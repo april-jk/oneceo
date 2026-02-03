@@ -4,6 +4,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import type { WebSocketEvent } from '@oneceo/shared';
+import agentRoutes from './routes/agent-routes';
 
 dotenv.config();
 
@@ -79,6 +80,9 @@ app.post('/api/messages', (req, res) => {
     message: 'Message sent - Coming soon',
   });
 });
+
+// Agent 相关 API
+app.use('/api/agents', agentRoutes);
 
 // ============================================================================
 // WebSocket 连接

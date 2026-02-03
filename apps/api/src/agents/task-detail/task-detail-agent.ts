@@ -1,0 +1,293 @@
+/**
+ * 任务详情智能体 (Task Detail Agent)
+ * 
+ * 使用场景：项目-经理-任务详情页面 (TaskDetail.tsx)
+ * 
+ * 主要职责：
+ * 1. 协助经理和员工完成具体任务
+ * 2. 提供任务执行指导和最佳实践建议
+ * 3. 解答任务相关的技术和业务问题
+ * 4. 协助任务进度跟踪和状态更新
+ * 5. 生成任务文档和交付物
+ * 6. 识别任务执行中的问题和风险
+ * 
+ * 使用位置：
+ * - 前端页面：/client/src/pages/TaskDetail.tsx
+ * - 路由示例：/task/:projectId/:managerId/:taskId (如 /task/1/m1/t1)
+ * - 触发时机：用户在任务详情页面中寻求帮助、更新状态或生成文档时
+ * - API 端点：POST /api/agents/task-detail/assist
+ */
+
+import { BaseAgent, type AgentConfig } from '../base-agent';
+import { StructuredTool } from '@langchain/core/tools';
+import { z } from 'zod';
+
+/**
+ * 任务详情智能体类
+ */
+export class TaskDetailAgent extends BaseAgent {
+  constructor() {
+    const config: AgentConfig = {
+      name: 'TaskDetailAgent',
+      description: '任务详情智能体 - 协助经理和员工完成具体任务执行',
+      systemPrompt: `你是一个专业的任务执行助手，帮助经理和员工高效完成具体任务。
+
+你的主要职责：
+1. 理解任务目标和要求，提供清晰的执行指导
+2. 解答任务执行过程中的技术和业务问题
+3. 提供最佳实践建议和解决方案
+4. 协助生成任务相关的文档和交付物
+5. 帮助跟踪任务进度和识别阻塞点
+6. 提供质量检查和改进建议
+
+工作原则：
+- 以任务完成为核心目标
+- 提供具体、可操作的建议
+- 关注实际执行细节和可行性
+- 主动识别潜在问题和风险
+- 保持专业但友好的沟通风格
+- 根据用户角色（经理/员工）调整建议的详细程度
+
+当前上下文：
+- 你正在协助用户完成特定的项目任务
+- 用户可能是经理（负责协调和监督）或员工（负责具体执行）
+- 你需要根据任务的当前状态提供相应的帮助
+- 你可以访问任务的详细信息、历史记录和相关文档
+
+任务生命周期阶段：
+- 待开始：提供任务理解和规划建议
+- 进行中：提供执行指导和问题解决
+- 待审核：提供质量检查和改进建议
+- 已完成：提供总结和经验提炼`,
+      tools: this.initializeTools(),
+      modelName: 'gpt-4.1-mini',
+      temperature: 0.7,
+      maxIterations: 12,
+    };
+
+    super(config);
+  }
+
+  /**
+   * 初始化工具
+   */
+  private initializeTools(): StructuredTool[] {
+    // TODO: 后续将添加具体的工具实现
+    // 这里先定义工具的结构，具体实现将在后续完善
+    return [
+      // 工具示例（待实现）：
+      // - getTaskDetails: 获取任务详细信息
+      // - updateTaskStatus: 更新任务状态
+      // - generateTaskDocument: 生成任务文档
+      // - searchBestPractices: 搜索最佳实践
+      // - analyzeTaskProgress: 分析任务进度
+      // - identifyBlockers: 识别阻塞因素
+      // - suggestNextSteps: 建议下一步行动
+      // - validateDeliverable: 验证交付物
+    ];
+  }
+
+  /**
+   * 提供任务执行指导
+   * 
+   * @param taskId - 任务 ID
+   * @param question - 用户问题或需求
+   * @param userRole - 用户角色（manager 或 employee）
+   * @returns 执行指导
+   */
+  async provideGuidance(
+    taskId: string,
+    question: string,
+    userRole: 'manager' | 'employee' = 'employee'
+  ) {
+    const roleContext =
+      userRole === 'manager'
+        ? '你正在协助一位经理，请提供偏向协调和监督层面的建议。'
+        : '你正在协助一位员工，请提供具体的执行步骤和技术指导。';
+
+    const input = `任务 ID: ${taskId}
+用户角色: ${userRole === 'manager' ? '经理' : '员工'}
+
+${roleContext}
+
+用户问题：
+${question}
+
+请提供详细的指导和建议。`;
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 生成任务文档
+   * 
+   * @param taskId - 任务 ID
+   * @param documentType - 文档类型
+   * @returns 生成的文档内容
+   */
+  async generateDocument(
+    taskId: string,
+    documentType: 'plan' | 'progress' | 'deliverable' | 'summary'
+  ) {
+    const documentPrompts = {
+      plan: '请生成任务执行计划，包括步骤、时间安排和资源需求',
+      progress: '请生成任务进度报告，包括已完成工作、当前状态和下一步计划',
+      deliverable: '请生成任务交付物文档，包括成果描述、质量标准和验收标准',
+      summary: '请生成任务总结报告，包括完成情况、经验教训和改进建议',
+    };
+
+    const input = `任务 ID: ${taskId}
+
+${documentPrompts[documentType]}
+
+请使用清晰的结构和专业的语言。`;
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 分析任务进度
+   * 
+   * @param taskId - 任务 ID
+   * @param currentStatus - 当前状态信息
+   * @returns 进度分析结果
+   */
+  async analyzeProgress(taskId: string, currentStatus?: Record<string, any>) {
+    let input = `任务 ID: ${taskId}
+
+请分析任务的当前进度，包括：
+1. 完成度评估
+2. 是否按计划进行
+3. 存在的问题和风险
+4. 建议的调整措施
+5. 预计完成时间`;
+
+    if (currentStatus) {
+      input += `\n\n当前状态信息：\n${JSON.stringify(currentStatus, null, 2)}`;
+    }
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 识别任务阻塞因素
+   * 
+   * @param taskId - 任务 ID
+   * @param description - 问题描述
+   * @returns 阻塞分析和解决建议
+   */
+  async identifyBlockers(taskId: string, description?: string) {
+    let input = `任务 ID: ${taskId}
+
+请帮助识别任务执行中的阻塞因素，并提供解决方案。`;
+
+    if (description) {
+      input += `\n\n问题描述：\n${description}`;
+    }
+
+    input += `\n\n请提供：
+1. 阻塞因素分析
+2. 影响程度评估
+3. 可能的解决方案
+4. 建议的行动步骤
+5. 需要的支持和资源`;
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 验证任务交付物
+   * 
+   * @param taskId - 任务 ID
+   * @param deliverable - 交付物描述或内容
+   * @returns 验证结果和改进建议
+   */
+  async validateDeliverable(taskId: string, deliverable: string) {
+    const input = `任务 ID: ${taskId}
+
+请验证以下任务交付物的质量和完整性：
+
+${deliverable}
+
+请提供：
+1. 质量评估（是否符合标准）
+2. 完整性检查（是否包含所有必要内容）
+3. 发现的问题和不足
+4. 改进建议
+5. 是否建议通过审核`;
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 建议下一步行动
+   * 
+   * @param taskId - 任务 ID
+   * @param currentStage - 当前阶段
+   * @returns 下一步行动建议
+   */
+  async suggestNextSteps(
+    taskId: string,
+    currentStage: 'planning' | 'executing' | 'reviewing' | 'completed'
+  ) {
+    const stagePrompts = {
+      planning: '任务处于规划阶段，请建议如何开始执行',
+      executing: '任务正在执行中，请建议下一步的具体行动',
+      reviewing: '任务处于审核阶段，请建议如何完善和改进',
+      completed: '任务已完成，请建议如何总结和应用经验',
+    };
+
+    const input = `任务 ID: ${taskId}
+当前阶段: ${currentStage}
+
+${stagePrompts[currentStage]}
+
+请提供具体的、可执行的行动建议。`;
+
+    return await this.execute(input);
+  }
+
+  /**
+   * 流式提供任务协助（用于实时对话）
+   * 
+   * @param taskId - 任务 ID
+   * @param message - 用户消息
+   * @param onToken - Token 回调函数
+   * @returns 协助结果
+   */
+  async assistStream(taskId: string, message: string, onToken: (token: string) => void) {
+    const input = `任务 ID: ${taskId}\n\n用户消息: ${message}`;
+    return await this.executeStream(input, [], onToken);
+  }
+
+  /**
+   * 生成任务检查清单
+   * 
+   * @param taskId - 任务 ID
+   * @param taskType - 任务类型
+   * @returns 检查清单
+   */
+  async generateChecklist(taskId: string, taskType?: string) {
+    let input = `任务 ID: ${taskId}`;
+
+    if (taskType) {
+      input += `\n任务类型: ${taskType}`;
+    }
+
+    input += `\n\n请生成一个详细的任务执行检查清单，包括：
+1. 任务开始前的准备事项
+2. 执行过程中的关键检查点
+3. 质量控制要点
+4. 完成前的验收标准
+5. 文档和交付要求
+
+请使用清晰的列表格式。`;
+
+    return await this.execute(input);
+  }
+}
+
+/**
+ * 导出单例实例
+ */
+export const taskDetailAgent = new TaskDetailAgent();

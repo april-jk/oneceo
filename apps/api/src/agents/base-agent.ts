@@ -48,6 +48,7 @@ export interface AgentResult {
 export abstract class BaseAgent {
   protected config: AgentConfig;
   protected llm: ChatOpenAI;
+  protected requestTimeoutMs: number;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -56,11 +57,13 @@ export abstract class BaseAgent {
     this.llm = new ChatOpenAI({
       modelName: config.modelName || 'claude-sonnet-4-5-20250929',
       temperature: config.temperature || 0.7,
+      timeout: Number(process.env.LLM_TIMEOUT_MS || 90000),
       openAIApiKey: process.env.OPENAI_API_KEY,
       configuration: {
         baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       },
     });
+    this.requestTimeoutMs = Number(process.env.LLM_TIMEOUT_MS || 90000);
   }
 
   /**
@@ -76,7 +79,11 @@ export abstract class BaseAgent {
         { role: 'user' as const, content: input },
       ];
 
-      const response = await this.llm.invoke(messages);
+      const response = await this.withTimeout(
+        this.llm.invoke(messages),
+        this.requestTimeoutMs,
+        'LLM 请求超时'
+      );
 
       return {
         success: true,
@@ -221,6 +228,20 @@ ${rawOutput}`;
       };
     } catch {
       return { success: false };
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

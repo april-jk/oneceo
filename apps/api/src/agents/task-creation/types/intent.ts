@@ -101,6 +101,7 @@ export enum MessageType {
  */
 export interface WebSocketMessage {
   type: MessageType;
+  sessionId?: string;
   content?: string;
   agent?: string;
   metadata?: any;

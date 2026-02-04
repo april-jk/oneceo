@@ -8,6 +8,7 @@ import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { testDatabaseConnection } from './config/database';
+import { getPublicErrorMessage } from './utils/error-response';
 
 dotenv.config();
 
@@ -146,7 +147,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     success: false,
     error: {
       code: 'INTERNAL_ERROR',
-      message: err.message || 'Internal server error',
+      message: getPublicErrorMessage('服务异常，请稍后重试'),
     },
   });
 });

@@ -42,6 +42,38 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
   const { t } = useTranslation();
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const [sessionTasks, setSessionTasks] = React.useState<Array<{
+    sessionId: string;
+    title: string;
+    status: string;
+  }>>([]);
+
+  React.useEffect(() => {
+    let disposed = false;
+    const load = async () => {
+      try {
+        const res = await fetch("http://localhost:4000/api/task-creation/sessions?limit=20");
+        if (!res.ok) return;
+        const json = await res.json();
+        const list = Array.isArray(json?.data) ? json.data : [];
+        if (disposed) return;
+        const mapped = list.map((session: any) => ({
+          sessionId: session.id,
+          title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+          status: session.status || "in_progress",
+        }));
+        setSessionTasks(mapped);
+      } catch {
+        // ignore
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 6000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects(prev => 
@@ -121,7 +153,6 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       managers: []
     },
   ];
-
   return (
     <aside
       className={`fixed left-0 top-0 h-screen ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border-r border-sidebar-border flex flex-col shadow-sm transition-all duration-300 ${className}`}
@@ -260,7 +291,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                             {/* Tasks */}
                             {isManagerExpanded && manager.tasks.length > 0 && (
                               <div className="ml-6 space-y-0.5">
-                                {manager.tasks.map((task) => (
+                                {manager.tasks.map((task: any) => (
                                   <Link key={task.id} href={`/task/${project.id}/${manager.id}/${task.id}`}>
                                     <Button
                                       variant="ghost"
@@ -288,6 +319,25 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           >
             <span className="text-sm">{t('sidebar.viewMore')}</span>
           </Button>
+
+          {sessionTasks.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {sessionTasks.map((session) => (
+                <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span className="text-xs truncate flex-1 text-left">{session.title}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {session.status === "completed" ? "完成" : session.status === "waiting_user" ? "待补充" : "进行中"}
+                    </span>
+                  </Button>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>}
 
         {!collapsed && <Separator className="my-3 bg-sidebar-border" />}

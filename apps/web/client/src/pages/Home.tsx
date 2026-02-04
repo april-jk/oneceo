@@ -5,11 +5,10 @@
  * - 支持对话模式和任务创建智能体
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import ProjectDetail from "./ProjectDetail";
 import { Mic, Plug, Send, Plus, Sparkles, Loader2 } from "lucide-react";
@@ -28,17 +27,20 @@ import {
 import ConnectorDialog from "@/components/ConnectorDialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
+import { useLocation } from "wouter";
+import { Streamdown } from "streamdown";
 
 type PageMode = 'input' | 'chat';
 
 export default function Home() {
+  const [location] = useLocation();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [mode, setMode] = useState<PageMode>('input');
   const [message, setMessage] = useState("");
   const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const hasSentInitialInputRef = useRef(false);
+  const pendingInputRef = useRef<string | null>(null);
 
   const {
     isConnected,
@@ -64,25 +66,53 @@ export default function Home() {
     }
   }, [messages, mode]);
 
+  // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
+  useEffect(() => {
+    const input = new URLSearchParams(window.location.search).get("q")?.trim();
+    const sessionInQuery = new URLSearchParams(window.location.search).get("sessionId")?.trim();
+
+    if (sessionInQuery) {
+      setMode('chat');
+    }
+
+    if (input) {
+      pendingInputRef.current = input;
+      setMode('chat');
+      window.history.replaceState(null, "", "/new-task");
+    }
+  }, [location]);
+
+  useEffect(() => {
+    if (!isConnected || !pendingInputRef.current) {
+      return;
+    }
+    const input = pendingInputRef.current;
+    pendingInputRef.current = null;
+    sendUserInput(input);
+  }, [isConnected, sendUserInput]);
+
   const handleSend = () => {
     if (message.trim()) {
+      const input = message.trim();
       // 切换到对话模式
       setMode('chat');
-      // 发送消息
-      if (isConnected && !hasSentInitialInputRef.current) {
-        sendUserInput(message.trim());
-        hasSentInitialInputRef.current = true;
+      if (isConnected) {
+        sendUserInput(input);
+      } else {
+        pendingInputRef.current = input;
       }
       setMessage("");
     }
   };
 
   const handleQuickAction = (action: string) => {
-    setMessage(action);
     setMode('chat');
     if (isConnected) {
       sendUserInput(action);
+    } else {
+      pendingInputRef.current = action;
     }
+    setMessage("");
   };
 
   const handleAnswerQuestion = (answer: string) => {
@@ -96,6 +126,8 @@ export default function Home() {
     { label: "生成季度业务报告", icon: "💻" },
   ];
 
+  const chatItems = useMemo(() => buildChatItems(messages), [messages]);
+
   return (
     <WorkspaceLayout
       selectedProjectId={selectedProjectId}
@@ -104,7 +136,7 @@ export default function Home() {
       {selectedProjectId ? (
         <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />
       ) : (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col min-h-[calc(100vh-6.5rem)]">
           <AnimatePresence mode="wait">
             {mode === 'input' ? (
               // 初始输入模式
@@ -318,57 +350,35 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
-                className="flex-1 flex flex-col"
+                className="flex-1 flex flex-col min-h-0"
               >
                 {/* 对话区域 */}
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto min-h-0">
                   <div className="container mx-auto px-6 py-6 max-w-3xl">
                     <div className="space-y-4">
                       {/* 连接状态 */}
                       {!isConnected && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                        >
-                          <Card className="p-4 bg-yellow-50 border-yellow-200">
-                            <div className="flex items-center gap-2 text-yellow-800">
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              <span className="text-sm">正在连接智能体...</span>
-                            </div>
-                          </Card>
-                        </motion.div>
+                        <NoticeMessage
+                          tone="warning"
+                          icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                          text="正在连接智能体..."
+                        />
                       )}
 
                       {/* 消息列表 */}
                       <AnimatePresence>
-                        {messages.map((msg, index) => (
-                          <MessageBubble key={index} message={msg} />
+                        {chatItems.map((item, index) => (
+                          <MessageBubble key={index} item={item} />
                         ))}
                       </AnimatePresence>
 
                       {/* 处理中指示器 */}
                       {isProcessing && !currentQuestion && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="flex items-center gap-2 text-muted-foreground"
-                        >
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span className="text-sm">智能体正在处理...</span>
-                        </motion.div>
-                      )}
-
-                      {/* 澄清问题 */}
-                      {currentQuestion && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                        >
-                          <ClarificationCard
-                            question={currentQuestion}
-                            onAnswer={handleAnswerQuestion}
-                          />
-                        </motion.div>
+                        <NoticeMessage
+                          tone="info"
+                          icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                          text="智能体正在处理..."
+                        />
                       )}
 
                       <div ref={messagesEndRef} />
@@ -381,42 +391,147 @@ export default function Home() {
                   initial={{ y: 100, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
-                  className="border-t border-border bg-background/95 backdrop-blur"
+                  className="mt-auto border-t border-border bg-background/95 backdrop-blur"
                 >
                   <div className="container mx-auto px-6 py-4 max-w-3xl">
-                    <div className="flex items-center gap-3">
-                      <Input
-                        placeholder="继续对话..."
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            if (currentQuestion) {
-                              handleAnswerQuestion(message);
-                              setMessage("");
-                            } else {
-                              handleSend();
+                    <div className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200">
+                      <div className="p-4 space-y-3">
+                        <Textarea
+                          placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
+                          value={message}
+                          onChange={(e) => setMessage(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              if (currentQuestion) {
+                                handleAnswerQuestion(message);
+                                setMessage("");
+                              } else {
+                                handleSend();
+                              }
                             }
-                          }
-                        }}
-                        className="flex-1 h-12 rounded-xl"
-                      />
-                      <Button
-                        onClick={() => {
-                          if (currentQuestion) {
-                            handleAnswerQuestion(message);
-                            setMessage("");
-                          } else {
-                            handleSend();
-                          }
-                        }}
-                        disabled={!message.trim()}
-                        size="icon"
-                        className="h-12 w-12 rounded-xl"
-                      >
-                        <Send className="w-5 h-5" />
-                      </Button>
+                          }}
+                          className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[80px] px-0 py-0"
+                          rows={3}
+                        />
+
+                        <TooltipProvider>
+                          <div className="flex items-center justify-between pt-2">
+                            <div className="flex items-center gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                  >
+                                    <Plus className="w-4 h-4 text-muted-foreground" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Add attachment</p>
+                                </TooltipContent>
+                              </Tooltip>
+
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                    onClick={() => setShowConnector(true)}
+                                  >
+                                    <Plug className="w-4 h-4 text-muted-foreground" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Connector</p>
+                                </TooltipContent>
+                              </Tooltip>
+
+                              <DropdownMenu>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
+                                      >
+                                        <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                        <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Select AI model</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                                <DropdownMenuContent align="start" className="w-40">
+                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">Agent Lite</span>
+                                      <span className="text-xs text-muted-foreground">Fast & efficient</span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">Agent Pro</span>
+                                      <span className="text-xs text-muted-foreground">Balanced performance</span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">Agent Max</span>
+                                      <span className="text-xs text-muted-foreground">Maximum capability</span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                  >
+                                    <Mic className="w-4 h-4 text-muted-foreground" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Voice input</p>
+                                </TooltipContent>
+                              </Tooltip>
+
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    onClick={() => {
+                                      if (currentQuestion) {
+                                        handleAnswerQuestion(message);
+                                        setMessage("");
+                                      } else {
+                                        handleSend();
+                                      }
+                                    }}
+                                    disabled={!message.trim()}
+                                    size="icon"
+                                    className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
+                                  >
+                                    <Send className="w-4 h-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Send message</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        </TooltipProvider>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -435,176 +550,199 @@ export default function Home() {
 /**
  * 消息气泡组件
  */
-function MessageBubble({ message }: { message: AgentMessage }) {
-  const isUser = message.type === 'user_input';
-  const isError = message.type === 'error';
-  const isPlanGenerated = message.type === 'plan_generated';
+function NoticeMessage({
+  text,
+  icon,
+  tone,
+}: {
+  text: string;
+  icon: ReactNode;
+  tone: "info" | "warning";
+}) {
+  const toneClass =
+    tone === "warning"
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-slate-200 bg-slate-50 text-slate-700";
 
-  if (isError) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -20 }}
-        transition={{ duration: 0.3 }}
-        className="flex justify-start"
-      >
-        <Card className="max-w-[80%] p-4 bg-red-50 border-red-200">
-          <div className="flex items-start gap-3">
-            <span className="text-red-600">❌</span>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-red-900">错误</p>
-              <p className="text-sm text-red-700 mt-1">{message.message}</p>
-            </div>
-          </div>
-        </Card>
-      </motion.div>
-    );
-  }
-
-  if (isPlanGenerated) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -20 }}
-        transition={{ duration: 0.3 }}
-        className="flex justify-start"
-      >
-        <Card className="max-w-[80%] p-4 bg-green-50 border-green-200">
-          <div className="flex items-start gap-3">
-            <span className="text-green-600">✅</span>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-green-900">执行计划已生成</p>
-              <p className="text-sm text-green-700 mt-1">
-                项目：{message.plan?.project?.title || "未命名项目"}
-              </p>
-            </div>
-          </div>
-        </Card>
-      </motion.div>
-    );
-  }
-
-  if (isUser) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, x: 20 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: 20 }}
-        transition={{ duration: 0.3 }}
-        className="flex justify-end"
-      >
-        <div className="max-w-[80%] rounded-2xl bg-foreground text-background px-4 py-3">
-          <p className="text-sm">{message.content}</p>
-        </div>
-      </motion.div>
-    );
-  }
-
-  // AI 消息
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.3 }}
-      className="flex justify-start"
-    >
-      <Card className="max-w-[80%] p-4">
-        <div className="flex items-start gap-3">
-          <span className="text-blue-600">🤖</span>
-          <div className="flex-1">
-            <p className="text-xs font-medium text-muted-foreground mb-1">
-              {getAgentName(message.agent)}
-            </p>
-            <StreamingText text={message.content} />
-          </div>
-        </div>
-      </Card>
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${toneClass}`}>
+        {icon}
+        <span>{text}</span>
+      </div>
     </motion.div>
   );
 }
 
-/**
- * 流式文本组件（打字机效果）
- */
-function StreamingText({ text }: { text: string }) {
-  const [displayText, setDisplayText] = useState("");
-  const [currentIndex, setCurrentIndex] = useState(0);
+type ChatItem =
+  | { kind: "user"; text: string }
+  | { kind: "agent"; markdown: string }
+  | { kind: "capsule"; label: string; tone: "system" | "intent" | "planning" | "execution" | "error" };
 
-  useEffect(() => {
-    if (currentIndex < text.length) {
-      const timeout = setTimeout(() => {
-        setDisplayText(prev => prev + text[currentIndex]);
-        setCurrentIndex(prev => prev + 1);
-      }, 20); // 20ms per character
-      return () => clearTimeout(timeout);
+type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
+
+function buildChatItems(messages: AgentMessage[]): ChatItem[] {
+  const items: ChatItem[] = [];
+
+  for (const message of messages) {
+    if (message.type === "user_input" || message.type === "user_response") {
+      items.push({
+        kind: "user",
+        text: message.content || "",
+      });
+      continue;
     }
-  }, [currentIndex, text]);
 
-  return <p className="text-sm text-foreground whitespace-pre-wrap">{displayText}</p>;
+    if (message.type === "agent_message") {
+      const parsed = extractCapsule(message.content || "");
+      if (parsed) {
+        items.push({
+          kind: "capsule",
+          label: parsed.label,
+          tone: getCapsuleTone(parsed.label),
+        });
+        if (parsed.rest.trim()) {
+          items.push({
+            kind: "agent",
+            markdown: `**${getAgentName(message.agent)}**\n\n${parsed.rest}`,
+          });
+        }
+        continue;
+      }
+
+      items.push({
+        kind: "agent",
+        markdown: `**${getAgentName(message.agent)}**\n\n${message.content || ""}`,
+      });
+      continue;
+    }
+
+    if (message.type === "error") {
+      items.push({
+        kind: "agent",
+        markdown: `**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`,
+      });
+      continue;
+    }
+
+    if (message.type === "clarification_request") {
+      const optionLines =
+        message.options && message.options.length > 0
+          ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
+          : "";
+      items.push({
+        kind: "agent",
+        markdown: `**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`,
+      });
+      continue;
+    }
+
+    if (message.type === "plan_generated") {
+      items.push({
+        kind: "agent",
+        markdown: `**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`,
+      });
+    }
+  }
+
+  return items;
 }
 
-/**
- * 澄清问题卡片组件
- */
-function ClarificationCard({ 
-  question, 
-  onAnswer 
-}: { 
-  question: { question: string; options?: string[] };
-  onAnswer: (answer: string) => void;
-}) {
-  const [answer, setAnswer] = useState("");
+function MessageBubble({ item }: { item: ChatItem }) {
+  if (item.kind === "capsule") {
+    const toneClass: Record<CapsuleTone, string> = {
+      system: "border-slate-200 bg-slate-50 text-slate-700",
+      intent: "border-blue-200 bg-blue-50 text-blue-700",
+      planning: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      execution: "border-amber-200 bg-amber-50 text-amber-700",
+      error: "border-rose-200 bg-rose-50 text-rose-700",
+    };
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${toneClass[item.tone]}`}>
+          {item.label}
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (item.kind === "user") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full flex justify-end"
+      >
+        <div className="max-w-[80%] rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+          <span className="whitespace-pre-wrap break-words">{item.text}</span>
+        </div>
+      </motion.div>
+    );
+  }
 
   return (
-    <Card className="p-4 bg-blue-50 border-blue-200">
-      <p className="text-sm font-medium text-blue-900 mb-3">
-        {question.question}
-      </p>
-
-      {question.options && question.options.length > 0 ? (
-        <div className="grid grid-cols-2 gap-2">
-          {question.options.map((option, index) => (
-            <Button
-              key={index}
-              variant="outline"
-              className="h-auto py-3 text-sm"
-              onClick={() => onAnswer(option)}
-            >
-              {option}
-            </Button>
-          ))}
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          <Input
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                onAnswer(answer);
-                setAnswer("");
-              }
-            }}
-            placeholder="请输入您的回答..."
-            className="flex-1"
-          />
-          <Button
-            onClick={() => {
-              onAnswer(answer);
-              setAnswer("");
-            }}
-            disabled={!answer.trim()}
-            size="icon"
-          >
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
-      )}
-    </Card>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+    >
+      <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold">
+        <Streamdown>{item.markdown}</Streamdown>
+      </div>
+    </motion.div>
   );
+}
+
+function extractCapsule(content: string): { label: string; rest: string } | null {
+  const text = content.trim();
+  const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
+  if (match) {
+    return {
+      label: match[1].trim(),
+      rest: (match[2] || "").trim(),
+    };
+  }
+
+  // 纯状态消息，直接渲染胶囊，不再下沉为正文
+  const statusCapsules = [
+    "正在分析您的任务需求",
+    "已识别任务类型",
+    "正在规划任务详情",
+    "任务规划完成",
+    "正在生成执行计划",
+    "执行计划已生成",
+  ];
+  for (const status of statusCapsules) {
+    if (text.includes(status)) {
+      return { label: text, rest: "" };
+    }
+  }
+
+  // 兼容后端未加 {标签} 的阶段文本
+  const fallbackLabels = ["意图识别", "任务规划", "执行计划", "系统", "错误"];
+  for (const label of fallbackLabels) {
+    if (text.startsWith(label)) {
+      return { label, rest: text.slice(label.length).replace(/^[:：\-\s]+/, "").trim() };
+    }
+  }
+  return null;
+}
+
+function getCapsuleTone(label: string): CapsuleTone {
+  const lower = label.toLowerCase();
+  if (lower.includes("错误") || lower.includes("error")) return "error";
+  if (lower.includes("意图")) return "intent";
+  if (lower.includes("规划") || lower.includes("计划")) return "planning";
+  if (lower.includes("执行")) return "execution";
+  return "system";
 }
 
 /**

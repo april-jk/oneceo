@@ -4,7 +4,8 @@
  * 创建所有必要的数据库表
  */
 
-import { pool } from '../config/database';
+import { sql } from 'drizzle-orm';
+import { db, ensureDatabaseConnection } from '../config/database';
 
 /**
  * 创建数据库表的 SQL 语句
@@ -94,13 +95,12 @@ CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creatio
  * 运行数据库迁移
  */
 export async function runMigration() {
-  const client = await pool.connect();
-  
   try {
     console.log('🚀 开始数据库迁移...');
+    await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
     
     // 执行创建表的 SQL
-    await client.query(createTablesSQL);
+    await db.execute(sql.raw(createTablesSQL));
     
     console.log('✅ 数据库迁移完成！');
     console.log('已创建以下表：');
@@ -115,8 +115,6 @@ export async function runMigration() {
   } catch (error) {
     console.error('❌ 数据库迁移失败:', error);
     throw error;
-  } finally {
-    client.release();
   }
 }
 
@@ -124,27 +122,24 @@ export async function runMigration() {
  * 删除所有表（谨慎使用）
  */
 export async function dropAllTables() {
-  const client = await pool.connect();
-  
   try {
     console.log('⚠️  开始删除所有表...');
+    await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
     
-    await client.query(`
+    await db.execute(sql.raw(`
       DROP TABLE IF EXISTS search_records CASCADE;
       DROP TABLE IF EXISTS execution_plans CASCADE;
       DROP TABLE IF EXISTS task_descriptions CASCADE;
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
-    `);
+    `));
     
     console.log('✅ 所有表已删除');
     return true;
   } catch (error) {
     console.error('❌ 删除表失败:', error);
     throw error;
-  } finally {
-    client.release();
   }
 }
 

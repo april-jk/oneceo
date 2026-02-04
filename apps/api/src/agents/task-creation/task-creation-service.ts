@@ -47,9 +47,13 @@ export class TaskCreationService {
    */
   async createTask(userInput: string, userId?: string): Promise<ExecutionPlan> {
     try {
+      console.log('[TaskCreationService] 开始创建任务:', userInput);
+      
       // 创建新的会话
+      console.log('[TaskCreationService] 创建会话...');
       const session = await taskCreationSessionDAO.createSession({ userId });
       this.sessionId = session.id;
+      console.log('[TaskCreationService] 会话创建成功:', this.sessionId);
 
       // 保存用户输入消息
       await taskCreationSessionDAO.addMessage({
@@ -60,6 +64,7 @@ export class TaskCreationService {
       });
 
       // Step 1: 意图识别
+      console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
       this.sendMessage({
         type: 'agent_message' as any,
         agent: 'intent_recognition',
@@ -67,6 +72,7 @@ export class TaskCreationService {
       });
 
       const intentResult = await this.layer1.recognizeIntent(userInput);
+      console.log('[TaskCreationService] 意图识别完成:', intentResult);
 
       // 保存意图识别结果
       await taskCreationSessionDAO.saveIntentResult({

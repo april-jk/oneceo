@@ -12,6 +12,10 @@ export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
   private clients: Map<string, WebSocket> = new Map();
   private services: Map<string, TaskCreationService> = new Map();
+  private pendingQuestions: Map<string, {
+    resolve: (answer: string) => void;
+    reject: (error: Error) => void;
+  }> = new Map();
 
   /**
    * 初始化 WebSocket 服务器
@@ -46,6 +50,7 @@ export class TaskCreationWebSocketService {
       ws.on('message', async (data: Buffer) => {
         try {
           const message: WebSocketMessage = JSON.parse(data.toString());
+          console.log(`[WebSocket] 收到消息 from ${clientId}:`, message);
           await this.handleMessage(clientId, message);
         } catch (error: any) {
           console.error('[WebSocket] 消息处理失败:', error);
@@ -61,6 +66,13 @@ export class TaskCreationWebSocketService {
         console.log(`[WebSocket] 客户端断开: ${clientId}`);
         this.clients.delete(clientId);
         this.services.delete(clientId);
+        
+        // 拒绝所有待处理的问题
+        const pending = this.pendingQuestions.get(clientId);
+        if (pending) {
+          pending.reject(new Error('客户端已断开连接'));
+          this.pendingQuestions.delete(clientId);
+        }
       });
 
       // 发送欢迎消息
@@ -76,6 +88,15 @@ export class TaskCreationWebSocketService {
    * 处理客户端消息
    */
   private async handleMessage(clientId: string, message: WebSocketMessage): Promise<void> {
+    // 检查是否是对待处理问题的回复
+    const pending = this.pendingQuestions.get(clientId);
+    if (pending && message.type === 'user_response' as any && message.content) {
+      console.log(`[WebSocket] 收到用户回复: ${message.content}`);
+      pending.resolve(message.content);
+      this.pendingQuestions.delete(clientId);
+      return;
+    }
+
     const service = this.services.get(clientId);
     if (!service) {
       throw new Error('服务未找到');
@@ -86,12 +107,9 @@ export class TaskCreationWebSocketService {
         if (!message.content) {
           throw new Error('用户输入不能为空');
         }
+        console.log(`[WebSocket] 开始处理任务创建: ${message.content}`);
         await service.createTask(message.content);
-        break;
-
-      case 'user_response' as any:
-        // 处理用户对澄清问题的回复
-        // 这个会在 askUser 的 Promise 中处理
+        console.log(`[WebSocket] 任务创建完成`);
         break;
 
       default:
@@ -105,6 +123,7 @@ export class TaskCreationWebSocketService {
   private sendToClient(clientId: string, message: WebSocketMessage): void {
     const ws = this.clients.get(clientId);
     if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log(`[WebSocket] 发送消息 to ${clientId}:`, message.type);
       ws.send(JSON.stringify(message));
     }
   }
@@ -120,6 +139,11 @@ export class TaskCreationWebSocketService {
         return;
       }
 
+      console.log(`[WebSocket] 向用户提问: ${question}`);
+
+      // 保存 Promise 的 resolve 和 reject
+      this.pendingQuestions.set(clientId, { resolve, reject });
+
       // 发送澄清请求
       this.sendToClient(clientId, {
         type: 'clarification_request' as any,
@@ -127,27 +151,14 @@ export class TaskCreationWebSocketService {
         options,
       });
 
-      // 监听用户回复
-      const messageHandler = (data: Buffer) => {
-        try {
-          const message: WebSocketMessage = JSON.parse(data.toString());
-          
-          if (message.type === 'user_response' as any && message.content) {
-            ws.off('message', messageHandler);
-            resolve(message.content);
-          }
-        } catch (error) {
-          // 忽略解析错误，继续等待
-        }
-      };
-
-      ws.on('message', messageHandler);
-
       // 设置超时
       setTimeout(() => {
-        ws.off('message', messageHandler);
-        reject(new Error('用户回复超时'));
-      }, 60000); // 60秒超时
+        const pending = this.pendingQuestions.get(clientId);
+        if (pending) {
+          pending.reject(new Error('用户回复超时'));
+          this.pendingQuestions.delete(clientId);
+        }
+      }, 120000); // 120秒超时
     });
   }
 
@@ -166,6 +177,7 @@ export class TaskCreationWebSocketService {
       this.wss.close();
       this.clients.clear();
       this.services.clear();
+      this.pendingQuestions.clear();
     }
   }
 }

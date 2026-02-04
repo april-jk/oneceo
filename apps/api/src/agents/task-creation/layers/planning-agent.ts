@@ -67,7 +67,7 @@ export class PlanningAgent extends BaseAgent {
 如果需要澄清，设置 needs_clarification 为 true，并添加 clarification_question 字段。`,
 
       tools: [],
-      modelName: 'gpt-4.1-mini',
+      modelName: 'claude-sonnet-4-5-20250929', // 平衡性能的任务规划
       temperature: 0.7,
       maxIterations: 15,
     };

@@ -67,7 +67,7 @@ export class ExecutionPlanAgent extends BaseAgent {
 - 交付物要具体、可衡量`,
 
       tools: [],
-      modelName: 'gpt-4.1-mini',
+      modelName: 'claude-opus-4-5-20251101', // 高质量的执行计划生成
       temperature: 0.6,
       maxIterations: 10,
     };

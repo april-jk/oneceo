@@ -28,6 +28,10 @@ export default defineConfig({
     fs: {
       strict: true,
       deny: ["**/.*"],
+      allow: [".."]
+    },
+    hmr: {
+      clientPort: 3000,
     },
   },
 });

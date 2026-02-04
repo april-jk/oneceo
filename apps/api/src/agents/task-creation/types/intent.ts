@@ -41,6 +41,7 @@ export interface IntentRecognitionResult {
   };
   clarification_needed: boolean;
   clarification_question?: string;
+  clarification_questions?: string[]; // 多个澄清问题
   next_agent: "planning_agent" | "user_clarification";
 }
 
@@ -52,7 +53,8 @@ export interface TaskDescription {
   objective: string;
   scope: string;
   deliverables: string[];
-  constraints: string[];
+  constraints: string[] | Record<string, any>;
+  additional_info?: Record<string, any>; // 额外信息
 }
 
 /**
@@ -62,6 +64,7 @@ export interface ExecutionPlan {
   project: {
     title: string;
     description: string;
+    estimated_total_hours?: number; // 预估总时长
     managers: Manager[];
   };
 }

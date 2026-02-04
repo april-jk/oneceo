@@ -160,7 +160,7 @@ const PORT = process.env.PORT || 4000;
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
 
-httpServer.listen(PORT, async () => {
+httpServer.listen(PORT, () => {
   console.log('');
   console.log('🚀 oneceo.ai API Server');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -170,8 +170,8 @@ httpServer.listen(PORT, async () => {
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   
-  // 测试数据库连接
-  await testDatabaseConnection();
+  // 启动后先进行数据库连通性重试检测
+  void testDatabaseConnection({ retries: 5, delayMs: 1500 });
   
   console.log('');
 });

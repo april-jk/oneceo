@@ -8,16 +8,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Loader2, Send, CheckCircle2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface TaskCreationChatProps {
   onPlanGenerated?: (plan: any) => void;
+  initialInput?: string;
 }
 
-export default function TaskCreationChat({ onPlanGenerated }: TaskCreationChatProps) {
+export default function TaskCreationChat({ onPlanGenerated, initialInput }: TaskCreationChatProps) {
   const [userAnswer, setUserAnswer] = useState("");
+  const hasSentInitialInputRef = useRef(false);
 
   const {
     isConnected,
@@ -32,6 +34,13 @@ export default function TaskCreationChat({ onPlanGenerated }: TaskCreationChatPr
       console.error("任务创建失败:", error);
     },
   });
+
+  useEffect(() => {
+    if (isConnected && initialInput && !hasSentInitialInputRef.current) {
+      sendUserInput(initialInput);
+      hasSentInitialInputRef.current = true;
+    }
+  }, [isConnected, initialInput, sendUserInput]);
 
   const handleAnswerSubmit = () => {
     if (userAnswer.trim()) {

@@ -94,6 +94,137 @@ export abstract class BaseAgent {
   }
 
   /**
+   * 从模型输出中解析 JSON，并在首次失败时自动进行一次修复重试
+   */
+  protected async parseJsonResponse<T>(rawOutput: string, context: string): Promise<T> {
+    const parseError = new Error(`解析 ${context} 失败`);
+    const candidates = this.extractJsonCandidates(rawOutput);
+
+    for (const candidate of candidates) {
+      const parsed = this.tryParseJson<T>(candidate);
+      if (parsed.success) {
+        return parsed.value;
+      }
+    }
+
+    // 兜底：让模型把已有输出修正为严格 JSON
+    const repairPrompt = `请将下面内容转换为严格有效的 JSON。
+要求：
+1. 仅输出 JSON，不要输出任何解释文字
+2. 使用双引号包裹字符串与键名
+3. 去除注释、尾随逗号和无效字符
+
+原始内容：
+${rawOutput}`;
+
+    const repairResult = await this.execute(repairPrompt);
+    if (repairResult.success) {
+      const repairedCandidates = this.extractJsonCandidates(repairResult.output || '');
+      for (const candidate of repairedCandidates) {
+        const parsed = this.tryParseJson<T>(candidate);
+        if (parsed.success) {
+          return parsed.value;
+        }
+      }
+    }
+
+    throw parseError;
+  }
+
+  private extractJsonCandidates(text: string): string[] {
+    const normalized = (text || '').trim();
+    if (!normalized) return [];
+
+    const candidates: string[] = [];
+
+    // 优先尝试 ```json ... ``` 代码块
+    const fenced = normalized.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) {
+      candidates.push(fenced[1].trim());
+    }
+
+    // 尝试提取第一个平衡的 JSON 对象
+    const objectBlock = this.extractBalancedBlock(normalized, '{', '}');
+    if (objectBlock) {
+      candidates.push(objectBlock);
+    }
+
+    // 尝试提取第一个平衡的 JSON 数组
+    const arrayBlock = this.extractBalancedBlock(normalized, '[', ']');
+    if (arrayBlock) {
+      candidates.push(arrayBlock);
+    }
+
+    // 最后尝试整段文本
+    candidates.push(normalized);
+
+    return Array.from(new Set(candidates));
+  }
+
+  private extractBalancedBlock(text: string, openChar: '{' | '[', closeChar: '}' | ']'): string | null {
+    const start = text.indexOf(openChar);
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+
+      if (ch === openChar) {
+        depth += 1;
+      } else if (ch === closeChar) {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private tryParseJson<T>(input: string): { success: true; value: T } | { success: false } {
+    const normalized = (input || '')
+      .replace(/\u201c|\u201d/g, '"')
+      .replace(/\u2018|\u2019/g, "'")
+      .replace(/,\s*([}\]])/g, '$1')
+      .trim();
+
+    if (!normalized) return { success: false };
+
+    try {
+      return {
+        success: true,
+        value: JSON.parse(normalized) as T,
+      };
+    } catch {
+      return { success: false };
+    }
+  }
+
+  /**
    * 流式执行 Agent
    * 
    * @param input - 用户输入

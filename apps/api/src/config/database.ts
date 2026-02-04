@@ -31,19 +31,58 @@ export const pool = new Pool({
  */
 export const db = drizzle(pool);
 
+interface RetryOptions {
+  retries?: number;
+  delayMs?: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pingDatabase(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT 1');
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * 测试数据库连接
  */
-export async function testDatabaseConnection() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT NOW()');
-    client.release();
-    console.log('✅ 数据库连接成功:', result.rows[0].now);
-    return true;
-  } catch (error) {
-    console.error('❌ 数据库连接失败:', error);
-    return false;
+export async function testDatabaseConnection(options: RetryOptions = {}): Promise<boolean> {
+  const retries = options.retries ?? 3;
+  const delayMs = options.delayMs ?? 1500;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await pingDatabase();
+      console.log('✅ 数据库连接成功');
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isLastAttempt = attempt === retries;
+      if (isLastAttempt) {
+        console.error(`❌ 数据库连接失败（已重试 ${retries} 次）: ${message}`);
+        return false;
+      }
+      console.warn(`⚠️ 数据库连接失败，准备重试 (${attempt}/${retries}): ${message}`);
+      await sleep(delayMs);
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 确保数据库可用，否则抛出异常
+ */
+export async function ensureDatabaseConnection(options: RetryOptions = {}): Promise<void> {
+  const ok = await testDatabaseConnection(options);
+  if (!ok) {
+    throw new Error('数据库连接不可用，请稍后重试');
   }
 }
 

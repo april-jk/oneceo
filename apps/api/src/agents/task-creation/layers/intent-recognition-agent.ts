@@ -93,15 +93,10 @@ export class IntentRecognitionAgent extends BaseAgent {
     }
 
     try {
-      // 尝试从输出中提取 JSON
-      const output = result.output || '';
-      const jsonMatch = output.match(/\{[\s\S]*\}/);
-      
-      if (!jsonMatch) {
-        throw new Error('无法从 Agent 输出中提取 JSON');
-      }
-
-      const intentResult: IntentRecognitionResult = JSON.parse(jsonMatch[0]);
+      const intentResult = await this.parseJsonResponse<IntentRecognitionResult>(
+        result.output || '',
+        '意图识别结果'
+      );
 
       // 如果需要澄清，调用用户回调
       if (intentResult.clarification_needed && intentResult.clarification_question && this.userCallback) {

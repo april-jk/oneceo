@@ -32,6 +32,7 @@ export class TaskCreationSessionDAO {
     const [session] = await db
       .insert(taskCreationSessions)
       .values({
+        id: data.id,
         userId: data.userId,
         status: data.status || 'in_progress',
       })

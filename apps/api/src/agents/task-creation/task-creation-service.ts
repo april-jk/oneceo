@@ -26,6 +26,7 @@ export class TaskCreationService {
   private layer3: ExecutionPlanAgent;
   private callbacks?: TaskCreationCallbacks;
   private sessionId?: string; // 当前会话 ID
+  private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' = 'collecting';
 
   constructor(callbacks?: TaskCreationCallbacks) {
     this.callbacks = callbacks;
@@ -71,10 +72,23 @@ export class TaskCreationService {
         this.callbacks?.onSessionCreated?.(this.sessionId);
         console.log('[TaskCreationService] 会话创建成功:', this.sessionId);
       } else {
-        await this.runDbOperation(
-          'updateSessionStatus:in_progress',
-          () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
+        const existed = await this.runDbOperation('getSession', () =>
+          taskCreationSessionDAO.getSession(this.sessionId!)
         );
+        if (!existed) {
+          await this.runDbOperation('createSessionWithId', () =>
+            taskCreationSessionDAO.createSession({
+              id: this.sessionId!,
+              userId,
+              status: 'in_progress',
+            } as any)
+          );
+        } else {
+          await this.runDbOperation(
+            'updateSessionStatus:in_progress',
+            () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
+          );
+        }
       }
 
       // 保存用户输入消息
@@ -91,11 +105,8 @@ export class TaskCreationService {
 
       // Step 1: 意图识别
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
-      this.sendMessage({
-        type: 'agent_message' as any,
-        agent: 'intent_recognition',
-        content: '正在分析您的任务需求...',
-      });
+      this.setStage('collecting');
+      this.sendStatus('intent', '正在分析您的任务需求...');
 
       const intentResult = await this.layer1.recognizeIntent(userInput);
       console.log('[TaskCreationService] 意图识别完成:', intentResult);
@@ -123,15 +134,13 @@ export class TaskCreationService {
         metadata: {
           intent_type: intentResult.intent_type,
           confidence: confidenceScore,
+          next_action: intentResult.clarification_needed ? 'ask_user' : 'plan',
         },
       });
 
       // Step 2: 任务规划
-      this.sendMessage({
-        type: 'agent_message' as any,
-        agent: 'planning',
-        content: '正在规划任务详情...',
-      });
+      this.setStage('planning');
+      this.sendStatus('planning', '正在规划任务详情...');
 
       const taskDescription = await this.layer2.generateTaskDescription(
         intentResult,
@@ -171,13 +180,15 @@ export class TaskCreationService {
       });
 
       // Step 3: 生成执行计划
-      this.sendMessage({
-        type: 'agent_message' as any,
-        agent: 'execution_plan',
-        content: '正在生成执行计划...',
-      });
+      this.setStage('executing');
+      this.sendStatus('execution', '正在生成执行计划...');
 
-      const executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
+      const executionPlan = await this.withTimeout(
+        this.layer3.generateExecutionPlan(taskDescription),
+        Number(process.env.EXECUTION_PLAN_TIMEOUT_MS || 120000),
+        '执行计划生成超时，请稍后重试'
+      );
+      console.log('[TaskCreationService] 执行计划生成完成');
 
       // 保存执行计划
       const taskDescriptionRecord = await this.runDbOperation(
@@ -199,12 +210,15 @@ export class TaskCreationService {
             managers: executionPlan.project.managers,
           })
       );
+      console.log('[TaskCreationService] 执行计划已保存到数据库');
 
       // 更新会话状态为完成
       await this.runDbOperation(
         'updateSessionStatus:completed',
         () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
       );
+      this.setStage('completed');
+      this.sendStatus('execution', '执行计划已生成');
 
       this.sendMessage({
         type: 'plan_generated' as any,
@@ -214,6 +228,7 @@ export class TaskCreationService {
       return executionPlan;
     } catch (error: any) {
       if (isAwaitingUserInputError(error)) {
+        this.setStage('clarifying');
         if (this.sessionId) {
           try {
             await this.runDbOperation(
@@ -229,6 +244,8 @@ export class TaskCreationService {
       }
 
       // 更新会话状态为失败
+      this.setStage('failed');
+      this.sendStatus('error', '任务处理失败');
       if (this.sessionId) {
         try {
           await this.runDbOperation(
@@ -288,6 +305,43 @@ export class TaskCreationService {
     return Math.max(0, Math.min(100, Math.round(normalized)));
   }
 
+  private setStage(stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed'): void {
+    this.stage = stage;
+  }
+
+  private sendStatus(
+    tone: 'system' | 'intent' | 'planning' | 'execution' | 'error',
+    content: string
+  ): void {
+    this.sendMessage({
+      type: 'status_update' as any,
+      agent: tone === 'intent' ? 'intent_recognition' : tone === 'planning' ? 'planning' : tone === 'execution' ? 'execution_plan' : 'system',
+      tone,
+      stage: this.stage,
+      content,
+    } as any);
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    timeoutMessage: string
+  ): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
   /**
    * 发送消息到前端
    */
@@ -307,6 +361,8 @@ export class TaskCreationService {
           messageType: message.type as any,
           metadata: {
             agent: message.agent,
+            stage: (message as any).stage,
+            tone: (message as any).tone,
             options: message.options,
             plan: message.plan,
             message: message.message,

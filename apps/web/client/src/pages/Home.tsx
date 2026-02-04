@@ -617,6 +617,15 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       continue;
     }
 
+    if (message.type === "status_update") {
+      items.push({
+        kind: "capsule",
+        label: message.content || "状态更新",
+        tone: message.tone || getCapsuleTone(message.content || ""),
+      });
+      continue;
+    }
+
     if (message.type === "error") {
       items.push({
         kind: "agent",

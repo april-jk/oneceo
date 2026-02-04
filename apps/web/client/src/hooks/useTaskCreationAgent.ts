@@ -8,10 +8,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'wouter';
 
 export interface AgentMessage {
-  type: 'agent_message' | 'clarification_request' | 'plan_generated' | 'error' | 'user_input' | 'user_response';
+  type: 'agent_message' | 'status_update' | 'clarification_request' | 'plan_generated' | 'error' | 'user_input' | 'user_response';
   sessionId?: string;
   content?: string;
   agent?: string;
+  stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed';
+  tone?: 'system' | 'intent' | 'planning' | 'execution' | 'error';
   metadata?: any;
   question?: string;
   options?: string[];
@@ -109,11 +111,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
         switch (message.type) {
           case 'agent_message':
+          case 'status_update':
             // 显示 Agent 消息
             break;
 
           case 'clarification_request':
             // 显示澄清问题
+            setIsProcessing(false);
             if (message.question) {
               setCurrentQuestion({
                 question: message.question,
@@ -135,6 +139,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             setIsProcessing(false);
             if (message.message && onErrorRef.current) {
               onErrorRef.current(message.message);
+            }
+            break;
+
+          case 'status_update':
+            if (message.stage === 'completed' || message.stage === 'failed') {
+              setIsProcessing(false);
             }
             break;
         }
@@ -268,6 +278,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             type: 'error',
             message: metadata?.message || item?.content,
             content: item?.content,
+            sessionId: historySessionId,
+          };
+        }
+
+        if (messageType === 'status_update') {
+          return {
+            type: 'status_update',
+            content: item?.content || '',
+            stage: metadata?.stage,
+            tone: metadata?.tone || 'system',
+            agent: metadata?.agent,
             sessionId: historySessionId,
           };
         }

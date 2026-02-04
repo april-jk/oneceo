@@ -14,6 +14,9 @@ export interface FileSessionRecord {
   id: string;
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed';
+  stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed';
+  pendingQuestion?: string;
+  pendingOptions?: string[];
   createdAt: string;
   updatedAt: string;
   messages: FileSessionMessage[];
@@ -74,14 +77,27 @@ class TaskCreationFileMemoryStore {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  async createSession(title: string): Promise<FileSessionRecord> {
+  async createSession(title: string, sessionId?: string): Promise<FileSessionRecord> {
     return this.withLock(async () => {
       const memory = await this.readMemory();
       const now = new Date().toISOString();
+      const existing = sessionId
+        ? memory.sessions.find((item) => item.id === sessionId)
+        : null;
+      if (existing) {
+        if (title?.trim()) {
+          existing.title = title.trim().slice(0, 80);
+        }
+        existing.updatedAt = now;
+        await this.writeMemory(memory);
+        return existing;
+      }
+
       const session: FileSessionRecord = {
-        id: this.createId('session'),
+        id: sessionId || this.createId('session'),
         title: title.trim().slice(0, 80) || '新建任务会话',
         status: 'in_progress',
+        stage: 'collecting',
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -110,6 +126,56 @@ class TaskCreationFileMemoryStore {
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
       session.status = status;
+      if (status === 'waiting_user') {
+        session.stage = 'clarifying';
+      } else if (status === 'completed') {
+        session.stage = 'completed';
+      } else if (status === 'failed') {
+        session.stage = 'failed';
+      }
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionStage(
+    sessionId: string,
+    stage: NonNullable<FileSessionRecord['stage']>
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.stage = stage;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async setPendingClarification(sessionId: string, question: string, options?: string[]): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.pendingQuestion = question;
+      session.pendingOptions = options;
+      session.status = 'waiting_user';
+      session.stage = 'clarifying';
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async clearPendingClarification(sessionId: string): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.pendingQuestion = undefined;
+      session.pendingOptions = undefined;
+      if (session.status === 'waiting_user') {
+        session.status = 'in_progress';
+      }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -146,4 +212,3 @@ class TaskCreationFileMemoryStore {
 }
 
 export const taskCreationFileMemoryStore = new TaskCreationFileMemoryStore();
-

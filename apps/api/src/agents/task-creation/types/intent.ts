@@ -43,6 +43,7 @@ export interface IntentRecognitionResult {
   clarification_question?: string;
   clarification_questions?: string[]; // 多个澄清问题
   next_agent: "planning_agent" | "user_clarification";
+  next_action?: "plan" | "ask_user" | "resume" | "finalize";
 }
 
 /**
@@ -90,7 +91,9 @@ export interface Task {
  */
 export enum MessageType {
   USER_INPUT = "user_input",
+  USER_RESPONSE = "user_response",
   AGENT_MESSAGE = "agent_message",
+  STATUS_UPDATE = "status_update",
   CLARIFICATION_REQUEST = "clarification_request",
   PLAN_GENERATED = "plan_generated",
   ERROR = "error",
@@ -104,6 +107,8 @@ export interface WebSocketMessage {
   sessionId?: string;
   content?: string;
   agent?: string;
+  stage?: "collecting" | "clarifying" | "planning" | "executing" | "completed" | "failed";
+  tone?: "system" | "intent" | "planning" | "execution" | "error";
   metadata?: any;
   question?: string;
   options?: string[];

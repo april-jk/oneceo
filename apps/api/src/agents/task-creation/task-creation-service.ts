@@ -9,6 +9,7 @@ import { PlanningAgent } from './layers/planning-agent';
 import { ExecutionPlanAgent } from './layers/execution-plan-agent';
 import type { ExecutionPlan, WebSocketMessage, MessageType } from './types/intent';
 import { taskCreationSessionDAO } from '../../db/dao';
+import { ensureDatabaseConnection } from '../../config/database';
 
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
@@ -47,21 +48,30 @@ export class TaskCreationService {
    */
   async createTask(userInput: string, userId?: string): Promise<ExecutionPlan> {
     try {
+      this.sessionId = undefined;
       console.log('[TaskCreationService] 开始创建任务:', userInput);
+      await ensureDatabaseConnection({ retries: 3, delayMs: 1200 });
       
       // 创建新的会话
       console.log('[TaskCreationService] 创建会话...');
-      const session = await taskCreationSessionDAO.createSession({ userId });
+      const session = await this.runDbOperation(
+        'createSession',
+        () => taskCreationSessionDAO.createSession({ userId })
+      );
       this.sessionId = session.id;
       console.log('[TaskCreationService] 会话创建成功:', this.sessionId);
 
       // 保存用户输入消息
-      await taskCreationSessionDAO.addMessage({
-        sessionId: this.sessionId,
-        role: 'user',
-        content: userInput,
-        messageType: 'user_input',
-      });
+      await this.runDbOperation(
+        'addMessage',
+        () =>
+          taskCreationSessionDAO.addMessage({
+            sessionId: this.sessionId!,
+            role: 'user',
+            content: userInput,
+            messageType: 'user_input',
+          })
+      );
 
       // Step 1: 意图识别
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
@@ -75,15 +85,19 @@ export class TaskCreationService {
       console.log('[TaskCreationService] 意图识别完成:', intentResult);
 
       // 保存意图识别结果
-      await taskCreationSessionDAO.saveIntentResult({
-        sessionId: this.sessionId!,
-        userInput,
-        intentType: intentResult.intent_type,
-        confidence: intentResult.confidence,
-        keyInfo: intentResult.key_info,
-        clarificationNeeded: intentResult.clarification_needed,
-        clarificationQuestions: intentResult.clarification_questions,
-      });
+      await this.runDbOperation(
+        'saveIntentResult',
+        () =>
+          taskCreationSessionDAO.saveIntentResult({
+            sessionId: this.sessionId!,
+            userInput,
+            intentType: intentResult.intent_type,
+            confidence: intentResult.confidence,
+            keyInfo: intentResult.key_info,
+            clarificationNeeded: intentResult.clarification_needed,
+            clarificationQuestions: intentResult.clarification_questions,
+          })
+      );
 
       this.sendMessage({
         type: 'agent_message' as any,
@@ -108,17 +122,27 @@ export class TaskCreationService {
       );
 
       // 保存任务描述
-      const intentResultRecord = await taskCreationSessionDAO.getIntentResult(this.sessionId!);
-      await taskCreationSessionDAO.saveTaskDescription({
-        sessionId: this.sessionId!,
-        intentResultId: intentResultRecord!.id,
-        title: taskDescription.title,
-        objective: taskDescription.objective,
-        scope: taskDescription.scope,
-        deliverables: taskDescription.deliverables,
-        constraints: taskDescription.constraints,
-        additionalInfo: taskDescription.additional_info,
-      });
+      const intentResultRecord = await this.runDbOperation(
+        'getIntentResult',
+        () => taskCreationSessionDAO.getIntentResult(this.sessionId!)
+      );
+      if (!intentResultRecord) {
+        throw new Error('数据库中未找到意图识别记录');
+      }
+      await this.runDbOperation(
+        'saveTaskDescription',
+        () =>
+          taskCreationSessionDAO.saveTaskDescription({
+            sessionId: this.sessionId!,
+            intentResultId: intentResultRecord.id,
+            title: taskDescription.title,
+            objective: taskDescription.objective,
+            scope: taskDescription.scope,
+            deliverables: taskDescription.deliverables,
+            constraints: taskDescription.constraints,
+            additionalInfo: taskDescription.additional_info,
+          })
+      );
 
       this.sendMessage({
         type: 'agent_message' as any,
@@ -139,18 +163,31 @@ export class TaskCreationService {
       const executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
 
       // 保存执行计划
-      const taskDescriptionRecord = await taskCreationSessionDAO.getTaskDescription(this.sessionId!);
-      await taskCreationSessionDAO.saveExecutionPlan({
-        sessionId: this.sessionId!,
-        taskDescriptionId: taskDescriptionRecord!.id,
-        projectTitle: executionPlan.project.title,
-        projectDescription: executionPlan.project.description,
-        estimatedTotalHours: executionPlan.project.estimated_total_hours,
-        managers: executionPlan.project.managers,
-      });
+      const taskDescriptionRecord = await this.runDbOperation(
+        'getTaskDescription',
+        () => taskCreationSessionDAO.getTaskDescription(this.sessionId!)
+      );
+      if (!taskDescriptionRecord) {
+        throw new Error('数据库中未找到任务描述记录');
+      }
+      await this.runDbOperation(
+        'saveExecutionPlan',
+        () =>
+          taskCreationSessionDAO.saveExecutionPlan({
+            sessionId: this.sessionId!,
+            taskDescriptionId: taskDescriptionRecord.id,
+            projectTitle: executionPlan.project.title,
+            projectDescription: executionPlan.project.description,
+            estimatedTotalHours: executionPlan.project.estimated_total_hours,
+            managers: executionPlan.project.managers,
+          })
+      );
 
       // 更新会话状态为完成
-      await taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed');
+      await this.runDbOperation(
+        'updateSessionStatus:completed',
+        () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
+      );
 
       this.sendMessage({
         type: 'plan_generated' as any,
@@ -161,7 +198,16 @@ export class TaskCreationService {
     } catch (error: any) {
       // 更新会话状态为失败
       if (this.sessionId) {
-        await taskCreationSessionDAO.updateSessionStatus(this.sessionId, 'failed');
+        try {
+          await this.runDbOperation(
+            'updateSessionStatus:failed',
+            () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'failed'),
+            2,
+            1000
+          );
+        } catch (dbError: any) {
+          console.warn('[TaskCreationService] 更新会话失败状态失败:', dbError?.message || dbError);
+        }
       }
 
       this.sendMessage({
@@ -169,8 +215,37 @@ export class TaskCreationService {
         message: error.message || '任务创建失败',
       });
 
+      (error as any).__clientNotified = true;
       throw error;
     }
+  }
+
+  private async runDbOperation<T>(
+    operationName: string,
+    operation: () => Promise<T>,
+    retries: number = 3,
+    delayMs: number = 1200
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt === retries) {
+          break;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[TaskCreationService] 数据库操作失败，重试中 (${operationName} ${attempt}/${retries}): ${message}`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`数据库操作失败(${operationName}): ${message}`);
   }
 
   /**

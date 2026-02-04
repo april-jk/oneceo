@@ -103,15 +103,10 @@ ${JSON.stringify(taskDescription, null, 2)}
     }
 
     try {
-      // 尝试从输出中提取 JSON
-      const output = result.output || '';
-      const jsonMatch = output.match(/\{[\s\S]*\}/);
-      
-      if (!jsonMatch) {
-        throw new Error('无法从 Agent 输出中提取 JSON');
-      }
-
-      const executionPlan: ExecutionPlan = JSON.parse(jsonMatch[0]);
+      const executionPlan = await this.parseJsonResponse<ExecutionPlan>(
+        result.output || '',
+        '执行计划'
+      );
 
       // 验证计划的基本结构
       this.validatePlan(executionPlan);

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Mic, Plug, Send, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import TaskCreationChat from "@/components/TaskCreationChat";
 import { motion, AnimatePresence } from "framer-motion";
@@ -30,32 +29,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import UserMenu from "@/components/UserMenu";
-import { useTaskCreationAgent } from "@/hooks/useTaskCreationAgent";
 
 export default function HomePage() {
-  const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
   const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [showAgentDialog, setShowAgentDialog] = useState(false);
-
-  const { sendUserInput, isConnected } = useTaskCreationAgent({
-    onPlanGenerated: (plan) => {
-      console.log("计划生成:", plan);
-      // TODO: 保存计划并跳转到项目页面
-      setShowAgentDialog(false);
-    },
-    onError: (error) => {
-      console.error("任务创建失败:", error);
-    },
-  });
+  const [initialAgentInput, setInitialAgentInput] = useState("");
 
   const handleSend = () => {
     if (message.trim()) {
       // 打开智能体对话框
+      setInitialAgentInput(message.trim());
       setShowAgentDialog(true);
-      // 发送用户输入到智能体
-      sendUserInput(message);
+      setMessage("");
     }
   };
 
@@ -295,12 +282,21 @@ export default function HomePage() {
       <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
 
       {/* Agent Dialog */}
-      <Dialog open={showAgentDialog} onOpenChange={setShowAgentDialog}>
+      <Dialog
+        open={showAgentDialog}
+        onOpenChange={(open) => {
+          setShowAgentDialog(open);
+          if (!open) {
+            setInitialAgentInput("");
+          }
+        }}
+      >
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>任务创建智能体</DialogTitle>
           </DialogHeader>
           <TaskCreationChat
+            initialInput={initialAgentInput}
             onPlanGenerated={(plan) => {
               console.log("计划生成:", plan);
               setShowAgentDialog(false);

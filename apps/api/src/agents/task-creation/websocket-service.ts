@@ -54,10 +54,12 @@ export class TaskCreationWebSocketService {
           await this.handleMessage(clientId, message);
         } catch (error: any) {
           console.error('[WebSocket] 消息处理失败:', error);
-          this.sendToClient(clientId, {
-            type: 'error' as any,
-            message: error.message || '消息处理失败',
-          });
+          if (!error?.__clientNotified) {
+            this.sendToClient(clientId, {
+              type: 'error' as any,
+              message: error.message || '消息处理失败',
+            });
+          }
         }
       });
 

@@ -13,7 +13,6 @@ import Library from "./pages/Library";
 import ProjectDetailWrapper from "./pages/ProjectDetailWrapper";
 import ManagerNode from "./pages/ManagerNode";
 import ManagerView from "./pages/ManagerView";
-import AIAgent from "./pages/AIAgent";
 import AIWorkspace from "./pages/AIWorkspace";
 import AgentProject from "./pages/AgentProject";
 import CEOView from "./pages/CEOView";
@@ -31,7 +30,7 @@ function Router() {
       <Route path="/project/:id" component={ProjectDetailWrapper} />
       <Route path="/manager-node" component={ManagerNode} />
       <Route path="/manager-view" component={ManagerView} />
-      <Route path="/new-task" component={AIAgent} />
+      <Route path="/new-task" component={Home} />
       <Route path="/ai-workspace" component={AIWorkspace} />
       <Route path="/agent-project" component={AgentProject} />
       <Route path="/ceo-view" component={CEOView} />

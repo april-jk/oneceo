@@ -6,6 +6,8 @@
 
 import express from 'express';
 import { taskCreationSessionDAO } from '../db/dao';
+import { getPublicErrorMessage } from '../utils/error-response';
+import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 
 const router = express.Router();
 
@@ -16,9 +18,7 @@ const router = express.Router();
 router.get('/sessions', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 10;
-    const userId = req.query.userId as string;
-
-    const sessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
+    const sessions = await taskCreationFileMemoryStore.listSessions(limit);
 
     res.json({
       success: true,
@@ -28,7 +28,7 @@ router.get('/sessions', async (req, res) => {
     console.error('获取会话列表失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取会话列表失败',
+      error: getPublicErrorMessage('获取会话列表失败，请稍后重试'),
     });
   }
 });
@@ -40,8 +40,7 @@ router.get('/sessions', async (req, res) => {
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
-
-    const sessionData = await taskCreationSessionDAO.getSessionWithDetails(sessionId);
+    const sessionData = await taskCreationFileMemoryStore.getSession(sessionId);
 
     if (!sessionData) {
       return res.status(404).json({
@@ -58,7 +57,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
     console.error('获取会话详情失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取会话详情失败',
+      error: getPublicErrorMessage('获取会话详情失败，请稍后重试'),
     });
   }
 });
@@ -70,8 +69,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
-
-    const messages = await taskCreationSessionDAO.getMessages(sessionId);
+    const messages = await taskCreationFileMemoryStore.getMessages(sessionId);
 
     res.json({
       success: true,
@@ -81,7 +79,7 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     console.error('获取对话消息失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取对话消息失败',
+      error: getPublicErrorMessage('获取对话消息失败，请稍后重试'),
     });
   }
 });
@@ -111,7 +109,7 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
     console.error('获取意图识别结果失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取意图识别结果失败',
+      error: getPublicErrorMessage('获取意图识别结果失败，请稍后重试'),
     });
   }
 });
@@ -141,7 +139,7 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
     console.error('获取任务描述失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取任务描述失败',
+      error: getPublicErrorMessage('获取任务描述失败，请稍后重试'),
     });
   }
 });
@@ -171,7 +169,7 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
     console.error('获取执行计划失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '获取执行计划失败',
+      error: getPublicErrorMessage('获取执行计划失败，请稍后重试'),
     });
   }
 });
@@ -194,7 +192,7 @@ router.delete('/sessions/:sessionId', async (req, res) => {
     console.error('删除会话失败:', error);
     res.status(500).json({
       success: false,
-      error: error.message || '删除会话失败',
+      error: getPublicErrorMessage('删除会话失败，请稍后重试'),
     });
   }
 });

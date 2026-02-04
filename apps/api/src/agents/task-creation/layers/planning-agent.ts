@@ -14,6 +14,7 @@ import { StructuredTool } from '@langchain/core/tools';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import type { IntentRecognitionResult, TaskDescription } from '../types/intent';
+import { isAwaitingUserInputError } from '../errors';
 
 export class PlanningAgent extends BaseAgent {
   private userCallback?: (question: string, options?: string[]) => Promise<string>;
@@ -137,6 +138,9 @@ ${userInput}
 
       return planningResult.task_description;
     } catch (error: any) {
+      if (isAwaitingUserInputError(error)) {
+        throw error;
+      }
       throw new Error(`解析任务描述失败: ${error.message}`);
     }
   }

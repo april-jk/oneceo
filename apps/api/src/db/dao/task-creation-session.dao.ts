@@ -57,7 +57,7 @@ export class TaskCreationSessionDAO {
    */
   async updateSessionStatus(
     sessionId: string,
-    status: 'in_progress' | 'completed' | 'failed'
+    status: 'in_progress' | 'waiting_user' | 'completed' | 'failed'
   ) {
     const [session] = await db
       .update(taskCreationSessions)

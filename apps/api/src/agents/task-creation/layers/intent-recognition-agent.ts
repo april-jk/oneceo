@@ -14,6 +14,7 @@ import { StructuredTool } from '@langchain/core/tools';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { IntentType, type IntentRecognitionResult } from '../types/intent';
+import { isAwaitingUserInputError } from '../errors';
 
 export class IntentRecognitionAgent extends BaseAgent {
   private userCallback?: (question: string, options?: string[]) => Promise<string>;
@@ -108,6 +109,9 @@ export class IntentRecognitionAgent extends BaseAgent {
 
       return intentResult;
     } catch (error: any) {
+      if (isAwaitingUserInputError(error)) {
+        throw error;
+      }
       throw new Error(`解析意图识别结果失败: ${error.message}`);
     }
   }

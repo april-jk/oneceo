@@ -5,8 +5,6 @@
  */
 
 import { ChatOpenAI } from '@langchain/openai';
-import { AgentExecutor, createOpenAIFunctionsAgent } from 'langchain/agents';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 
@@ -50,12 +48,10 @@ export interface AgentResult {
 export abstract class BaseAgent {
   protected config: AgentConfig;
   protected llm: ChatOpenAI;
-  protected agent: any;
-  protected agentExecutor: AgentExecutor | null = null;
 
   constructor(config: AgentConfig) {
     this.config = config;
-    
+
     // 初始化 LLM
     this.llm = new ChatOpenAI({
       modelName: config.modelName || 'gpt-4.1-mini',
@@ -65,69 +61,72 @@ export abstract class BaseAgent {
   }
 
   /**
-   * 初始化 Agent
-   * 子类可以重写此方法以自定义初始化逻辑
-   */
-  protected async initialize(): Promise<void> {
-    // 创建提示词模板
-    const prompt = ChatPromptTemplate.fromMessages([
-      ['system', this.config.systemPrompt],
-      ['placeholder', '{chat_history}'],
-      ['human', '{input}'],
-      ['placeholder', '{agent_scratchpad}'],
-    ]);
-
-    // 创建 Agent
-    this.agent = await createOpenAIFunctionsAgent({
-      llm: this.llm,
-      tools: this.config.tools,
-      prompt,
-    });
-
-    // 创建 Agent Executor
-    this.agentExecutor = new AgentExecutor({
-      agent: this.agent,
-      tools: this.config.tools,
-      maxIterations: this.config.maxIterations || 10,
-      verbose: true,
-    });
-  }
-
-  /**
    * 执行 Agent
    * 
    * @param input - 用户输入
-   * @param chatHistory - 聊天历史
    * @returns Agent 执行结果
    */
-  async execute(input: string, chatHistory: BaseMessage[] = []): Promise<AgentResult> {
+  async execute(input: string): Promise<AgentResult> {
     try {
-      // 确保 Agent 已初始化
-      if (!this.agentExecutor) {
-        await this.initialize();
-      }
+      const messages = [
+        { role: 'system' as const, content: this.config.systemPrompt },
+        { role: 'user' as const, content: input },
+      ];
 
-      if (!this.agentExecutor) {
-        throw new Error('Agent executor initialization failed');
-      }
-
-      // 执行 Agent
-      const result = await this.agentExecutor.invoke({
-        input,
-        chat_history: chatHistory,
-      });
+      const response = await this.llm.invoke(messages);
 
       return {
         success: true,
-        output: result.output,
-        intermediateSteps: result.intermediateSteps,
+        output: response.content as string,
+        intermediateSteps: [],
       };
     } catch (error: any) {
-      console.error(`[${this.config.name}] Error:`, error);
+      console.error(`[${this.config.name}] 执行失败:`, error);
       return {
         success: false,
         output: '',
-        error: error.message || 'Unknown error occurred',
+        error: error.message || '执行失败',
+      };
+    }
+  }
+
+  /**
+   * 流式执行 Agent
+   * 
+   * @param input - 用户输入
+   * @param onChunk - 接收流式输出的回调函数
+   * @returns Agent 执行结果
+   */
+  async executeStream(
+    input: string,
+    onChunk: (chunk: string) => void
+  ): Promise<AgentResult> {
+    try {
+      const messages = [
+        { role: 'system' as const, content: this.config.systemPrompt },
+        { role: 'user' as const, content: input },
+      ];
+
+      const stream = await this.llm.stream(messages);
+      let fullOutput = '';
+
+      for await (const chunk of stream) {
+        const content = chunk.content as string;
+        fullOutput += content;
+        onChunk(content);
+      }
+
+      return {
+        success: true,
+        output: fullOutput,
+        intermediateSteps: [],
+      };
+    } catch (error: any) {
+      console.error(`[${this.config.name}] 流式执行失败:`, error);
+      return {
+        success: false,
+        output: '',
+        error: error.message || '流式执行失败',
       };
     }
   }
@@ -139,67 +138,23 @@ export abstract class BaseAgent {
     return {
       name: this.config.name,
       description: this.config.description,
-      tools: this.config.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-      })),
+      modelName: this.config.modelName || 'gpt-4.1-mini',
+      temperature: this.config.temperature || 0.7,
+      toolsCount: this.config.tools.length,
     };
   }
 
   /**
-   * 流式执行 Agent（用于实时响应）
-   * 
-   * @param input - 用户输入
-   * @param chatHistory - 聊天历史
-   * @param onToken - Token 回调函数
-   * @returns Agent 执行结果
+   * 获取 Agent 名称
    */
-  async executeStream(
-    input: string,
-    chatHistory: BaseMessage[] = [],
-    onToken?: (token: string) => void
-  ): Promise<AgentResult> {
-    try {
-      // 确保 Agent 已初始化
-      if (!this.agentExecutor) {
-        await this.initialize();
-      }
+  getName(): string {
+    return this.config.name;
+  }
 
-      if (!this.agentExecutor) {
-        throw new Error('Agent executor initialization failed');
-      }
-
-      // 流式执行
-      const result = await this.agentExecutor.invoke(
-        {
-          input,
-          chat_history: chatHistory,
-        },
-        {
-          callbacks: onToken
-            ? [
-                {
-                  handleLLMNewToken(token: string) {
-                    onToken(token);
-                  },
-                },
-              ]
-            : undefined,
-        }
-      );
-
-      return {
-        success: true,
-        output: result.output,
-        intermediateSteps: result.intermediateSteps,
-      };
-    } catch (error: any) {
-      console.error(`[${this.config.name}] Error:`, error);
-      return {
-        success: false,
-        output: '',
-        error: error.message || 'Unknown error occurred',
-      };
-    }
+  /**
+   * 获取 Agent 描述
+   */
+  getDescription(): string {
+    return this.config.description;
   }
 }

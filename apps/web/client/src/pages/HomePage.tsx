@@ -9,7 +9,8 @@ import { Mic, Plug, Send, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
-import { motion } from "framer-motion";
+import TaskCreationChat from "@/components/TaskCreationChat";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Tooltip,
   TooltipContent,
@@ -22,18 +23,39 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import UserMenu from "@/components/UserMenu";
+import { useTaskCreationAgent } from "@/hooks/useTaskCreationAgent";
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
   const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [showAgentDialog, setShowAgentDialog] = useState(false);
+
+  const { sendUserInput, isConnected } = useTaskCreationAgent({
+    onPlanGenerated: (plan) => {
+      console.log("计划生成:", plan);
+      // TODO: 保存计划并跳转到项目页面
+      setShowAgentDialog(false);
+    },
+    onError: (error) => {
+      console.error("任务创建失败:", error);
+    },
+  });
 
   const handleSend = () => {
     if (message.trim()) {
-      // Smooth transition to workspace
-      setLocation("/ai-workspace");
+      // 打开智能体对话框
+      setShowAgentDialog(true);
+      // 发送用户输入到智能体
+      sendUserInput(message);
     }
   };
 
@@ -271,6 +293,22 @@ export default function HomePage() {
 
       {/* Connector Dialog */}
       <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
+
+      {/* Agent Dialog */}
+      <Dialog open={showAgentDialog} onOpenChange={setShowAgentDialog}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>任务创建智能体</DialogTitle>
+          </DialogHeader>
+          <TaskCreationChat
+            onPlanGenerated={(plan) => {
+              console.log("计划生成:", plan);
+              setShowAgentDialog(false);
+              // TODO: 跳转到项目详情页面
+            }}
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
+import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 
 dotenv.config();
 
@@ -150,12 +151,17 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
+
+// 初始化任务创建 WebSocket 服务
+taskCreationWebSocketService.initialize(httpServer);
+
 httpServer.listen(PORT, () => {
   console.log('');
   console.log('🚀 oneceo.ai API Server');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📡 API server running on http://localhost:${PORT}`);
   console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
+  console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('');

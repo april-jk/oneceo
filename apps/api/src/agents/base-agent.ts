@@ -54,9 +54,12 @@ export abstract class BaseAgent {
 
     // 初始化 LLM
     this.llm = new ChatOpenAI({
-      modelName: config.modelName || 'gpt-4.1-mini',
+      modelName: config.modelName || 'claude-sonnet-4-5-20250929',
       temperature: config.temperature || 0.7,
       openAIApiKey: process.env.OPENAI_API_KEY,
+      configuration: {
+        baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      },
     });
   }
 

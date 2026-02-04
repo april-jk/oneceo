@@ -5,7 +5,9 @@ import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
+import taskCreationRoutes from './routes/task-creation-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
+import { testDatabaseConnection } from './config/database';
 
 dotenv.config();
 
@@ -63,6 +65,9 @@ app.post('/api/projects', (req, res) => {
     message: 'Project created - Coming soon',
   });
 });
+
+// 任务创建相关 API
+app.use('/api/task-creation', taskCreationRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -155,14 +160,18 @@ const PORT = process.env.PORT || 4000;
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
   console.log('');
   console.log('🚀 oneceo.ai API Server');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📡 API server running on http://localhost:${PORT}`);
   console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
   console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  
+  // 测试数据库连接
+  await testDatabaseConnection();
+  
   console.log('');
 });

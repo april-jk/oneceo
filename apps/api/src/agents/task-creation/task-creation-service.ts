@@ -8,6 +8,7 @@ import { IntentRecognitionAgent } from './layers/intent-recognition-agent';
 import { PlanningAgent } from './layers/planning-agent';
 import { ExecutionPlanAgent } from './layers/execution-plan-agent';
 import type { ExecutionPlan, WebSocketMessage, MessageType } from './types/intent';
+import { taskCreationSessionDAO } from '../../db/dao';
 
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
@@ -20,6 +21,7 @@ export class TaskCreationService {
   private layer2: PlanningAgent;
   private layer3: ExecutionPlanAgent;
   private callbacks?: TaskCreationCallbacks;
+  private sessionId?: string; // 当前会话 ID
 
   constructor(callbacks?: TaskCreationCallbacks) {
     this.callbacks = callbacks;
@@ -43,8 +45,20 @@ export class TaskCreationService {
    * @param userInput - 用户输入的任务描述
    * @returns 执行计划
    */
-  async createTask(userInput: string): Promise<ExecutionPlan> {
+  async createTask(userInput: string, userId?: string): Promise<ExecutionPlan> {
     try {
+      // 创建新的会话
+      const session = await taskCreationSessionDAO.createSession({ userId });
+      this.sessionId = session.id;
+
+      // 保存用户输入消息
+      await taskCreationSessionDAO.addMessage({
+        sessionId: this.sessionId,
+        role: 'user',
+        content: userInput,
+        messageType: 'user_input',
+      });
+
       // Step 1: 意图识别
       this.sendMessage({
         type: 'agent_message' as any,
@@ -53,6 +67,17 @@ export class TaskCreationService {
       });
 
       const intentResult = await this.layer1.recognizeIntent(userInput);
+
+      // 保存意图识别结果
+      await taskCreationSessionDAO.saveIntentResult({
+        sessionId: this.sessionId!,
+        userInput,
+        intentType: intentResult.intent_type,
+        confidence: intentResult.confidence,
+        keyInfo: intentResult.key_info,
+        clarificationNeeded: intentResult.clarification_needed,
+        clarificationQuestions: intentResult.clarification_questions,
+      });
 
       this.sendMessage({
         type: 'agent_message' as any,
@@ -76,6 +101,19 @@ export class TaskCreationService {
         userInput
       );
 
+      // 保存任务描述
+      const intentResultRecord = await taskCreationSessionDAO.getIntentResult(this.sessionId!);
+      await taskCreationSessionDAO.saveTaskDescription({
+        sessionId: this.sessionId!,
+        intentResultId: intentResultRecord!.id,
+        title: taskDescription.title,
+        objective: taskDescription.objective,
+        scope: taskDescription.scope,
+        deliverables: taskDescription.deliverables,
+        constraints: taskDescription.constraints,
+        additionalInfo: taskDescription.additional_info,
+      });
+
       this.sendMessage({
         type: 'agent_message' as any,
         agent: 'planning',
@@ -94,6 +132,20 @@ export class TaskCreationService {
 
       const executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
 
+      // 保存执行计划
+      const taskDescriptionRecord = await taskCreationSessionDAO.getTaskDescription(this.sessionId!);
+      await taskCreationSessionDAO.saveExecutionPlan({
+        sessionId: this.sessionId!,
+        taskDescriptionId: taskDescriptionRecord!.id,
+        projectTitle: executionPlan.project.title,
+        projectDescription: executionPlan.project.description,
+        estimatedTotalHours: executionPlan.project.estimated_total_hours,
+        managers: executionPlan.project.managers,
+      });
+
+      // 更新会话状态为完成
+      await taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed');
+
       this.sendMessage({
         type: 'plan_generated' as any,
         plan: executionPlan,
@@ -101,6 +153,11 @@ export class TaskCreationService {
 
       return executionPlan;
     } catch (error: any) {
+      // 更新会话状态为失败
+      if (this.sessionId) {
+        await taskCreationSessionDAO.updateSessionStatus(this.sessionId, 'failed');
+      }
+
       this.sendMessage({
         type: 'error' as any,
         message: error.message || '任务创建失败',

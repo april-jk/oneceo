@@ -23,6 +23,7 @@ export interface UseTaskCreationAgentOptions {
 }
 
 export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
+  const WELCOME_MESSAGE = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -32,11 +33,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const questionResolverRef = useRef<((answer: string) => void) | null>(null);
+  const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
+  const onErrorRef = useRef(options?.onError);
+
+  useEffect(() => {
+    onPlanGeneratedRef.current = options?.onPlanGenerated;
+    onErrorRef.current = options?.onError;
+  }, [options?.onPlanGenerated, options?.onError]);
 
   // 连接 WebSocket
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) {
       return;
     }
 
@@ -52,7 +62,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const message: AgentMessage = JSON.parse(event.data);
         console.log('[TaskCreationAgent] 收到消息:', message);
 
-        setMessages((prev) => [...prev, message]);
+        setMessages((prev) => {
+          const lastMessage = prev[prev.length - 1];
+          const isDuplicateWelcome =
+            message.type === 'agent_message' &&
+            message.agent === 'system' &&
+            message.content === WELCOME_MESSAGE &&
+            lastMessage?.type === 'agent_message' &&
+            lastMessage?.agent === 'system' &&
+            lastMessage?.content === WELCOME_MESSAGE;
+
+          return isDuplicateWelcome ? prev : [...prev, message];
+        });
 
         switch (message.type) {
           case 'agent_message':
@@ -72,16 +93,16 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           case 'plan_generated':
             // 计划生成完成
             setIsProcessing(false);
-            if (message.plan && options?.onPlanGenerated) {
-              options.onPlanGenerated(message.plan);
+            if (message.plan && onPlanGeneratedRef.current) {
+              onPlanGeneratedRef.current(message.plan);
             }
             break;
 
           case 'error':
             // 错误处理
             setIsProcessing(false);
-            if (message.message && options?.onError) {
-              options.onError(message.message);
+            if (message.message && onErrorRef.current) {
+              onErrorRef.current(message.message);
             }
             break;
         }
@@ -101,7 +122,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
 
     wsRef.current = ws;
-  }, [options]);
+  }, []);
 
   // 断开连接
   const disconnect = useCallback(() => {

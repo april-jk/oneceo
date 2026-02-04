@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/dialog";
 import { Mic, Plug, Send, Plus } from "lucide-react";
 import { useState } from "react";
-import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import TaskCreationChat from "@/components/TaskCreationChat";
 import {
@@ -22,7 +21,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useTaskCreationAgent } from "@/hooks/useTaskCreationAgent";
 
 interface NewTaskDialogProps {
   open: boolean;
@@ -30,29 +28,17 @@ interface NewTaskDialogProps {
 }
 
 export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps) {
-  const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
   const [showConnector, setShowConnector] = useState(false);
   const [showAgentChat, setShowAgentChat] = useState(false);
-
-  const { sendUserInput } = useTaskCreationAgent({
-    onPlanGenerated: (plan) => {
-      console.log("计划生成:", plan);
-      // TODO: 保存计划并跳转到项目页面
-      onOpenChange(false);
-      setShowAgentChat(false);
-    },
-    onError: (error) => {
-      console.error("任务创建失败:", error);
-    },
-  });
+  const [initialAgentInput, setInitialAgentInput] = useState("");
 
   const handleSend = () => {
     if (message.trim()) {
       // 显示智能体对话
+      setInitialAgentInput(message.trim());
       setShowAgentChat(true);
-      // 发送用户输入到智能体
-      sendUserInput(message);
+      setMessage("");
     }
   };
 
@@ -200,10 +186,12 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
             ) : (
               /* Agent Chat */
               <TaskCreationChat
+                initialInput={initialAgentInput}
                 onPlanGenerated={(plan) => {
                   console.log("计划生成:", plan);
                   onOpenChange(false);
                   setShowAgentChat(false);
+                  setInitialAgentInput("");
                   // TODO: 跳转到项目详情页面
                 }}
               />

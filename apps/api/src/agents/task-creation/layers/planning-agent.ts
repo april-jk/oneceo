@@ -122,15 +122,10 @@ ${userInput}
     }
 
     try {
-      // 尝试从输出中提取 JSON
-      const output = result.output || '';
-      const jsonMatch = output.match(/\{[\s\S]*\}/);
-      
-      if (!jsonMatch) {
-        throw new Error('无法从 Agent 输出中提取 JSON');
-      }
-
-      const planningResult = JSON.parse(jsonMatch[0]);
+      const planningResult = await this.parseJsonResponse<any>(
+        result.output || '',
+        '任务规划结果'
+      );
 
       // 如果需要澄清，调用用户回调
       if (planningResult.needs_clarification && planningResult.clarification_question && this.userCallback) {

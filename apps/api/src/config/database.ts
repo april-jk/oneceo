@@ -34,11 +34,17 @@ class DatabaseManager {
   private readonly minCheckIntervalMs = 15000;
 
   constructor() {
+    const sslDisabled = (
+      process.env.DATABASE_SSL === 'disable' ||
+      process.env.DATABASE_SSL === 'false' ||
+      process.env.PGSSLMODE === 'disable' ||
+      DATABASE_URL.includes('sslmode=disable')
+    );
+    const sslConfig = sslDisabled ? undefined : { rejectUnauthorized: false };
+
     this.poolInstance = new Pool({
       connectionString: DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false, // Railway 需要 SSL 连接
-      },
+      ssl: sslConfig, // 默认启用 SSL；可通过环境变量关闭
       max: 20, // 最大连接数
       idleTimeoutMillis: 30000, // 空闲连接超时
       connectionTimeoutMillis: 10000, // 连接超时

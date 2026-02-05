@@ -112,6 +112,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         switch (message.type) {
           case 'agent_message':
           case 'status_update':
+            if (message.type === 'status_update' && (message.stage === 'completed' || message.stage === 'failed')) {
+              setIsProcessing(false);
+            }
             // 显示 Agent 消息
             break;
 
@@ -142,11 +145,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             }
             break;
 
-          case 'status_update':
-            if (message.stage === 'completed' || message.stage === 'failed') {
-              setIsProcessing(false);
-            }
-            break;
         }
       } catch (error) {
         console.error('[TaskCreationAgent] 解析消息失败:', error);

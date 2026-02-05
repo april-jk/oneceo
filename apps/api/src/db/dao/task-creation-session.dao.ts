@@ -4,6 +4,7 @@
  * 提供任务创建会话的数据库操作方法
  */
 
+import { randomUUID } from 'node:crypto';
 import { db } from '../../config/database';
 import {
   taskCreationSessions,
@@ -25,6 +26,10 @@ import { eq, desc } from 'drizzle-orm';
  * 任务创建会话 DAO 类
  */
 export class TaskCreationSessionDAO {
+  private createId(id?: string) {
+    return id ?? randomUUID();
+  }
+
   /**
    * 创建新的任务创建会话
    */
@@ -32,7 +37,7 @@ export class TaskCreationSessionDAO {
     const [session] = await db
       .insert(taskCreationSessions)
       .values({
-        id: data.id,
+        id: this.createId(data.id),
         userId: data.userId,
         status: data.status || 'in_progress',
       })
@@ -79,7 +84,10 @@ export class TaskCreationSessionDAO {
   async addMessage(data: NewConversationMessage) {
     const [message] = await db
       .insert(conversationMessages)
-      .values(data)
+      .values({
+        ...data,
+        id: this.createId(data.id),
+      })
       .returning();
 
     return message;
@@ -104,7 +112,10 @@ export class TaskCreationSessionDAO {
   async saveIntentResult(data: NewIntentRecognitionResult) {
     const [result] = await db
       .insert(intentRecognitionResults)
-      .values(data)
+      .values({
+        ...data,
+        id: this.createId(data.id),
+      })
       .returning();
 
     return result;
@@ -130,7 +141,10 @@ export class TaskCreationSessionDAO {
   async saveTaskDescription(data: NewTaskDescription) {
     const [description] = await db
       .insert(taskDescriptions)
-      .values(data)
+      .values({
+        ...data,
+        id: this.createId(data.id),
+      })
       .returning();
 
     return description;
@@ -156,7 +170,10 @@ export class TaskCreationSessionDAO {
   async saveExecutionPlan(data: NewExecutionPlan) {
     const [plan] = await db
       .insert(executionPlans)
-      .values(data)
+      .values({
+        ...data,
+        id: this.createId(data.id),
+      })
       .returning();
 
     return plan;
@@ -182,7 +199,10 @@ export class TaskCreationSessionDAO {
   async saveSearchRecord(data: NewSearchRecord) {
     const [record] = await db
       .insert(searchRecords)
-      .values(data)
+      .values({
+        ...data,
+        id: this.createId(data.id),
+      })
       .returning();
 
     return record;

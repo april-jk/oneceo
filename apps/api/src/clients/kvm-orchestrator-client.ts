@@ -52,7 +52,7 @@ async function request<T>(
     body: payloadBody,
   });
 
-  const payload = await response.json().catch(() => ({}));
+  const payload: any = await response.json().catch(() => ({}));
   const requestId = payload?.request_id;
 
   if (!response.ok) {

@@ -12,7 +12,7 @@ import { pgTable, text, timestamp, jsonb, uuid, integer, boolean } from 'drizzle
  * 记录每次任务创建的会话信息
  */
 export const taskCreationSessions = pgTable('task_creation_sessions', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   userId: text('user_id'), // 用户ID（可选，未来可以关联用户系统）
   status: text('status').notNull().default('in_progress'), // in_progress, completed, failed
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -26,7 +26,7 @@ export const taskCreationSessions = pgTable('task_creation_sessions', {
  * 记录任务创建过程中的所有对话消息
  */
 export const conversationMessages = pgTable('conversation_messages', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
   role: text('role').notNull(), // user, agent, system
   content: text('content').notNull(),
@@ -41,7 +41,7 @@ export const conversationMessages = pgTable('conversation_messages', {
  * 记录 Layer 1 的意图识别结果
  */
 export const intentRecognitionResults = pgTable('intent_recognition_results', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
   userInput: text('user_input').notNull(),
   intentType: text('intent_type').notNull(),
@@ -58,7 +58,7 @@ export const intentRecognitionResults = pgTable('intent_recognition_results', {
  * 记录 Layer 2 生成的任务描述
  */
 export const taskDescriptions = pgTable('task_descriptions', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
   intentResultId: uuid('intent_result_id').notNull().references(() => intentRecognitionResults.id),
   title: text('title').notNull(),
@@ -76,7 +76,7 @@ export const taskDescriptions = pgTable('task_descriptions', {
  * 记录 Layer 3 生成的执行计划
  */
 export const executionPlans = pgTable('execution_plans', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
   taskDescriptionId: uuid('task_description_id').notNull().references(() => taskDescriptions.id),
   projectTitle: text('project_title').notNull(),
@@ -92,7 +92,7 @@ export const executionPlans = pgTable('execution_plans', {
  * 记录任务创建过程中的搜索查询和结果
  */
 export const searchRecords = pgTable('search_records', {
-  id: uuid('id').primaryKey().defaultRandom(),
+  id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
   query: text('query').notNull(),
   results: jsonb('results'), // 搜索结果

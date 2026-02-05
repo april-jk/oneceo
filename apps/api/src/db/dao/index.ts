@@ -3,3 +3,4 @@
  */
 
 export * from './task-creation-session.dao';
+export * from './sandbox-execution-environment.dao';

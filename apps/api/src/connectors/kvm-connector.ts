@@ -25,13 +25,14 @@ function deepCamel(value: unknown): unknown {
   return out;
 }
 
-function unwrap<T>(payload: EnvelopeLike): { data: T; requestId?: string; code?: number; message?: string } {
-  const data = (payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload) as T;
+function unwrap<T>(payload: unknown): { data: T; requestId?: string; code?: number; message?: string } {
+  const envelope = (payload || {}) as EnvelopeLike;
+  const data = (envelope && typeof envelope === 'object' && 'data' in envelope ? envelope.data : envelope) as T;
   return {
     data: deepCamel(data) as T,
-    requestId: (payload as any)?.request_id || (payload as any)?.requestId,
-    code: payload?.code,
-    message: payload?.message,
+    requestId: (envelope as any)?.request_id || (envelope as any)?.requestId,
+    code: envelope?.code,
+    message: envelope?.message,
   };
 }
 

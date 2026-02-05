@@ -81,12 +81,33 @@ CREATE TABLE IF NOT EXISTS search_records (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Sandbox 执行环境表
+CREATE TABLE IF NOT EXISTS sandbox_execution_environments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id TEXT NOT NULL UNIQUE,
+  orchestrator_session_id TEXT NOT NULL,
+  vm_name TEXT,
+  base_image TEXT NOT NULL,
+  incremental_storage_dir TEXT NOT NULL,
+  incremental_file_name TEXT NOT NULL,
+  incremental_file_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'creating',
+  security_profile JSONB NOT NULL,
+  network_policy JSONB NOT NULL,
+  metadata JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMP
+);
+
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_session_id ON conversation_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_intent_recognition_results_session_id ON intent_recognition_results(session_id);
 CREATE INDEX IF NOT EXISTS idx_task_descriptions_session_id ON task_descriptions(session_id);
 CREATE INDEX IF NOT EXISTS idx_execution_plans_session_id ON execution_plans(session_id);
 CREATE INDEX IF NOT EXISTS idx_search_records_session_id ON search_records(session_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sandbox_execution_environments(session_id);
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
 `;
@@ -110,6 +131,7 @@ export async function runMigration() {
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
     console.log('  - search_records');
+    console.log('  - sandbox_execution_environments');
     
     return true;
   } catch (error) {
@@ -132,6 +154,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS task_descriptions CASCADE;
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
+      DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
     `));
     

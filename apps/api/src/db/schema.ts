@@ -100,6 +100,29 @@ export const searchRecords = pgTable('search_records', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
+/**
+ * Sandbox 执行环境表
+ *
+ * 记录 Session 与 KVM/增量盘映射，以及安全配置快照
+ */
+export const sandboxExecutionEnvironments = pgTable('sandbox_execution_environments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sessionId: text('session_id').notNull().unique(),
+  orchestratorSessionId: text('orchestrator_session_id').notNull(),
+  vmName: text('vm_name'),
+  baseImage: text('base_image').notNull(),
+  incrementalStorageDir: text('incremental_storage_dir').notNull(),
+  incrementalFileName: text('incremental_file_name').notNull(),
+  incrementalFilePath: text('incremental_file_path').notNull(),
+  status: text('status').notNull().default('creating'), // creating, ready, closing, closed, failed
+  securityProfile: jsonb('security_profile').notNull(),
+  networkPolicy: jsonb('network_policy').notNull(),
+  metadata: jsonb('metadata'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  closedAt: timestamp('closed_at'),
+});
+
 // 导出类型
 export type TaskCreationSession = typeof taskCreationSessions.$inferSelect;
 export type NewTaskCreationSession = typeof taskCreationSessions.$inferInsert;
@@ -118,3 +141,6 @@ export type NewExecutionPlan = typeof executionPlans.$inferInsert;
 
 export type SearchRecord = typeof searchRecords.$inferSelect;
 export type NewSearchRecord = typeof searchRecords.$inferInsert;
+
+export type SandboxExecutionEnvironment = typeof sandboxExecutionEnvironments.$inferSelect;
+export type NewSandboxExecutionEnvironment = typeof sandboxExecutionEnvironments.$inferInsert;

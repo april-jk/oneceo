@@ -13,7 +13,7 @@ import { db, ensureDatabaseConnection } from '../config/database';
 const createTablesSQL = `
 -- 任务创建会话表
 CREATE TABLE IF NOT EXISTS task_creation_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   user_id TEXT,
   status TEXT NOT NULL DEFAULT 'in_progress',
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
 
 -- 对话消息表
 CREATE TABLE IF NOT EXISTS conversation_messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 
 -- 意图识别结果表
 CREATE TABLE IF NOT EXISTS intent_recognition_results (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   user_input TEXT NOT NULL,
   intent_type TEXT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS intent_recognition_results (
 
 -- 任务描述表
 CREATE TABLE IF NOT EXISTS task_descriptions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   intent_result_id UUID NOT NULL REFERENCES intent_recognition_results(id),
   title TEXT NOT NULL,
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS task_descriptions (
 
 -- 执行计划表
 CREATE TABLE IF NOT EXISTS execution_plans (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   task_description_id UUID NOT NULL REFERENCES task_descriptions(id),
   project_title TEXT NOT NULL,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS execution_plans (
 
 -- 搜索记录表
 CREATE TABLE IF NOT EXISTS search_records (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   query TEXT NOT NULL,
   results JSONB,

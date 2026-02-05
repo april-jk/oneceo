@@ -2,6 +2,8 @@ import express from 'express';
 import { kvmConnector } from '../connectors/kvm-connector';
 import { KvmClientError } from '../clients/kvm-orchestrator-client';
 import { getPublicErrorMessage } from '../utils/error-response';
+import { sandboxSecurityConfig } from '../config/sandbox-security';
+import { sandboxEnvironmentService } from '../services/sandbox-environment-service';
 
 const router = express.Router();
 
@@ -31,6 +33,38 @@ function ok(res: express.Response, payload: { data: unknown; requestId?: string;
     requestId: payload.requestId,
     data: payload.data,
   });
+}
+
+function isProtectedVm(name: string): boolean {
+  return sandboxSecurityConfig.protectedVmNames.includes(name);
+}
+
+async function validateVmControlScope(req: express.Request, vmName: string) {
+  if (!sandboxSecurityConfig.enforceSessionFirst) {
+    return;
+  }
+
+  const sessionId =
+    (req.query.sessionId as string | undefined) ||
+    req.header('X-Sandbox-Session-Id') ||
+    (req.body?.sessionId as string | undefined);
+
+  if (!sessionId) {
+    throw new KvmClientError(400, '缺少 sessionId（query 或 X-Sandbox-Session-Id）');
+  }
+
+  const environment = await sandboxEnvironmentService.findEnvironment(sessionId);
+  if (!environment) {
+    throw new KvmClientError(404, `未找到 session 对应的执行环境: ${sessionId}`);
+  }
+
+  if (environment.status !== 'ready') {
+    throw new KvmClientError(409, `执行环境不可操作（当前状态: ${environment.status}）`);
+  }
+
+  if (environment.vmName !== vmName) {
+    throw new KvmClientError(403, `session(${sessionId}) 无权操作 VM(${vmName})`);
+  }
 }
 
 router.get('/health', async (_req, res) => {
@@ -68,6 +102,15 @@ router.post('/vms/:name/:action', async (req, res) => {
       });
     }
 
+    if (isProtectedVm(req.params.name)) {
+      return res.status(403).json({
+        success: false,
+        error: getPublicErrorMessage(`受保护虚拟机禁止执行控制动作: ${req.params.name}`),
+      });
+    }
+
+    await validateVmControlScope(req, req.params.name);
+
     const asyncMode = String(req.query.async || '').toLowerCase() === 'true';
     return ok(res, await kvmConnector.controlVm(req.params.name, action as any, asyncMode));
   } catch (error) {
@@ -102,6 +145,13 @@ router.get('/vms/:name/snapshots', async (req, res) => {
 
 router.post('/vms/:name/snapshots/create', async (req, res) => {
   try {
+    if (isProtectedVm(req.params.name)) {
+      return res.status(403).json({
+        success: false,
+        error: getPublicErrorMessage(`受保护虚拟机禁止创建快照: ${req.params.name}`),
+      });
+    }
+    await validateVmControlScope(req, req.params.name);
     return ok(res, await kvmConnector.createVmSnapshot(req.params.name, req.body || {}));
   } catch (error) {
     return handleError(res, error, '创建快照失败');
@@ -110,6 +160,13 @@ router.post('/vms/:name/snapshots/create', async (req, res) => {
 
 router.post('/vms/:name/snapshots/:snapshotName/restore', async (req, res) => {
   try {
+    if (isProtectedVm(req.params.name)) {
+      return res.status(403).json({
+        success: false,
+        error: getPublicErrorMessage(`受保护虚拟机禁止恢复快照: ${req.params.name}`),
+      });
+    }
+    await validateVmControlScope(req, req.params.name);
     return ok(res, await kvmConnector.restoreVmSnapshot(req.params.name, req.params.snapshotName));
   } catch (error) {
     return handleError(res, error, '恢复快照失败');
@@ -118,6 +175,13 @@ router.post('/vms/:name/snapshots/:snapshotName/restore', async (req, res) => {
 
 router.delete('/vms/:name/snapshots/:snapshotName', async (req, res) => {
   try {
+    if (isProtectedVm(req.params.name)) {
+      return res.status(403).json({
+        success: false,
+        error: getPublicErrorMessage(`受保护虚拟机禁止删除快照: ${req.params.name}`),
+      });
+    }
+    await validateVmControlScope(req, req.params.name);
     return ok(res, await kvmConnector.deleteVmSnapshot(req.params.name, req.params.snapshotName));
   } catch (error) {
     return handleError(res, error, '删除快照失败');
@@ -163,6 +227,58 @@ router.post('/sessions/:sessionId/close', async (req, res) => {
     return ok(res, await kvmConnector.closeSession(req.params.sessionId, req.body || {}));
   } catch (error) {
     return handleError(res, error, '关闭会话失败');
+  }
+});
+
+// execution environment (base + incremental + db mapping)
+router.post('/environment/open', async (req, res) => {
+  try {
+    const idempotencyKey = req.header('Idempotency-Key') || undefined;
+    const result = await sandboxEnvironmentService.openEnvironment({
+      metadata: req.body?.metadata || {},
+      bind: req.body?.bind || {},
+      idempotencyKey,
+    });
+    return res.status(201).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, '创建执行层 KVM 环境失败');
+  }
+});
+
+router.get('/environment/:sessionId', async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: await sandboxEnvironmentService.getEnvironment(req.params.sessionId),
+    });
+  } catch (error) {
+    return handleError(res, error, '获取执行层 KVM 环境失败');
+  }
+});
+
+router.get('/environment', async (req, res) => {
+  try {
+    const limit = Number(req.query.limit || 20);
+    return res.json({
+      success: true,
+      data: await sandboxEnvironmentService.listEnvironments(limit),
+    });
+  } catch (error) {
+    return handleError(res, error, '获取执行层 KVM 环境列表失败');
+  }
+});
+
+router.post('/environment/:sessionId/close', async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: await sandboxEnvironmentService.closeEnvironment(req.params.sessionId),
+    });
+  } catch (error) {
+    return handleError(res, error, '关闭执行层 KVM 环境失败');
   }
 });
 

@@ -18,6 +18,32 @@ function pickString(...candidates: unknown[]): string | undefined {
   return undefined;
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForJob(jobId: string, timeoutMs: number = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const job = await kvmConnector.getJob(jobId);
+    const data = job.data as any;
+    const status = data?.status;
+    if (status && !['queued', 'running'].includes(status)) {
+      return data;
+    }
+    await sleep(1200);
+  }
+  throw new Error(`等待任务超时: ${jobId}`);
+}
+
+async function awaitJobIfNeeded(result: any) {
+  const jobId = result?.jobId || result?.job_id;
+  if (!jobId) {
+    return result;
+  }
+  return waitForJob(String(jobId));
+}
+
 export class SandboxEnvironmentService {
   private buildIncrementalMapping(sessionId: string) {
     const fileName = `${sessionId}.qcow2`;
@@ -94,11 +120,44 @@ export class SandboxEnvironmentService {
           });
         }
 
-        const bindResult = await kvmConnector.bindSessionVm(orchestratorSessionId, {
-          auto: true,
-          excludeVmNames: sandboxSecurityConfig.protectedVmNames,
-          ...(input.bind || {}),
-        });
+        let bindResult: any = null;
+        if (sandboxSecurityConfig.useSandboxApi) {
+          const vmName =
+            pickString(input.bind?.vm_name, input.bind?.vmName) ||
+            `sandbox_${orchestratorSessionId}`;
+          const sandboxInput: Record<string, unknown> = {
+            session_id: orchestratorSessionId,
+            vm_name: vmName,
+            auto_bind: true,
+            start: true,
+          };
+          if (sandboxSecurityConfig.sandboxBaseImagePath) {
+            sandboxInput.base_image = sandboxSecurityConfig.sandboxBaseImagePath;
+          }
+          if (sandboxSecurityConfig.sandboxNetwork) {
+            sandboxInput.network = sandboxSecurityConfig.sandboxNetwork;
+          }
+          if (sandboxSecurityConfig.sandboxMemoryMb) {
+            sandboxInput.memory_mb = sandboxSecurityConfig.sandboxMemoryMb;
+          }
+          if (sandboxSecurityConfig.sandboxVcpus) {
+            sandboxInput.vcpus = sandboxSecurityConfig.sandboxVcpus;
+          }
+          if (sandboxSecurityConfig.sandboxOsVariant) {
+            sandboxInput.os_variant = sandboxSecurityConfig.sandboxOsVariant;
+          }
+          const sandboxIdempotencyKey = attemptIdempotencyKey
+            ? `${attemptIdempotencyKey}-sandbox`
+            : undefined;
+          bindResult = await kvmConnector.createSandbox(sandboxInput, sandboxIdempotencyKey);
+          await awaitJobIfNeeded(bindResult);
+        } else {
+          bindResult = await kvmConnector.bindSessionVm(orchestratorSessionId, {
+            auto: true,
+            excludeVmNames: sandboxSecurityConfig.protectedVmNames,
+            ...(input.bind || {}),
+          });
+        }
 
         const vmResult = await kvmConnector.getSessionVm(orchestratorSessionId);
         const vmName = pickString(

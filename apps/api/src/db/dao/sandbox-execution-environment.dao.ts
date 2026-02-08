@@ -42,6 +42,19 @@ export class SandboxExecutionEnvironmentDAO {
 
     return row;
   }
+
+  async updateMetadata(sessionId: string, metadata: Record<string, unknown>) {
+    const [row] = await db
+      .update(sandboxExecutionEnvironments)
+      .set({
+        metadata,
+        updatedAt: new Date(),
+      })
+      .where(eq(sandboxExecutionEnvironments.sessionId, sessionId))
+      .returning();
+
+    return row;
+  }
 }
 
 export const sandboxExecutionEnvironmentDAO = new SandboxExecutionEnvironmentDAO();

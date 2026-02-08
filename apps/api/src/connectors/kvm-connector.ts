@@ -1,4 +1,10 @@
 import { kvmOrchestratorClient } from '../clients/kvm-orchestrator-client';
+import type {
+  UploadFileInput,
+  ExecInput,
+  SandboxCreateInput,
+  SandboxPortMappingInput,
+} from '../clients/kvm-orchestrator-client';
 
 type Action = 'start' | 'shutdown' | 'reboot' | 'suspend' | 'resume';
 
@@ -41,6 +47,8 @@ export const kvmConnector = {
 
   listVms: async () => unwrap(await kvmOrchestratorClient.listVms()),
   getVm: async (name: string) => unwrap(await kvmOrchestratorClient.getVm(name)),
+  getVmIp: async (name: string, query?: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.getVmIp(name, query)),
   controlVm: async (name: string, action: Action, asyncMode?: boolean) =>
     unwrap(await kvmOrchestratorClient.controlVm(name, action, asyncMode)),
   getVmMetrics: async (name: string) => unwrap(await kvmOrchestratorClient.getVmMetrics(name)),
@@ -66,6 +74,35 @@ export const kvmConnector = {
   getSessionQuota: async (sessionId: string) => unwrap(await kvmOrchestratorClient.getSessionQuota(sessionId)),
   updateSessionQuota: async (sessionId: string, input: Record<string, unknown>) =>
     unwrap(await kvmOrchestratorClient.updateSessionQuota(sessionId, input)),
+
+  uploadVmFile: async (vmName: string, input: UploadFileInput) =>
+    unwrap(await kvmOrchestratorClient.uploadVmFile(vmName, input)),
+  uploadSessionFile: async (sessionId: string, input: UploadFileInput) =>
+    unwrap(await kvmOrchestratorClient.uploadSessionFile(sessionId, input)),
+  deleteVmFile: async (vmName: string, query: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.deleteVmFile(vmName, query)),
+  deleteSessionFile: async (sessionId: string, query: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.deleteSessionFile(sessionId, query)),
+  execVm: async (vmName: string, input: ExecInput) =>
+    unwrap(await kvmOrchestratorClient.execVm(vmName, input)),
+  execSession: async (sessionId: string, input: ExecInput) =>
+    unwrap(await kvmOrchestratorClient.execSession(sessionId, input)),
+
+  createSandbox: async (input: SandboxCreateInput, idempotencyKey?: string) =>
+    unwrap(await kvmOrchestratorClient.createSandbox(input, idempotencyKey)),
+  getSandbox: async (sessionId: string) => unwrap(await kvmOrchestratorClient.getSandbox(sessionId)),
+  getSandboxIp: async (sessionId: string, query?: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.getSandboxIp(sessionId, query)),
+  createSandboxPort: async (sessionId: string, input: SandboxPortMappingInput) =>
+    unwrap(await kvmOrchestratorClient.createSandboxPort(sessionId, input)),
+  listSandboxPorts: async (sessionId: string) =>
+    unwrap(await kvmOrchestratorClient.listSandboxPorts(sessionId)),
+  deleteSandboxPort: async (sessionId: string, query: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.deleteSandboxPort(sessionId, query)),
+  restartSandbox: async (sessionId: string, input: Record<string, unknown>) =>
+    unwrap(await kvmOrchestratorClient.restartSandbox(sessionId, input)),
+  deleteSandbox: async (sessionId: string, query?: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.deleteSandbox(sessionId, query)),
 
   getJob: async (jobId: string) => unwrap(await kvmOrchestratorClient.getJob(jobId)),
 };

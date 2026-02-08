@@ -10,8 +10,11 @@ import { Pool } from 'pg';
 /**
  * 数据库连接配置
  */
-const DATABASE_URL = process.env.DATABASE_URL || 
-  'postgresql://postgres:ByEiZNfHGcTGWJtObsvzQypmEuLanLeZ@centerbeam.proxy.rlwy.net:49514/railway';
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is required. Please configure it in apps/api/.env');
+}
+
+const DATABASE_URL = process.env.DATABASE_URL;
 
 interface RetryOptions {
   retries?: number;

@@ -7,6 +7,7 @@ import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
 import sandboxRoutes from './routes/sandbox-routes';
+import osacRoutes from './routes/osac-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -71,6 +72,7 @@ app.post('/api/projects', (req, res) => {
 // 任务创建相关 API
 app.use('/api/task-creation', taskCreationRoutes);
 app.use('/api/sandbox', sandboxRoutes);
+app.use('/api/sandbox/osac', osacRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

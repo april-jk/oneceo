@@ -47,6 +47,7 @@ export default function Home() {
     isProcessing,
     messages,
     currentQuestion,
+    runtime,
     sendUserInput,
     answerQuestion,
   } = useTaskCreationAgent({
@@ -362,6 +363,18 @@ export default function Home() {
                           tone="warning"
                           icon={<Loader2 className="w-4 h-4 animate-spin" />}
                           text="正在连接智能体..."
+                        />
+                      )}
+
+                      {runtime.orchestratorSessionId && (
+                        <NoticeMessage
+                          tone={runtime.error ? "warning" : "info"}
+                          icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
+                          text={
+                            runtime.error
+                              ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
+                              : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
+                          }
                         />
                       )}
 

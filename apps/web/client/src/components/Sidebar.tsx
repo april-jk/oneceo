@@ -28,6 +28,7 @@ import {
 import { Link, useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import React from 'react';
+import { listTaskCreationSessions } from '@/lib/task-creation-client';
 
 interface SidebarProps {
   className?: string;
@@ -52,10 +53,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
     let disposed = false;
     const load = async () => {
       try {
-        const res = await fetch("http://localhost:4000/api/task-creation/sessions?limit=20");
-        if (!res.ok) return;
-        const json = await res.json();
-        const list = Array.isArray(json?.data) ? json.data : [];
+        const list = await listTaskCreationSessions(20);
         if (disposed) return;
         const mapped = list.map((session: any) => ({
           sessionId: session.id,

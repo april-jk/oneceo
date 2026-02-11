@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { useLocation } from "wouter";
@@ -38,6 +39,7 @@ export default function Home() {
   const [mode, setMode] = useState<PageMode>('input');
   const [message, setMessage] = useState("");
   const [showConnector, setShowConnector] = useState(false);
+  const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
@@ -367,15 +369,26 @@ export default function Home() {
                       )}
 
                       {runtime.orchestratorSessionId && (
-                        <NoticeMessage
-                          tone={runtime.error ? "warning" : "info"}
-                          icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
-                          text={
-                            runtime.error
-                              ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
-                              : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
-                          }
-                        />
+                        <div className="flex items-center justify-between gap-3">
+                          <NoticeMessage
+                            tone={runtime.error ? "warning" : "info"}
+                            icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
+                            text={
+                              runtime.error
+                                ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
+                                : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
+                            }
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="shrink-0 rounded-full"
+                            onClick={() => setShowRuntimeDrawer(true)}
+                          >
+                            查看执行日志
+                          </Button>
+                        </div>
                       )}
 
                       {/* 消息列表 */}
@@ -556,6 +569,11 @@ export default function Home() {
 
       {/* Connector Dialog */}
       <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
+      <TaskRuntimeDrawer
+        open={showRuntimeDrawer}
+        onOpenChange={setShowRuntimeDrawer}
+        runtime={runtime}
+      />
     </WorkspaceLayout>
   );
 }

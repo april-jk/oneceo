@@ -33,6 +33,8 @@ export interface OrchestrationRuntime {
   latestText: string | null;
   syncing: boolean;
   error: string | null;
+  messages: OsacMessageRecord[];
+  refresh: () => Promise<void>;
 }
 
 export interface UseTaskCreationAgentOptions {
@@ -77,6 +79,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   } | null>(null);
   const [orchestratorSessionId, setOrchestratorSessionId] = useState<string | null>(null);
   const [latestOsacMessage, setLatestOsacMessage] = useState<OsacMessageRecord | null>(null);
+  const [runtimeMessages, setRuntimeMessages] = useState<OsacMessageRecord[]>([]);
   const [isSyncingRuntime, setIsSyncingRuntime] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [location] = useLocation();
@@ -94,6 +97,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setCurrentQuestion(null);
         setOrchestratorSessionId(null);
         setLatestOsacMessage(null);
+        setRuntimeMessages([]);
         setRuntimeError(null);
         setSessionId(querySessionId);
       }
@@ -359,6 +363,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       } else {
         setOrchestratorSessionId(null);
         setLatestOsacMessage(null);
+        setRuntimeMessages([]);
         setRuntimeError(null);
       }
     } catch (error) {
@@ -366,43 +371,51 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
   }, []);
 
+  const syncRuntime = useCallback(
+    async (targetSessionId?: string) => {
+      const sid = (targetSessionId || orchestratorSessionId || '').trim();
+      if (!sid) {
+        setLatestOsacMessage(null);
+        setRuntimeMessages([]);
+        setRuntimeError(null);
+        setIsSyncingRuntime(false);
+        return;
+      }
+
+      setIsSyncingRuntime(true);
+      try {
+        const list = await listOsacMessages(sid, 150);
+        setRuntimeError(null);
+        setRuntimeMessages(list);
+        setLatestOsacMessage(list.length > 0 ? list[list.length - 1] : null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'runtime sync failed';
+        setRuntimeError(message);
+      } finally {
+        setIsSyncingRuntime(false);
+      }
+    },
+    [orchestratorSessionId]
+  );
+
   useEffect(() => {
     if (!orchestratorSessionId) {
       setLatestOsacMessage(null);
+      setRuntimeMessages([]);
       setRuntimeError(null);
       setIsSyncingRuntime(false);
       return;
     }
 
-    let cancelled = false;
-    const syncRuntime = async () => {
-      setIsSyncingRuntime(true);
-      try {
-        const list = await listOsacMessages(orchestratorSessionId, 150);
-        if (cancelled) return;
-        setRuntimeError(null);
-        setLatestOsacMessage(list.length > 0 ? list[list.length - 1] : null);
-      } catch (error) {
-        if (cancelled) return;
-        const message = error instanceof Error ? error.message : 'runtime sync failed';
-        setRuntimeError(message);
-      } finally {
-        if (!cancelled) {
-          setIsSyncingRuntime(false);
-        }
-      }
-    };
-
-    void syncRuntime();
+    void syncRuntime(orchestratorSessionId);
     const timer = window.setInterval(() => {
-      void syncRuntime();
+      void syncRuntime(orchestratorSessionId);
     }, 4000);
 
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
     };
-  }, [orchestratorSessionId]);
+  }, [orchestratorSessionId, syncRuntime]);
 
   // 自动连接
   useEffect(() => {
@@ -431,6 +444,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       latestText: pickOsacMessageText(latestOsacMessage),
       syncing: isSyncingRuntime,
       error: runtimeError,
+      messages: runtimeMessages,
+      refresh: async () => {
+        await syncRuntime();
+      },
     } as OrchestrationRuntime,
     sendUserInput,
     answerQuestion,

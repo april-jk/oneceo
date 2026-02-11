@@ -6,6 +6,12 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'wouter';
+import {
+  createTaskCreationSocket,
+  listOsacMessages,
+  listTaskCreationMessages,
+  type OsacMessageRecord,
+} from '@/lib/task-creation-client';
 
 export interface AgentMessage {
   type: 'agent_message' | 'status_update' | 'clarification_request' | 'plan_generated' | 'error' | 'user_input' | 'user_response';
@@ -21,9 +27,41 @@ export interface AgentMessage {
   message?: string;
 }
 
+export interface OrchestrationRuntime {
+  orchestratorSessionId: string | null;
+  latestType: string | null;
+  latestText: string | null;
+  syncing: boolean;
+  error: string | null;
+}
+
 export interface UseTaskCreationAgentOptions {
   onPlanGenerated?: (plan: any) => void;
   onError?: (error: string) => void;
+}
+
+function extractOrchestratorSessionId(message: AgentMessage): string | null {
+  const candidate = message?.metadata?.orchestratorSessionId;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+function pickOsacMessageText(message: OsacMessageRecord | null): string | null {
+  const payload = (message?.payload || {}) as Record<string, unknown>;
+  const candidates = [
+    payload.output,
+    payload.content,
+    payload.message,
+    payload.text,
+    payload.error,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
@@ -37,6 +75,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     question: string;
     options?: string[];
   } | null>(null);
+  const [orchestratorSessionId, setOrchestratorSessionId] = useState<string | null>(null);
+  const [latestOsacMessage, setLatestOsacMessage] = useState<OsacMessageRecord | null>(null);
+  const [isSyncingRuntime, setIsSyncingRuntime] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [location] = useLocation();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -50,6 +92,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (querySessionId !== sessionId) {
         setMessages([]);
         setCurrentQuestion(null);
+        setOrchestratorSessionId(null);
+        setLatestOsacMessage(null);
+        setRuntimeError(null);
         setSessionId(querySessionId);
       }
       window.localStorage.setItem(SESSION_STORAGE_KEY, querySessionId);
@@ -79,7 +124,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
 
-    const ws = new WebSocket('ws://localhost:4000/ws/task-creation');
+    const ws = createTaskCreationSocket();
 
     ws.onopen = () => {
       console.log('[TaskCreationAgent] WebSocket 连接成功');
@@ -94,6 +139,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (messageSessionId) {
           setSessionId(messageSessionId);
           window.localStorage.setItem(SESSION_STORAGE_KEY, messageSessionId);
+        }
+        const orchestratorId = extractOrchestratorSessionId(message);
+        if (orchestratorId) {
+          setOrchestratorSessionId(orchestratorId);
         }
 
         setMessages((prev) => {
@@ -232,13 +281,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const loadHistory = useCallback(async (historySessionId: string) => {
     try {
-      const response = await fetch(`http://localhost:4000/api/task-creation/sessions/${historySessionId}/messages`);
-      if (!response.ok) {
-        return;
-      }
-
-      const result = await response.json();
-      const list = Array.isArray(result?.data) ? result.data : [];
+      const list = await listTaskCreationMessages(historySessionId);
       const mapped: AgentMessage[] = list.map((item: any) => {
         const metadata = item?.metadata || {};
         const messageType = item?.messageType;
@@ -249,6 +292,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             type: messageType === 'user_response' ? 'user_response' : 'user_input',
             content: item?.content || '',
             sessionId: historySessionId,
+            metadata,
           };
         }
 
@@ -258,6 +302,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             plan: metadata?.plan,
             content: item?.content,
             sessionId: historySessionId,
+            metadata,
           };
         }
 
@@ -268,6 +313,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             options: metadata?.options,
             content: item?.content,
             sessionId: historySessionId,
+            metadata,
           };
         }
 
@@ -277,6 +323,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             message: metadata?.message || item?.content,
             content: item?.content,
             sessionId: historySessionId,
+            metadata,
           };
         }
 
@@ -288,6 +335,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             tone: metadata?.tone || 'system',
             agent: metadata?.agent,
             sessionId: historySessionId,
+            metadata,
           };
         }
 
@@ -301,10 +349,60 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       });
 
       setMessages(mapped);
+
+      const latestRuntimeSession = [...mapped]
+        .reverse()
+        .map((msg) => extractOrchestratorSessionId(msg))
+        .find((value): value is string => Boolean(value));
+      if (latestRuntimeSession) {
+        setOrchestratorSessionId(latestRuntimeSession);
+      } else {
+        setOrchestratorSessionId(null);
+        setLatestOsacMessage(null);
+        setRuntimeError(null);
+      }
     } catch (error) {
       console.error('[TaskCreationAgent] 加载历史消息失败:', error);
     }
   }, []);
+
+  useEffect(() => {
+    if (!orchestratorSessionId) {
+      setLatestOsacMessage(null);
+      setRuntimeError(null);
+      setIsSyncingRuntime(false);
+      return;
+    }
+
+    let cancelled = false;
+    const syncRuntime = async () => {
+      setIsSyncingRuntime(true);
+      try {
+        const list = await listOsacMessages(orchestratorSessionId, 150);
+        if (cancelled) return;
+        setRuntimeError(null);
+        setLatestOsacMessage(list.length > 0 ? list[list.length - 1] : null);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : 'runtime sync failed';
+        setRuntimeError(message);
+      } finally {
+        if (!cancelled) {
+          setIsSyncingRuntime(false);
+        }
+      }
+    };
+
+    void syncRuntime();
+    const timer = window.setInterval(() => {
+      void syncRuntime();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [orchestratorSessionId]);
 
   // 自动连接
   useEffect(() => {
@@ -327,6 +425,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     messages,
     sessionId,
     currentQuestion,
+    runtime: {
+      orchestratorSessionId,
+      latestType: latestOsacMessage?.type || null,
+      latestText: pickOsacMessageText(latestOsacMessage),
+      syncing: isSyncingRuntime,
+      error: runtimeError,
+    } as OrchestrationRuntime,
     sendUserInput,
     answerQuestion,
     clearMessages,

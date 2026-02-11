@@ -7,6 +7,13 @@
  */
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -39,10 +46,12 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ className = "", collapsed = false, onToggleCollapse, selectedProjectId, onProjectSelect }: SidebarProps) {
+  const SESSION_PREVIEW_COUNT = 3;
   const [location] = useLocation();
   const { t } = useTranslation();
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<Array<{
     sessionId: string;
     title: string;
@@ -151,6 +160,15 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       managers: []
     },
   ];
+  const sessionPreviewList = sessionTasks.slice(0, SESSION_PREVIEW_COUNT);
+  const hiddenSessionCount = Math.max(sessionTasks.length - SESSION_PREVIEW_COUNT, 0);
+  const hasSessionOverflow = hiddenSessionCount > 0;
+  const formatSessionStatus = (status: string) => {
+    if (status === "completed") return "完成";
+    if (status === "waiting_user") return "待补充";
+    return "进行中";
+  };
+
   return (
     <aside
       className={`fixed left-0 top-0 h-screen ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border-r border-sidebar-border flex flex-col shadow-sm transition-all duration-300 ${className}`}
@@ -311,16 +329,21 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
               );
             })}
           </div>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
-          >
-            <span className="text-sm">{t('sidebar.viewMore')}</span>
-          </Button>
+          {hasSessionOverflow && (
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
+              onClick={() => setTasksDialogOpen(true)}
+            >
+              <span className="text-sm">
+                {t('sidebar.viewMore')} ({hiddenSessionCount})
+              </span>
+            </Button>
+          )}
 
           {sessionTasks.length > 0 && (
             <div className="mt-2 space-y-1">
-              {sessionTasks.map((session) => (
+              {sessionPreviewList.map((session) => (
                 <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
                   <Button
                     variant="ghost"
@@ -329,7 +352,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                     <FileText className="w-3.5 h-3.5" />
                     <span className="text-xs truncate flex-1 text-left">{session.title}</span>
                     <span className="text-[10px] text-muted-foreground">
-                      {session.status === "completed" ? "完成" : session.status === "waiting_user" ? "待补充" : "进行中"}
+                      {formatSessionStatus(session.status)}
                     </span>
                   </Button>
                 </Link>
@@ -342,15 +365,17 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
         {/* All Tasks */}
         {!collapsed && <div className="px-3 pb-3">
-          <Link href="/tasks">
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-            >
-              <FileText className="w-4 h-4" />
-              <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
-            </Button>
-          </Link>
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+            onClick={() => setTasksDialogOpen(true)}
+          >
+            <FileText className="w-4 h-4" />
+            <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {sessionTasks.length}
+            </span>
+          </Button>
         </div>}
       </ScrollArea>
 
@@ -364,6 +389,44 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
         </Button>
       </div>
+
+      <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>
+        <DialogContent className="max-w-2xl p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b">
+            <DialogTitle>{t('sidebar.allTasks')}</DialogTitle>
+            <DialogDescription>
+              {`共 ${sessionTasks.length} 个任务会话`}
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[65vh] px-4 py-4">
+            {sessionTasks.length === 0 ? (
+              <div className="text-sm text-muted-foreground px-2 py-6 text-center">
+                暂无任务会话
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sessionTasks.map((session) => (
+                  <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      onClick={() => setTasksDialogOpen(false)}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <FileText className="w-4 h-4 shrink-0" />
+                        <span className="text-sm truncate">{session.title}</span>
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {formatSessionStatus(session.status)}
+                      </span>
+                    </Button>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

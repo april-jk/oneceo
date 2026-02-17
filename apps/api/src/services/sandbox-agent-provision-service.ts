@@ -1,8 +1,18 @@
 import { sandboxEnvironmentService } from './sandbox-environment-service';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { kvmConnector } from '../connectors/kvm-connector';
+import {
+  buildSandboxPortProbeQuery,
+  extractSandboxPortMappings,
+  findSandboxPortMapping,
+  getSandboxPortCheckCount,
+  getSandboxPortWaitSeconds,
+  isSandboxPortReady,
+  normalizeSandboxPortMapping,
+} from '../connectors/kvm-call-pattern';
 import { ensureDatabaseConnection } from '../config/database';
 import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
+import { normalizeOpencodeModel } from '../utils/opencode-model';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -238,6 +248,29 @@ async function waitForGuestAgent(sessionId: string, attempts: number = 10) {
   }
 }
 
+async function waitForOsacListening(sessionId: string, port: number, attempts: number = 10) {
+  const checkCommand = `if command -v ss >/dev/null 2>&1; then ss -ltn; elif command -v netstat >/dev/null 2>&1; then netstat -ltn; else exit 0; fi`;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const execResult = await kvmConnector.execSession(sessionId, {
+        path: '/bin/bash',
+        args: ['-lc', checkCommand],
+        capture_output: true,
+        timeout_seconds: 8,
+      });
+      const finished = await awaitJobIfNeeded(execResult);
+      const output = extractExecOutput(finished) || extractExecOutput(execResult);
+      if (output && output.includes(`:${port}`)) {
+        return true;
+      }
+    } catch {
+      // ignore and retry
+    }
+    await sleep(2000);
+  }
+  return false;
+}
+
 function buildDownloadBaseUrl(reqBaseUrl?: string): string {
   if (osacBootstrapConfig.downloadBaseUrl) {
     return osacBootstrapConfig.downloadBaseUrl.replace(/\/+$/, '');
@@ -288,10 +321,178 @@ function generateOsacToken() {
   return crypto.randomBytes(24).toString('base64url');
 }
 
-async function ensureVmEnv(sessionId: string, token: string) {
+function normalizeOpenAiBaseUrl(input: string): string {
+  const raw = input.trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const pathname = parsed.pathname || '/';
+    if (pathname === '/' || pathname === '') {
+      parsed.pathname = '/v1';
+    }
+    return parsed.toString().replace(/\/+$/, '');
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+function resolveOpencodeEnv() {
+  const proxyPort = Number(process.env.OSAC_LLM_PROXY_PORT || 18111);
+  const defaultBaseUrl = `http://127.0.0.1:${proxyPort}`;
+  const baseUrlRaw =
+    process.env.OPENCODE_BASE_URL ||
+    process.env.OPENCODE_PROXY_BASE_URL ||
+    defaultBaseUrl;
+  const apiKeyRaw =
+    process.env.OPENCODE_API_KEY ||
+    process.env.OPENCODE_PROXY_API_KEY ||
+    'local-proxy';
+  const modelRaw =
+    process.env.OPENCODE_MODEL ||
+    process.env.OPENCODE_DEFAULT_MODEL ||
+    '';
+  const providerRaw = process.env.OPENCODE_PROVIDER_ID || 'openai';
+  const normalized = normalizeOpencodeModel(modelRaw, providerRaw);
+
+  return {
+    baseUrl: normalizeOpenAiBaseUrl(baseUrlRaw),
+    apiKey: apiKeyRaw.trim(),
+    model: normalized?.fullModel || '',
+    modelId: normalized?.modelId || '',
+    providerId: normalized?.providerId || providerRaw.trim() || 'openai',
+    providerName: (process.env.OPENCODE_PROVIDER_NAME || '').trim(),
+    explicitBaseUrl: Boolean(process.env.OPENCODE_BASE_URL || process.env.OPENCODE_PROXY_BASE_URL),
+    explicitApiKey: Boolean(process.env.OPENCODE_API_KEY || process.env.OPENCODE_PROXY_API_KEY),
+    explicitProviderId: Boolean(process.env.OPENCODE_PROVIDER_ID),
+  };
+}
+
+function shouldWriteOpencodeProviderConfig(env: ReturnType<typeof resolveOpencodeEnv>): boolean {
+  if (!env.model || !env.modelId || !env.baseUrl || !env.apiKey) {
+    return false;
+  }
+  return Boolean(env.explicitBaseUrl || env.explicitApiKey || env.explicitProviderId);
+}
+
+function resolveOsacLlmProxyEnv(requestBaseUrl?: string) {
+  const proxyPort = Number(process.env.OSAC_LLM_PROXY_PORT || 18111);
+  const bridgeBase = (process.env.OSAC_LLM_PROXY_BRIDGE_BASE_URL || '').trim().replace(/\/+$/, '');
+  let fallbackBase = '';
+  if (bridgeBase) {
+    fallbackBase = bridgeBase;
+  } else if (requestBaseUrl) {
+    try {
+      const parsed = new URL(requestBaseUrl);
+      const isLoopbackHost =
+        parsed.hostname === 'localhost' ||
+        parsed.hostname === '127.0.0.1' ||
+        parsed.hostname === '::1';
+      if (!isLoopbackHost) {
+        fallbackBase = `${parsed.origin}/api/llm-proxy`;
+      }
+    } catch {
+      fallbackBase = '';
+    }
+  }
+  const rawUpstream =
+    process.env.OSAC_LLM_UPSTREAM_BASE_URL ||
+    fallbackBase;
+  const upstreamBaseUrl = rawUpstream.trim().replace(/\/+$/, '');
+  const upstreamToken = (process.env.OSAC_LLM_UPSTREAM_TOKEN || '').trim();
+  const timeoutMs = (process.env.OSAC_LLM_PROXY_TIMEOUT_MS || '').trim();
+  const enabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'true').trim().toLowerCase();
+  const enabled = enabledRaw !== 'false';
+  return {
+    enabled,
+    proxyPort,
+    upstreamBaseUrl,
+    upstreamToken,
+    timeoutMs,
+  };
+}
+
+async function ensureVmEnv(
+  sessionId: string,
+  token: string,
+  requestBaseUrl?: string,
+  opencodeEnvInput?: ReturnType<typeof resolveOpencodeEnv>
+) {
   const escapedToken = shellEscapeSingle(token);
   const listenAddr = `:${osacBootstrapConfig.osacPort}`;
   const escapedListen = shellEscapeSingle(listenAddr);
+  const opencodeEnv = opencodeEnvInput || resolveOpencodeEnv();
+  const osacLlmEnv = resolveOsacLlmProxyEnv(requestBaseUrl);
+  const extraLines: string[] = [];
+
+  if (opencodeEnv.baseUrl) {
+    const escaped = shellEscapeSingle(opencodeEnv.baseUrl);
+    extraLines.push(`if grep -q '^OPENAI_BASE_URL=' /etc/environment; then
+  sed -i "s|^OPENAI_BASE_URL=.*|OPENAI_BASE_URL='${escaped}'|" /etc/environment;
+else
+  echo "OPENAI_BASE_URL='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (opencodeEnv.apiKey) {
+    const escaped = shellEscapeSingle(opencodeEnv.apiKey);
+    extraLines.push(`if grep -q '^OPENAI_API_KEY=' /etc/environment; then
+  sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY='${escaped}'|" /etc/environment;
+else
+  echo "OPENAI_API_KEY='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (opencodeEnv.model) {
+    const escaped = shellEscapeSingle(opencodeEnv.model);
+    extraLines.push(`if grep -q '^OPENCODE_MODEL=' /etc/environment; then
+  sed -i "s|^OPENCODE_MODEL=.*|OPENCODE_MODEL='${escaped}'|" /etc/environment;
+else
+  echo "OPENCODE_MODEL='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (opencodeEnv.providerId) {
+    const escaped = shellEscapeSingle(opencodeEnv.providerId);
+    extraLines.push(`if grep -q '^OPENCODE_PROVIDER_ID=' /etc/environment; then
+  sed -i "s|^OPENCODE_PROVIDER_ID=.*|OPENCODE_PROVIDER_ID='${escaped}'|" /etc/environment;
+else
+  echo "OPENCODE_PROVIDER_ID='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (Number.isFinite(osacLlmEnv.proxyPort)) {
+    const escaped = shellEscapeSingle(String(osacLlmEnv.proxyPort));
+    extraLines.push(`if grep -q '^OSAC_LLM_PROXY_PORT=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_PORT=.*|OSAC_LLM_PROXY_PORT='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_PORT='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  extraLines.push(`if grep -q '^OSAC_LLM_PROXY_ENABLE=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_ENABLE=.*|OSAC_LLM_PROXY_ENABLE='${osacLlmEnv.enabled ? 'true' : 'false'}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_ENABLE='${osacLlmEnv.enabled ? 'true' : 'false'}'" >> /etc/environment;
+fi;`);
+  if (osacLlmEnv.upstreamBaseUrl) {
+    const escaped = shellEscapeSingle(osacLlmEnv.upstreamBaseUrl);
+    extraLines.push(`if grep -q '^OSAC_LLM_UPSTREAM_BASE_URL=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_UPSTREAM_BASE_URL=.*|OSAC_LLM_UPSTREAM_BASE_URL='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_UPSTREAM_BASE_URL='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.upstreamToken) {
+    const escaped = shellEscapeSingle(osacLlmEnv.upstreamToken);
+    extraLines.push(`if grep -q '^OSAC_LLM_UPSTREAM_TOKEN=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_UPSTREAM_TOKEN=.*|OSAC_LLM_UPSTREAM_TOKEN='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_UPSTREAM_TOKEN='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.timeoutMs) {
+    const escaped = shellEscapeSingle(osacLlmEnv.timeoutMs);
+    extraLines.push(`if grep -q '^OSAC_LLM_PROXY_TIMEOUT_MS=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_TIMEOUT_MS=.*|OSAC_LLM_PROXY_TIMEOUT_MS='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_TIMEOUT_MS='${escaped}'" >> /etc/environment;
+fi;`);
+  }
 
   const updateEnv = `set -e;
 if grep -q '^OSAC_AUTH_TOKEN=' /etc/environment; then
@@ -304,6 +505,7 @@ if grep -q '^OSAC_LISTEN_ADDR=' /etc/environment; then
 else
   echo "OSAC_LISTEN_ADDR='${escapedListen}'" >> /etc/environment;
 fi;
+${extraLines.join('\n')}
 `;
 
   const result = await kvmConnector.execSession(sessionId, {
@@ -315,6 +517,56 @@ fi;
 
   const finished = await awaitJobIfNeeded(result);
   assertJobSuccess(finished, '写入 OSAC 环境变量');
+}
+
+async function ensureOpencodeProviderConfig(
+  sessionId: string,
+  opencodeEnv: ReturnType<typeof resolveOpencodeEnv>
+) {
+  if (!shouldWriteOpencodeProviderConfig(opencodeEnv)) {
+    return;
+  }
+
+  const providerId = opencodeEnv.providerId;
+  const modelId = opencodeEnv.modelId;
+  const fullModel = opencodeEnv.model;
+  const providerName = opencodeEnv.providerName || `Custom ${providerId}`;
+  const config = {
+    $schema: 'https://opencode.ai/config.json',
+    provider: {
+      [providerId]: {
+        npm: '@ai-sdk/openai-compatible',
+        name: providerName,
+        options: {
+          baseURL: opencodeEnv.baseUrl,
+          apiKey: opencodeEnv.apiKey,
+        },
+        models: {
+          [modelId]: {
+            name: modelId,
+          },
+        },
+      },
+    },
+    model: fullModel,
+    small_model: fullModel,
+  };
+
+  const encoded = Buffer.from(JSON.stringify(config, null, 2), 'utf8').toString('base64');
+  const writeCommand = `set -e;
+mkdir -p /root/.config/opencode;
+echo '${encoded}' | base64 -d > /root/.config/opencode/opencode.json;
+chmod 600 /root/.config/opencode/opencode.json`;
+
+  const result = await kvmConnector.execSession(sessionId, {
+    path: '/bin/bash',
+    args: ['-lc', writeCommand],
+    capture_output: true,
+    timeout_seconds: 20,
+  });
+
+  const finished = await awaitJobIfNeeded(result);
+  assertJobSuccess(finished, '写入 OpenCode provider 配置');
 }
 
 export class SandboxAgentProvisionService {
@@ -392,8 +644,10 @@ export class SandboxAgentProvisionService {
     const remoteOpencodePath = `${remoteDir}/${osacBootstrapConfig.opencodeBinaryName}`;
     const remoteDirPath = `${remoteDir}/`;
 
+    const opencodeEnv = resolveOpencodeEnv();
     await waitForGuestAgent(sessionId, 12);
-    await ensureVmEnv(sessionId, osacToken);
+    await ensureVmEnv(sessionId, osacToken, input.requestBaseUrl, opencodeEnv);
+    await ensureOpencodeProviderConfig(sessionId, opencodeEnv);
 
     const osacBuffer = fs.readFileSync(osacBootstrapConfig.osacBinaryPath);
     const opencodeBuffer = fs.readFileSync(osacBootstrapConfig.opencodeBinaryPath);
@@ -425,6 +679,7 @@ export class SandboxAgentProvisionService {
     const opencodeUploadJob = await awaitJobIfNeeded(opencodeUpload);
     assertJobSuccess(opencodeUploadJob, 'OpenCode 上传');
 
+    const osacLlmEnv = resolveOsacLlmProxyEnv(input.requestBaseUrl);
     const env: Record<string, string> = {
       OSAC_AUTH_TOKEN: osacToken,
       OSAC_LISTEN_ADDR: `:${osacBootstrapConfig.osacPort}`,
@@ -433,7 +688,32 @@ export class SandboxAgentProvisionService {
       OSAC_UPDATE_TMP: `${remoteDir}/tmp`,
       OPENCODE_BIN: remoteOpencodePath,
       OPENCODE_PATH: remoteOpencodePath,
+      OSAC_LLM_PROXY_ENABLE: osacLlmEnv.enabled ? 'true' : 'false',
     };
+    if (Number.isFinite(osacLlmEnv.proxyPort)) {
+      env.OSAC_LLM_PROXY_PORT = String(osacLlmEnv.proxyPort);
+    }
+    if (osacLlmEnv.upstreamBaseUrl) {
+      env.OSAC_LLM_UPSTREAM_BASE_URL = osacLlmEnv.upstreamBaseUrl;
+    }
+    if (osacLlmEnv.upstreamToken) {
+      env.OSAC_LLM_UPSTREAM_TOKEN = osacLlmEnv.upstreamToken;
+    }
+    if (osacLlmEnv.timeoutMs) {
+      env.OSAC_LLM_PROXY_TIMEOUT_MS = osacLlmEnv.timeoutMs;
+    }
+    if (opencodeEnv.baseUrl) {
+      env.OPENAI_BASE_URL = opencodeEnv.baseUrl;
+    }
+    if (opencodeEnv.apiKey) {
+      env.OPENAI_API_KEY = opencodeEnv.apiKey;
+    }
+    if (opencodeEnv.model) {
+      env.OPENCODE_MODEL = opencodeEnv.model;
+    }
+    if (opencodeEnv.providerId) {
+      env.OPENCODE_PROVIDER_ID = opencodeEnv.providerId;
+    }
 
     let launchCommand = osacBootstrapConfig.launchCommand;
     if (!launchCommand || !launchCommand.trim()) {
@@ -442,7 +722,43 @@ export class SandboxAgentProvisionService {
 
     const osacUploadedName = path.basename(osacBootstrapConfig.osacBinaryPath);
     const opencodeUploadedName = path.basename(osacBootstrapConfig.opencodeBinaryPath);
-    const inlineEnv = `OSAC_AUTH_TOKEN='${shellEscapeSingle(osacToken)}' OSAC_LISTEN_ADDR=':${osacBootstrapConfig.osacPort}' OSAC_OPENCODE_PATH='${remoteOpencodePath}' OSAC_LOG_DIR='${remoteDir}/log' OSAC_UPDATE_TMP='${remoteDir}/tmp' OPENCODE_BIN='${remoteOpencodePath}' OPENCODE_PATH='${remoteOpencodePath}'`;
+    const inlineEnvParts = [
+      `OSAC_AUTH_TOKEN='${shellEscapeSingle(osacToken)}'`,
+      `OSAC_LISTEN_ADDR=':${osacBootstrapConfig.osacPort}'`,
+      `OSAC_OPENCODE_PATH='${remoteOpencodePath}'`,
+      `OSAC_LOG_DIR='${remoteDir}/log'`,
+      `OSAC_UPDATE_TMP='${remoteDir}/tmp'`,
+      `OPENCODE_BIN='${remoteOpencodePath}'`,
+      `OPENCODE_PATH='${remoteOpencodePath}'`,
+      `OSAC_LLM_PROXY_ENABLE='${osacLlmEnv.enabled ? 'true' : 'false'}'`,
+    ];
+    if (Number.isFinite(osacLlmEnv.proxyPort)) {
+      inlineEnvParts.push(`OSAC_LLM_PROXY_PORT='${shellEscapeSingle(String(osacLlmEnv.proxyPort))}'`);
+    }
+    if (osacLlmEnv.upstreamBaseUrl) {
+      inlineEnvParts.push(
+        `OSAC_LLM_UPSTREAM_BASE_URL='${shellEscapeSingle(osacLlmEnv.upstreamBaseUrl)}'`
+      );
+    }
+    if (osacLlmEnv.upstreamToken) {
+      inlineEnvParts.push(`OSAC_LLM_UPSTREAM_TOKEN='${shellEscapeSingle(osacLlmEnv.upstreamToken)}'`);
+    }
+    if (osacLlmEnv.timeoutMs) {
+      inlineEnvParts.push(`OSAC_LLM_PROXY_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.timeoutMs)}'`);
+    }
+    if (opencodeEnv.baseUrl) {
+      inlineEnvParts.push(`OPENAI_BASE_URL='${shellEscapeSingle(opencodeEnv.baseUrl)}'`);
+    }
+    if (opencodeEnv.apiKey) {
+      inlineEnvParts.push(`OPENAI_API_KEY='${shellEscapeSingle(opencodeEnv.apiKey)}'`);
+    }
+    if (opencodeEnv.model) {
+      inlineEnvParts.push(`OPENCODE_MODEL='${shellEscapeSingle(opencodeEnv.model)}'`);
+    }
+    if (opencodeEnv.providerId) {
+      inlineEnvParts.push(`OPENCODE_PROVIDER_ID='${shellEscapeSingle(opencodeEnv.providerId)}'`);
+    }
+    const inlineEnv = inlineEnvParts.join(' ');
     const startCommand = `mkdir -p ${remoteDir} ${remoteDir}/log ${remoteDir}/tmp && mv -f ${remoteDir}/${osacUploadedName} ${remoteOsacPath} && mv -f ${remoteDir}/${opencodeUploadedName} ${remoteOpencodePath} && chmod +x ${remoteOsacPath} ${remoteOpencodePath} && setsid env ${inlineEnv} ${launchCommand} >> ${remoteDir}/log/osac.log 2>&1 < /dev/null &`;
 
     const execResult = await kvmConnector.execSession(sessionId, {
@@ -455,6 +771,21 @@ export class SandboxAgentProvisionService {
 
     const execJob = await awaitJobIfNeeded(execResult);
     assertJobSuccess(execJob, 'OSAC 启动');
+    let osacReady = await waitForOsacListening(sessionId, osacBootstrapConfig.osacPort, 12);
+
+    if (!osacReady) {
+      const fallbackCommand = `mkdir -p ${remoteDir} ${remoteDir}/log ${remoteDir}/tmp && touch ${remoteDir}/log/osac.log && chmod +x ${remoteOsacPath} ${remoteOpencodePath} && nohup env ${inlineEnv} ${launchCommand} >> ${remoteDir}/log/osac.log 2>&1 < /dev/null &`;
+      const fallbackExec = await kvmConnector.execSession(sessionId, {
+        path: '/bin/bash',
+        args: ['-lc', fallbackCommand],
+        capture_output: false,
+        timeout_seconds: 30,
+        env,
+      });
+      const fallbackJob = await awaitJobIfNeeded(fallbackExec);
+      assertJobSuccess(fallbackJob, 'OSAC 启动(回退)');
+      osacReady = await waitForOsacListening(sessionId, osacBootstrapConfig.osacPort, 10);
+    }
 
     // 连接模式说明：
     // - direct: 直接使用 VM IP + OSAC 端口，适合内网可直达场景
@@ -465,7 +796,27 @@ export class SandboxAgentProvisionService {
       const { base, range } = pickPortMappingConfig();
       let mappedPort = computePortCandidate(sessionId, base, range);
       let mapped = false;
+
+      try {
+        const existingPorts = await kvmConnector.listSandboxPorts(
+          sessionId,
+          buildSandboxPortProbeQuery(0)
+        );
+        const existingItems = extractSandboxPortMappings(existingPorts.data);
+        const existing = findSandboxPortMapping(existingItems as any[], osacBootstrapConfig.osacPort);
+        const normalizedExisting = normalizeSandboxPortMapping(existing as any);
+        if (existing && normalizedExisting.hostPort !== null) {
+          mappedPort = normalizedExisting.hostPort;
+          mapped = true;
+        }
+      } catch {
+        // ignore and continue to create mapping
+      }
+
       for (let attempt = 0; attempt < Math.max(range, 1); attempt++) {
+        if (mapped) {
+          break;
+        }
         try {
           await kvmConnector.createSandboxPort(sessionId, {
             vm_port: osacBootstrapConfig.osacPort,
@@ -488,6 +839,32 @@ export class SandboxAgentProvisionService {
           osacHostPort: mappedPort,
           osacConnectionMode: 'port-mapping',
         });
+      }
+
+      // 等待端口映射就绪（fix5: 支持 refresh/verify/wait_seconds）
+      if (mapped && host) {
+        const waitSeconds = getSandboxPortWaitSeconds();
+        const maxChecks = getSandboxPortCheckCount();
+        for (let i = 0; i < maxChecks; i++) {
+          try {
+            const ports = await kvmConnector.listSandboxPorts(
+              sessionId,
+              buildSandboxPortProbeQuery(waitSeconds)
+            );
+            const items = extractSandboxPortMappings(ports.data);
+            const matched = findSandboxPortMapping(
+              items as any[],
+              osacBootstrapConfig.osacPort,
+              mappedPort
+            );
+            if (matched && isSandboxPortReady(matched as any)) {
+              break;
+            }
+          } catch {
+            // ignore and retry
+          }
+          await sleep(2000);
+        }
       }
     }
 

@@ -7,11 +7,15 @@
 import { IntentRecognitionAgent } from './layers/intent-recognition-agent';
 import { PlanningAgent } from './layers/planning-agent';
 import { ExecutionPlanAgent } from './layers/execution-plan-agent';
+import { executionReviewAgent } from './layers/execution-review-agent';
 import type { ExecutionPlan, WebSocketMessage, MessageType } from './types/intent';
 import { taskCreationSessionDAO } from '../../db/dao';
 import { ensureDatabaseConnection } from '../../config/database';
 import { getPublicErrorMessage } from '../../utils/error-response';
-import { isAwaitingUserInputError } from './errors';
+import { normalizeOpencodeModel } from '../../utils/opencode-model';
+import { isAwaitingUserInputError, RecoverableAgentError } from './errors';
+import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
+import { osacAgentService } from '../../services/osac-agent-service';
 
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
@@ -27,6 +31,8 @@ export class TaskCreationService {
   private callbacks?: TaskCreationCallbacks;
   private sessionId?: string; // 当前会话 ID
   private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' = 'collecting';
+  private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'true').toLowerCase() === 'true';
+  private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
 
   constructor(callbacks?: TaskCreationCallbacks) {
     this.callbacks = callbacks;
@@ -108,7 +114,15 @@ export class TaskCreationService {
       this.setStage('collecting');
       this.sendStatus('intent', '正在分析您的任务需求...');
 
-      const intentResult = await this.layer1.recognizeIntent(userInput);
+      let intentResult;
+      try {
+        intentResult = await this.layer1.recognizeIntent(userInput);
+      } catch (error: any) {
+        if (this.isRecoverableLlmError(error)) {
+          throw new RecoverableAgentError(error.message || '意图识别失败');
+        }
+        throw error;
+      }
       console.log('[TaskCreationService] 意图识别完成:', intentResult);
       const confidenceScore = this.normalizeConfidence(intentResult.confidence);
 
@@ -142,10 +156,18 @@ export class TaskCreationService {
       this.setStage('planning');
       this.sendStatus('planning', '正在规划任务详情...');
 
-      const taskDescription = await this.layer2.generateTaskDescription(
-        intentResult,
-        userInput
-      );
+      let taskDescription;
+      try {
+        taskDescription = await this.layer2.generateTaskDescription(
+          intentResult,
+          userInput
+        );
+      } catch (error: any) {
+        if (this.isRecoverableLlmError(error)) {
+          throw new RecoverableAgentError(error.message || '任务描述生成失败');
+        }
+        throw error;
+      }
 
       // 保存任务描述
       const intentResultRecord = await this.runDbOperation(
@@ -183,11 +205,15 @@ export class TaskCreationService {
       this.setStage('executing');
       this.sendStatus('execution', '正在生成执行计划...');
 
-      const executionPlan = await this.withTimeout(
-        this.layer3.generateExecutionPlan(taskDescription),
-        Number(process.env.EXECUTION_PLAN_TIMEOUT_MS || 120000),
-        '执行计划生成超时，请稍后重试'
-      );
+      let executionPlan: ExecutionPlan;
+      try {
+        executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
+      } catch (error: any) {
+        if (this.isRecoverableLlmError(error)) {
+          throw new RecoverableAgentError(error.message || '执行计划生成失败');
+        }
+        throw error;
+      }
       console.log('[TaskCreationService] 执行计划生成完成');
 
       // 保存执行计划
@@ -198,6 +224,13 @@ export class TaskCreationService {
       if (!taskDescriptionRecord) {
         throw new Error('数据库中未找到任务描述记录');
       }
+      const estimatedTotalHoursRaw = executionPlan.project.estimated_total_hours;
+      const estimatedTotalHours = Number.isFinite(estimatedTotalHoursRaw)
+        ? Number(estimatedTotalHoursRaw)
+        : typeof estimatedTotalHoursRaw === 'string' && estimatedTotalHoursRaw.trim() !== ''
+          ? Number(estimatedTotalHoursRaw)
+          : undefined;
+
       await this.runDbOperation(
         'saveExecutionPlan',
         () =>
@@ -206,7 +239,9 @@ export class TaskCreationService {
             taskDescriptionId: taskDescriptionRecord.id,
             projectTitle: executionPlan.project.title,
             projectDescription: executionPlan.project.description,
-            estimatedTotalHours: executionPlan.project.estimated_total_hours,
+            estimatedTotalHours: Number.isFinite(estimatedTotalHours)
+              ? Math.round(estimatedTotalHours as number)
+              : undefined,
             managers: executionPlan.project.managers,
           })
       );
@@ -225,6 +260,15 @@ export class TaskCreationService {
         plan: executionPlan,
       });
 
+      // Step 4: 交由 OSAC 在 sandbox 内执行（可开关）
+      if (this.osacEnabled) {
+        await this.executeInSandbox({
+          userInput,
+          taskDescription,
+          executionPlan,
+        });
+      }
+
       return executionPlan;
     } catch (error: any) {
       if (isAwaitingUserInputError(error)) {
@@ -237,6 +281,23 @@ export class TaskCreationService {
             );
           } catch (dbError: any) {
             console.warn('[TaskCreationService] 更新会话等待状态失败:', dbError?.message || dbError);
+          }
+        }
+        (error as any).__clientNotified = true;
+        throw error;
+      }
+
+      if (error instanceof RecoverableAgentError) {
+        this.setStage('executing');
+        this.sendStatus('execution', '模型暂时不可用，稍后自动继续处理...');
+        if (this.sessionId) {
+          try {
+            await this.runDbOperation(
+              'updateSessionStatus:in_progress',
+              () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
+            );
+          } catch (dbError: any) {
+            console.warn('[TaskCreationService] 更新会话状态失败:', dbError?.message || dbError);
           }
         }
         (error as any).__clientNotified = true;
@@ -342,6 +403,214 @@ export class TaskCreationService {
     }
   }
 
+  private buildOpencodeCommand(payload: {
+    userInput: string;
+    taskDescription: any;
+    executionPlan: ExecutionPlan;
+  }): string {
+    const prompt = [
+      '你是执行智能体，请依据以下任务信息在当前工作区完成执行：',
+      `用户需求: ${payload.userInput}`,
+      `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
+      `执行计划摘要: ${JSON.stringify(this.pickExecutionSummary(payload.executionPlan))}`,
+      '要求：',
+      '1) 以命令行模式执行（不要进入交互式界面）。',
+      '2) 输出可落地的执行结果与产出说明。',
+      '3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。',
+    ].join('\n');
+
+    const flattened = prompt
+      .replace(/\r?\n/g, ' ')
+      .replace(/"/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // 注意：OSAC 侧以空格拆分命令参数，避免使用引号包裹导致解析异常
+    return `run --format json --model ${this.resolveOpencodeModel()} ${flattened}`;
+  }
+
+  private buildOpencodeCommandWithFeedback(payload: {
+    userInput: string;
+    taskDescription: any;
+    executionPlan: ExecutionPlan;
+    lastOutput: string;
+    feedback: string;
+  }): string {
+    const prompt = [
+      '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
+      `用户需求: ${payload.userInput}`,
+      `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
+      `执行计划摘要: ${JSON.stringify(this.pickExecutionSummary(payload.executionPlan))}`,
+      `上一轮输出: ${payload.lastOutput}`,
+      `改进要求: ${payload.feedback}`,
+      '要求：',
+      '1) 继续命令行模式执行（不要进入交互式界面）。',
+      '2) 补齐缺口并输出更新后的交付物说明。',
+      '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
+    ].join('\n');
+
+    const flattened = prompt
+      .replace(/\r?\n/g, ' ')
+      .replace(/"/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return `run --format json --model ${this.resolveOpencodeModel()} ${flattened}`;
+  }
+
+  private resolveOpencodeModel(): string {
+    const raw = (process.env.OPENCODE_MODEL || '').trim();
+    if (!raw) {
+      throw new Error('OPENCODE_MODEL 未配置');
+    }
+    const normalized = normalizeOpencodeModel(
+      raw,
+      process.env.OPENCODE_PROVIDER_ID || 'openai'
+    );
+    if (!normalized) {
+      throw new Error('OPENCODE_MODEL 格式无效');
+    }
+    return normalized.fullModel;
+  }
+
+  private async executeInSandbox(payload: {
+    userInput: string;
+    taskDescription: any;
+    executionPlan: ExecutionPlan;
+  }) {
+    this.sendStatus('execution', '正在启动执行环境...');
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.osacMaxAttempts; attempt++) {
+      try {
+        const provision = await sandboxAgentProvisionService.provision({
+          metadata: {
+            taskSessionId: this.sessionId,
+            taskTitle: payload.executionPlan?.project?.title,
+          },
+        });
+
+        this.sendMessage({
+          type: 'agent_message' as any,
+          agent: 'execution_plan',
+          content: '执行环境已就绪，开始下发执行指令...',
+          metadata: {
+            osacEndpoint: provision.osacEndpoint,
+            osacHost: provision.osacHost,
+            osacHostPort: provision.osacHostPort,
+            osacConnectionMode: provision.osacConnectionMode,
+            osacAuthToken: provision.osacAuthToken,
+            orchestratorSessionId: provision.sessionId,
+          },
+        });
+
+        const maxRounds = Number(process.env.OSAC_EXECUTION_ROUNDS || 3);
+        let lastOutput = '';
+        let command = this.buildOpencodeCommand(payload);
+
+        for (let round = 1; round <= maxRounds; round += 1) {
+          this.sendMessage({
+            type: 'agent_message' as any,
+            agent: 'execution_plan',
+            content: `执行指令已提交到 OSAC，正在执行中...（第 ${round}/${maxRounds} 轮）`,
+            metadata: {
+              osacCommand: command,
+              orchestratorSessionId: provision.sessionId,
+            },
+          });
+
+          const result = await osacAgentService.executeCommandAndWait(
+            provision.sessionId,
+            { command },
+            {
+              timeoutMs: Number(process.env.OSAC_COMMAND_TIMEOUT_MS || 900000),
+              pollMs: Number(process.env.OSAC_COMMAND_POLL_MS || 2000),
+            }
+          );
+
+          lastOutput = result.output || lastOutput;
+
+          if (result.status && result.status !== 'completed' && result.status !== 'success') {
+            this.sendMessage({
+              type: 'agent_message' as any,
+              agent: 'execution_plan',
+              content: `OSAC 执行返回状态: ${result.status}`,
+            });
+          }
+
+          const review = await executionReviewAgent.review({
+            userInput: payload.userInput,
+            taskDescription: payload.taskDescription,
+            executionPlan: payload.executionPlan,
+            executionOutput: lastOutput || '（无输出）',
+          });
+
+          this.sendMessage({
+            type: 'agent_message' as any,
+            agent: 'execution_plan',
+            content: review.summary || '已完成执行结果评估',
+            metadata: {
+              reviewDone: review.done,
+              reviewIssues: review.issues,
+            },
+          });
+
+          if (review.done || !review.next_instructions) {
+            break;
+          }
+
+          command = this.buildOpencodeCommandWithFeedback({
+            ...payload,
+            lastOutput,
+            feedback: review.next_instructions,
+          });
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        this.sendMessage({
+          type: 'agent_message' as any,
+          agent: 'execution_plan',
+          content: `执行环境调度失败（第 ${attempt}/${this.osacMaxAttempts} 次）：${message}`,
+        });
+        if (attempt < this.osacMaxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('执行环境调度失败');
+  }
+
+  private pickTaskDescription(taskDescription: any) {
+    if (!taskDescription) return {};
+    return {
+      title: taskDescription.title,
+      objective: taskDescription.objective,
+      scope: taskDescription.scope,
+      deliverables: taskDescription.deliverables,
+      constraints: taskDescription.constraints,
+    };
+  }
+
+  private pickExecutionSummary(executionPlan: ExecutionPlan) {
+    if (!executionPlan) return {};
+    const project = executionPlan.project || ({} as any);
+    return {
+      title: project.title,
+      description: project.description,
+      total_estimated_hours: (project as any).total_estimated_hours ?? project.estimated_total_hours,
+      managers: Array.isArray(project.managers)
+        ? project.managers.map((manager: any) => ({
+            id: manager.id,
+            name: manager.name,
+            task_count: Array.isArray(manager.tasks) ? manager.tasks.length : 0,
+          }))
+        : [],
+    };
+  }
+
   /**
    * 发送消息到前端
    */
@@ -396,6 +665,131 @@ export class TaskCreationService {
     };
 
     return nameMap[intentType] || intentType;
+  }
+
+  private isRecoverableLlmError(error: unknown): boolean {
+    if (!error) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('llm') ||
+      normalized.includes('timeout') ||
+      normalized.includes('timed out') ||
+      normalized.includes('rate limit') ||
+      normalized.includes('429') ||
+      normalized.includes('econnreset') ||
+      normalized.includes('econnrefused') ||
+      normalized.includes('socket') ||
+      normalized.includes('network') ||
+      normalized.includes('502') ||
+      normalized.includes('503') ||
+      normalized.includes('504')
+    );
+  }
+
+  async resumeTask(sessionId: string, latestUserInput?: string): Promise<void> {
+    this.sessionId = sessionId;
+    await ensureDatabaseConnection({ retries: 3, delayMs: 1200 });
+
+    const [messages, intentResultRecord, taskDescriptionRecord, executionPlanRecord] = await Promise.all([
+      taskCreationSessionDAO.getMessages(sessionId),
+      taskCreationSessionDAO.getIntentResult(sessionId),
+      taskCreationSessionDAO.getTaskDescription(sessionId),
+      taskCreationSessionDAO.getExecutionPlan(sessionId),
+    ]);
+
+    const firstUserInput =
+      messages.find((m) => m.messageType === 'user_input')?.content ||
+      latestUserInput ||
+      '';
+
+    let taskDescription: any = taskDescriptionRecord
+      ? {
+          title: taskDescriptionRecord.title,
+          objective: taskDescriptionRecord.objective,
+          scope: taskDescriptionRecord.scope,
+          deliverables: taskDescriptionRecord.deliverables,
+          constraints: taskDescriptionRecord.constraints,
+          additional_info: taskDescriptionRecord.additionalInfo,
+        }
+      : null;
+
+    if (!taskDescription && intentResultRecord && firstUserInput) {
+      const intentResult: any = {
+        intent_type: intentResultRecord.intentType,
+        confidence: intentResultRecord.confidence,
+        key_info: intentResultRecord.keyInfo,
+        clarification_needed: intentResultRecord.clarificationNeeded,
+        clarification_questions: intentResultRecord.clarificationQuestions,
+      };
+      taskDescription = await this.layer2.generateTaskDescription(intentResult, firstUserInput);
+
+      await this.runDbOperation(
+        'saveTaskDescription:resume',
+        () =>
+          taskCreationSessionDAO.saveTaskDescription({
+            sessionId,
+            intentResultId: intentResultRecord.id,
+            title: taskDescription.title,
+            objective: taskDescription.objective,
+            scope: taskDescription.scope,
+            deliverables: taskDescription.deliverables,
+            constraints: taskDescription.constraints,
+            additionalInfo: taskDescription.additional_info,
+          })
+      );
+    }
+
+    if (!taskDescription) {
+      throw new RecoverableAgentError('缺少任务描述，无法恢复任务');
+    }
+
+    let executionPlan: ExecutionPlan | null = executionPlanRecord
+      ? ({
+          project: {
+            title: executionPlanRecord.projectTitle,
+            description: executionPlanRecord.projectDescription || '',
+            estimated_total_hours: executionPlanRecord.estimatedTotalHours ?? undefined,
+            managers: executionPlanRecord.managers as any,
+          },
+        } as ExecutionPlan)
+      : null;
+
+    if (!executionPlan) {
+      this.setStage('executing');
+      this.sendStatus('execution', '正在重新生成执行计划...');
+      executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
+
+      const latestTaskDescription = taskDescriptionRecord || (await taskCreationSessionDAO.getTaskDescription(sessionId));
+      if (!latestTaskDescription) {
+        throw new RecoverableAgentError('执行计划生成完成但未找到任务描述记录');
+      }
+      await this.runDbOperation(
+        'saveExecutionPlan:resume',
+        () =>
+          taskCreationSessionDAO.saveExecutionPlan({
+            sessionId,
+            taskDescriptionId: latestTaskDescription.id,
+            projectTitle: executionPlan!.project.title,
+            projectDescription: executionPlan!.project.description,
+            estimatedTotalHours:
+              typeof executionPlan!.project.estimated_total_hours === 'number'
+                ? Math.round(executionPlan!.project.estimated_total_hours)
+                : undefined,
+            managers: executionPlan!.project.managers,
+          })
+      );
+      this.sendStatus('execution', '执行计划已生成');
+      this.sendMessage({ type: 'plan_generated' as any, plan: executionPlan });
+    }
+
+    if (this.osacEnabled && executionPlan) {
+      await this.executeInSandbox({
+        userInput: firstUserInput,
+        taskDescription,
+        executionPlan,
+      });
+    }
   }
 
   /**

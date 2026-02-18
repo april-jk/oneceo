@@ -12,6 +12,7 @@ import {
 } from '../connectors/kvm-call-pattern';
 import { ensureDatabaseConnection } from '../config/database';
 import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
+import { osacConnectionManager } from './osac-connection-manager';
 import { normalizeOpencodeModel } from '../utils/opencode-model';
 import fs from 'fs';
 import path from 'path';
@@ -318,7 +319,8 @@ function shellEscapeSingle(value: string) {
 }
 
 function generateOsacToken() {
-  return crypto.randomBytes(24).toString('base64url');
+  // fix2 compatibility: keep token strictly alphanumeric to avoid WS auth parser edge cases.
+  return crypto.randomBytes(24).toString('hex');
 }
 
 function normalizeOpenAiBaseUrl(input: string): string {
@@ -336,17 +338,37 @@ function normalizeOpenAiBaseUrl(input: string): string {
   }
 }
 
+function isLoopbackBaseUrl(input: string): boolean {
+  const raw = input.trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.trim().toLowerCase();
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
 function resolveOpencodeEnv() {
   const proxyPort = Number(process.env.OSAC_LLM_PROXY_PORT || 18111);
   const defaultBaseUrl = `http://127.0.0.1:${proxyPort}`;
-  const baseUrlRaw =
+  const baseUrlCandidate =
     process.env.OPENCODE_BASE_URL ||
     process.env.OPENCODE_PROXY_BASE_URL ||
     defaultBaseUrl;
-  const apiKeyRaw =
+  const apiKeyCandidate =
     process.env.OPENCODE_API_KEY ||
     process.env.OPENCODE_PROXY_API_KEY ||
     'local-proxy';
+  const proxyEnabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'true').trim().toLowerCase();
+  const proxyEnabled = proxyEnabledRaw !== 'false';
+  const forcedProxyBaseUrl = normalizeOpenAiBaseUrl(`http://127.0.0.1:${proxyPort}/v1`);
+  const normalizedCandidateBaseUrl = normalizeOpenAiBaseUrl(baseUrlCandidate);
+  const useForcedProxyBase = proxyEnabled && !isLoopbackBaseUrl(normalizedCandidateBaseUrl);
+  const baseUrlRaw = useForcedProxyBase ? forcedProxyBaseUrl : baseUrlCandidate;
+  const apiKeyRaw = useForcedProxyBase ? 'local-proxy' : apiKeyCandidate;
+
   const modelRaw =
     process.env.OPENCODE_MODEL ||
     process.env.OPENCODE_DEFAULT_MODEL ||
@@ -361,8 +383,16 @@ function resolveOpencodeEnv() {
     modelId: normalized?.modelId || '',
     providerId: normalized?.providerId || providerRaw.trim() || 'openai',
     providerName: (process.env.OPENCODE_PROVIDER_NAME || '').trim(),
-    explicitBaseUrl: Boolean(process.env.OPENCODE_BASE_URL || process.env.OPENCODE_PROXY_BASE_URL),
-    explicitApiKey: Boolean(process.env.OPENCODE_API_KEY || process.env.OPENCODE_PROXY_API_KEY),
+    explicitBaseUrl: Boolean(
+      process.env.OPENCODE_BASE_URL ||
+      process.env.OPENCODE_PROXY_BASE_URL ||
+      useForcedProxyBase
+    ),
+    explicitApiKey: Boolean(
+      process.env.OPENCODE_API_KEY ||
+      process.env.OPENCODE_PROXY_API_KEY ||
+      useForcedProxyBase
+    ),
     explicitProviderId: Boolean(process.env.OPENCODE_PROVIDER_ID),
   };
 }
@@ -882,6 +912,10 @@ export class SandboxAgentProvisionService {
         vmIpAddress: ipAddress,
         osacAuthToken: osacToken,
       });
+    }
+
+    if (osacLlmEnv.enabled && osacEndpoint) {
+      await osacConnectionManager.ensurePersistent(sessionId);
     }
 
     return {

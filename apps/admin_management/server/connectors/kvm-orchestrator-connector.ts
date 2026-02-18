@@ -1,19 +1,42 @@
 import { config } from '../config';
 import { deepCamelCase } from '../utils/case';
 import { AppError } from '../utils/errors';
-import type { KvmSessionListItem, KvmVmDetail, KvmVmListItem, KvmVmState } from '../types';
+import type { KvmSessionListItem, KvmVmDetail, KvmVmListItem, KvmVmState, VmLifecycleState } from '../types';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 type OrchestratorEnvelope<T> = {
-  code: number;
-  message: string;
+  code?: string | number;
+  message?: string;
   data?: T;
   error?: {
-    type: string;
-    details?: string;
+    type?: string;
+    details?: unknown;
     field?: string;
+  } | null;
+  request_id?: string;
+};
+
+type VmListRawItem = {
+  name: string;
+  state: string;
+};
+
+type VmDetailRaw = {
+  name: string;
+  state: string;
+  ipAddresses?: string[];
+};
+
+type VmMetricsRaw = {
+  name: string;
+  state: string;
+  memory?: {
+    actual?: number;
+    rss?: number;
   };
+  stats?: Record<string, number | string>;
+  collectedAt?: string;
 };
 
 function sleep(ms: number) {
@@ -31,6 +54,75 @@ function shouldRetryError(error: unknown) {
 
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   return message.includes('timeout') || message.includes('network') || message.includes('aborted');
+}
+
+function parseVmState(state: string | undefined): VmLifecycleState {
+  const normalized = (state || '').toLowerCase();
+  if (normalized.includes('running')) return 'running';
+  if (normalized.includes('pause')) return 'paused';
+  if (normalized === 'shut off' || normalized.includes('stopped') || normalized.includes('shutdown')) return 'stopped';
+  return 'error';
+}
+
+function parseSessionIdFromVmName(vmName: string): string {
+  if (vmName.startsWith('sandbox_sess_')) {
+    return vmName.replace('sandbox_', '');
+  }
+
+  const matched = vmName.match(/sess_[a-zA-Z0-9]+/);
+  if (matched?.[0]) {
+    return matched[0];
+  }
+
+  return `session-${vmName}`;
+}
+
+function toIpv4(ipList: string[] | undefined): string | undefined {
+  if (!ipList || ipList.length === 0) {
+    return undefined;
+  }
+
+  for (const item of ipList) {
+    const ip = item.split('/')[0];
+    if (ip && !ip.includes(':')) {
+      return ip;
+    }
+  }
+
+  return ipList[0]?.split('/')[0];
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+function formatErrorDetails(details: unknown): string {
+  if (details === undefined || details === null) {
+    return '';
+  }
+  if (typeof details === 'string') {
+    return details;
+  }
+  try {
+    return JSON.stringify(details);
+  } catch {
+    return String(details);
+  }
+}
+
+function bytesToGb(bytes: number): number {
+  return Number((bytes / (1024 * 1024 * 1024)).toFixed(2));
+}
+
+function kbToMb(kb: number): number {
+  return Math.floor(kb / 1024);
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -51,6 +143,7 @@ export class KvmOrchestratorConnector {
   private readonly baseUrl = config.kvmOrchestratorUrl;
   private readonly timeoutMs = config.kvmRequestTimeoutMs;
   private readonly retries = config.kvmRequestRetries;
+  private readonly token = config.kvmOrchToken;
 
   private buildQueryString(query?: Record<string, unknown>): string {
     if (!query) {
@@ -70,20 +163,42 @@ export class KvmOrchestratorConnector {
     return encoded ? `?${encoded}` : '';
   }
 
-  private async request<T>(path: string, options?: { method?: HttpMethod; body?: unknown }): Promise<T> {
+  private buildHeaders(withAuth = true, extra?: Record<string, string>): Record<string, string> {
+    const headers: Record<string, string> = {
+      ...(extra || {}),
+    };
+
+    if (withAuth) {
+      if (!this.token) {
+        throw new AppError(500, '缺少 KVM_ORCH_TOKEN，无法访问 kvm-orchestrator');
+      }
+      headers.authorization = `Bearer ${this.token}`;
+    }
+
+    return headers;
+  }
+
+  private async request<T>(
+    path: string,
+    options?: { method?: HttpMethod; body?: unknown; withAuth?: boolean; headers?: Record<string, string> }
+  ): Promise<T> {
     const method = options?.method ?? 'GET';
+    const withAuth = options?.withAuth !== false;
     const maxAttempts = Math.max(1, this.retries + 1);
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
+        const headers = this.buildHeaders(withAuth, options?.headers);
+        if (options?.body !== undefined) {
+          headers['content-type'] = 'application/json';
+        }
+
         const response = await fetchWithTimeout(
           `${this.baseUrl}${path}`,
           {
             method,
-            headers: {
-              'content-type': 'application/json',
-            },
+            headers,
             body: options?.body === undefined ? undefined : JSON.stringify(options.body),
           },
           this.timeoutMs
@@ -93,20 +208,20 @@ export class KvmOrchestratorConnector {
         const statusCode = response.status;
 
         if (!response.ok) {
-          const message = payload?.error?.details || payload?.message || `请求失败 (${statusCode})`;
-          const error = new AppError(statusCode, message, payload?.error);
+          const detailMessage =
+            payload?.error && typeof payload.error === 'object' && 'details' in payload.error
+              ? formatErrorDetails(payload.error.details)
+              : '';
+          const message = detailMessage || payload?.message || `请求失败 (${statusCode})`;
+          const error = new AppError(statusCode, message, payload?.error ?? payload);
 
           if (attempt < maxAttempts && isRetryableStatus(statusCode)) {
             lastError = error;
-            await sleep(500);
+            await sleep(400);
             continue;
           }
 
           throw error;
-        }
-
-        if (typeof payload?.code === 'number' && payload.code !== 0) {
-          throw new AppError(502, payload.message || 'KVM 返回异常结果', payload.error);
         }
 
         return deepCamelCase<T>(payload?.data ?? payload);
@@ -117,7 +232,7 @@ export class KvmOrchestratorConnector {
           break;
         }
 
-        await sleep(500);
+        await sleep(400);
       }
     }
 
@@ -134,109 +249,179 @@ export class KvmOrchestratorConnector {
     });
   }
 
-  health() {
-    return this.request<{ status: string; service: string; timestamp: string }>('/health');
-  }
-
-  listVms(query?: { state?: string; limit?: number; offset?: number }) {
-    return this.request<{ total: number; limit: number; offset: number; vms: KvmVmListItem[] }>(
-      `/api/v1/kvm/list${this.buildQueryString(query)}`
-    );
-  }
-
-  getVm(vmId: string) {
-    return this.request<KvmVmDetail>(`/api/v1/kvm/${encodeURIComponent(vmId)}`);
-  }
-
-  getVmState(vmId: string) {
-    return this.request<KvmVmState>(`/api/v1/kvm/${encodeURIComponent(vmId)}/state`);
-  }
-
-  startVm(vmId: string) {
-    return this.request<{ vmId: string; state: string; ipAddress?: string; startedAt: string }>(
-      `/api/v1/kvm/${encodeURIComponent(vmId)}/start`,
-      {
-        method: 'POST',
-        body: {
-          wait_ready: false,
-        },
-      }
-    );
-  }
-
-  stopVm(vmId: string, force = false) {
-    return this.request<{ vmId: string; state: string; stoppedAt: string }>(`/api/v1/kvm/${encodeURIComponent(vmId)}/stop`, {
-      method: 'POST',
-      body: {
-        force,
-      },
+  async health() {
+    const data = await this.request<{ status?: string; service?: string; time?: string; timestamp?: string }>('/health', {
+      withAuth: false,
     });
+
+    return {
+      status: data.status || 'unknown',
+      service: data.service || 'kvm-orchestrator',
+      timestamp: data.timestamp || data.time || new Date().toISOString(),
+    };
   }
 
-  createVm(input: {
+  async listVms(query?: { state?: string; limit?: number; offset?: number }) {
+    const data = await this.request<{ total?: number; items?: VmListRawItem[] }>('/v1/vms');
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    const normalized = items.map<KvmVmListItem>((item) => ({
+      vmId: item.name,
+      state: parseVmState(item.state),
+    }));
+
+    const filtered = query?.state ? normalized.filter((item) => item.state === query.state) : normalized;
+    const limit = query?.limit ?? 200;
+    const offset = query?.offset ?? 0;
+
+    return {
+      total: filtered.length,
+      limit,
+      offset,
+      vms: filtered.slice(offset, offset + limit),
+    };
+  }
+
+  async getVm(vmId: string): Promise<KvmVmDetail> {
+    const [detail, metrics] = await Promise.all([
+      this.request<VmDetailRaw>(`/v1/vms/${encodeURIComponent(vmId)}`),
+      this.request<VmMetricsRaw>(`/v1/vms/${encodeURIComponent(vmId)}/metrics`).catch(() => undefined),
+    ]);
+
+    const stats = (metrics?.stats || {}) as Record<string, unknown>;
+    const memoryActualKb = asNumber(metrics?.memory?.actual, 2048 * 1024);
+    const cpuCores = Math.max(1, asNumber(stats['vcpu.current'], 2));
+    const diskBytes = asNumber(stats['block.0.capacity'], 20 * 1024 * 1024 * 1024);
+
+    return {
+      vmId: detail.name,
+      name: detail.name,
+      state: parseVmState(detail.state),
+      config: {
+        cpuCores,
+        memoryMb: kbToMb(memoryActualKb),
+        rootDiskGb: Math.max(1, Math.round(bytesToGb(diskBytes))),
+      },
+      network: {
+        ipAddress: toIpv4(detail.ipAddresses),
+      },
+      createdAt: new Date().toISOString(),
+      stateInfo: metrics
+        ? {
+            uptimeSeconds: 0,
+            cpuUsagePercent: 0,
+            memoryUsageMb: kbToMb(asNumber(metrics.memory?.rss, 0)),
+            diskUsageGb: bytesToGb(asNumber(stats['block.0.allocation'], 0)),
+          }
+        : undefined,
+    };
+  }
+
+  async getVmState(vmId: string): Promise<KvmVmState> {
+    const metrics = await this.request<VmMetricsRaw>(`/v1/vms/${encodeURIComponent(vmId)}/metrics`);
+    const stats = (metrics.stats || {}) as Record<string, unknown>;
+
+    return {
+      vmId,
+      state: parseVmState(metrics.state),
+      uptimeSeconds: 0,
+      cpuUsagePercent: 0,
+      memoryUsageMb: kbToMb(asNumber(metrics.memory?.rss, 0)),
+      diskUsageGb: bytesToGb(asNumber(stats['block.0.allocation'], 0)),
+      network: {
+        inBytes: asNumber(stats['net.0.rx.bytes'], 0),
+        outBytes: asNumber(stats['net.0.tx.bytes'], 0),
+      },
+      lastUpdate: metrics.collectedAt || new Date().toISOString(),
+    };
+  }
+
+  async startVm(vmId: string) {
+    await this.request(`/v1/vms/${encodeURIComponent(vmId)}/start`, {
+      method: 'POST',
+    });
+
+    return {
+      vmId,
+      state: 'running',
+      startedAt: new Date().toISOString(),
+    };
+  }
+
+  async stopVm(vmId: string, _force = false) {
+    await this.request(`/v1/vms/${encodeURIComponent(vmId)}/shutdown`, {
+      method: 'POST',
+    });
+
+    return {
+      vmId,
+      state: 'stopped',
+      stoppedAt: new Date().toISOString(),
+    };
+  }
+
+  async createVm(input: {
     sessionId: string;
     cpuCores?: number;
     memoryMb?: number;
     rootDiskGb?: number;
     tags?: Record<string, string>;
   }) {
-    return this.request<{
-      vmId: string;
-      sessionId: string;
-      name: string;
-      state: string;
-      config: {
-        cpuCores: number;
-        memoryMb: number;
-        rootDiskGb: number;
-        networkBridge: string;
-      };
-      createdAt: string;
-    }>('/api/v1/kvm/create', {
+    const vmName = `sandbox_${input.sessionId}`;
+    const data = await this.request<{ vmName?: string; sessionId?: string; state?: string }>(`/v1/sandboxes`, {
       method: 'POST',
       body: {
         session_id: input.sessionId,
-        cpu_cores: input.cpuCores,
+        vm_name: vmName,
         memory_mb: input.memoryMb,
-        root_disk_gb: input.rootDiskGb,
-        tags: input.tags,
+        vcpus: input.cpuCores,
+        auto_bind: true,
+        start: false,
+        metadata: input.tags || {},
       },
     });
+
+    return {
+      vmId: data.vmName || vmName,
+      sessionId: data.sessionId || input.sessionId,
+      name: data.vmName || vmName,
+      state: parseVmState(data.state),
+      config: {
+        cpuCores: input.cpuCores || 0,
+        memoryMb: input.memoryMb || 0,
+        rootDiskGb: input.rootDiskGb || 0,
+        networkBridge: 'default',
+      },
+      createdAt: new Date().toISOString(),
+    };
   }
 
-  listSessions(query?: { userId?: string; status?: string; limit?: number; offset?: number }) {
-    return this.request<{ total: number; limit: number; offset: number; sessions: KvmSessionListItem[] }>(
-      `/api/v1/session/list${
-        this.buildQueryString({
-          user_id: query?.userId,
-          status: query?.status,
-          limit: query?.limit,
-          offset: query?.offset,
-        })
-      }`
-    );
+  async listSessions(query?: { userId?: string; status?: string; limit?: number; offset?: number }) {
+    const offset = query?.offset ?? 0;
+    const limit = query?.limit ?? 200;
+    return {
+      total: 0,
+      offset,
+      limit,
+      sessions: [] as KvmSessionListItem[],
+    };
   }
 
-  getQuota(sessionId: string) {
-    return this.request<{
-      quotaId: string;
-      sessionId: string;
-      cpu: {
-        cores: number;
-        maxCores: number;
-        usagePercent: number;
-      };
-      memory: {
-        mb: number;
-        maxMb: number;
-        usageMb: number;
-      };
-      storage: {
-        gb: number;
-        maxGb: number;
-        usageGb: number;
-      };
-    }>(`/api/v1/quota/${encodeURIComponent(sessionId)}`);
+  async getQuota(sessionId: string) {
+    const quota = await this.request<{
+      maxActionsPerMinute?: number;
+      maxRuntimeMinutes?: number;
+      maxRebootsPerHour?: number;
+    }>(`/v1/sessions/${encodeURIComponent(sessionId)}/quota`);
+
+    return {
+      sessionId,
+      quota: {
+        maxActionsPerMinute: quota.maxActionsPerMinute ?? 0,
+        maxRuntimeMinutes: quota.maxRuntimeMinutes ?? 0,
+        maxRebootsPerHour: quota.maxRebootsPerHour ?? 0,
+      },
+    };
   }
 }
 

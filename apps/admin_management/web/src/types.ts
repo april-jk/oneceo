@@ -53,25 +53,23 @@ export interface VmListResponse {
 
 export interface VmItem {
   vmId: string;
-  sessionId: string;
+  sessionId?: string;
   state: VmState;
-  cpuCores: number;
-  memoryMb: number;
-  createdAt: string;
-  hostId: string;
-  hostName: string;
+  cpuCores?: number;
+  memoryMb?: number;
+  createdAt?: string;
   stateInfo?: {
     vmId: string;
     state: VmState;
-    uptimeSeconds: number;
-    cpuUsagePercent: number;
-    memoryUsageMb: number;
-    diskUsageGb: number;
-    network: {
+    uptimeSeconds?: number;
+    cpuUsagePercent?: number;
+    memoryUsageMb?: number;
+    diskUsageGb?: number;
+    network?: {
       inBytes: number;
       outBytes: number;
     };
-    lastUpdate: string;
+    lastUpdate?: string;
   };
 }
 

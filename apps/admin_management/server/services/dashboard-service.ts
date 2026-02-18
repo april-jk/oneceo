@@ -1,6 +1,5 @@
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
 import type { AuditService } from './audit-service';
-import type { HostService } from './host-service';
 import type { DashboardOverview } from '../types';
 
 function buildDistribution(input: string[]): Array<{ label: string; value: number }> {
@@ -21,11 +20,7 @@ function average(values: number[]): number {
 }
 
 export class DashboardService {
-  constructor(
-    private readonly connector: KvmOrchestratorConnector,
-    private readonly hostService: HostService,
-    private readonly auditService: AuditService
-  ) {}
+  constructor(private readonly connector: KvmOrchestratorConnector, private readonly auditService: AuditService) {}
 
   async getOverview(): Promise<DashboardOverview> {
     const [healthResult, vmResult, sessionResult] = await Promise.allSettled([
@@ -40,7 +35,6 @@ export class DashboardService {
     const vms = vmResult.status === 'fulfilled' ? vmResult.value.vms : [];
     const sessions = sessionResult.status === 'fulfilled' ? sessionResult.value.sessions : [];
 
-    const hostRuntime = await this.hostService.buildHostRuntime(vms, orchestratorOnline);
     const auditLogs = await this.auditService.list(20);
 
     const vmSummary = {
@@ -60,13 +54,13 @@ export class DashboardService {
     };
 
     const hostSummary = {
-      total: hostRuntime.length,
-      online: hostRuntime.filter((item) => item.effectiveStatus === 'online').length,
-      degraded: hostRuntime.filter((item) => item.effectiveStatus === 'degraded').length,
-      maintenance: hostRuntime.filter((item) => item.effectiveStatus === 'maintenance').length,
-      offline: hostRuntime.filter((item) => item.effectiveStatus === 'offline').length,
-      averageCpuUsagePercent: average(hostRuntime.map((item) => item.cpuUsagePercent)),
-      averageMemoryUsagePercent: average(hostRuntime.map((item) => item.memoryUsagePercent)),
+      total: 0,
+      online: 0,
+      degraded: 0,
+      maintenance: 0,
+      offline: 0,
+      averageCpuUsagePercent: 0,
+      averageMemoryUsagePercent: 0,
     };
 
     const alerts: string[] = [];
@@ -76,11 +70,6 @@ export class DashboardService {
 
     if (vmSummary.error > 0) {
       alerts.push(`发现 ${vmSummary.error} 台处于 error 状态的 VM，建议优先处理`);
-    }
-
-    const highLoadHosts = hostRuntime.filter((item) => item.cpuUsagePercent > 80 || item.memoryUsagePercent > 80);
-    if (highLoadHosts.length > 0) {
-      alerts.push(`${highLoadHosts.length} 台宿主机负载超过 80%，建议迁移部分会话`);
     }
 
     if (auditLogs.some((item) => item.result === 'failed')) {
@@ -99,14 +88,7 @@ export class DashboardService {
       hostSummary,
       vmStateDistribution: buildDistribution(vms.map((item) => item.state)),
       sessionStatusDistribution: buildDistribution(sessions.map((item) => item.status)),
-      hostLoadSeries: hostRuntime.map((item) => ({
-        hostId: item.hostId,
-        hostName: item.name,
-        cpuUsagePercent: item.cpuUsagePercent,
-        memoryUsagePercent: item.memoryUsagePercent,
-        storageUsagePercent: item.storageUsagePercent,
-        status: item.effectiveStatus,
-      })),
+      hostLoadSeries: [],
       alerts,
     };
   }

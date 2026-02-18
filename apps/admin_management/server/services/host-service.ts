@@ -157,11 +157,13 @@ export class HostService {
       }
 
       const vmWeight = vm.state === 'running' ? 1 : vm.state === 'paused' ? 0.45 : 0.15;
+      const vmCpuCores = vm.cpuCores || 0;
+      const vmMemoryMb = vm.memoryMb || 0;
       item.totalVmCount += 1;
       item.runningVmCount += vm.state === 'running' ? 1 : 0;
-      item.usedCpuCores += vm.cpuCores * vmWeight;
-      item.usedMemoryGb += (vm.memoryMb / 1024) * vmWeight;
-      item.usedStorageGb += Math.max(8, vm.cpuCores * 4) * vmWeight;
+      item.usedCpuCores += vmCpuCores * vmWeight;
+      item.usedMemoryGb += (vmMemoryMb / 1024) * vmWeight;
+      item.usedStorageGb += Math.max(8, vmCpuCores * 4) * vmWeight;
     }
 
     for (const value of runtime.values()) {

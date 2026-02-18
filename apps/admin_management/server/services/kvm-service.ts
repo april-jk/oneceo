@@ -1,14 +1,9 @@
 import { AppError } from '../utils/errors';
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
 import type { AuditService } from './audit-service';
-import type { HostService } from './host-service';
 
 export class KvmService {
-  constructor(
-    private readonly connector: KvmOrchestratorConnector,
-    private readonly hostService: HostService,
-    private readonly auditService: AuditService
-  ) {}
+  constructor(private readonly connector: KvmOrchestratorConnector, private readonly auditService: AuditService) {}
 
   async listVms(options?: { state?: string; limit?: number; offset?: number; withState?: boolean }) {
     const listResult = await this.connector.listVms({
@@ -16,29 +11,7 @@ export class KvmService {
       limit: options?.limit ?? 200,
       offset: options?.offset ?? 0,
     });
-
-    const annotated = await this.hostService.annotateVms(listResult.vms);
-
-    if (!options?.withState) {
-      return {
-        ...listResult,
-        vms: annotated,
-      };
-    }
-
-    const stateResults = await Promise.allSettled(
-      annotated.map((vm) => this.connector.getVmState(vm.vmId))
-    );
-
-    const merged = annotated.map((vm, index) => ({
-      ...vm,
-      stateInfo: stateResults[index].status === 'fulfilled' ? stateResults[index].value : undefined,
-    }));
-
-    return {
-      ...listResult,
-      vms: merged,
-    };
+    return listResult;
   }
 
   async createVm(input: {
@@ -86,22 +59,9 @@ export class KvmService {
       this.connector.getVmState(vmId).catch(() => undefined),
     ]);
 
-    const [annotatedVm] = await this.hostService.annotateVms([
-      {
-        vmId: vm.vmId,
-        sessionId: vm.sessionId,
-        state: vm.state,
-        cpuCores: vm.config.cpuCores,
-        memoryMb: vm.config.memoryMb,
-        createdAt: vm.createdAt,
-      },
-    ]);
-
     return {
       ...vm,
       stateInfo: state ?? vm.stateInfo,
-      hostId: annotatedVm?.hostId,
-      hostName: annotatedVm?.hostName,
     };
   }
 

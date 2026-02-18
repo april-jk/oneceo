@@ -1,6 +1,7 @@
 import { osacConnectionManager } from './osac-connection-manager';
 import { auditOsacAction } from '../utils/osac-audit';
 import { getPublicErrorMessage } from '../utils/error-response';
+import type { OsacMessage } from '../clients/osac-client';
 
 type LlmProxyRequestPayload = {
   requestId?: string;
@@ -12,6 +13,19 @@ type LlmProxyRequestPayload = {
   bodyEncoding?: string;
   isStream?: boolean;
 };
+
+function toPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+const bridgeSendConnectTimeoutMs = toPositiveInt(
+  process.env.OSAC_LLM_PROXY_BRIDGE_SEND_CONNECT_TIMEOUT_MS,
+  1200
+);
 
 function normalizeHeaders(input?: Record<string, unknown>): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -56,13 +70,34 @@ function toOpenAiError(message: string, type: string, code: string) {
 }
 
 async function sendError(sessionId: string, requestId: string, status: number, message: string, type: string, code: string) {
-  await osacConnectionManager.send(sessionId, {
-    type: 'LLM_PROXY_ERROR',
-    payload: {
+  try {
+    await osacConnectionManager.send(
+      sessionId,
+      {
+        type: 'LLM_PROXY_ERROR',
+        payload: {
+          requestId,
+          status,
+          error: toOpenAiError(message, type, code).error,
+        },
+      },
+      {
+        connectAcquireTimeoutMs: bridgeSendConnectTimeoutMs,
+      }
+    );
+  } catch (error) {
+    console.warn(
+      '[OSAC_LLM_PROXY_SEND_ERROR]',
+      sessionId,
       requestId,
-      status,
-      error: toOpenAiError(message, type, code).error,
-    },
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
+
+async function sendBridgeMessage(sessionId: string, message: OsacMessage) {
+  await osacConnectionManager.send(sessionId, message, {
+    connectAcquireTimeoutMs: bridgeSendConnectTimeoutMs,
   });
 }
 
@@ -75,7 +110,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
 
   // OSAC fix3: acknowledge bridge receipt first to avoid bridge_no_ack timeout.
   try {
-    await osacConnectionManager.send(sessionId, {
+    await sendBridgeMessage(sessionId, {
       type: 'LLM_PROXY_ACK',
       payload: {
         requestId,
@@ -167,7 +202,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
         if (done) break;
         if (!value) continue;
         const chunk = Buffer.from(value).toString('utf8');
-        await osacConnectionManager.send(sessionId, {
+        await sendBridgeMessage(sessionId, {
           type: 'LLM_PROXY_CHUNK',
           payload: {
             requestId,
@@ -176,7 +211,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
           },
         });
       }
-      await osacConnectionManager.send(sessionId, {
+      await sendBridgeMessage(sessionId, {
         type: 'LLM_PROXY_END',
         payload: {
           requestId,
@@ -189,7 +224,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
 
     const buffer = Buffer.from(await response.arrayBuffer());
     const bodyText = buffer.toString('utf8');
-    await osacConnectionManager.send(sessionId, {
+    await sendBridgeMessage(sessionId, {
       type: 'LLM_PROXY_RESPONSE',
       payload: {
         requestId,

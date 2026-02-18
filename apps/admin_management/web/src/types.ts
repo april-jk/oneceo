@@ -177,3 +177,34 @@ export interface AgentManagementOverview {
   };
   stageDistribution: Array<{ label: string; value: number }>;
 }
+
+export interface SandboxEnvironmentItem {
+  id: string;
+  sessionId: string;
+  orchestratorSessionId?: string | null;
+  vmName?: string | null;
+  baseImage?: string | null;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+}
+
+export interface SandboxManagementOverview {
+  sandboxApi: {
+    online: boolean;
+    status: string;
+    service: string;
+    version: string | null;
+    timestamp: string | null;
+  };
+  summary: {
+    total: number;
+    ready: number;
+    creating: number;
+    closed: number;
+    failed: number;
+  };
+  environments: SandboxEnvironmentItem[];
+}

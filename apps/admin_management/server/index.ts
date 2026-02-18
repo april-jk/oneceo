@@ -9,11 +9,13 @@ import { createConversationRoutes } from './routes/conversation-routes';
 import { createDashboardRoutes } from './routes/dashboard-routes';
 import { createHostRoutes } from './routes/host-routes';
 import { createKvmRoutes } from './routes/kvm-routes';
+import { createSandboxManagementRoutes } from './routes/sandbox-management-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AuditService } from './services/audit-service';
 import { ConversationManagementService } from './services/conversation-management-service';
 import { DashboardService } from './services/dashboard-service';
 import { KvmService } from './services/kvm-service';
+import { SandboxManagementService } from './services/sandbox-management-service';
 import { errorMiddleware, fail } from './utils/http';
 
 const app = express();
@@ -23,6 +25,7 @@ const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
 const dashboardService = new DashboardService(kvmOrchestratorConnector, auditService);
 const conversationService = new ConversationManagementService(oneceoApiConnector);
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
+const sandboxManagementService = new SandboxManagementService(oneceoApiConnector);
 
 app.use(
   cors({
@@ -45,6 +48,7 @@ app.use('/api/dashboard', createDashboardRoutes(dashboardService));
 app.use('/api/audit', createAuditRoutes(auditService));
 app.use('/api/conversations', createConversationRoutes(conversationService));
 app.use('/api/agent-management', createAgentManagementRoutes(agentManagementService));
+app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManagementService));
 
 app.use((req, res) => {
   return fail(res, 404, `Route ${req.method} ${req.path} not found`);

@@ -5,6 +5,7 @@ import type {
   ConversationSessionsResponse,
   DashboardOverview,
   HostListResponse,
+  SandboxManagementOverview,
   VmListResponse,
 } from './types';
 
@@ -84,6 +85,8 @@ export const api = {
     request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}`),
   getAgentManagementOverview: () =>
     request<AgentManagementOverview>('/api/agent-management/overview'),
+  getSandboxManagementOverview: (limit = 50) =>
+    request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
 
   listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
 };

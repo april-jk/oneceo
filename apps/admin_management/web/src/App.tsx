@@ -5,6 +5,8 @@ import {
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -26,6 +28,13 @@ import type {
 } from './types';
 
 type SectionKey = 'kvm' | 'conversation' | 'agent' | 'sandbox' | 'audit';
+type HostTrendPoint = {
+  timestamp: number;
+  timeLabel: string;
+  cpu: number;
+  memory: number;
+  storage: number;
+};
 
 const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string }> = [
   { key: 'kvm', label: 'KVM 管理', subtitle: '虚拟机与资源' },
@@ -94,6 +103,7 @@ export default function App() {
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
   const [hosts, setHosts] = useState<HostListResponse['hosts']>([]);
+  const [hostTrendMap, setHostTrendMap] = useState<Record<string, HostTrendPoint[]>>({});
   const [busyVmIds, setBusyVmIds] = useState<Record<string, boolean>>({});
 
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
@@ -120,7 +130,40 @@ export default function App() {
     }
 
     setVms(vmResult.status === 'fulfilled' ? vmResult.value.vms : []);
-    setHosts(hostResult.status === 'fulfilled' ? hostResult.value.hosts : []);
+    const nextHosts = hostResult.status === 'fulfilled' ? hostResult.value.hosts : [];
+    setHosts(nextHosts);
+
+    if (hostResult.status === 'fulfilled') {
+      const now = Date.now();
+      setHostTrendMap((previous) => {
+        const updated: Record<string, HostTrendPoint[]> = {};
+        for (const host of nextHosts) {
+          const previousSeries = previous[host.hostId] || [];
+          const sampledAt = host.lastHeartbeat && Number.isFinite(Date.parse(host.lastHeartbeat))
+            ? Date.parse(host.lastHeartbeat)
+            : now;
+          const nextPoint: HostTrendPoint = {
+            timestamp: sampledAt,
+            timeLabel: new Date(sampledAt).toLocaleTimeString('zh-CN', { hour12: false }),
+            cpu: Number(host.cpuUsagePercent.toFixed(1)),
+            memory: Number(host.memoryUsagePercent.toFixed(1)),
+            storage: Number(host.storageUsagePercent.toFixed(1)),
+          };
+
+          const lastPoint = previousSeries[previousSeries.length - 1];
+          const shouldAppend =
+            !lastPoint ||
+            Math.abs(lastPoint.timestamp - nextPoint.timestamp) > 1000 ||
+            lastPoint.cpu !== nextPoint.cpu ||
+            lastPoint.memory !== nextPoint.memory ||
+            lastPoint.storage !== nextPoint.storage;
+
+          const series = shouldAppend ? [...previousSeries, nextPoint] : previousSeries;
+          updated[host.hostId] = series.slice(-30);
+        }
+        return updated;
+      });
+    }
 
     if (
       overviewResult.status === 'rejected' &&
@@ -306,6 +349,21 @@ export default function App() {
                     运行 VM {host.runningVmCount} / 总 VM {host.totalVmCount}
                   </p>
                   <p>心跳: {formatDateTime(host.lastHeartbeat)}</p>
+                </div>
+
+                <div className="host-trend-wrap">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={hostTrendMap[host.hostId] || []}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
+                      <XAxis dataKey="timeLabel" minTickGap={20} />
+                      <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                      <Tooltip formatter={(value) => [`${value}%`, '']} />
+                      <Legend />
+                      <Line type="monotone" dataKey="cpu" name="CPU" stroke="#0f766e" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="memory" name="内存" stroke="#0284c7" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="storage" name="存储" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               </article>
             ))}

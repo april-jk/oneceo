@@ -14,6 +14,7 @@ import { AgentManagementService } from './services/agent-management-service';
 import { AuditService } from './services/audit-service';
 import { ConversationManagementService } from './services/conversation-management-service';
 import { DashboardService } from './services/dashboard-service';
+import { HostRuntimeService } from './services/host-runtime-service';
 import { KvmService } from './services/kvm-service';
 import { SandboxManagementService } from './services/sandbox-management-service';
 import { errorMiddleware, fail } from './utils/http';
@@ -23,6 +24,7 @@ const app = express();
 const auditService = new AuditService();
 const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
 const dashboardService = new DashboardService(kvmOrchestratorConnector, auditService);
+const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
 const conversationService = new ConversationManagementService(oneceoApiConnector);
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
 const sandboxManagementService = new SandboxManagementService(oneceoApiConnector);
@@ -43,7 +45,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/kvm', createKvmRoutes(kvmService));
-app.use('/api/hosts', createHostRoutes(kvmOrchestratorConnector));
+app.use('/api/hosts', createHostRoutes(hostRuntimeService));
 app.use('/api/dashboard', createDashboardRoutes(dashboardService));
 app.use('/api/audit', createAuditRoutes(auditService));
 app.use('/api/conversations', createConversationRoutes(conversationService));

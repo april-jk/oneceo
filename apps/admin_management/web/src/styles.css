@@ -733,6 +733,14 @@ button:focus-visible {
   font-size: 12px;
 }
 
+.host-trend-wrap {
+  height: 220px;
+  border: 1px solid #dbe7f4;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px 6px 4px;
+}
+
 .audit-list {
   display: grid;
   gap: 8px;

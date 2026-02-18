@@ -180,11 +180,17 @@ export class KvmOrchestratorConnector {
 
   private async request<T>(
     path: string,
-    options?: { method?: HttpMethod; body?: unknown; withAuth?: boolean; headers?: Record<string, string> }
+    options?: {
+      method?: HttpMethod;
+      body?: unknown;
+      withAuth?: boolean;
+      headers?: Record<string, string>;
+      retries?: number;
+    }
   ): Promise<T> {
     const method = options?.method ?? 'GET';
     const withAuth = options?.withAuth !== false;
-    const maxAttempts = Math.max(1, this.retries + 1);
+    const maxAttempts = Math.max(1, (options?.retries ?? this.retries) + 1);
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -252,6 +258,7 @@ export class KvmOrchestratorConnector {
   async health() {
     const data = await this.request<{ status?: string; service?: string; time?: string; timestamp?: string }>('/health', {
       withAuth: false,
+      retries: 0,
     });
 
     return {
@@ -262,7 +269,7 @@ export class KvmOrchestratorConnector {
   }
 
   async listVms(query?: { state?: string; limit?: number; offset?: number }) {
-    const data = await this.request<{ total?: number; items?: VmListRawItem[] }>('/v1/vms');
+    const data = await this.request<{ total?: number; items?: VmListRawItem[] }>('/v1/vms', { retries: 0 });
     const items = Array.isArray(data.items) ? data.items : [];
 
     const normalized = items.map<KvmVmListItem>((item) => ({

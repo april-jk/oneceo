@@ -2,19 +2,25 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const apiProxyTarget =
+  (process.env.VITE_API_PROXY_TARGET as string | undefined) ??
+  `http://localhost:${process.env.ADMIN_MANAGEMENT_PORT || '9310'}`;
+const webPort = Number(process.env.ADMIN_MANAGEMENT_WEB_PORT || process.env.VITE_DEV_PORT || 5174);
+
 export default defineConfig({
   root: path.resolve(__dirname),
   plugins: [react()],
   server: {
     host: true,
-    port: 5174,
+    port: webPort,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:9310',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://localhost:9310',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },

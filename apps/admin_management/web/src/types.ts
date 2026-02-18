@@ -117,3 +117,63 @@ export interface AuditResponse {
   total: number;
   entries: AuditLogEntry[];
 }
+
+export interface ConversationSession {
+  id: string;
+  title: string;
+  status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
+  stage?: string;
+  pendingQuestion?: string;
+  pendingOptions?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'agent' | 'system' | string;
+  messageType?: string;
+  content: string;
+  createdAt: string;
+  metadata?: unknown;
+}
+
+export interface ConversationSessionsResponse {
+  total: number;
+  sessions: ConversationSession[];
+}
+
+export interface ConversationSessionDetailResponse {
+  session: ConversationSession;
+  messages: ConversationMessage[];
+  intent: Record<string, unknown> | null;
+  taskDescription: Record<string, unknown> | null;
+  executionPlan: Record<string, unknown> | null;
+}
+
+export interface AgentManagementOverview {
+  oneceoApi: {
+    online: boolean;
+    timestamp: string | null;
+  };
+  agentApi: {
+    online: boolean;
+    message: string;
+    timestamp: string | null;
+  };
+  capabilities: Array<{
+    key: string;
+    name: string;
+    transport: string;
+    endpoint: string;
+    status: 'available' | 'planned' | string;
+  }>;
+  taskCreationSessions: {
+    total: number;
+    inProgress: number;
+    waitingUser: number;
+    completed: number;
+    failed: number;
+  };
+  stageDistribution: Array<{ label: string; value: number }>;
+}

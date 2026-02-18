@@ -29,30 +29,30 @@ export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
 export interface KvmVmListItem {
   vmId: string;
-  sessionId: string;
+  sessionId?: string;
   state: VmLifecycleState;
-  cpuCores: number;
-  memoryMb: number;
-  createdAt: string;
+  cpuCores?: number;
+  memoryMb?: number;
+  createdAt?: string;
 }
 
 export interface KvmVmState {
   vmId: string;
   state: VmLifecycleState;
-  uptimeSeconds: number;
-  cpuUsagePercent: number;
-  memoryUsageMb: number;
-  diskUsageGb: number;
-  network: {
+  uptimeSeconds?: number;
+  cpuUsagePercent?: number;
+  memoryUsageMb?: number;
+  diskUsageGb?: number;
+  network?: {
     inBytes: number;
     outBytes: number;
   };
-  lastUpdate: string;
+  lastUpdate?: string;
 }
 
 export interface KvmVmDetail {
   vmId: string;
-  sessionId: string;
+  sessionId?: string;
   name: string;
   state: VmLifecycleState;
   config: {

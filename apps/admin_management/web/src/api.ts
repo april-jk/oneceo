@@ -2,7 +2,6 @@ import type {
   AuditResponse,
   DashboardOverview,
   HostListResponse,
-  HostStatus,
   VmListResponse,
 } from './types';
 
@@ -69,21 +68,6 @@ export const api = {
     }),
 
   listHosts: () => request<HostListResponse>('/api/hosts'),
-
-  updateHost: (
-    hostId: string,
-    patch: {
-      status?: HostStatus;
-      cpuCapacityCores?: number;
-      memoryCapacityGb?: number;
-      storageCapacityGb?: number;
-      notes?: string;
-    }
-  ) =>
-    request(`/api/hosts/${encodeURIComponent(hostId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    }),
 
   listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
 };

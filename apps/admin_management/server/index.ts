@@ -8,16 +8,14 @@ import { createHostRoutes } from './routes/host-routes';
 import { createKvmRoutes } from './routes/kvm-routes';
 import { AuditService } from './services/audit-service';
 import { DashboardService } from './services/dashboard-service';
-import { HostService } from './services/host-service';
 import { KvmService } from './services/kvm-service';
 import { errorMiddleware, fail } from './utils/http';
 
 const app = express();
 
-const hostService = new HostService();
 const auditService = new AuditService();
-const kvmService = new KvmService(kvmOrchestratorConnector, hostService, auditService);
-const dashboardService = new DashboardService(kvmOrchestratorConnector, hostService, auditService);
+const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
+const dashboardService = new DashboardService(kvmOrchestratorConnector, auditService);
 
 app.use(
   cors({
@@ -35,7 +33,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/kvm', createKvmRoutes(kvmService));
-app.use('/api/hosts', createHostRoutes(hostService, kvmOrchestratorConnector));
+app.use('/api/hosts', createHostRoutes(kvmOrchestratorConnector));
 app.use('/api/dashboard', createDashboardRoutes(dashboardService));
 app.use('/api/audit', createAuditRoutes(auditService));
 

@@ -53,14 +53,19 @@ export interface VmListResponse {
 
 export interface VmItem {
   vmId: string;
+  name?: string;
   sessionId?: string;
   state: VmState;
+  stateRaw?: string;
+  ipAddresses?: string[];
   cpuCores?: number;
   memoryMb?: number;
   createdAt?: string;
+  updatedAt?: string;
   stateInfo?: {
     vmId: string;
     state: VmState;
+    stateRaw?: string;
     uptimeSeconds?: number;
     cpuUsagePercent?: number;
     memoryUsageMb?: number;
@@ -71,6 +76,92 @@ export interface VmItem {
     };
     lastUpdate?: string;
   };
+}
+
+export interface VmIpInfo {
+  vmId: string;
+  ipAddresses: string[];
+  primaryIp?: string;
+}
+
+export interface VmMetricsInfo {
+  vmId: string;
+  state: VmState;
+  stateRaw?: string;
+  memoryActualMb?: number;
+  memoryRssMb?: number;
+  stats: Record<string, number | string>;
+  collectedAt?: string;
+}
+
+export interface VmDetailResponse extends VmItem {
+  network?: {
+    ipAddress?: string;
+    macAddress?: string;
+  };
+  config?: {
+    cpuCores: number;
+    memoryMb: number;
+    rootDiskGb: number;
+  };
+  ipInfo?: VmIpInfo;
+}
+
+export interface KvmSnapshotInfo {
+  snapshotName: string;
+  vmName: string;
+  operationId?: string;
+  description?: string;
+  createdAt?: string;
+  restoredAt?: string;
+  deletedAt?: string;
+}
+
+export interface KvmJobInfo {
+  jobId: string;
+  status: string;
+  type?: string;
+  operationId?: string;
+  target?: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+  error?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KvmSessionQuota {
+  maxActionsPerMinute: number;
+  maxRuntimeMinutes: number;
+  maxRebootsPerHour: number;
+}
+
+export interface KvmSessionInfo {
+  sessionId: string;
+  status: string;
+  vmName?: string | null;
+  metadata?: Record<string, unknown>;
+  quota?: KvmSessionQuota;
+  createdAt?: string;
+  updatedAt?: string;
+  closedAt?: string | null;
+}
+
+export interface KvmSandboxPortMapping {
+  vmPort: number;
+  hostPort: number;
+  protocol: string;
+  hostIp?: string;
+  portReady?: boolean;
+}
+
+export interface KvmSandboxInfo {
+  sessionId: string;
+  vmName?: string;
+  vmExists?: boolean;
+  overlayPath?: string;
+  overlayExists?: boolean;
+  state?: string | null;
+  ipAddresses?: string[];
 }
 
 export interface HostRuntime {

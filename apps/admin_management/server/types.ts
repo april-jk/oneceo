@@ -1,14 +1,17 @@
 export type VmLifecycleState = 'running' | 'stopped' | 'paused' | 'error';
+export type VmAction = 'start' | 'shutdown' | 'reboot' | 'suspend' | 'resume' | 'stop';
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | string;
 export type SessionStatus =
   | 'pending'
   | 'initializing'
+  | 'open'
+  | 'closed'
   | 'ready'
   | 'active'
   | 'idle'
   | 'terminating'
   | 'terminated'
   | string;
-
 export type HostStatus = 'online' | 'degraded' | 'offline' | 'maintenance';
 
 export interface ApiSuccess<T> {
@@ -29,16 +32,21 @@ export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
 export interface KvmVmListItem {
   vmId: string;
+  name?: string;
   sessionId?: string;
   state: VmLifecycleState;
+  stateRaw?: string;
+  ipAddresses?: string[];
   cpuCores?: number;
   memoryMb?: number;
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface KvmVmState {
   vmId: string;
   state: VmLifecycleState;
+  stateRaw?: string;
   uptimeSeconds?: number;
   cpuUsagePercent?: number;
   memoryUsageMb?: number;
@@ -50,11 +58,23 @@ export interface KvmVmState {
   lastUpdate?: string;
 }
 
+export interface KvmVmMetrics {
+  vmId: string;
+  state: VmLifecycleState;
+  stateRaw?: string;
+  memoryActualMb?: number;
+  memoryRssMb?: number;
+  stats: Record<string, number | string>;
+  collectedAt?: string;
+}
+
 export interface KvmVmDetail {
   vmId: string;
   sessionId?: string;
   name: string;
   state: VmLifecycleState;
+  stateRaw?: string;
+  ipAddresses?: string[];
   config: {
     cpuCores: number;
     memoryMb: number;
@@ -71,6 +91,30 @@ export interface KvmVmDetail {
     macAddress?: string;
   };
   createdAt: string;
+  updatedAt?: string;
+}
+
+export interface KvmVmIpInfo {
+  vmId: string;
+  ipAddresses: string[];
+  primaryIp?: string;
+}
+
+export interface KvmSessionQuota {
+  maxActionsPerMinute: number;
+  maxRuntimeMinutes: number;
+  maxRebootsPerHour: number;
+}
+
+export interface KvmSessionInfo {
+  sessionId: string;
+  status: SessionStatus;
+  vmName?: string | null;
+  metadata?: Record<string, unknown>;
+  quota?: KvmSessionQuota;
+  createdAt?: string;
+  updatedAt?: string;
+  closedAt?: string | null;
 }
 
 export interface KvmSessionListItem {
@@ -79,6 +123,54 @@ export interface KvmSessionListItem {
   status: SessionStatus;
   vmId?: string;
   createdAt: string;
+}
+
+export interface KvmJobInfo {
+  jobId: string;
+  status: JobStatus;
+  type?: string;
+  operationId?: string;
+  target?: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+  error?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface KvmSnapshotInfo {
+  snapshotName: string;
+  vmName: string;
+  operationId?: string;
+  description?: string;
+  createdAt?: string;
+  restoredAt?: string;
+  deletedAt?: string;
+  diskOnly?: boolean;
+  quiesce?: boolean;
+}
+
+export interface KvmSandboxInfo {
+  sessionId: string;
+  vmName?: string;
+  vmExists?: boolean;
+  overlayPath?: string;
+  overlayExists?: boolean;
+  state?: string | null;
+  ipAddresses?: string[];
+}
+
+export interface KvmSandboxPortMapping {
+  vmPort: number;
+  hostPort: number;
+  protocol: 'tcp' | 'udp' | string;
+  hostIp?: string;
+  portReady?: boolean;
+  portReadyDetail?: {
+    vmPortReady?: boolean;
+    hostPortReady?: boolean;
+    vmError?: string;
+    hostError?: string;
+  };
 }
 
 export interface HostRecord {
@@ -117,7 +209,7 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   operator: string;
-  action: 'start' | 'stop';
+  action: string;
   targetVmId: string;
   sessionId?: string;
   result: 'success' | 'failed';

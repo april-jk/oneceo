@@ -13,6 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import { api } from './api';
+import { KvmControlCenter } from './components/KvmControlCenter';
 import type {
   AgentManagementOverview,
   AuditLogEntry,
@@ -351,6 +352,15 @@ export default function App() {
           </table>
         </div>
       </section>
+
+      <KvmControlCenter
+        vms={vms}
+        onDataChanged={async () => {
+          await loadKvmSection();
+          await loadAuditSection();
+        }}
+        onError={(message) => setError(message)}
+      />
 
       <section className="panel fade-in">
         <div className="panel-header">

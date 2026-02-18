@@ -20,15 +20,17 @@ import type {
   ConversationSessionDetailResponse,
   DashboardOverview,
   HostListResponse,
+  SandboxManagementOverview,
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'agent' | 'audit';
+type SectionKey = 'kvm' | 'conversation' | 'agent' | 'sandbox' | 'audit';
 
 const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string }> = [
   { key: 'kvm', label: 'KVM 管理', subtitle: '虚拟机与资源' },
   { key: 'conversation', label: '对话管理', subtitle: '任务创建会话' },
   { key: 'agent', label: '智能体管理', subtitle: 'Agent 运行状态' },
+  { key: 'sandbox', label: '执行环境管理', subtitle: 'Sandbox 与 OSAC' },
   { key: 'audit', label: '审计日志', subtitle: '操作追踪' },
 ];
 
@@ -76,6 +78,7 @@ export default function App() {
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
+  const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -130,6 +133,11 @@ export default function App() {
     setAgentOverview(result);
   }, []);
 
+  const loadSandboxSection = useCallback(async () => {
+    const result = await api.getSandboxManagementOverview(80);
+    setSandboxOverview(result);
+  }, []);
+
   const loadAuditSection = useCallback(async () => {
     const result = await api.listAudit(80);
     setAuditEntries(result.entries);
@@ -149,6 +157,8 @@ export default function App() {
           await loadConversationSessions();
         } else if (section === 'agent') {
           await loadAgentSection();
+        } else if (section === 'sandbox') {
+          await loadSandboxSection();
         } else {
           await loadAuditSection();
         }
@@ -160,7 +170,7 @@ export default function App() {
         setRefreshing(false);
       }
     },
-    [loadAgentSection, loadAuditSection, loadConversationSessions, loadKvmSection]
+    [loadAgentSection, loadAuditSection, loadConversationSessions, loadKvmSection, loadSandboxSection]
   );
 
   useEffect(() => {
@@ -199,6 +209,14 @@ export default function App() {
   );
 
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
+  const activeServiceOnline =
+    activeSection === 'agent'
+      ? agentOverview?.agentApi.online
+      : activeSection === 'sandbox'
+        ? sandboxOverview?.sandboxApi.online
+        : kvmOverview?.orchestrator.online;
+  const activeServiceLabel =
+    activeSection === 'agent' ? 'Agent 服务' : activeSection === 'sandbox' ? 'Sandbox 服务' : 'KVM 服务';
 
   const handlePower = async (vm: VmItem, action: 'start' | 'stop') => {
     setBusyVmIds((prev) => ({ ...prev, [vm.vmId]: true }));
@@ -486,6 +504,63 @@ export default function App() {
     </main>
   );
 
+  const renderSandboxSection = () => (
+    <main className="content-stack">
+      <section className="kpi-grid fade-in">
+        <article className="kpi-card">
+          <p className="kpi-title">Sandbox API</p>
+          <p className="kpi-value">{sandboxOverview?.sandboxApi.online ? '在线' : '离线'}</p>
+          <p className="kpi-meta">{sandboxOverview?.sandboxApi.service || '-'}</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">执行环境总数</p>
+          <p className="kpi-value">{sandboxOverview?.summary.total ?? 0}</p>
+          <p className="kpi-meta">环境记录</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">Ready 环境</p>
+          <p className="kpi-value">{sandboxOverview?.summary.ready ?? 0}</p>
+          <p className="kpi-meta">可执行</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">Creating 环境</p>
+          <p className="kpi-value">{sandboxOverview?.summary.creating ?? 0}</p>
+          <p className="kpi-meta">创建中</p>
+        </article>
+      </section>
+
+      <section className="panel fade-in">
+        <div className="panel-header">
+          <h2>执行环境列表</h2>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>VM 名称</th>
+                <th>状态</th>
+                <th>基础镜像</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(sandboxOverview?.environments || []).map((item) => (
+                <tr key={item.id}>
+                  <td className="mono">{item.sessionId}</td>
+                  <td className="mono">{item.vmName || '-'}</td>
+                  <td>{item.status}</td>
+                  <td>{item.baseImage || '-'}</td>
+                  <td>{formatDateTime(item.updatedAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+
   const renderAuditSection = () => (
     <main className="content-stack">
       <section className="panel fade-in">
@@ -522,6 +597,7 @@ export default function App() {
     if (activeSection === 'kvm') return renderKvmSection();
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
+    if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
 
@@ -557,8 +633,8 @@ export default function App() {
               <p className="subtitle">基于 oneceo 项目现有模块能力构建的管理标签页。</p>
             </div>
             <div className="header-tools">
-              <span className={`service-state ${kvmOverview?.orchestrator.online ? 'ok' : 'down'}`}>
-                {kvmOverview?.orchestrator.online ? 'KVM 在线' : 'KVM 离线'}
+              <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
+                {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
               </span>
               <button
                 type="button"

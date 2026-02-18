@@ -30,6 +30,19 @@ export type TaskCreationSession = {
   }>;
 };
 
+export type SandboxEnvironmentRecord = {
+  id: string;
+  sessionId: string;
+  orchestratorSessionId?: string | null;
+  vmName?: string | null;
+  baseImage?: string | null;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -126,6 +139,14 @@ export class OneceoApiConnector {
     return this.request<{ success: boolean; message: string; timestamp: string }>('/api/agents/health');
   }
 
+  getSandboxHealth() {
+    return this.request<{ status?: string; service?: string; version?: string; time?: string }>('/api/sandbox/health');
+  }
+
+  listSandboxEnvironments(limit = 20) {
+    return this.request<SandboxEnvironmentRecord[]>(`/api/sandbox/environment?limit=${limit}`);
+  }
+
   listTaskCreationSessions(limit = 20) {
     return this.request<TaskCreationSession[]>(`/api/task-creation/sessions?limit=${limit}`);
   }
@@ -158,4 +179,3 @@ export class OneceoApiConnector {
 }
 
 export const oneceoApiConnector = new OneceoApiConnector();
-

@@ -1,21 +1,15 @@
 import { Router } from 'express';
 import { asyncHandler, fail, ok } from '../utils/http';
-import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
+import type { HostRuntimeService } from '../services/host-runtime-service';
 
-export function createHostRoutes(connector: KvmOrchestratorConnector) {
+export function createHostRoutes(hostRuntimeService: HostRuntimeService) {
   const router = Router();
 
   router.get(
     '/',
     asyncHandler(async (_req, res) => {
-      const healthResult = await connector.health().catch(() => null);
-      const online = Boolean(healthResult && healthResult.status.toLowerCase() === 'ok');
-
-      return ok(res, {
-        online,
-        total: 0,
-        hosts: [],
-      });
+      const result = await hostRuntimeService.listHosts();
+      return ok(res, result);
     })
   );
 

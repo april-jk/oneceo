@@ -457,8 +457,10 @@ export class KvmOrchestratorConnector {
     };
   }
 
-  async getVmMetrics(vmId: string): Promise<KvmVmMetrics> {
-    const metrics = await this.request<VmMetricsRaw>(`/v1/vms/${encodeURIComponent(vmId)}/metrics`);
+  async getVmMetrics(vmId: string, options?: { retries?: number }): Promise<KvmVmMetrics> {
+    const metrics = await this.request<VmMetricsRaw>(`/v1/vms/${encodeURIComponent(vmId)}/metrics`, {
+      retries: options?.retries,
+    });
     const stats = (metrics.stats || {}) as Record<string, number | string>;
     return {
       vmId: metrics.name || metrics.vmName || vmId,

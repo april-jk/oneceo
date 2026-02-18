@@ -66,6 +66,28 @@ function statusLabel(status: string) {
   return status;
 }
 
+function hostStatusLabel(status: string) {
+  if (status === 'online') return '在线';
+  if (status === 'degraded') return '降级';
+  if (status === 'maintenance') return '维护';
+  if (status === 'offline') return '离线';
+  return status;
+}
+
+function hostStatusColor(status: string) {
+  if (status === 'online') return '#047857';
+  if (status === 'degraded') return '#b45309';
+  if (status === 'maintenance') return '#4f46e5';
+  return '#b91c1c';
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '-';
+  }
+  return `${value.toFixed(1)}%`;
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
 
@@ -364,12 +386,58 @@ export default function App() {
 
       <section className="panel fade-in">
         <div className="panel-header">
-          <h2>宿主机管理（占位）</h2>
+          <h2>KVM 宿主机状态</h2>
+          <span className="kpi-meta">总计 {hosts.length} 台</span>
         </div>
         {hosts.length === 0 ? (
-          <p className="empty">当前 KVM v1 未提供宿主机管理接口，已保留模块位置等待接入。</p>
+          <p className="empty">暂无宿主机数据，请检查 KVM 编排器连接或稍后重试。</p>
         ) : (
-          <p className="empty">已获取宿主机数：{hosts.length}</p>
+          <div className="host-grid">
+            {hosts.map((host) => (
+              <article key={host.hostId} className="host-card">
+                <div className="host-head">
+                  <div>
+                    <h3>{host.name}</h3>
+                    <p className="kpi-meta mono">{host.managementIp}</p>
+                  </div>
+                  <span className="host-dot" style={{ backgroundColor: hostStatusColor(host.effectiveStatus) }}>
+                    {hostStatusLabel(host.effectiveStatus)}
+                  </span>
+                </div>
+
+                <div className="usage-grid">
+                  <div>
+                    <p>CPU 使用率</p>
+                    <strong>{formatPercent(host.cpuUsagePercent)}</strong>
+                    <p>
+                      {host.usedCpuCores.toFixed(1)} / {host.cpuCapacityCores.toFixed(1)} cores
+                    </p>
+                  </div>
+                  <div>
+                    <p>内存使用率</p>
+                    <strong>{formatPercent(host.memoryUsagePercent)}</strong>
+                    <p>
+                      {host.usedMemoryGb.toFixed(1)} / {host.memoryCapacityGb.toFixed(1)} GB
+                    </p>
+                  </div>
+                  <div>
+                    <p>存储使用率</p>
+                    <strong>{formatPercent(host.storageUsagePercent)}</strong>
+                    <p>
+                      {host.usedStorageGb.toFixed(1)} / {host.storageCapacityGb.toFixed(1)} GB
+                    </p>
+                  </div>
+                </div>
+
+                <div className="host-card-footer">
+                  <p>
+                    运行 VM {host.runningVmCount} / 总 VM {host.totalVmCount}
+                  </p>
+                  <p>心跳: {formatDateTime(host.lastHeartbeat)}</p>
+                </div>
+              </article>
+            ))}
+          </div>
         )}
       </section>
     </main>

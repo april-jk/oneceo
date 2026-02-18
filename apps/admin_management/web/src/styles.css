@@ -813,6 +813,14 @@ button:focus-visible {
   .button-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .host-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
@@ -844,6 +852,10 @@ button:focus-visible {
 
 @media (max-width: 560px) {
   .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-grid {
     grid-template-columns: 1fr;
   }
 }

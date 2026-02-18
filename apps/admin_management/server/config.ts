@@ -9,6 +9,9 @@ const envSchema = z.object({
   KVM_ORCH_TOKEN: z.string().default(''),
   KVM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
   KVM_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+  ONECEO_API_URL: z.string().url().default('http://localhost:4000'),
+  ONECEO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  ONECEO_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(1),
   ADMIN_MANAGEMENT_CORS_ORIGIN: z.string().default('http://localhost:5174'),
 });
 
@@ -21,4 +24,7 @@ export const config = {
   kvmOrchToken: parsed.KVM_ORCH_TOKEN,
   kvmRequestTimeoutMs: parsed.KVM_REQUEST_TIMEOUT_MS,
   kvmRequestRetries: parsed.KVM_REQUEST_RETRIES,
+  oneceoApiUrl: parsed.ONECEO_API_URL.replace(/\/+$/, ''),
+  oneceoRequestTimeoutMs: parsed.ONECEO_REQUEST_TIMEOUT_MS,
+  oneceoRequestRetries: parsed.ONECEO_REQUEST_RETRIES,
 };

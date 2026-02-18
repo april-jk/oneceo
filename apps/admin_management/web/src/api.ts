@@ -1,5 +1,8 @@
 import type {
+  AgentManagementOverview,
   AuditResponse,
+  ConversationSessionDetailResponse,
+  ConversationSessionsResponse,
   DashboardOverview,
   HostListResponse,
   VmListResponse,
@@ -20,14 +23,21 @@ type ApiFailure = {
 type ApiEnvelope<T> = ApiSuccess<T> | ApiFailure;
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    signal: controller.signal,
     headers: {
       'content-type': 'application/json',
       ...(init?.headers || {}),
     },
+  }).finally(() => {
+    clearTimeout(timer);
   });
 
   const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
@@ -68,6 +78,12 @@ export const api = {
     }),
 
   listHosts: () => request<HostListResponse>('/api/hosts'),
+  listConversationSessions: (limit = 30) =>
+    request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
+  getConversationSessionDetail: (sessionId: string) =>
+    request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}`),
+  getAgentManagementOverview: () =>
+    request<AgentManagementOverview>('/api/agent-management/overview'),
 
   listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
 };

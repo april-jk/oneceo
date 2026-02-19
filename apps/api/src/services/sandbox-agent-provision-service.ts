@@ -27,6 +27,12 @@ function pickString(...values: unknown[]): string | null {
   return null;
 }
 
+type SandboxStatus = 'ready' | 'using';
+
+function toSandboxStatus(value: unknown, fallback: SandboxStatus = 'using'): SandboxStatus {
+  return value === 'ready' ? 'ready' : value === 'using' ? 'using' : fallback;
+}
+
 function extractIpAddress(payload: any): string | null {
   const normalize = (value: string) => value.split('/')[0].trim();
   const pickIp = (value: unknown): string | null => {
@@ -672,13 +678,509 @@ chmod 600 /root/.config/opencode/opencode.json`;
   assertJobSuccess(finished, '写入 OpenCode provider 配置');
 }
 
+type ProvisionInput = {
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
+  bind?: Record<string, unknown>;
+  requestBaseUrl?: string;
+  __skipWarmPool?: boolean;
+  __warmPoolSeed?: boolean;
+  __warmPoolReason?: string;
+};
+
+type ProvisionResult = {
+  sessionId: string;
+  vmName: string | null;
+  vmIpAddress: string | null;
+  osacEndpoint: string | null;
+  status: string;
+  sandboxStatus?: SandboxStatus;
+  bootstrap: {
+    osacBinaryUrl: string;
+    opencodeBinaryUrl: string;
+    osacPort: number;
+    osacPathSuffix: string;
+  };
+  warmPoolHit?: boolean;
+};
+
+type WarmPoolConfig = {
+  enabled: boolean;
+  targetSize: number;
+  maxInflight: number;
+  checkIntervalMs: number;
+  scanLimit: number;
+};
+
+type WarmPoolSummary = {
+  enabled: boolean;
+  targetSize: number;
+  maxInflight: number;
+  inFlight: number;
+  checkIntervalMs: number;
+  availableCount: number;
+  usingCount: number;
+  seedingCount: number;
+  totalWarmCount: number;
+  lastEnsureAt: string | null;
+  lastEnsureReason: string | null;
+  lastEnsureError: string | null;
+  readyQueue: string[];
+  samples: Array<{
+    sessionId: string;
+    status: string;
+    vmName: string | null;
+    warmState: string | null;
+    sandboxStatus: SandboxStatus | null;
+    osacEndpoint: string | null;
+    createdAt?: string;
+  }>;
+};
+
 export class SandboxAgentProvisionService {
-  async provision(input: {
-    metadata?: Record<string, unknown>;
-    idempotencyKey?: string;
-    bind?: Record<string, unknown>;
-    requestBaseUrl?: string;
-  }) {
+  private readonly warmPoolConfig: WarmPoolConfig = (() => {
+    const targetSize = Math.max(0, Number(process.env.OSAC_WARM_POOL_SIZE || 5));
+    const defaultMaxInflight = targetSize > 0 ? targetSize : 1;
+    return {
+      enabled: toBool(process.env.OSAC_WARM_POOL_ENABLED, true),
+      targetSize,
+      maxInflight: Math.max(1, Number(process.env.OSAC_WARM_POOL_MAX_INFLIGHT || defaultMaxInflight)),
+      checkIntervalMs: Math.max(5000, Number(process.env.OSAC_WARM_POOL_CHECK_INTERVAL_MS || 20000)),
+      scanLimit: Math.max(20, Number(process.env.OSAC_WARM_POOL_SCAN_LIMIT || 80)),
+    };
+  })();
+
+  private warmPoolTimer: NodeJS.Timeout | null = null;
+  private warmPoolInFlight = 0;
+  private warmPoolStarted = false;
+  private warmPoolLastEnsureAt: string | null = null;
+  private warmPoolLastEnsureReason: string | null = null;
+  private warmPoolLastEnsureError: string | null = null;
+  private warmPoolLock: Promise<void> = Promise.resolve();
+
+  constructor() {
+    this.ensureWarmPoolStarted();
+  }
+
+  private withWarmPoolLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.warmPoolLock;
+    let release: (() => void) | null = null;
+    this.warmPoolLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    return previous
+      .then(fn)
+      .finally(() => {
+        if (release) {
+          release();
+        }
+      });
+  }
+
+  private getWarmPoolState(metadata: Record<string, unknown> | null | undefined): string | null {
+    if (!metadata) return null;
+    const warmPool = metadata.warmPool as Record<string, unknown> | undefined;
+    const state = warmPool?.state;
+    return typeof state === 'string' && state.trim() ? state.trim() : null;
+  }
+
+  private isWarmPoolManaged(metadata: Record<string, unknown> | null | undefined): boolean {
+    if (!metadata) return false;
+    const warmState = this.getWarmPoolState(metadata);
+    if (warmState) return true;
+    const owner = pickString(metadata.owner);
+    const purpose = pickString(metadata.purpose);
+    return owner === 'osac-warm-pool' || purpose === 'osac-warm-pool';
+  }
+
+  private buildWarmSeedMetadata(reason: string): Record<string, unknown> {
+    return {
+      owner: 'osac-warm-pool',
+      purpose: 'osac-warm-pool',
+      warmPool: {
+        state: 'seeding',
+        sandboxStatus: 'using',
+        reason,
+        seededAt: new Date().toISOString(),
+      },
+      warmPoolSandboxStatus: 'using',
+      sandboxStatus: 'using',
+    };
+  }
+
+  private shouldUseWarmPool(input: ProvisionInput): boolean {
+    if (!this.warmPoolConfig.enabled || this.warmPoolConfig.targetSize <= 0) {
+      return false;
+    }
+    if (input.__skipWarmPool) {
+      return false;
+    }
+    // idempotent create must preserve deterministic behavior.
+    if (input.idempotencyKey) {
+      return false;
+    }
+    return true;
+  }
+
+  private ensureWarmPoolStarted() {
+    if (!this.warmPoolConfig.enabled || this.warmPoolConfig.targetSize <= 0) {
+      return;
+    }
+    if (this.warmPoolStarted) {
+      return;
+    }
+    this.warmPoolStarted = true;
+    this.warmPoolTimer = setInterval(() => {
+      void this.ensureWarmPool('ticker');
+    }, this.warmPoolConfig.checkIntervalMs);
+    if (this.warmPoolTimer && typeof this.warmPoolTimer.unref === 'function') {
+      this.warmPoolTimer.unref();
+    }
+    void this.ensureWarmPool('startup');
+  }
+
+  private scheduleWarmPoolEnsure(reason: string) {
+    if (!this.warmPoolConfig.enabled || this.warmPoolConfig.targetSize <= 0) {
+      return;
+    }
+    this.ensureWarmPoolStarted();
+    void this.ensureWarmPool(reason);
+  }
+
+  private async listWarmPoolRows(limit?: number) {
+    const maxRows = limit || this.warmPoolConfig.scanLimit;
+    const rows = await sandboxExecutionEnvironmentDAO.listRecent(maxRows);
+    return rows.filter((row: any) => this.isWarmPoolManaged((row?.metadata || {}) as Record<string, unknown>));
+  }
+
+  private async refreshWarmMappingMetadata(
+    sessionId: string,
+    metadata: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    if (osacBootstrapConfig.connectionMode !== 'port-mapping') {
+      return metadata;
+    }
+    const host = osacBootstrapConfig.portMappingHost || buildOrchestratorHost();
+    if (!host) {
+      return metadata;
+    }
+
+    const preferredHostPort =
+      typeof metadata.osacHostPort === 'number'
+        ? metadata.osacHostPort
+        : typeof metadata.osacHostPort === 'string'
+          ? Number(metadata.osacHostPort)
+          : undefined;
+
+    const ports = await kvmConnector.listSandboxPorts(sessionId, buildSandboxPortProbeQuery(5));
+    const items = extractSandboxPortMappings(ports.data);
+    const matched = findSandboxPortMapping(
+      items as any[],
+      osacBootstrapConfig.osacPort,
+      Number.isFinite(preferredHostPort as number) ? Number(preferredHostPort) : undefined
+    );
+    if (!matched || !isSandboxPortReady(matched as any)) {
+      return metadata;
+    }
+
+    const normalized = normalizeSandboxPortMapping(matched as any);
+    if (normalized.hostPort === null) {
+      return metadata;
+    }
+
+    const endpoint = `ws://${host}:${normalized.hostPort}${osacBootstrapConfig.osacPathSuffix}`;
+    if (
+      pickString(metadata.osacEndpoint) === endpoint &&
+      Number(metadata.osacHostPort || 0) === normalized.hostPort
+    ) {
+      return metadata;
+    }
+
+    const nextMetadata: Record<string, unknown> = {
+      ...metadata,
+      osacConnectionMode: 'port-mapping',
+      osacHost: host,
+      osacHostPort: normalized.hostPort,
+      osacEndpoint: endpoint,
+    };
+    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, nextMetadata);
+    return nextMetadata;
+  }
+
+  private async verifyWarmSessionHealth(
+    sessionId: string,
+    metadata: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const sandbox = await kvmConnector.getSandbox(sessionId);
+      const state = String((sandbox.data as any)?.state || '').toLowerCase();
+      if (state && state !== 'running') {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    try {
+      const refreshed = await this.refreshWarmMappingMetadata(sessionId, metadata);
+      const endpoint = pickString(refreshed.osacEndpoint);
+      if (!endpoint) {
+        return null;
+      }
+      return refreshed;
+    } catch {
+      return null;
+    }
+  }
+
+  private async markWarmSessionState(
+    sessionId: string,
+    metadata: Record<string, unknown>,
+    state: string,
+    reason?: string
+  ) {
+    const warmPool = (metadata.warmPool || {}) as Record<string, unknown>;
+    const sandboxStatus: SandboxStatus = state === 'ready' ? 'ready' : 'using';
+    const nextMetadata: Record<string, unknown> = {
+      ...metadata,
+      warmPool: {
+        ...warmPool,
+        state,
+        sandboxStatus,
+        reason: reason || warmPool.reason || '',
+        updatedAt: new Date().toISOString(),
+      },
+      warmPoolSandboxStatus: sandboxStatus,
+      sandboxStatus,
+    };
+    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, nextMetadata);
+  }
+
+  private buildProvisionResult(
+    sessionId: string,
+    vmName: string | null | undefined,
+    metadata: Record<string, unknown>,
+    requestBaseUrl?: string,
+    warmPoolHit?: boolean
+  ): ProvisionResult {
+    const downloadBase = buildDownloadBaseUrl(requestBaseUrl);
+    const sandboxStatus = toSandboxStatus(
+      pickString(
+        metadata.sandboxStatus,
+        metadata.warmPoolSandboxStatus,
+        ((metadata.warmPool as Record<string, unknown> | undefined) || {}).sandboxStatus
+      ),
+      pickString(metadata.osacEndpoint) ? 'ready' : 'using'
+    );
+    return {
+      sessionId,
+      vmName: vmName || null,
+      vmIpAddress: pickString(metadata.vmIpAddress) || null,
+      osacEndpoint: pickString(metadata.osacEndpoint) || null,
+      status: pickString(metadata.osacEndpoint) ? 'ready' : 'pending',
+      sandboxStatus,
+      bootstrap: {
+        osacBinaryUrl: `${downloadBase}/osac`,
+        opencodeBinaryUrl: `${downloadBase}/opencode`,
+        osacPort: osacBootstrapConfig.osacPort,
+        osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
+      },
+      warmPoolHit: warmPoolHit === true ? true : undefined,
+    };
+  }
+
+  private async tryClaimWarmSession(input: ProvisionInput): Promise<ProvisionResult | null> {
+    return this.withWarmPoolLock(async () => {
+      const rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+      const candidates = (rows as any[])
+        .filter((row: any) => {
+          if (row?.status !== 'ready') return false;
+          const state = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+          return state === 'ready';
+        })
+        .sort((a: any, b: any) => {
+          const ta = new Date(a?.createdAt || 0).getTime();
+          const tb = new Date(b?.createdAt || 0).getTime();
+          return ta - tb;
+        });
+
+      for (const row of candidates) {
+        if (row?.status !== 'ready') {
+          continue;
+        }
+        const metadata = (row?.metadata || {}) as Record<string, unknown>;
+        if (this.getWarmPoolState(metadata) !== 'ready') {
+          continue;
+        }
+        const sessionId = String(row.sessionId || '');
+        if (!sessionId) {
+          continue;
+        }
+        const healthyMetadata = await this.verifyWarmSessionHealth(sessionId, metadata);
+        if (!healthyMetadata) {
+          await this.markWarmSessionState(sessionId, metadata, 'retired', 'unhealthy_before_claim');
+          continue;
+        }
+
+        const warmPool = (healthyMetadata.warmPool || {}) as Record<string, unknown>;
+        const nextMetadata: Record<string, unknown> = {
+          ...healthyMetadata,
+          ...(input.metadata || {}),
+          warmPool: {
+            ...warmPool,
+            state: 'using',
+            sandboxStatus: 'using',
+            claimedAt: new Date().toISOString(),
+            source: 'warm_pool',
+          },
+          warmPoolSandboxStatus: 'using',
+          sandboxStatus: 'using',
+          warmPoolHit: true,
+        };
+
+        await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, nextMetadata);
+        return this.buildProvisionResult(
+          sessionId,
+          row?.vmName || null,
+          nextMetadata,
+          input.requestBaseUrl,
+          true
+        );
+      }
+      return null;
+    });
+  }
+
+  private async ensureWarmPool(reason: string) {
+    if (!this.warmPoolConfig.enabled || this.warmPoolConfig.targetSize <= 0) {
+      return;
+    }
+
+    this.warmPoolLastEnsureAt = new Date().toISOString();
+    this.warmPoolLastEnsureReason = reason;
+    this.warmPoolLastEnsureError = null;
+
+    try {
+      await this.withWarmPoolLock(async () => {
+        const rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+        const readyCount = rows.filter(
+          (row: any) =>
+            row?.status === 'ready' &&
+            this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>) === 'ready'
+        ).length;
+        const seedingCount = rows.filter((row: any) => {
+          const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+          return warmState === 'seeding' || row?.status === 'creating';
+        }).length;
+
+        const readyDeficit = this.warmPoolConfig.targetSize - readyCount;
+        const pendingCount = seedingCount + this.warmPoolInFlight;
+        const need = Math.max(0, readyDeficit - pendingCount);
+        const forcedNeed = reason === 'claimed' && readyDeficit > 0 ? 1 : 0;
+        const totalNeed = Math.max(need, forcedNeed);
+        if (totalNeed <= 0) {
+          return;
+        }
+
+        const spawn = Math.min(
+          totalNeed,
+          Math.max(0, this.warmPoolConfig.maxInflight - this.warmPoolInFlight)
+        );
+        for (let i = 0; i < spawn; i++) {
+          this.warmPoolInFlight += 1;
+          void this.spawnWarmPoolSeed(reason);
+        }
+      });
+    } catch (error) {
+      this.warmPoolLastEnsureError = error instanceof Error ? error.message : String(error);
+      console.warn('[OSAC_WARM_POOL_ENSURE_ERROR]', this.warmPoolLastEnsureError);
+    }
+  }
+
+  private async spawnWarmPoolSeed(reason: string) {
+    try {
+      await this.provision({
+        metadata: this.buildWarmSeedMetadata(reason),
+        __skipWarmPool: true,
+        __warmPoolSeed: true,
+        __warmPoolReason: reason,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[OSAC_WARM_POOL_SEED_ERROR]', reason, message);
+    } finally {
+      this.warmPoolInFlight = Math.max(0, this.warmPoolInFlight - 1);
+      this.scheduleWarmPoolEnsure('seed-finished');
+    }
+  }
+
+  async getWarmPoolStatus(): Promise<WarmPoolSummary> {
+    const rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+    const available = rows.filter(
+      (row: any) =>
+        row?.status === 'ready' &&
+        this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>) === 'ready'
+    );
+    const using = rows.filter((row: any) => {
+      const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+      return warmState === 'using';
+    });
+    const seeding = rows.filter((row: any) => {
+      const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+      return warmState === 'seeding' || row?.status === 'creating';
+    });
+    const readyQueue = available
+      .slice()
+      .sort((a: any, b: any) => {
+        const ta = new Date(a?.createdAt || 0).getTime();
+        const tb = new Date(b?.createdAt || 0).getTime();
+        return ta - tb;
+      })
+      .map((row: any) => String(row?.sessionId || ''))
+      .filter(Boolean);
+
+    return {
+      enabled: this.warmPoolConfig.enabled,
+      targetSize: this.warmPoolConfig.targetSize,
+      maxInflight: this.warmPoolConfig.maxInflight,
+      inFlight: this.warmPoolInFlight,
+      checkIntervalMs: this.warmPoolConfig.checkIntervalMs,
+      availableCount: available.length,
+      usingCount: using.length,
+      seedingCount: seeding.length,
+      totalWarmCount: rows.length,
+      lastEnsureAt: this.warmPoolLastEnsureAt,
+      lastEnsureReason: this.warmPoolLastEnsureReason,
+      lastEnsureError: this.warmPoolLastEnsureError,
+      readyQueue,
+      samples: rows.slice(0, 10).map((row: any) => ({
+        sessionId: String(row?.sessionId || ''),
+        status: String(row?.status || ''),
+        vmName: row?.vmName || null,
+        warmState: this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>),
+        sandboxStatus: pickString(
+          ((row?.metadata || {}) as Record<string, unknown>).sandboxStatus,
+          ((row?.metadata || {}) as Record<string, unknown>).warmPoolSandboxStatus,
+          (((row?.metadata || {}) as Record<string, unknown>).warmPool as Record<string, unknown> | undefined)?.sandboxStatus
+        ) as SandboxStatus | null,
+        osacEndpoint: pickString((row?.metadata || {}).osacEndpoint),
+        createdAt: row?.createdAt ? new Date(row.createdAt).toISOString() : undefined,
+      })),
+    };
+  }
+
+  async provision(input: ProvisionInput): Promise<ProvisionResult> {
+    this.ensureWarmPoolStarted();
+
+    if (this.shouldUseWarmPool(input)) {
+      const claimed = await this.tryClaimWarmSession(input);
+      if (claimed) {
+        this.scheduleWarmPoolEnsure('claimed');
+        return claimed;
+      }
+    }
+
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
 
     const environment = await sandboxEnvironmentService.openEnvironment({
@@ -713,9 +1215,11 @@ export class SandboxAgentProvisionService {
     const osacToken = generateOsacToken();
 
     const existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-    const mergedMetadata = {
-      ...(existing?.metadata || {}),
+    const existingMetadata = ((existing?.metadata || {}) as Record<string, unknown>) || {};
+    const mergedMetadata: Record<string, unknown> = {
+      ...existingMetadata,
       ...(input.metadata || {}),
+      sandboxStatus: 'using',
       osacEndpoint,
       vmIpAddress: ipAddress,
       osacAuthToken: osacToken,
@@ -1040,12 +1544,13 @@ export class SandboxAgentProvisionService {
       }
     }
 
-    return {
+    const result: ProvisionResult = {
       sessionId,
       vmName: vmName || environment.vmName,
       vmIpAddress: ipAddress,
       osacEndpoint,
       status: osacEndpoint ? 'ready' : 'pending',
+      sandboxStatus: 'using',
       bootstrap: {
         osacBinaryUrl,
         opencodeBinaryUrl,
@@ -1053,6 +1558,20 @@ export class SandboxAgentProvisionService {
         osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
       },
     };
+
+    if (input.__warmPoolSeed) {
+      const latest = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+      const latestMetadata = ((latest?.metadata || mergedMetadata) as Record<string, unknown>) || {};
+      const nextState = result.status === 'ready' ? 'ready' : 'retired';
+      const reason = result.status === 'ready'
+        ? input.__warmPoolReason || 'seed_ready'
+        : 'seed_pending_not_ready';
+      await this.markWarmSessionState(sessionId, latestMetadata, nextState, reason);
+      return result;
+    }
+
+    this.scheduleWarmPoolEnsure('post-provision');
+    return result;
   }
 }
 

@@ -28,6 +28,17 @@ type RoundResult = {
   stderrSnippet: string;
 };
 
+type ProxyPrecheckResult = {
+  ok: boolean;
+  status: string;
+  exit: number | null;
+  errorCode: string | null;
+  retryAfterMs: number | null;
+  errorMessage: string | null;
+  stdoutSnippet: string;
+  stderrSnippet: string;
+};
+
 function toNumber(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
@@ -44,6 +55,12 @@ function shellQuote(value: string): string {
 
 function nowStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+function resolveBridgeBaseUrlFromEnv(): string | null {
+  const explicit = (process.env.OSAC_LLM_PROXY_BRIDGE_BASE_URL || '').trim();
+  if (!explicit) return null;
+  return explicit.replace(/\/+$/, '');
 }
 
 function toBool(value: string | undefined, fallback: boolean): boolean {
@@ -77,6 +94,11 @@ function isTimeoutLike(error: unknown): boolean {
   return /timeout|timed out|aborted|超时/i.test(message);
 }
 
+function isTokenMismatchLike(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /token_mismatch/i.test(message);
+}
+
 function isGuestAgentUnavailable(outcome: ExecOutcome): boolean {
   const text = `${outcome.errorMessage || ''}\n${outcome.stderr}`.toLowerCase();
   return (
@@ -88,6 +110,42 @@ function isGuestAgentUnavailable(outcome: ExecOutcome): boolean {
 function looksOk(output: string): boolean {
   if (!output) return false;
   return /"text":"OK"/.test(output) || /\bOK\b/.test(output);
+}
+
+function extractErrorCode(text: string): string | null {
+  if (!text) return null;
+  const match = text.match(/"code"\s*:\s*"([^"]+)"/i);
+  if (match?.[1]) return match[1];
+  return null;
+}
+
+function extractRetryAfterMs(text: string): number | null {
+  if (!text) return null;
+  const match = text.match(/"retryAfterMs"\s*:\s*([0-9]+)/i);
+  if (!match?.[1]) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+function isRetryableProxyError(code: string | null): boolean {
+  if (!code) return false;
+  return [
+    'bridge_disconnected',
+    'bridge_no_ack',
+    'bridge_not_ready',
+    'mapping_not_ready',
+    'mapping_stale',
+    'bridge_backpressure',
+    'upstream_timeout_first_byte',
+  ].includes(code);
+}
+
+function isCircuitOpenPrecheckFailure(precheck: ProxyPrecheckResult | null): boolean {
+  if (!precheck || precheck.ok) return false;
+  if (precheck.errorCode !== 'bridge_disconnected') return false;
+  const text = `${precheck.errorMessage || ''}\n${precheck.stdoutSnippet}\n${precheck.stderrSnippet}`;
+  return /circuit_open|circuit open/i.test(text);
 }
 
 function pickSnippet(text: string, max: number): string {
@@ -180,7 +238,7 @@ async function waitForWsReady(
   sessionId: string,
   attempts: number,
   delayMs: number,
-  probeMode: 'ping' | 'request',
+  probeMode: 'ping' | 'request' | 'open',
   pingTimeoutMs: number,
   connectAcquireTimeoutMs: number
 ): Promise<void> {
@@ -200,11 +258,18 @@ async function waitForWsReady(
           (msg: any) => msg.type === 'SESSION_LIST_RESPONSE',
           { connectAcquireTimeoutMs: acquireTimeoutMs }
         );
-      } else {
+      } else if (probeMode === 'ping') {
         const entry = await osacConnectionManager.getConnection(sessionId, {
           connectAcquireTimeoutMs: acquireTimeoutMs,
         });
         await entry.handle.ping(pingTimeoutMs);
+      } else {
+        const entry = await osacConnectionManager.getConnection(sessionId, {
+          connectAcquireTimeoutMs: acquireTimeoutMs,
+        });
+        if (!entry?.handle?.isOpen?.()) {
+          throw new Error('OSAC persistent bridge open probe failed');
+        }
       }
       return;
     } catch (error) {
@@ -284,8 +349,128 @@ async function recoverGuestAgent(
   await waitForSandboxReady(kvmConnector, sessionId, readyAttempts, readyDelayMs);
 }
 
+async function precheckLlmProxy(
+  kvmConnector: any,
+  sessionId: string,
+  timeoutSeconds: number,
+  execTimeoutMs: number,
+  pollTimeoutMs: number,
+  pollIntervalMs: number
+): Promise<ProxyPrecheckResult> {
+  const proxyCommand = [
+    '/usr/bin/curl',
+    '-sS',
+    '--max-time',
+    String(Math.max(5, timeoutSeconds)),
+    '-H',
+    '"Authorization: Bearer local-proxy"',
+    'http://127.0.0.1:18111/v1/models',
+  ].join(' ');
+
+  const outcome = await withTimeout('proxy-precheck', execTimeoutMs, async () =>
+    execInVm(kvmConnector, sessionId, proxyCommand, Math.max(5, timeoutSeconds + 5), pollTimeoutMs, pollIntervalMs)
+  );
+
+  const stdoutSnippet = pickSnippet(outcome.stdout, 300);
+  const stderrSnippet = pickSnippet(outcome.stderr, 220);
+  const errorCode =
+    extractErrorCode(outcome.stdout) ||
+    extractErrorCode(outcome.stderr) ||
+    outcome.errorCode ||
+    null;
+  const retryAfterMs =
+    extractRetryAfterMs(outcome.stdout) ||
+    extractRetryAfterMs(outcome.stderr);
+  const errorMessage = outcome.errorMessage || null;
+  const ok =
+    outcome.status === 'completed' &&
+    outcome.exit === 0 &&
+    !errorCode &&
+    /"data"\s*:\s*\[/i.test(outcome.stdout);
+
+  return {
+    ok,
+    status: outcome.status,
+    exit: outcome.exit,
+    errorCode,
+    retryAfterMs,
+    errorMessage,
+    stdoutSnippet,
+    stderrSnippet,
+  };
+}
+
+type LocalBridgeServer = {
+  started: boolean;
+  baseUrl: string;
+  close: () => Promise<void>;
+};
+
+async function ensureLocalBridgeServer(
+  desiredPort: number
+): Promise<LocalBridgeServer> {
+  const port = Math.max(1, Math.floor(desiredPort));
+  const baseUrl = `http://127.0.0.1:${port}/api/llm-proxy`;
+
+  try {
+    const probeController = new AbortController();
+    const timer = setTimeout(() => probeController.abort(), 800);
+    const probe = await fetch(`http://127.0.0.1:${port}/health`, {
+      method: 'GET',
+      signal: probeController.signal,
+    });
+    clearTimeout(timer);
+    if (probe.ok) {
+      return {
+        started: false,
+        baseUrl,
+        close: async () => {},
+      };
+    }
+  } catch {
+    // ignore probe errors and try to start local bridge server
+  }
+
+  const express = (await import('express')).default;
+  const llmProxyRoutes = (await import('../src/routes/llm-proxy-routes')).default;
+  const app = express();
+  app.use('/api/llm-proxy', express.raw({ type: '*/*' }), llmProxyRoutes);
+
+  const server = await new Promise<any>((resolve, reject) => {
+    const instance = app.listen(port, '127.0.0.1');
+    instance.once('listening', () => resolve(instance));
+    instance.once('error', (error: any) => reject(error));
+  });
+
+  return {
+    started: true,
+    baseUrl,
+    close: async () => {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
+}
+
 async function main() {
   const startedAt = new Date().toISOString();
+  const disableOsacHealthcheck = toBool(process.env.DISABLE_OSAC_HEALTHCHECK, true);
+  if (disableOsacHealthcheck) {
+    process.env.OSAC_PERSISTENT_HEALTHCHECK_MS = '0';
+    process.env.OSAC_HEALTHCHECK_MODE = 'request';
+  }
+
+  const configuredBridgeBaseUrl = resolveBridgeBaseUrlFromEnv();
+  const localBridgePort = Math.max(1, toNumber(process.env.OSAC_REGRESSION_BRIDGE_PORT, toNumber(process.env.PORT, 4000)));
+  let localBridgeServer: LocalBridgeServer | null = null;
+  if (configuredBridgeBaseUrl) {
+    process.env.OSAC_LLM_PROXY_BRIDGE_BASE_URL = configuredBridgeBaseUrl;
+  } else {
+    localBridgeServer = await ensureLocalBridgeServer(localBridgePort);
+    process.env.OSAC_LLM_PROXY_BRIDGE_BASE_URL = localBridgeServer.baseUrl;
+  }
+
   const rounds = toNumber(process.env.ROUNDS, 10);
   const roundIntervalMs = toNumber(process.env.ROUND_INTERVAL_MS, 1500);
   const commandTimeoutSeconds = toNumber(process.env.COMMAND_TIMEOUT_SECONDS, 60);
@@ -298,9 +483,12 @@ async function main() {
   const provisionDelayMs = toNumber(process.env.PROVISION_DELAY_MS, 4000);
   const wsReadyAttempts = toNumber(process.env.WS_READY_ATTEMPTS, 8);
   const wsReadyDelayMs = toNumber(process.env.WS_READY_DELAY_MS, 3000);
-  const wsProbeMode = ((process.env.WS_PROBE_MODE || 'ping').trim().toLowerCase() === 'request'
-    ? 'request'
-    : 'ping') as 'ping' | 'request';
+  const wsProbeModeRaw = (process.env.WS_PROBE_MODE || 'ping').trim().toLowerCase();
+  const wsProbeMode = (
+    wsProbeModeRaw === 'request' ? 'request' :
+      wsProbeModeRaw === 'open' ? 'open' :
+        'ping'
+  ) as 'ping' | 'request' | 'open';
   const wsPingTimeoutMs = Math.max(1000, toNumber(process.env.WS_PING_TIMEOUT_MS, 15000));
   const wsConnectAcquireTimeoutMs = Math.max(
     2000,
@@ -317,6 +505,24 @@ async function main() {
   const roundExecTimeoutMs = Math.max(
     30_000,
     toNumber(process.env.ROUND_EXEC_TIMEOUT_MS, Math.max((execTimeoutSeconds + 30) * 1000, 120_000))
+  );
+  const enableProxyPrecheck = toBool(process.env.ENABLE_PROXY_PRECHECK, true);
+  const proxyPrecheckTimeoutSeconds = Math.max(
+    5,
+    toNumber(process.env.PROXY_PRECHECK_TIMEOUT_SECONDS, 20)
+  );
+  const proxyPrecheckExecTimeoutMs = Math.max(
+    8_000,
+    toNumber(process.env.PROXY_PRECHECK_EXEC_TIMEOUT_MS, 30_000)
+  );
+  const proxyPrecheckRetries = Math.max(0, toNumber(process.env.PROXY_PRECHECK_RETRIES, 1));
+  const proxyPrecheckRetryDelayMs = Math.max(
+    200,
+    toNumber(process.env.PROXY_PRECHECK_RETRY_DELAY_MS, 900)
+  );
+  const proxyPrecheckBudgetMs = Math.max(
+    1_000,
+    toNumber(process.env.PROXY_PRECHECK_BUDGET_MS, 15_000)
   );
   const prompt = process.env.OPENCODE_PROMPT || 'reply with OK only';
 
@@ -367,18 +573,40 @@ async function main() {
       ensureSandboxRunningAndReady(kvmConnector, sessionId, readyAttempts, readyDelayMs)
     );
 
-    ensureBudget('ws-ready');
-    await withTimeout('ws-ready', wsReadyStageTimeoutMs, async () =>
-      waitForWsReady(
-        osacConnectionManager,
-        sessionId,
-        wsReadyAttempts,
-        wsReadyDelayMs,
-        wsProbeMode,
-        wsPingTimeoutMs,
-        wsConnectAcquireTimeoutMs
-      )
-    );
+    try {
+      ensureBudget('ws-ready');
+      await withTimeout('ws-ready', wsReadyStageTimeoutMs, async () =>
+        waitForWsReady(
+          osacConnectionManager,
+          sessionId,
+          wsReadyAttempts,
+          wsReadyDelayMs,
+          wsProbeMode,
+          wsPingTimeoutMs,
+          wsConnectAcquireTimeoutMs
+        )
+      );
+    } catch (error) {
+      if (!isTokenMismatchLike(error)) {
+        throw error;
+      }
+      ensureBudget('ws-ready-token-recover');
+      await withTimeout('ws-ready-token-recover', recoverStageTimeoutMs, async () =>
+        recoverGuestAgent(kvmConnector, sessionId, readyAttempts, readyDelayMs)
+      );
+      ensureBudget('ws-ready-after-token-recover');
+      await withTimeout('ws-ready-after-token-recover', wsReadyStageTimeoutMs, async () =>
+        waitForWsReady(
+          osacConnectionManager,
+          sessionId,
+          wsReadyAttempts,
+          wsReadyDelayMs,
+          wsProbeMode,
+          wsPingTimeoutMs,
+          wsConnectAcquireTimeoutMs
+        )
+      );
+    }
 
     osacLlmProxyBridgeService.initialize();
     ensureBudget('bridge-ready');
@@ -403,6 +631,148 @@ async function main() {
       let row: RoundResult;
 
       try {
+        if (enableProxyPrecheck) {
+          let precheck: ProxyPrecheckResult | null = null;
+          let attemptError: unknown = null;
+          const precheckStart = Date.now();
+          let probeAttempt = 0;
+          while (true) {
+            try {
+              precheck = await precheckLlmProxy(
+                kvmConnector,
+                sessionId,
+                proxyPrecheckTimeoutSeconds,
+                proxyPrecheckExecTimeoutMs,
+                pollTimeoutMs,
+                pollIntervalMs
+              );
+              if (precheck.ok) break;
+              const canRetry = isRetryableProxyError(precheck.errorCode);
+              const elapsed = Date.now() - precheckStart;
+              const withinBudget = elapsed < proxyPrecheckBudgetMs;
+              if (!canRetry || !withinBudget || probeAttempt >= proxyPrecheckRetries) break;
+              const delayMs = Math.max(
+                proxyPrecheckRetryDelayMs,
+                Math.min(3_000, precheck.retryAfterMs || 0)
+              );
+              await sleep(delayMs);
+            } catch (error) {
+              attemptError = error;
+              const elapsed = Date.now() - precheckStart;
+              const withinBudget = elapsed < proxyPrecheckBudgetMs;
+              if (!withinBudget || probeAttempt >= proxyPrecheckRetries) break;
+              await sleep(proxyPrecheckRetryDelayMs);
+            }
+            probeAttempt += 1;
+          }
+
+          if (isCircuitOpenPrecheckFailure(precheck) && !recovered) {
+            ensureBudget(`round-${i}-recover-circuit`);
+            await withTimeout(`round-${i}-recover-circuit`, recoverStageTimeoutMs, async () =>
+              recoverGuestAgent(kvmConnector, sessionId, readyAttempts, readyDelayMs)
+            );
+            recovered = true;
+
+            ensureBudget(`round-${i}-ws-reprobe-circuit`);
+            await withTimeout(`round-${i}-ws-reprobe-circuit`, wsReadyStageTimeoutMs, async () =>
+              waitForWsReady(
+                osacConnectionManager,
+                sessionId,
+                wsReadyAttempts,
+                wsReadyDelayMs,
+                wsProbeMode,
+                wsPingTimeoutMs,
+                wsConnectAcquireTimeoutMs
+              )
+            );
+
+            try {
+              precheck = await precheckLlmProxy(
+                kvmConnector,
+                sessionId,
+                proxyPrecheckTimeoutSeconds,
+                proxyPrecheckExecTimeoutMs,
+                pollTimeoutMs,
+                pollIntervalMs
+              );
+            } catch (error) {
+              attemptError = error;
+              precheck = null;
+            }
+          }
+
+          if (precheck && !precheck.ok) {
+            const fallbackMessage =
+              precheck.errorMessage ||
+              (precheck.errorCode ? `proxy precheck failed: ${precheck.errorCode}` : 'proxy precheck failed');
+            row = {
+              round: i,
+              ok: false,
+              status: `precheck_${precheck.status || 'failed'}`,
+              exit: precheck.exit,
+              durationMs: Date.now() - roundStart,
+              timedOut:
+                precheck.exit === 124 ||
+                isTimeoutLike(precheck.errorMessage || '') ||
+                isTimeoutLike(precheck.stderrSnippet),
+              guestAgentRecovered: recovered,
+              errorCode: precheck.errorCode,
+              errorMessage: fallbackMessage,
+              stdoutSnippet: precheck.stdoutSnippet,
+              stderrSnippet: precheck.stderrSnippet,
+            };
+            roundResults.push(row);
+            console.log(JSON.stringify(row));
+            totalFailures += 1;
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= maxConsecutiveFailures) {
+              aborted = true;
+              abortReason = `Circuit break: ${consecutiveFailures} consecutive failures reached threshold ${maxConsecutiveFailures}`;
+            } else if (totalFailures >= maxFailures) {
+              aborted = true;
+              abortReason = `Circuit break: total failures ${totalFailures} reached threshold ${maxFailures}`;
+            }
+            if (aborted) break;
+            if (i < rounds && roundIntervalMs > 0) {
+              await sleep(roundIntervalMs);
+            }
+            continue;
+          }
+
+          if (!precheck && attemptError) {
+            const message = attemptError instanceof Error ? attemptError.message : String(attemptError);
+            row = {
+              round: i,
+              ok: false,
+              status: 'precheck_error',
+              exit: null,
+              durationMs: Date.now() - roundStart,
+              timedOut: isTimeoutLike(attemptError),
+              guestAgentRecovered: recovered,
+              errorCode: null,
+              errorMessage: message,
+              stdoutSnippet: '',
+              stderrSnippet: '',
+            };
+            roundResults.push(row);
+            console.log(JSON.stringify(row));
+            totalFailures += 1;
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= maxConsecutiveFailures) {
+              aborted = true;
+              abortReason = `Circuit break: ${consecutiveFailures} consecutive failures reached threshold ${maxConsecutiveFailures}`;
+            } else if (totalFailures >= maxFailures) {
+              aborted = true;
+              abortReason = `Circuit break: total failures ${totalFailures} reached threshold ${maxFailures}`;
+            }
+            if (aborted) break;
+            if (i < rounds && roundIntervalMs > 0) {
+              await sleep(roundIntervalMs);
+            }
+            continue;
+          }
+        }
+
         let outcome = await withTimeout(`round-${i}-exec`, roundExecTimeoutMs, async () =>
           execInVm(kvmConnector, sessionId, cmd, execTimeoutSeconds, pollTimeoutMs, pollIntervalMs)
         );
@@ -433,7 +803,10 @@ async function main() {
         }
 
         const ok = outcome.status === 'completed' && outcome.exit === 0 && looksOk(outcome.stdout);
-        timeoutLike = isTimeoutLike(outcome.errorMessage || '') || isTimeoutLike(outcome.stderr);
+        timeoutLike =
+          outcome.exit === 124 ||
+          isTimeoutLike(outcome.errorMessage || '') ||
+          isTimeoutLike(outcome.stderr);
         row = {
           round: i,
           ok,
@@ -503,6 +876,13 @@ async function main() {
         // ignore close errors
       }
     }
+    if (localBridgeServer?.started) {
+      try {
+        await localBridgeServer.close();
+      } catch {
+        // ignore close errors
+      }
+    }
   }
 
   const passed = roundResults.filter((item) => item.ok).length;
@@ -527,6 +907,15 @@ async function main() {
     commandTimeoutSeconds,
     execTimeoutSeconds,
     roundExecTimeoutMs,
+    enableProxyPrecheck,
+    proxyPrecheckTimeoutSeconds,
+    proxyPrecheckExecTimeoutMs,
+    proxyPrecheckRetries,
+    proxyPrecheckRetryDelayMs,
+    proxyPrecheckBudgetMs,
+    disableOsacHealthcheck,
+    bridgeBaseUrl: process.env.OSAC_LLM_PROXY_BRIDGE_BASE_URL || null,
+    localBridgeServerStarted: Boolean(localBridgeServer?.started),
     wsProbeMode,
     wsPingTimeoutMs,
     wsConnectAcquireTimeoutMs,

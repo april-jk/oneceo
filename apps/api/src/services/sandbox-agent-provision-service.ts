@@ -430,6 +430,12 @@ function resolveOsacLlmProxyEnv(requestBaseUrl?: string) {
   const upstreamBaseUrl = rawUpstream.trim().replace(/\/+$/, '');
   const upstreamToken = (process.env.OSAC_LLM_UPSTREAM_TOKEN || '').trim();
   const timeoutMs = (process.env.OSAC_LLM_PROXY_TIMEOUT_MS || '').trim();
+  const maxInflightPerSession = (process.env.OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION || '').trim();
+  const queueTimeoutMs = (process.env.OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS || '').trim();
+  const streamIdleTimeoutMs = (process.env.OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS || '').trim();
+  const wsPingInterval = (process.env.OSAC_WS_PING_INTERVAL || '').trim();
+  const wsIdleTimeout = (process.env.OSAC_WS_IDLE_TIMEOUT || '').trim();
+  const instanceLockPath = (process.env.OSAC_INSTANCE_LOCK_PATH || '').trim();
   const enabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'true').trim().toLowerCase();
   const enabled = enabledRaw !== 'false';
   return {
@@ -438,7 +444,26 @@ function resolveOsacLlmProxyEnv(requestBaseUrl?: string) {
     upstreamBaseUrl,
     upstreamToken,
     timeoutMs,
+    maxInflightPerSession,
+    queueTimeoutMs,
+    streamIdleTimeoutMs,
+    wsPingInterval,
+    wsIdleTimeout,
+    instanceLockPath,
   };
+}
+
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function shouldEagerBridgeOnProvision(): boolean {
+  // Default disabled: eager bridge can hold OSAC in candidate state before probe-ready.
+  return toBool(process.env.OSAC_PROVISION_EAGER_BRIDGE, false);
 }
 
 async function ensureVmEnv(
@@ -521,6 +546,54 @@ fi;`);
   sed -i "s|^OSAC_LLM_PROXY_TIMEOUT_MS=.*|OSAC_LLM_PROXY_TIMEOUT_MS='${escaped}'|" /etc/environment;
 else
   echo "OSAC_LLM_PROXY_TIMEOUT_MS='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.maxInflightPerSession) {
+    const escaped = shellEscapeSingle(osacLlmEnv.maxInflightPerSession);
+    extraLines.push(`if grep -q '^OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION=.*|OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.queueTimeoutMs) {
+    const escaped = shellEscapeSingle(osacLlmEnv.queueTimeoutMs);
+    extraLines.push(`if grep -q '^OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS=.*|OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.streamIdleTimeoutMs) {
+    const escaped = shellEscapeSingle(osacLlmEnv.streamIdleTimeoutMs);
+    extraLines.push(`if grep -q '^OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS=' /etc/environment; then
+  sed -i "s|^OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS=.*|OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.wsPingInterval) {
+    const escaped = shellEscapeSingle(osacLlmEnv.wsPingInterval);
+    extraLines.push(`if grep -q '^OSAC_WS_PING_INTERVAL=' /etc/environment; then
+  sed -i "s|^OSAC_WS_PING_INTERVAL=.*|OSAC_WS_PING_INTERVAL='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_WS_PING_INTERVAL='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.wsIdleTimeout) {
+    const escaped = shellEscapeSingle(osacLlmEnv.wsIdleTimeout);
+    extraLines.push(`if grep -q '^OSAC_WS_IDLE_TIMEOUT=' /etc/environment; then
+  sed -i "s|^OSAC_WS_IDLE_TIMEOUT=.*|OSAC_WS_IDLE_TIMEOUT='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_WS_IDLE_TIMEOUT='${escaped}'" >> /etc/environment;
+fi;`);
+  }
+  if (osacLlmEnv.instanceLockPath) {
+    const escaped = shellEscapeSingle(osacLlmEnv.instanceLockPath);
+    extraLines.push(`if grep -q '^OSAC_INSTANCE_LOCK_PATH=' /etc/environment; then
+  sed -i "s|^OSAC_INSTANCE_LOCK_PATH=.*|OSAC_INSTANCE_LOCK_PATH='${escaped}'|" /etc/environment;
+else
+  echo "OSAC_INSTANCE_LOCK_PATH='${escaped}'" >> /etc/environment;
 fi;`);
   }
 
@@ -732,6 +805,24 @@ export class SandboxAgentProvisionService {
     if (osacLlmEnv.timeoutMs) {
       env.OSAC_LLM_PROXY_TIMEOUT_MS = osacLlmEnv.timeoutMs;
     }
+    if (osacLlmEnv.maxInflightPerSession) {
+      env.OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION = osacLlmEnv.maxInflightPerSession;
+    }
+    if (osacLlmEnv.queueTimeoutMs) {
+      env.OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS = osacLlmEnv.queueTimeoutMs;
+    }
+    if (osacLlmEnv.streamIdleTimeoutMs) {
+      env.OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS = osacLlmEnv.streamIdleTimeoutMs;
+    }
+    if (osacLlmEnv.wsPingInterval) {
+      env.OSAC_WS_PING_INTERVAL = osacLlmEnv.wsPingInterval;
+    }
+    if (osacLlmEnv.wsIdleTimeout) {
+      env.OSAC_WS_IDLE_TIMEOUT = osacLlmEnv.wsIdleTimeout;
+    }
+    if (osacLlmEnv.instanceLockPath) {
+      env.OSAC_INSTANCE_LOCK_PATH = osacLlmEnv.instanceLockPath;
+    }
     if (opencodeEnv.baseUrl) {
       env.OPENAI_BASE_URL = opencodeEnv.baseUrl;
     }
@@ -775,6 +866,30 @@ export class SandboxAgentProvisionService {
     }
     if (osacLlmEnv.timeoutMs) {
       inlineEnvParts.push(`OSAC_LLM_PROXY_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.timeoutMs)}'`);
+    }
+    if (osacLlmEnv.maxInflightPerSession) {
+      inlineEnvParts.push(
+        `OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION='${shellEscapeSingle(osacLlmEnv.maxInflightPerSession)}'`
+      );
+    }
+    if (osacLlmEnv.queueTimeoutMs) {
+      inlineEnvParts.push(
+        `OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.queueTimeoutMs)}'`
+      );
+    }
+    if (osacLlmEnv.streamIdleTimeoutMs) {
+      inlineEnvParts.push(
+        `OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.streamIdleTimeoutMs)}'`
+      );
+    }
+    if (osacLlmEnv.wsPingInterval) {
+      inlineEnvParts.push(`OSAC_WS_PING_INTERVAL='${shellEscapeSingle(osacLlmEnv.wsPingInterval)}'`);
+    }
+    if (osacLlmEnv.wsIdleTimeout) {
+      inlineEnvParts.push(`OSAC_WS_IDLE_TIMEOUT='${shellEscapeSingle(osacLlmEnv.wsIdleTimeout)}'`);
+    }
+    if (osacLlmEnv.instanceLockPath) {
+      inlineEnvParts.push(`OSAC_INSTANCE_LOCK_PATH='${shellEscapeSingle(osacLlmEnv.instanceLockPath)}'`);
     }
     if (opencodeEnv.baseUrl) {
       inlineEnvParts.push(`OPENAI_BASE_URL='${shellEscapeSingle(opencodeEnv.baseUrl)}'`);
@@ -914,8 +1029,15 @@ export class SandboxAgentProvisionService {
       });
     }
 
-    if (osacLlmEnv.enabled && osacEndpoint) {
-      await osacConnectionManager.ensurePersistent(sessionId);
+    if (osacLlmEnv.enabled && osacEndpoint && shouldEagerBridgeOnProvision()) {
+      const bridgeReady = await osacConnectionManager.ensurePersistent(sessionId);
+      if (!bridgeReady) {
+        console.warn(
+          '[OSAC_BRIDGE_NOT_READY]',
+          sessionId,
+          'websocket auth/port mapping may be unstable; continue with background reconnect'
+        );
+      }
     }
 
     return {

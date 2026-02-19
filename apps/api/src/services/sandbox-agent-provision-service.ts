@@ -13,6 +13,7 @@ import {
 import { ensureDatabaseConnection } from '../config/database';
 import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { osacConnectionManager } from './osac-connection-manager';
+import { osacAgentService } from './osac-agent-service';
 import { normalizeOpencodeModel } from '../utils/opencode-model';
 import fs from 'fs';
 import path from 'path';
@@ -28,9 +29,20 @@ function pickString(...values: unknown[]): string | null {
 }
 
 type SandboxStatus = 'ready' | 'using';
+type WarmPoolState = 'seeding' | 'ready' | 'using' | 'retired' | 'failed';
+type AllocationSource = 'warm_pool' | 'cold_start';
 
 function toSandboxStatus(value: unknown, fallback: SandboxStatus = 'using'): SandboxStatus {
   return value === 'ready' ? 'ready' : value === 'using' ? 'using' : fallback;
+}
+
+function toWarmPoolState(value: unknown): WarmPoolState | null {
+  if (value === 'seeding') return 'seeding';
+  if (value === 'ready') return 'ready';
+  if (value === 'using') return 'using';
+  if (value === 'retired') return 'retired';
+  if (value === 'failed') return 'failed';
+  return null;
 }
 
 function extractIpAddress(payload: any): string | null {
@@ -695,6 +707,9 @@ type ProvisionResult = {
   osacEndpoint: string | null;
   status: string;
   sandboxStatus?: SandboxStatus;
+  allocationSource: AllocationSource;
+  degradedFromWarmPool: boolean;
+  readyGatePassed: boolean;
   bootstrap: {
     osacBinaryUrl: string;
     opencodeBinaryUrl: string;
@@ -710,6 +725,15 @@ type WarmPoolConfig = {
   maxInflight: number;
   checkIntervalMs: number;
   scanLimit: number;
+  waitReadyMs: number;
+  waitPollMs: number;
+  seedingTtlMs: number;
+  creatingTtlMs: number;
+  readyGateEnabled: boolean;
+  readyGateTimeoutMs: number;
+  readyGateModelsTimeoutMs: number;
+  readyGatePollMs: number;
+  cleanupCloseSession: boolean;
 };
 
 type WarmPoolSummary = {
@@ -719,12 +743,17 @@ type WarmPoolSummary = {
   inFlight: number;
   checkIntervalMs: number;
   availableCount: number;
+  healthyReadyCount: number;
   usingCount: number;
   seedingCount: number;
+  staleSeedingCount: number;
   totalWarmCount: number;
   lastEnsureAt: string | null;
   lastEnsureReason: string | null;
   lastEnsureError: string | null;
+  lastCleanupAt: string | null;
+  coldStartFallbackCount: number;
+  claimFailByCode: Record<string, number>;
   readyQueue: string[];
   samples: Array<{
     sessionId: string;
@@ -741,12 +770,31 @@ export class SandboxAgentProvisionService {
   private readonly warmPoolConfig: WarmPoolConfig = (() => {
     const targetSize = Math.max(0, Number(process.env.OSAC_WARM_POOL_SIZE || 5));
     const defaultMaxInflight = targetSize > 0 ? targetSize : 1;
+    const waitReadyMs = Math.max(0, Number(process.env.OSAC_WARM_POOL_WAIT_READY_MS || 10000));
+    const waitPollMs = Math.max(500, Number(process.env.OSAC_WARM_POOL_WAIT_POLL_MS || 2000));
+    const seedingTtlMs = Math.max(60_000, Number(process.env.OSAC_WARM_POOL_SEEDING_TTL_MS || 480000));
+    const creatingTtlMs = Math.max(120_000, Number(process.env.OSAC_WARM_POOL_CREATING_TTL_MS || 720000));
+    const readyGateTimeoutMs = Math.max(5000, Number(process.env.OSAC_WARM_POOL_READY_GATE_TIMEOUT_MS || 60000));
+    const readyGateModelsTimeoutMs = Math.max(
+      5000,
+      Number(process.env.OSAC_WARM_POOL_READY_GATE_MODELS_TIMEOUT_MS || 90000)
+    );
+    const readyGatePollMs = Math.max(500, Number(process.env.OSAC_WARM_POOL_READY_GATE_POLL_MS || 1500));
     return {
       enabled: toBool(process.env.OSAC_WARM_POOL_ENABLED, true),
       targetSize,
       maxInflight: Math.max(1, Number(process.env.OSAC_WARM_POOL_MAX_INFLIGHT || defaultMaxInflight)),
       checkIntervalMs: Math.max(5000, Number(process.env.OSAC_WARM_POOL_CHECK_INTERVAL_MS || 20000)),
       scanLimit: Math.max(20, Number(process.env.OSAC_WARM_POOL_SCAN_LIMIT || 80)),
+      waitReadyMs,
+      waitPollMs,
+      seedingTtlMs,
+      creatingTtlMs,
+      readyGateEnabled: toBool(process.env.OSAC_WARM_POOL_READY_GATE_ENABLED, true),
+      readyGateTimeoutMs,
+      readyGateModelsTimeoutMs,
+      readyGatePollMs,
+      cleanupCloseSession: toBool(process.env.OSAC_WARM_POOL_CLEANUP_CLOSE_SESSION, true),
     };
   })();
 
@@ -756,6 +804,9 @@ export class SandboxAgentProvisionService {
   private warmPoolLastEnsureAt: string | null = null;
   private warmPoolLastEnsureReason: string | null = null;
   private warmPoolLastEnsureError: string | null = null;
+  private warmPoolLastCleanupAt: string | null = null;
+  private warmPoolColdStartFallbackCount = 0;
+  private readonly warmPoolClaimFailByCode = new Map<string, number>();
   private warmPoolLock: Promise<void> = Promise.resolve();
 
   constructor() {
@@ -778,11 +829,180 @@ export class SandboxAgentProvisionService {
       });
   }
 
-  private getWarmPoolState(metadata: Record<string, unknown> | null | undefined): string | null {
+  private async withTimeout<T>(label: string, timeoutMs: number, promise: Promise<T>): Promise<T> {
+    const normalized = Math.max(1000, timeoutMs);
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}_timeout`)), normalized);
+      if (timer && typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private getWarmPoolState(metadata: Record<string, unknown> | null | undefined): WarmPoolState | null {
     if (!metadata) return null;
     const warmPool = metadata.warmPool as Record<string, unknown> | undefined;
-    const state = warmPool?.state;
-    return typeof state === 'string' && state.trim() ? state.trim() : null;
+    return toWarmPoolState(warmPool?.state);
+  }
+
+  private bumpWarmPoolClaimFailure(reason: string) {
+    const key = reason && reason.trim() ? reason.trim() : 'unknown';
+    this.warmPoolClaimFailByCode.set(key, (this.warmPoolClaimFailByCode.get(key) || 0) + 1);
+  }
+
+  private getWarmPoolClaimFailureSnapshot(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [key, value] of this.warmPoolClaimFailByCode.entries()) {
+      out[key] = value;
+    }
+    return out;
+  }
+
+  private getRowTimeMs(row: any): number {
+    const value = row?.updatedAt || row?.createdAt;
+    const ms = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  private getRowAgeMs(row: any, nowMs: number): number {
+    const timeMs = this.getRowTimeMs(row);
+    if (timeMs <= 0) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    return Math.max(0, nowMs - timeMs);
+  }
+
+  private getWarmPoolFailureCode(message: string): string {
+    const text = message || '';
+    const codeMatch = text.match(/\bcode=([a-zA-Z0-9_.-]+)/);
+    if (codeMatch?.[1]) {
+      return codeMatch[1];
+    }
+    const jsonMatch = text.match(/"code"\s*:\s*"([^"]+)"/);
+    if (jsonMatch?.[1]) {
+      return jsonMatch[1];
+    }
+    const compact = text.toLowerCase();
+    if (compact.includes('token_mismatch')) return 'token_mismatch';
+    if (compact.includes('bridge_disconnected')) return 'bridge_disconnected';
+    if (compact.includes('mapping_not_ready')) return 'mapping_not_ready';
+    if (compact.includes('mapping_stale')) return 'mapping_stale';
+    if (compact.includes('timed out') || compact.includes('timeout')) return 'timeout';
+    return 'unknown';
+  }
+
+  private isStaleWarmRow(row: any, nowMs: number): boolean {
+    const metadata = (row?.metadata || {}) as Record<string, unknown>;
+    const warmState = this.getWarmPoolState(metadata);
+    const ageMs = this.getRowAgeMs(row, nowMs);
+    if (warmState === 'seeding' && ageMs > this.warmPoolConfig.seedingTtlMs) {
+      return true;
+    }
+    if (row?.status === 'creating' && warmState !== 'ready' && warmState !== 'using' && ageMs > this.warmPoolConfig.creatingTtlMs) {
+      return true;
+    }
+    return false;
+  }
+
+  private async cleanupStaleWarmRows(rows: any[], trigger: string): Promise<number> {
+    const nowMs = Date.now();
+    let cleaned = 0;
+    for (const row of rows) {
+      if (!this.isStaleWarmRow(row, nowMs)) {
+        continue;
+      }
+      const sessionId = String(row?.sessionId || '');
+      if (!sessionId) {
+        continue;
+      }
+      const metadata = (row?.metadata || {}) as Record<string, unknown>;
+      try {
+        await this.markWarmSessionState(sessionId, metadata, 'retired', `stale_${trigger}`);
+      } catch {
+        // ignore state update failure and still attempt close/update-status
+      }
+
+      if (this.warmPoolConfig.cleanupCloseSession) {
+        try {
+          await kvmConnector.closeSession(sessionId, { graceful: true });
+        } catch {
+          // ignore close errors
+        }
+      }
+
+      try {
+        await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'failed', row?.vmName || null);
+      } catch {
+        // ignore status update failure
+      }
+      cleaned += 1;
+    }
+    if (cleaned > 0) {
+      this.warmPoolLastCleanupAt = new Date().toISOString();
+    }
+    return cleaned;
+  }
+
+  private async verifyWarmReadyGate(
+    sessionId: string,
+    metadata: Record<string, unknown>
+  ): Promise<{ ok: boolean; metadata: Record<string, unknown>; reason?: string }> {
+    const healthyMetadata = await this.verifyWarmSessionHealth(sessionId, metadata);
+    if (!healthyMetadata) {
+      return { ok: false, metadata, reason: 'unhealthy_before_gate' };
+    }
+    if (!this.warmPoolConfig.readyGateEnabled) {
+      return { ok: true, metadata: healthyMetadata };
+    }
+
+    try {
+      const connected = await this.withTimeout(
+        'warm_ready_gate_connect',
+        this.warmPoolConfig.readyGateTimeoutMs,
+        osacConnectionManager.ensurePersistent(sessionId)
+      );
+      if (!connected) {
+        return { ok: false, metadata: healthyMetadata, reason: 'ws_not_ready' };
+      }
+
+      await this.withTimeout(
+        'warm_ready_gate_session_list',
+        this.warmPoolConfig.readyGateTimeoutMs,
+        osacAgentService.getSessionList(sessionId, { maxCount: 1, format: 'json' })
+      );
+
+      const probe = await this.withTimeout(
+        'warm_ready_gate_models_probe',
+        this.warmPoolConfig.readyGateModelsTimeoutMs,
+        osacAgentService.executeCommandAndWait(
+          sessionId,
+          {
+            command: 'curl -sS -m 60 http://127.0.0.1:18111/v1/models -H "Authorization: Bearer local-proxy"',
+            options: {},
+          },
+          {
+            timeoutMs: this.warmPoolConfig.readyGateModelsTimeoutMs,
+            pollMs: this.warmPoolConfig.readyGatePollMs,
+          }
+        )
+      );
+
+      const output = String(probe.output || '');
+      if (!output.includes('"data"')) {
+        const reason = this.getWarmPoolFailureCode(output);
+        return { ok: false, metadata: healthyMetadata, reason: reason || 'models_probe_failed' };
+      }
+      return { ok: true, metadata: healthyMetadata };
+    } catch (error) {
+      const reason = this.getWarmPoolFailureCode(error instanceof Error ? error.message : String(error));
+      return { ok: false, metadata: healthyMetadata, reason };
+    }
   }
 
   private isWarmPoolManaged(metadata: Record<string, unknown> | null | undefined): boolean {
@@ -937,7 +1157,7 @@ export class SandboxAgentProvisionService {
   private async markWarmSessionState(
     sessionId: string,
     metadata: Record<string, unknown>,
-    state: string,
+    state: WarmPoolState,
     reason?: string
   ) {
     const warmPool = (metadata.warmPool || {}) as Record<string, unknown>;
@@ -962,7 +1182,12 @@ export class SandboxAgentProvisionService {
     vmName: string | null | undefined,
     metadata: Record<string, unknown>,
     requestBaseUrl?: string,
-    warmPoolHit?: boolean
+    options?: {
+      warmPoolHit?: boolean;
+      allocationSource?: AllocationSource;
+      degradedFromWarmPool?: boolean;
+      readyGatePassed?: boolean;
+    }
   ): ProvisionResult {
     const downloadBase = buildDownloadBaseUrl(requestBaseUrl);
     const sandboxStatus = toSandboxStatus(
@@ -980,13 +1205,16 @@ export class SandboxAgentProvisionService {
       osacEndpoint: pickString(metadata.osacEndpoint) || null,
       status: pickString(metadata.osacEndpoint) ? 'ready' : 'pending',
       sandboxStatus,
+      allocationSource: options?.allocationSource || 'cold_start',
+      degradedFromWarmPool: options?.degradedFromWarmPool === true,
+      readyGatePassed: options?.readyGatePassed === true,
       bootstrap: {
         osacBinaryUrl: `${downloadBase}/osac`,
         opencodeBinaryUrl: `${downloadBase}/opencode`,
         osacPort: osacBootstrapConfig.osacPort,
         osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
       },
-      warmPoolHit: warmPoolHit === true ? true : undefined,
+      warmPoolHit: options?.warmPoolHit === true ? true : undefined,
     };
   }
 
@@ -1017,11 +1245,14 @@ export class SandboxAgentProvisionService {
         if (!sessionId) {
           continue;
         }
-        const healthyMetadata = await this.verifyWarmSessionHealth(sessionId, metadata);
-        if (!healthyMetadata) {
-          await this.markWarmSessionState(sessionId, metadata, 'retired', 'unhealthy_before_claim');
+        const gate = await this.verifyWarmReadyGate(sessionId, metadata);
+        if (!gate.ok) {
+          const reason = gate.reason || 'ready_gate_failed';
+          this.bumpWarmPoolClaimFailure(reason);
+          await this.markWarmSessionState(sessionId, metadata, 'retired', reason);
           continue;
         }
+        const healthyMetadata = gate.metadata;
 
         const warmPool = (healthyMetadata.warmPool || {}) as Record<string, unknown>;
         const nextMetadata: Record<string, unknown> = {
@@ -1045,11 +1276,31 @@ export class SandboxAgentProvisionService {
           row?.vmName || null,
           nextMetadata,
           input.requestBaseUrl,
-          true
+          {
+            warmPoolHit: true,
+            allocationSource: 'warm_pool',
+            degradedFromWarmPool: false,
+            readyGatePassed: true,
+          }
         );
       }
       return null;
     });
+  }
+
+  private async waitForWarmPoolClaim(input: ProvisionInput): Promise<ProvisionResult | null> {
+    if (this.warmPoolConfig.waitReadyMs <= 0) {
+      return null;
+    }
+    const start = Date.now();
+    while (Date.now() - start < this.warmPoolConfig.waitReadyMs) {
+      await sleep(this.warmPoolConfig.waitPollMs);
+      const claimed = await this.tryClaimWarmSession(input);
+      if (claimed) {
+        return claimed;
+      }
+    }
+    return null;
   }
 
   private async ensureWarmPool(reason: string) {
@@ -1063,7 +1314,11 @@ export class SandboxAgentProvisionService {
 
     try {
       await this.withWarmPoolLock(async () => {
-        const rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+        let rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+        const cleaned = await this.cleanupStaleWarmRows(rows as any[], reason);
+        if (cleaned > 0) {
+          rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+        }
         const readyCount = rows.filter(
           (row: any) =>
             row?.status === 'ready' &&
@@ -1071,6 +1326,9 @@ export class SandboxAgentProvisionService {
         ).length;
         const seedingCount = rows.filter((row: any) => {
           const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+          if (warmState === 'retired' || warmState === 'failed') {
+            return false;
+          }
           return warmState === 'seeding' || row?.status === 'creating';
         }).length;
 
@@ -1117,19 +1375,28 @@ export class SandboxAgentProvisionService {
 
   async getWarmPoolStatus(): Promise<WarmPoolSummary> {
     const rows = await this.listWarmPoolRows(this.warmPoolConfig.scanLimit);
+    const nowMs = Date.now();
     const available = rows.filter(
       (row: any) =>
         row?.status === 'ready' &&
         this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>) === 'ready'
     );
+    const healthyReady = available.filter((row: any) => {
+      const metadata = (row?.metadata || {}) as Record<string, unknown>;
+      return Boolean(pickString(metadata.osacEndpoint));
+    });
     const using = rows.filter((row: any) => {
       const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
       return warmState === 'using';
     });
     const seeding = rows.filter((row: any) => {
       const warmState = this.getWarmPoolState((row?.metadata || {}) as Record<string, unknown>);
+      if (warmState === 'retired' || warmState === 'failed') {
+        return false;
+      }
       return warmState === 'seeding' || row?.status === 'creating';
     });
+    const staleSeeding = rows.filter((row: any) => this.isStaleWarmRow(row, nowMs));
     const readyQueue = available
       .slice()
       .sort((a: any, b: any) => {
@@ -1147,12 +1414,17 @@ export class SandboxAgentProvisionService {
       inFlight: this.warmPoolInFlight,
       checkIntervalMs: this.warmPoolConfig.checkIntervalMs,
       availableCount: available.length,
+      healthyReadyCount: healthyReady.length,
       usingCount: using.length,
       seedingCount: seeding.length,
+      staleSeedingCount: staleSeeding.length,
       totalWarmCount: rows.length,
       lastEnsureAt: this.warmPoolLastEnsureAt,
       lastEnsureReason: this.warmPoolLastEnsureReason,
       lastEnsureError: this.warmPoolLastEnsureError,
+      lastCleanupAt: this.warmPoolLastCleanupAt,
+      coldStartFallbackCount: this.warmPoolColdStartFallbackCount,
+      claimFailByCode: this.getWarmPoolClaimFailureSnapshot(),
       readyQueue,
       samples: rows.slice(0, 10).map((row: any) => ({
         sessionId: String(row?.sessionId || ''),
@@ -1172,13 +1444,21 @@ export class SandboxAgentProvisionService {
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     this.ensureWarmPoolStarted();
+    let attemptedWarmPool = false;
 
     if (this.shouldUseWarmPool(input)) {
+      attemptedWarmPool = true;
       const claimed = await this.tryClaimWarmSession(input);
       if (claimed) {
         this.scheduleWarmPoolEnsure('claimed');
         return claimed;
       }
+      const waitedClaim = await this.waitForWarmPoolClaim(input);
+      if (waitedClaim) {
+        this.scheduleWarmPoolEnsure('claimed');
+        return waitedClaim;
+      }
+      this.warmPoolColdStartFallbackCount += 1;
     }
 
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
@@ -1551,6 +1831,9 @@ export class SandboxAgentProvisionService {
       osacEndpoint,
       status: osacEndpoint ? 'ready' : 'pending',
       sandboxStatus: 'using',
+      allocationSource: 'cold_start',
+      degradedFromWarmPool: attemptedWarmPool,
+      readyGatePassed: false,
       bootstrap: {
         osacBinaryUrl,
         opencodeBinaryUrl,
@@ -1562,10 +1845,21 @@ export class SandboxAgentProvisionService {
     if (input.__warmPoolSeed) {
       const latest = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
       const latestMetadata = ((latest?.metadata || mergedMetadata) as Record<string, unknown>) || {};
-      const nextState = result.status === 'ready' ? 'ready' : 'retired';
-      const reason = result.status === 'ready'
-        ? input.__warmPoolReason || 'seed_ready'
-        : 'seed_pending_not_ready';
+      let nextState: WarmPoolState = 'retired';
+      let reason = 'seed_pending_not_ready';
+      let readyGatePassed = false;
+      if (result.status === 'ready') {
+        const gate = await this.verifyWarmReadyGate(sessionId, latestMetadata);
+        if (gate.ok) {
+          nextState = 'ready';
+          reason = input.__warmPoolReason || 'seed_ready';
+          readyGatePassed = true;
+        } else {
+          reason = gate.reason ? `seed_gate_${gate.reason}` : 'seed_gate_failed';
+          this.bumpWarmPoolClaimFailure(gate.reason || 'seed_gate_failed');
+        }
+      }
+      result.readyGatePassed = readyGatePassed;
       await this.markWarmSessionState(sessionId, latestMetadata, nextState, reason);
       return result;
     }

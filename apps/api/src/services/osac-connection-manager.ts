@@ -189,6 +189,16 @@ export class OsacConnectionManager {
     return message.includes('code=reconnect_in_progress');
   }
 
+  private isRequestTimeoutError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('OSAC 请求超时') || /request timeout/i.test(message);
+  }
+
+  private isPingTimeoutError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('OSAC WebSocket ping 超时') || /ping timeout/i.test(message);
+  }
+
   private clearReconnectTimer(sessionId: string) {
     const timer = this.reconnectTimers.get(sessionId);
     if (timer) {
@@ -318,6 +328,29 @@ export class OsacConnectionManager {
             await entry.handle.ping(this.healthCheckPingTimeoutMs);
           }
         } catch (error) {
+          if (this.isReconnectInProgressError(error)) {
+            continue;
+          }
+          if (this.isRequestTimeoutError(error)) {
+            // Request timeout alone is not enough evidence that socket is broken.
+            // Keep current connection and let next health tick verify again.
+            console.warn(
+              '[OSAC_HEALTHCHECK_TIMEOUT]',
+              sessionId,
+              error instanceof Error ? error.message : String(error)
+            );
+            continue;
+          }
+          if (this.isPingTimeoutError(error)) {
+            // Ping timeout can happen during OSAC candidate->active convergence.
+            // Avoid drop/reconnect storms; let following ticks or business traffic verify connectivity.
+            console.warn(
+              '[OSAC_HEALTHCHECK_PING_TIMEOUT]',
+              sessionId,
+              error instanceof Error ? error.message : String(error)
+            );
+            continue;
+          }
           console.warn(
             '[OSAC_HEALTHCHECK_ERROR]',
             sessionId,
@@ -460,7 +493,10 @@ export class OsacConnectionManager {
         return await entry.handle.request(message, match);
       }
       if (this.isReconnectInProgressError(error)) {
-        this.triggerReconnectNow(sessionId);
+        throw error;
+      }
+      if (this.isRequestTimeoutError(error)) {
+        // Avoid reconnect storms when bridge is still healthy but backend response is slow.
         throw error;
       }
       this.triggerReconnectNow(sessionId);

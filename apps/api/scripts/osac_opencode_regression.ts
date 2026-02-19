@@ -181,10 +181,11 @@ async function waitForWsReady(
   attempts: number,
   delayMs: number,
   probeMode: 'ping' | 'request',
-  pingTimeoutMs: number
+  pingTimeoutMs: number,
+  connectAcquireTimeoutMs: number
 ): Promise<void> {
   let lastError: unknown = null;
-  const acquireTimeoutMs = Math.max(2000, pingTimeoutMs + 2000);
+  const acquireTimeoutMs = Math.max(2000, connectAcquireTimeoutMs);
   for (let i = 0; i < attempts; i++) {
     try {
       const ready = await osacConnectionManager.ensurePersistent(sessionId);
@@ -300,7 +301,11 @@ async function main() {
   const wsProbeMode = ((process.env.WS_PROBE_MODE || 'ping').trim().toLowerCase() === 'request'
     ? 'request'
     : 'ping') as 'ping' | 'request';
-  const wsPingTimeoutMs = Math.max(1000, toNumber(process.env.WS_PING_TIMEOUT_MS, 5000));
+  const wsPingTimeoutMs = Math.max(1000, toNumber(process.env.WS_PING_TIMEOUT_MS, 15000));
+  const wsConnectAcquireTimeoutMs = Math.max(
+    2000,
+    toNumber(process.env.WS_CONNECT_ACQUIRE_TIMEOUT_MS, Math.max(30_000, wsPingTimeoutMs + 2000))
+  );
   const restartOnGuestAgentError = toBool(process.env.RESTART_ON_GA_ERROR, true);
   const maxConsecutiveFailures = Math.max(1, toNumber(process.env.MAX_CONSECUTIVE_FAILURES, 3));
   const maxFailures = Math.max(1, toNumber(process.env.MAX_FAILURES, Math.ceil(rounds * 0.5)));
@@ -364,7 +369,15 @@ async function main() {
 
     ensureBudget('ws-ready');
     await withTimeout('ws-ready', wsReadyStageTimeoutMs, async () =>
-      waitForWsReady(osacConnectionManager, sessionId, wsReadyAttempts, wsReadyDelayMs, wsProbeMode, wsPingTimeoutMs)
+      waitForWsReady(
+        osacConnectionManager,
+        sessionId,
+        wsReadyAttempts,
+        wsReadyDelayMs,
+        wsProbeMode,
+        wsPingTimeoutMs,
+        wsConnectAcquireTimeoutMs
+      )
     );
 
     osacLlmProxyBridgeService.initialize();
@@ -409,7 +422,8 @@ async function main() {
               wsReadyAttempts,
               wsReadyDelayMs,
               wsProbeMode,
-              wsPingTimeoutMs
+              wsPingTimeoutMs,
+              wsConnectAcquireTimeoutMs
             )
           );
 
@@ -515,6 +529,7 @@ async function main() {
     roundExecTimeoutMs,
     wsProbeMode,
     wsPingTimeoutMs,
+    wsConnectAcquireTimeoutMs,
     persistentBridgeReady,
   };
 

@@ -772,8 +772,8 @@ export class SandboxAgentProvisionService {
     const defaultMaxInflight = targetSize > 0 ? targetSize : 1;
     const waitReadyMs = Math.max(0, Number(process.env.OSAC_WARM_POOL_WAIT_READY_MS || 10000));
     const waitPollMs = Math.max(500, Number(process.env.OSAC_WARM_POOL_WAIT_POLL_MS || 2000));
-    const seedingTtlMs = Math.max(60_000, Number(process.env.OSAC_WARM_POOL_SEEDING_TTL_MS || 480000));
-    const creatingTtlMs = Math.max(120_000, Number(process.env.OSAC_WARM_POOL_CREATING_TTL_MS || 720000));
+    const seedingTtlMs = Math.max(60_000, Number(process.env.OSAC_WARM_POOL_SEEDING_TTL_MS || 180000));
+    const creatingTtlMs = Math.max(120_000, Number(process.env.OSAC_WARM_POOL_CREATING_TTL_MS || 300000));
     const readyGateTimeoutMs = Math.max(5000, Number(process.env.OSAC_WARM_POOL_READY_GATE_TIMEOUT_MS || 60000));
     const readyGateModelsTimeoutMs = Math.max(
       5000,

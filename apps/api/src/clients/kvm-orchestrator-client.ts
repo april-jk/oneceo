@@ -3,8 +3,53 @@ import { Blob } from 'buffer';
 
 const baseUrl = process.env.KVM_ORCHESTRATOR_URL || 'http://192.168.10.172:8500';
 const token = process.env.KVM_ORCH_TOKEN || '';
-
+const baseRequestTimeoutMs = Math.max(1000, Number(process.env.KVM_HTTP_TIMEOUT_MS || 15000));
+const baseRetries = Math.max(0, Number(process.env.KVM_HTTP_RETRIES || 1));
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+function toInt(value: string | undefined, fallback: number, min: number = 0): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.floor(parsed));
+}
+
+function resolveRequestPolicy(path: string, method: HttpMethod, isForm: boolean): { timeoutMs: number; retries: number } {
+  const healthTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_HEALTH_MS, Math.min(baseRequestTimeoutMs, 8000), 1000);
+  const metaTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_META_MS, Math.max(baseRequestTimeoutMs, 15000), 1000);
+  const sandboxTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_SANDBOX_MS, Math.max(baseRequestTimeoutMs, 30000), 1000);
+  const jobTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_JOB_MS, Math.max(baseRequestTimeoutMs, 30000), 1000);
+  const execTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_EXEC_MS, Math.max(baseRequestTimeoutMs, 90000), 1000);
+  const uploadTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_UPLOAD_MS, Math.max(baseRequestTimeoutMs, 120000), 1000);
+
+  const metaRetries = toInt(process.env.KVM_HTTP_RETRIES_META, baseRetries, 0);
+  const sandboxRetries = toInt(process.env.KVM_HTTP_RETRIES_SANDBOX, Math.max(baseRetries, 1), 0);
+  const jobRetries = toInt(process.env.KVM_HTTP_RETRIES_JOB, Math.max(baseRetries, 1), 0);
+  const execRetries = toInt(process.env.KVM_HTTP_RETRIES_EXEC, Math.max(baseRetries, 1), 0);
+  const uploadRetries = toInt(process.env.KVM_HTTP_RETRIES_UPLOAD, Math.max(baseRetries, 1), 0);
+
+  if (path === '/health') {
+    return { timeoutMs: healthTimeoutMs, retries: 0 };
+  }
+  if (path.startsWith('/v1/jobs/')) {
+    return { timeoutMs: jobTimeoutMs, retries: jobRetries };
+  }
+  if (path.includes('/exec')) {
+    return { timeoutMs: execTimeoutMs, retries: execRetries };
+  }
+  if (isForm || path.includes('/files')) {
+    return { timeoutMs: uploadTimeoutMs, retries: uploadRetries };
+  }
+  if (path.startsWith('/v1/sandboxes/')) {
+    return { timeoutMs: sandboxTimeoutMs, retries: sandboxRetries };
+  }
+  if (path.startsWith('/v1/sessions') || path.startsWith('/v1/vms')) {
+    return { timeoutMs: metaTimeoutMs, retries: metaRetries };
+  }
+  if (method === 'GET') {
+    return { timeoutMs: metaTimeoutMs, retries: metaRetries };
+  }
+  return { timeoutMs: Math.max(metaTimeoutMs, baseRequestTimeoutMs), retries: baseRetries };
+}
 
 export class KvmClientError extends Error {
   readonly status: number;
@@ -32,6 +77,29 @@ function buildHeaders(withAuth: boolean, extra?: Record<string, string>) {
   return headers;
 }
 
+function isRetryableStatus(status: number) {
+  return status >= 500 || status === 429;
+}
+
+function shouldRetryError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.toLowerCase().includes('aborted') ||
+    message.toLowerCase().includes('timeout') ||
+    message.toLowerCase().includes('network')
+  );
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function request<T>(
   path: string,
   method: HttpMethod,
@@ -40,6 +108,7 @@ async function request<T>(
 ): Promise<T> {
   const withAuth = options?.withAuth !== false;
   const headers = buildHeaders(withAuth, options?.headers);
+  const policy = resolveRequestPolicy(path, method, false);
 
   let payloadBody: string | undefined;
   if (body !== undefined) {
@@ -47,21 +116,48 @@ async function request<T>(
     payloadBody = JSON.stringify(body);
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers,
-    body: payloadBody,
-  });
+  let lastError: unknown;
+  const maxAttempts = Math.max(1, policy.retries + 1);
 
-  const payload: any = await response.json().catch(() => ({}));
-  const requestId = payload?.request_id;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetchWithTimeout(`${baseUrl}${path}`, {
+        method,
+        headers,
+        body: payloadBody,
+      }, policy.timeoutMs);
 
-  if (!response.ok) {
-    const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
-    throw new KvmClientError(response.status, message, requestId);
+      const payload: any = await response.json().catch(() => ({}));
+      const requestId = payload?.request_id;
+
+      if (!response.ok) {
+        const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
+        if (isRetryableStatus(response.status) && attempt < maxAttempts) {
+          lastError = new KvmClientError(response.status, message, requestId);
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          continue;
+        }
+        throw new KvmClientError(response.status, message, requestId);
+      }
+
+      return payload as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !shouldRetryError(error)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
   }
 
-  return payload as T;
+  if (lastError instanceof KvmClientError) {
+    throw lastError;
+  }
+  if (lastError && (lastError as any).name === 'AbortError') {
+    throw new KvmClientError(504, 'KVM 服务请求超时');
+  }
+  const message = lastError instanceof Error ? lastError.message : getPublicErrorMessage('KVM 服务暂时不可用');
+  throw new KvmClientError(502, message);
 }
 
 async function requestForm<T>(
@@ -71,22 +167,50 @@ async function requestForm<T>(
 ): Promise<T> {
   const withAuth = options?.withAuth !== false;
   const headers = buildHeaders(withAuth, options?.headers);
+  const policy = resolveRequestPolicy(path, 'POST', true);
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers,
-    body: form,
-  });
+  let lastError: unknown;
+  const maxAttempts = Math.max(1, policy.retries + 1);
 
-  const payload: any = await response.json().catch(() => ({}));
-  const requestId = payload?.request_id;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetchWithTimeout(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers,
+        body: form,
+      }, policy.timeoutMs);
 
-  if (!response.ok) {
-    const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
-    throw new KvmClientError(response.status, message, requestId);
+      const payload: any = await response.json().catch(() => ({}));
+      const requestId = payload?.request_id;
+
+      if (!response.ok) {
+        const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
+        if (isRetryableStatus(response.status) && attempt < maxAttempts) {
+          lastError = new KvmClientError(response.status, message, requestId);
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          continue;
+        }
+        throw new KvmClientError(response.status, message, requestId);
+      }
+
+      return payload as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !shouldRetryError(error)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
   }
 
-  return payload as T;
+  if (lastError instanceof KvmClientError) {
+    throw lastError;
+  }
+  if (lastError && (lastError as any).name === 'AbortError') {
+    throw new KvmClientError(504, 'KVM 服务请求超时');
+  }
+  const message = lastError instanceof Error ? lastError.message : getPublicErrorMessage('KVM 服务暂时不可用');
+  throw new KvmClientError(502, message);
 }
 
 export type UploadFileInput = {
@@ -226,8 +350,13 @@ export const kvmOrchestratorClient = {
     ),
   createSandboxPort: (sessionId: string, body: SandboxPortMappingInput) =>
     request(`/v1/sandboxes/${encodeURIComponent(sessionId)}/ports`, 'POST', body),
-  listSandboxPorts: (sessionId: string) =>
-    request(`/v1/sandboxes/${encodeURIComponent(sessionId)}/ports`, 'GET'),
+  listSandboxPorts: (sessionId: string, query?: Record<string, string>) =>
+    request(
+      `/v1/sandboxes/${encodeURIComponent(sessionId)}/ports${
+        query ? `?${new URLSearchParams(query).toString()}` : ''
+      }`,
+      'GET'
+    ),
   deleteSandboxPort: (sessionId: string, query: Record<string, string>) =>
     request(`/v1/sandboxes/${encodeURIComponent(sessionId)}/ports?${new URLSearchParams(query).toString()}`, 'DELETE'),
   restartSandbox: (sessionId: string, body: Record<string, unknown>) =>

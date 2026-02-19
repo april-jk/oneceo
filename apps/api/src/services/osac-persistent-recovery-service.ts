@@ -23,6 +23,38 @@ function hasRecoverableToken(metadata: unknown) {
   );
 }
 
+function hasRecoverableEndpoint(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const map = metadata as Record<string, unknown>;
+  const endpoint =
+    (typeof map.osacEndpoint === 'string' && map.osacEndpoint.trim()) ||
+    (typeof map.osacUrl === 'string' && map.osacUrl.trim()) ||
+    (typeof map.sandboxAgentEndpoint === 'string' && map.sandboxAgentEndpoint.trim()) ||
+    '';
+  return Boolean(endpoint);
+}
+
+function isWarmPoolMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const map = metadata as Record<string, unknown>;
+  const owner = typeof map.owner === 'string' ? map.owner.trim() : '';
+  const purpose = typeof map.purpose === 'string' ? map.purpose.trim() : '';
+  const warmPool = map.warmPool && typeof map.warmPool === 'object' ? (map.warmPool as Record<string, unknown>) : null;
+  return (
+    owner === 'osac-warm-pool' ||
+    purpose === 'osac-warm-pool' ||
+    warmPool !== null
+  );
+}
+
+function isRecentEnough(item: any, maxAgeMs: number) {
+  if (maxAgeMs <= 0) return true;
+  const t = item?.updatedAt || item?.createdAt;
+  const ms = t ? new Date(t).getTime() : 0;
+  if (!Number.isFinite(ms) || ms <= 0) return false;
+  return Date.now() - ms <= maxAgeMs;
+}
+
 export class OsacPersistentRecoveryService {
   private started = false;
 
@@ -38,18 +70,27 @@ export class OsacPersistentRecoveryService {
     }
 
     const limit = toNumber(process.env.OSAC_PERSISTENT_RECOVER_LIMIT, 5);
+    const maxAgeMs = Math.max(60_000, toNumber(process.env.OSAC_PERSISTENT_RECOVER_MAX_AGE_MS, 30 * 60 * 1000));
+    const skipWarmPool = String(process.env.OSAC_PERSISTENT_RECOVER_SKIP_WARM_POOL || 'true').toLowerCase() !== 'false';
 
     try {
       const environments = await sandboxEnvironmentService.listEnvironments(limit);
       const candidates = environments
-        .filter((item) => item.status === 'ready' && hasRecoverableToken(item.metadata))
+        .filter((item) => item.status === 'ready')
+        .filter((item) => hasRecoverableToken(item.metadata))
+        .filter((item) => hasRecoverableEndpoint(item.metadata))
+        .filter((item) => isRecentEnough(item, maxAgeMs))
+        .filter((item) => !skipWarmPool || !isWarmPoolMetadata(item.metadata))
         .map((item) => item.sessionId);
 
       if (candidates.length === 0) {
         return;
       }
 
-      console.log('[OSAC_PERSISTENT_RECOVER]', JSON.stringify({ candidates: candidates.length, limit }));
+      console.log(
+        '[OSAC_PERSISTENT_RECOVER]',
+        JSON.stringify({ candidates: candidates.length, limit, maxAgeMs, skipWarmPool })
+      );
 
       for (const sessionId of candidates) {
         try {

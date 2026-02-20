@@ -736,6 +736,14 @@ type WarmPoolConfig = {
   cleanupCloseSession: boolean;
 };
 
+type ProvisionReadyGateConfig = {
+  enabled: boolean;
+  strict: boolean;
+  timeoutMs: number;
+  modelsTimeoutMs: number;
+  pollMs: number;
+};
+
 type WarmPoolSummary = {
   enabled: boolean;
   targetSize: number;
@@ -795,6 +803,18 @@ export class SandboxAgentProvisionService {
       readyGateModelsTimeoutMs,
       readyGatePollMs,
       cleanupCloseSession: toBool(process.env.OSAC_WARM_POOL_CLEANUP_CLOSE_SESSION, true),
+    };
+  })();
+  private readonly provisionReadyGateConfig: ProvisionReadyGateConfig = (() => {
+    return {
+      enabled: toBool(process.env.OSAC_PROVISION_READY_GATE_ENABLED, true),
+      strict: toBool(process.env.OSAC_PROVISION_READY_GATE_STRICT, true),
+      timeoutMs: Math.max(5000, Number(process.env.OSAC_PROVISION_READY_GATE_TIMEOUT_MS || 60000)),
+      modelsTimeoutMs: Math.max(
+        5000,
+        Number(process.env.OSAC_PROVISION_READY_GATE_MODELS_TIMEOUT_MS || 90000)
+      ),
+      pollMs: Math.max(500, Number(process.env.OSAC_PROVISION_READY_GATE_POLL_MS || 1500)),
     };
   })();
 
@@ -1005,6 +1025,62 @@ export class SandboxAgentProvisionService {
     }
   }
 
+  private async verifyProvisionReadyGate(
+    sessionId: string,
+    metadata: Record<string, unknown>
+  ): Promise<{ ok: boolean; metadata: Record<string, unknown>; reason?: string }> {
+    const healthyMetadata = await this.verifyWarmSessionHealth(sessionId, metadata);
+    if (!healthyMetadata) {
+      return { ok: false, metadata, reason: 'unhealthy_before_gate' };
+    }
+    if (!this.provisionReadyGateConfig.enabled) {
+      return { ok: true, metadata: healthyMetadata };
+    }
+
+    try {
+      const connected = await this.withTimeout(
+        'provision_ready_gate_connect',
+        this.provisionReadyGateConfig.timeoutMs,
+        osacConnectionManager.ensurePersistent(sessionId)
+      );
+      if (!connected) {
+        return { ok: false, metadata: healthyMetadata, reason: 'ws_not_ready' };
+      }
+
+      await this.withTimeout(
+        'provision_ready_gate_session_list',
+        this.provisionReadyGateConfig.timeoutMs,
+        osacAgentService.getSessionList(sessionId, { maxCount: 1, format: 'json' })
+      );
+
+      const probe = await this.withTimeout(
+        'provision_ready_gate_models_probe',
+        this.provisionReadyGateConfig.modelsTimeoutMs,
+        osacAgentService.executeCommandAndWait(
+          sessionId,
+          {
+            command: 'curl -sS -m 60 http://127.0.0.1:18111/v1/models -H "Authorization: Bearer local-proxy"',
+            options: {},
+          },
+          {
+            timeoutMs: this.provisionReadyGateConfig.modelsTimeoutMs,
+            pollMs: this.provisionReadyGateConfig.pollMs,
+          }
+        )
+      );
+
+      const output = String(probe.output || '');
+      if (!output.includes('"data"')) {
+        const reason = this.getWarmPoolFailureCode(output);
+        return { ok: false, metadata: healthyMetadata, reason: reason || 'models_probe_failed' };
+      }
+      return { ok: true, metadata: healthyMetadata };
+    } catch (error) {
+      const reason = this.getWarmPoolFailureCode(error instanceof Error ? error.message : String(error));
+      return { ok: false, metadata: healthyMetadata, reason };
+    }
+  }
+
   private isWarmPoolManaged(metadata: Record<string, unknown> | null | undefined): boolean {
     if (!metadata) return false;
     const warmState = this.getWarmPoolState(metadata);
@@ -1134,9 +1210,28 @@ export class SandboxAgentProvisionService {
   ): Promise<Record<string, unknown> | null> {
     try {
       const sandbox = await kvmConnector.getSandbox(sessionId);
-      const state = String((sandbox.data as any)?.state || '').toLowerCase();
+      const sandboxData = (sandbox.data as any) || {};
+      const state = String(sandboxData?.state || '').toLowerCase();
       if (state && state !== 'running') {
         return null;
+      }
+      const lifecycleState = pickString(sandboxData?.lifecycleState, sandboxData?.lifecycle_state);
+      if (lifecycleState) {
+        const normalized = lifecycleState.toLowerCase();
+        if (normalized !== 'ready' && normalized !== 'running') {
+          return null;
+        }
+      }
+      const readyGate = (sandboxData?.readyGate || sandboxData?.ready_gate || {}) as Record<string, unknown>;
+      if (Object.keys(readyGate).length > 0) {
+        const ready =
+          readyGate?.ready === true ||
+          readyGate?.ok === true ||
+          readyGate?.passed === true ||
+          readyGate?.pass === true;
+        if (!ready) {
+          return null;
+        }
       }
     } catch {
       return null;
@@ -1824,16 +1919,50 @@ export class SandboxAgentProvisionService {
       }
     }
 
+    let provisionReadyGatePassed = !this.provisionReadyGateConfig.enabled;
+    let provisionReadyGateReason: string | null = null;
+    if (!input.__warmPoolSeed && osacEndpoint && this.provisionReadyGateConfig.enabled) {
+      const latest = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+      const latestMetadata = ((latest?.metadata || mergedMetadata) as Record<string, unknown>) || {};
+      const gate = await this.verifyProvisionReadyGate(sessionId, latestMetadata);
+      provisionReadyGatePassed = gate.ok;
+      provisionReadyGateReason = gate.reason || null;
+
+      const nextMetadata: Record<string, unknown> = {
+        ...gate.metadata,
+        osacReadyGate: {
+          ok: gate.ok,
+          reason: gate.reason || null,
+          source: 'provision',
+          checkedAt: new Date().toISOString(),
+        },
+      };
+      await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, nextMetadata);
+
+      if (!gate.ok) {
+        this.bumpWarmPoolClaimFailure(gate.reason || 'provision_gate_failed');
+        if (this.provisionReadyGateConfig.strict) {
+          await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'failed', vmName || environment.vmName || null);
+          throw new Error(`OSAC provision ready gate failed: ${gate.reason || 'unknown'}`);
+        }
+        await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'creating', vmName || environment.vmName || null);
+      }
+    }
+
+    const finalReady = input.__warmPoolSeed
+      ? Boolean(osacEndpoint)
+      : Boolean(osacEndpoint) && provisionReadyGatePassed;
+
     const result: ProvisionResult = {
       sessionId,
       vmName: vmName || environment.vmName,
       vmIpAddress: ipAddress,
       osacEndpoint,
-      status: osacEndpoint ? 'ready' : 'pending',
-      sandboxStatus: 'using',
+      status: finalReady ? 'ready' : 'pending',
+      sandboxStatus: finalReady ? 'ready' : 'using',
       allocationSource: 'cold_start',
       degradedFromWarmPool: attemptedWarmPool,
-      readyGatePassed: false,
+      readyGatePassed: provisionReadyGatePassed,
       bootstrap: {
         osacBinaryUrl,
         opencodeBinaryUrl,
@@ -1862,6 +1991,10 @@ export class SandboxAgentProvisionService {
       result.readyGatePassed = readyGatePassed;
       await this.markWarmSessionState(sessionId, latestMetadata, nextState, reason);
       return result;
+    }
+
+    if (provisionReadyGateReason) {
+      console.warn('[OSAC_PROVISION_READY_GATE_WARN]', sessionId, provisionReadyGateReason);
     }
 
     this.scheduleWarmPoolEnsure('post-provision');

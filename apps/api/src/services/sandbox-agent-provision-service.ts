@@ -14,6 +14,7 @@ import { ensureDatabaseConnection } from '../config/database';
 import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { osacConnectionManager } from './osac-connection-manager';
 import { osacAgentService } from './osac-agent-service';
+import { KvmClientError } from '../clients/kvm-orchestrator-client';
 import { normalizeOpencodeModel } from '../utils/opencode-model';
 import fs from 'fs';
 import path from 'path';
@@ -479,6 +480,54 @@ function toBool(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
+function extractOsacAuthToken(payload: Record<string, unknown> | null | undefined): string | null {
+  if (!payload) return null;
+  const osac = payload.osac && typeof payload.osac === 'object' ? (payload.osac as Record<string, unknown>) : null;
+  return pickString(
+    payload.osacAuthToken,
+    payload.osacToken,
+    payload.authToken,
+    payload.token,
+    payload.osac_auth_token,
+    payload.osac_token,
+    payload.auth_token,
+    osac?.authToken,
+    osac?.token
+  );
+}
+
+function extractPoolClaimSessionId(payload: Record<string, unknown> | null | undefined): string | null {
+  if (!payload) return null;
+  const session = payload.session && typeof payload.session === 'object'
+    ? (payload.session as Record<string, unknown>)
+    : null;
+  return pickString(
+    payload.sessionId,
+    payload.session_id,
+    payload.orchestratorSessionId,
+    payload.orchestrator_session_id,
+    session?.sessionId,
+    session?.session_id,
+    session?.id
+  );
+}
+
+function extractPoolClaimVmName(payload: Record<string, unknown> | null | undefined): string | null {
+  if (!payload) return null;
+  const vm = payload.vm && typeof payload.vm === 'object' ? (payload.vm as Record<string, unknown>) : null;
+  const target = payload.target && typeof payload.target === 'object'
+    ? (payload.target as Record<string, unknown>)
+    : null;
+  return pickString(
+    payload.vmName,
+    payload.vm_name,
+    vm?.name,
+    vm?.vmName,
+    target?.vmName,
+    target?.vm_name
+  );
+}
+
 function shouldEagerBridgeOnProvision(): boolean {
   // Default disabled: eager bridge can hold OSAC in candidate state before probe-ready.
   return toBool(process.env.OSAC_PROVISION_EAGER_BRIDGE, false);
@@ -705,6 +754,10 @@ type ProvisionResult = {
   vmName: string | null;
   vmIpAddress: string | null;
   osacEndpoint: string | null;
+  osacHost?: string | null;
+  osacHostPort?: number | null;
+  osacConnectionMode?: 'direct' | 'port-mapping' | 'kvm-tcp-relay' | null;
+  osacAuthToken?: string | null;
   status: string;
   sandboxStatus?: SandboxStatus;
   allocationSource: AllocationSource;
@@ -742,6 +795,13 @@ type ProvisionReadyGateConfig = {
   timeoutMs: number;
   modelsTimeoutMs: number;
   pollMs: number;
+};
+
+type KvmWarmPoolConfig = {
+  enabled: boolean;
+  claimTimeoutMs: number;
+  strict: boolean;
+  releaseOnFailure: boolean;
 };
 
 type WarmPoolSummary = {
@@ -815,6 +875,17 @@ export class SandboxAgentProvisionService {
         Number(process.env.OSAC_PROVISION_READY_GATE_MODELS_TIMEOUT_MS || 90000)
       ),
       pollMs: Math.max(500, Number(process.env.OSAC_PROVISION_READY_GATE_POLL_MS || 1500)),
+    };
+  })();
+  private readonly kvmWarmPoolConfig: KvmWarmPoolConfig = (() => {
+    return {
+      enabled: toBool(
+        process.env.OSAC_KVM_POOL_ENABLED,
+        osacBootstrapConfig.connectionMode === 'kvm-tcp-relay'
+      ),
+      claimTimeoutMs: Math.max(1000, Number(process.env.OSAC_KVM_POOL_CLAIM_TIMEOUT_MS || 15000)),
+      strict: toBool(process.env.OSAC_KVM_POOL_STRICT, false),
+      releaseOnFailure: toBool(process.env.OSAC_KVM_POOL_RELEASE_ON_FAILURE, true),
     };
   })();
 
@@ -1375,6 +1446,16 @@ export class SandboxAgentProvisionService {
       vmName: vmName || null,
       vmIpAddress: pickString(metadata.vmIpAddress) || null,
       osacEndpoint: pickString(metadata.osacEndpoint) || null,
+      osacHost: pickString(metadata.osacHost) || null,
+      osacHostPort:
+        typeof metadata.osacHostPort === 'number'
+          ? metadata.osacHostPort
+          : typeof metadata.osacHostPort === 'string' && metadata.osacHostPort.trim()
+            ? Number(metadata.osacHostPort)
+            : null,
+      osacConnectionMode:
+        (pickString(metadata.osacConnectionMode) as ProvisionResult['osacConnectionMode']) || null,
+      osacAuthToken: pickString(metadata.osacAuthToken, metadata.osacToken) || null,
       status: pickString(metadata.osacEndpoint) ? 'ready' : 'pending',
       sandboxStatus,
       allocationSource: options?.allocationSource || 'cold_start',
@@ -1388,6 +1469,215 @@ export class SandboxAgentProvisionService {
       },
       warmPoolHit: options?.warmPoolHit === true ? true : undefined,
     };
+  }
+
+  private shouldUseKvmWarmPool(input: ProvisionInput): boolean {
+    if (!this.kvmWarmPoolConfig.enabled) {
+      return false;
+    }
+    // keep deterministic semantics for idempotent create.
+    if (input.idempotencyKey) {
+      return false;
+    }
+    // legacy internal warm-seed path should never enter KVM pool path.
+    if (input.__warmPoolSeed === true) {
+      return false;
+    }
+    return true;
+  }
+
+  private buildKvmWarmPoolPurpose(input: ProvisionInput): string {
+    const metadata = input.metadata || {};
+    return (
+      pickString(
+        metadata.poolPurpose,
+        metadata.taskTitle,
+        metadata.taskSessionId,
+        metadata.owner,
+        metadata.purpose
+      ) || 'osac-provision'
+    );
+  }
+
+  private async releaseClaimedKvmWarmPoolSession(
+    sessionId: string,
+    result: 'success' | 'failed',
+    reason: string
+  ) {
+    if (!this.kvmWarmPoolConfig.releaseOnFailure) {
+      return;
+    }
+    try {
+      await kvmConnector.releasePoolSandbox(sessionId, { result, reason });
+    } catch (error) {
+      console.warn(
+        '[KVM_POOL_RELEASE_WARN]',
+        sessionId,
+        result,
+        reason,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  private async tryProvisionFromKvmWarmPool(input: ProvisionInput): Promise<ProvisionResult | null> {
+    if (!this.shouldUseKvmWarmPool(input)) {
+      return null;
+    }
+
+    const purpose = this.buildKvmWarmPoolPurpose(input);
+    let claimPayload: Record<string, unknown> | null = null;
+    let claimRequestId: string | undefined;
+
+    try {
+      const claim = await kvmConnector.claimPoolSandbox({
+        purpose,
+        timeout_ms: this.kvmWarmPoolConfig.claimTimeoutMs,
+      });
+      claimPayload = (claim.data || {}) as Record<string, unknown>;
+      claimRequestId = claim.requestId;
+    } catch (error) {
+      const kvmError = error instanceof KvmClientError ? error : null;
+      const code = (kvmError?.code || '').toUpperCase();
+      const message = error instanceof Error ? error.message : String(error);
+      const isTemporary =
+        code === 'POOL_EMPTY_TEMPORARY' ||
+        code === 'POOL_READY_GATE_FAILED' ||
+        (kvmError?.status === 409 && message.includes('POOL_EMPTY_TEMPORARY'));
+      if (isTemporary && !this.kvmWarmPoolConfig.strict) {
+        return null;
+      }
+      if (!this.kvmWarmPoolConfig.strict) {
+        console.warn('[KVM_POOL_CLAIM_WARN]', code || kvmError?.status || 'unknown', message);
+        return null;
+      }
+      throw error;
+    }
+
+    const sessionId = extractPoolClaimSessionId(claimPayload);
+    if (!sessionId) {
+      if (!this.kvmWarmPoolConfig.strict) {
+        return null;
+      }
+      throw new Error('KVM pool claim 返回缺少 session_id');
+    }
+    const vmName = extractPoolClaimVmName(claimPayload);
+
+    let sessionMetadata: Record<string, unknown> = {};
+    try {
+      const session = await kvmConnector.getSession(sessionId);
+      const data = (session.data || {}) as Record<string, unknown>;
+      const meta =
+        (data.metadata && typeof data.metadata === 'object' ? (data.metadata as Record<string, unknown>) : null) ||
+        (data.meta && typeof data.meta === 'object' ? (data.meta as Record<string, unknown>) : null);
+      if (meta) {
+        sessionMetadata = meta;
+      }
+    } catch {
+      // keep claim-only metadata path
+    }
+    const existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    const existingMetadata = ((existing?.metadata || {}) as Record<string, unknown>) || {};
+
+    const osacToken =
+      extractOsacAuthToken(claimPayload) ||
+      extractOsacAuthToken(sessionMetadata) ||
+      extractOsacAuthToken(existingMetadata) ||
+      extractOsacAuthToken(input.metadata || null);
+
+    if (!osacToken) {
+      await this.releaseClaimedKvmWarmPoolSession(sessionId, 'failed', 'pool_missing_osac_token');
+      if (!this.kvmWarmPoolConfig.strict) {
+        return null;
+      }
+      throw new Error('KVM pool claim 缺少 osac auth token');
+    }
+
+    const relayObj =
+      (claimPayload?.relay && typeof claimPayload.relay === 'object'
+        ? (claimPayload.relay as Record<string, unknown>)
+        : null) ||
+      claimPayload;
+    const relayWsUrl = pickString(relayObj.wsUrl, relayObj.ws_url);
+    const relaySubprotocol = pickString(relayObj.subprotocol) || 'kvm.tcp.v1';
+    const relayExpiresAt = pickString(relayObj.expiresAt, relayObj.expires_at);
+    const relayId = pickString(relayObj.relayId, relayObj.relay_id);
+
+    const endpoint = `ws://127.0.0.1:${osacBootstrapConfig.osacPort}${osacBootstrapConfig.osacPathSuffix}`;
+    const mergedMetadata: Record<string, unknown> = {
+      ...existingMetadata,
+      ...sessionMetadata,
+      ...(input.metadata || {}),
+      sandboxStatus: 'using',
+      osacEndpoint: endpoint,
+      osacAuthToken: osacToken,
+      osacConnectionMode: 'kvm-tcp-relay',
+      allocationSource: 'warm_pool',
+      kvmWarmPool: {
+        source: 'warm_pool',
+        purpose,
+        claimedAt: new Date().toISOString(),
+        claimRequestId: claimRequestId || null,
+        relayWsUrl: relayWsUrl || null,
+        relaySubprotocol,
+        relayExpiresAt: relayExpiresAt || null,
+        relayId: relayId || null,
+      },
+    };
+
+    await sandboxEnvironmentService.attachPoolEnvironment({
+      sessionId,
+      vmName,
+      metadata: mergedMetadata,
+      status: 'ready',
+    });
+
+    let readyGatePassed = !this.provisionReadyGateConfig.enabled;
+    let readyGateReason: string | null = null;
+    if (this.provisionReadyGateConfig.enabled) {
+      const gate = await this.verifyProvisionReadyGate(sessionId, mergedMetadata);
+      readyGatePassed = gate.ok;
+      readyGateReason = gate.reason || null;
+
+      const nextMetadata: Record<string, unknown> = {
+        ...gate.metadata,
+        osacReadyGate: {
+          ok: gate.ok,
+          reason: gate.reason || null,
+          source: 'pool_claim',
+          checkedAt: new Date().toISOString(),
+        },
+      };
+      await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, nextMetadata);
+      if (!gate.ok) {
+        await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'failed', vmName || null);
+        await this.releaseClaimedKvmWarmPoolSession(sessionId, 'failed', gate.reason || 'pool_ready_gate_failed');
+        if (this.kvmWarmPoolConfig.strict) {
+          throw new Error(`KVM pool ready gate failed: ${gate.reason || 'unknown'}`);
+        }
+        return null;
+      }
+    }
+
+    const latest = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    const latestMetadata = ((latest?.metadata || mergedMetadata) as Record<string, unknown>) || {};
+    const result = this.buildProvisionResult(
+      sessionId,
+      vmName || latest?.vmName || null,
+      latestMetadata,
+      input.requestBaseUrl,
+      {
+        warmPoolHit: true,
+        allocationSource: 'warm_pool',
+        degradedFromWarmPool: false,
+        readyGatePassed,
+      }
+    );
+
+    if (readyGateReason) {
+      console.warn('[OSAC_POOL_READY_GATE_WARN]', sessionId, readyGateReason);
+    }
+    return result;
   }
 
   private async tryClaimWarmSession(input: ProvisionInput): Promise<ProvisionResult | null> {
@@ -1615,6 +1905,15 @@ export class SandboxAgentProvisionService {
   }
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
+    let attemptedKvmWarmPool = false;
+    if (this.shouldUseKvmWarmPool(input)) {
+      attemptedKvmWarmPool = true;
+      const pooled = await this.tryProvisionFromKvmWarmPool(input);
+      if (pooled) {
+        return pooled;
+      }
+    }
+
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
 
     const environment = await sandboxEnvironmentService.openEnvironment({
@@ -2008,6 +2307,29 @@ export class SandboxAgentProvisionService {
     }
 
     const finalReady = Boolean(osacEndpoint) && provisionReadyGatePassed;
+    let resultHost = pickString(mergedMetadata.osacHost);
+    let resultHostPort =
+      typeof mergedMetadata.osacHostPort === 'number'
+        ? mergedMetadata.osacHostPort
+        : typeof mergedMetadata.osacHostPort === 'string' && mergedMetadata.osacHostPort.trim()
+          ? Number(mergedMetadata.osacHostPort)
+          : null;
+    if (osacEndpoint) {
+      try {
+        const endpointUrl = new URL(osacEndpoint);
+        if (!resultHost) {
+          resultHost = endpointUrl.hostname;
+        }
+        if (resultHostPort === null && endpointUrl.port) {
+          const parsedPort = Number(endpointUrl.port);
+          if (Number.isFinite(parsedPort) && parsedPort > 0) {
+            resultHostPort = parsedPort;
+          }
+        }
+      } catch {
+        // keep fallback values
+      }
+    }
 
     const result: ProvisionResult = {
       sessionId,
@@ -2017,8 +2339,12 @@ export class SandboxAgentProvisionService {
       status: finalReady ? 'ready' : 'pending',
       sandboxStatus: finalReady ? 'ready' : 'using',
       allocationSource: 'cold_start',
-      degradedFromWarmPool: false,
+      degradedFromWarmPool: attemptedKvmWarmPool,
       readyGatePassed: provisionReadyGatePassed,
+      osacAuthToken: osacToken,
+      osacConnectionMode: osacBootstrapConfig.connectionMode,
+      osacHost: resultHost || null,
+      osacHostPort: resultHostPort,
       bootstrap: {
         osacBinaryUrl,
         opencodeBinaryUrl,

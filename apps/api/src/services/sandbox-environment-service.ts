@@ -1,4 +1,5 @@
 import { kvmConnector } from '../connectors/kvm-connector';
+import { KvmClientError } from '../clients/kvm-orchestrator-client';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { ensureDatabaseConnection } from '../config/database';
 import { sandboxSecurityConfig } from '../config/sandbox-security';
@@ -44,6 +45,16 @@ async function awaitJobIfNeeded(result: any) {
   return waitForJob(String(jobId));
 }
 
+function isKvmWarmPoolEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
+  if (!metadata) return false;
+  const allocationSource = pickString(
+    metadata.allocationSource,
+    (metadata.kvmWarmPool as any)?.allocationSource,
+    (metadata.kvmWarmPool as any)?.source
+  );
+  return allocationSource === 'warm_pool';
+}
+
 export class SandboxEnvironmentService {
   private buildIncrementalMapping(sessionId: string) {
     const fileName = `${sessionId}.qcow2`;
@@ -64,6 +75,54 @@ export class SandboxEnvironmentService {
       allowedDomains: sandboxSecurityConfig.allowedDomains,
       enforceSessionFirst: sandboxSecurityConfig.enforceSessionFirst,
     };
+  }
+
+  async attachPoolEnvironment(input: {
+    sessionId: string;
+    vmName?: string | null;
+    metadata?: Record<string, unknown>;
+    status?: 'creating' | 'ready';
+  }) {
+    await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+
+    const sessionId = input.sessionId.trim();
+    if (!sessionId) {
+      throw new Error('attachPoolEnvironment 缺少 sessionId');
+    }
+
+    const mapping = this.buildIncrementalMapping(sessionId);
+    const securityProfile = this.buildSecurityProfile();
+    const status = input.status || 'ready';
+    const metadata = input.metadata || {};
+
+    const existed = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    if (!existed) {
+      return sandboxExecutionEnvironmentDAO.createEnvironment({
+        sessionId,
+        orchestratorSessionId: sessionId,
+        vmName: input.vmName || null,
+        baseImage: mapping.baseImage,
+        incrementalStorageDir: mapping.incrementalStorageDir,
+        incrementalFileName: mapping.incrementalFileName,
+        incrementalFilePath: mapping.incrementalFilePath,
+        status,
+        securityProfile,
+        networkPolicy: {
+          mode: 'default_deny_egress',
+          denyCidrs: sandboxSecurityConfig.denyCidrs,
+          allowedDomains: sandboxSecurityConfig.allowedDomains,
+        },
+        metadata,
+      });
+    }
+
+    const mergedMetadata = {
+      ...((existed.metadata || {}) as Record<string, unknown>),
+      ...metadata,
+    };
+    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, mergedMetadata);
+    await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, status, input.vmName || existed.vmName || null);
+    return sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
   }
 
   async openEnvironment(input: {
@@ -149,8 +208,18 @@ export class SandboxEnvironmentService {
           const sandboxIdempotencyKey = attemptIdempotencyKey
             ? `${attemptIdempotencyKey}-sandbox`
             : undefined;
-          bindResult = await kvmConnector.createSandbox(sandboxInput, sandboxIdempotencyKey);
-          await awaitJobIfNeeded(bindResult);
+          try {
+            bindResult = await kvmConnector.createSandbox(sandboxInput, sandboxIdempotencyKey);
+            await awaitJobIfNeeded(bindResult);
+          } catch (error) {
+            if (error instanceof KvmClientError && error.status === 409) {
+              // VM 已存在：尝试复用已有 sandbox 并继续绑定/查询
+              const sandbox = await kvmConnector.getSandbox(orchestratorSessionId);
+              bindResult = sandbox;
+            } else {
+              throw error;
+            }
+          }
         } else {
           bindResult = await kvmConnector.bindSessionVm(orchestratorSessionId, {
             auto: true,
@@ -220,9 +289,29 @@ export class SandboxEnvironmentService {
     if (!environment) {
       throw new Error(`未找到环境记录: ${sessionId}`);
     }
+    const metadata = ((environment.metadata || {}) as Record<string, unknown>) || {};
+    const fromKvmWarmPool = isKvmWarmPoolEnvironment(metadata);
 
     await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closing', environment.vmName || null);
-    await kvmConnector.closeSession(environment.orchestratorSessionId, { graceful: true });
+
+    if (fromKvmWarmPool) {
+      try {
+        await kvmConnector.releasePoolSandbox(environment.orchestratorSessionId, {
+          result: 'success',
+          reason: 'api_close_environment',
+        });
+      } catch (error) {
+        console.warn(
+          '[KVM_POOL_RELEASE_ERROR]',
+          sessionId,
+          error instanceof Error ? error.message : String(error)
+        );
+        await kvmConnector.closeSession(environment.orchestratorSessionId, { graceful: true });
+      }
+    } else {
+      await kvmConnector.closeSession(environment.orchestratorSessionId, { graceful: true });
+    }
+
     const updated = await sandboxExecutionEnvironmentDAO.updateStatus(
       sessionId,
       'closed',

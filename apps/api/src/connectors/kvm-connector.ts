@@ -4,6 +4,7 @@ import type {
   ExecInput,
   SandboxCreateInput,
   SandboxPortMappingInput,
+  RelayTcpTicketInput,
 } from '../clients/kvm-orchestrator-client';
 
 type Action = 'start' | 'shutdown' | 'reboot' | 'suspend' | 'resume';
@@ -95,14 +96,19 @@ export const kvmConnector = {
     unwrap(await kvmOrchestratorClient.getSandboxIp(sessionId, query)),
   createSandboxPort: async (sessionId: string, input: SandboxPortMappingInput) =>
     unwrap(await kvmOrchestratorClient.createSandboxPort(sessionId, input)),
-  listSandboxPorts: async (sessionId: string) =>
-    unwrap(await kvmOrchestratorClient.listSandboxPorts(sessionId)),
+  listSandboxPorts: async (sessionId: string, query?: Record<string, string>) =>
+    unwrap(await kvmOrchestratorClient.listSandboxPorts(sessionId, query)),
   deleteSandboxPort: async (sessionId: string, query: Record<string, string>) =>
     unwrap(await kvmOrchestratorClient.deleteSandboxPort(sessionId, query)),
   restartSandbox: async (sessionId: string, input: Record<string, unknown>) =>
     unwrap(await kvmOrchestratorClient.restartSandbox(sessionId, input)),
   deleteSandbox: async (sessionId: string, query?: Record<string, string>) =>
     unwrap(await kvmOrchestratorClient.deleteSandbox(sessionId, query)),
+
+  createRelayTcpTicket: async (sessionId: string, input: RelayTcpTicketInput) =>
+    unwrap(await kvmOrchestratorClient.createRelayTcpTicket(sessionId, input)),
+  getRelayTcpState: async (sessionId: string) =>
+    unwrap(await kvmOrchestratorClient.getRelayTcpState(sessionId)),
 
   getJob: async (jobId: string) => unwrap(await kvmOrchestratorClient.getJob(jobId)),
 };

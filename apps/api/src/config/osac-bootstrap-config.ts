@@ -12,7 +12,7 @@ export interface OsacBootstrapConfig {
   launchCommand: string | null;
   downloadBaseUrl?: string;
   binaryAuthToken?: string;
-  connectionMode: 'direct' | 'port-mapping';
+  connectionMode: 'direct' | 'port-mapping' | 'kvm-tcp-relay';
   portMappingBase?: number;
   portMappingRange?: number;
   portMappingHost?: string;
@@ -34,7 +34,7 @@ export const osacBootstrapConfig: OsacBootstrapConfig = {
   osacPathSuffix: process.env.OSAC_PATH_SUFFIX || '/ws',
   osacBinaryPath: resolvePath(
     process.env.OSAC_BINARY_PATH || '',
-    'others/osac-linux/osac-linux-amd64_v1.0'
+    'others/osac-linux/osac-linux-amd64_v1.1.2'
   ),
   opencodeBinaryPath: resolvePath(
     process.env.OPENCODE_BINARY_PATH || '',
@@ -49,7 +49,7 @@ export const osacBootstrapConfig: OsacBootstrapConfig = {
   downloadBaseUrl: process.env.OSAC_DOWNLOAD_BASE_URL,
   binaryAuthToken: process.env.OSAC_BINARY_TOKEN || undefined,
   connectionMode:
-    (process.env.OSAC_CONNECTION_MODE as 'direct' | 'port-mapping') || 'direct',
+    (process.env.OSAC_CONNECTION_MODE as 'direct' | 'port-mapping' | 'kvm-tcp-relay') || 'direct',
   portMappingBase: process.env.OSAC_PORT_MAPPING_BASE
     ? Number(process.env.OSAC_PORT_MAPPING_BASE)
     : undefined,

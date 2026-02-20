@@ -54,11 +54,29 @@ function resolveRequestPolicy(path: string, method: HttpMethod, isForm: boolean)
 export class KvmClientError extends Error {
   readonly status: number;
   readonly requestId?: string;
+  readonly code?: string;
+  readonly details?: unknown;
+  readonly retryable?: boolean;
+  readonly actionHint?: string;
 
-  constructor(status: number, message: string, requestId?: string) {
+  constructor(
+    status: number,
+    message: string,
+    requestId?: string,
+    extras?: {
+      code?: string;
+      details?: unknown;
+      retryable?: boolean;
+      actionHint?: string;
+    }
+  ) {
     super(message);
     this.status = status;
     this.requestId = requestId;
+    this.code = extras?.code;
+    this.details = extras?.details;
+    this.retryable = extras?.retryable;
+    this.actionHint = extras?.actionHint;
   }
 }
 
@@ -132,12 +150,29 @@ async function request<T>(
 
       if (!response.ok) {
         const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
+        const code = typeof payload?.code === 'string' ? payload.code : undefined;
+        const details = payload?.error?.details;
+        const retryable = typeof details?.retryable === 'boolean' ? details.retryable : undefined;
+        const actionHint =
+          (typeof details?.action_hint === 'string' && details.action_hint) ||
+          (typeof details?.next_action === 'string' && details.next_action) ||
+          undefined;
         if (isRetryableStatus(response.status) && attempt < maxAttempts) {
-          lastError = new KvmClientError(response.status, message, requestId);
+          lastError = new KvmClientError(response.status, message, requestId, {
+            code,
+            details,
+            retryable,
+            actionHint,
+          });
           await new Promise((resolve) => setTimeout(resolve, 800));
           continue;
         }
-        throw new KvmClientError(response.status, message, requestId);
+        throw new KvmClientError(response.status, message, requestId, {
+          code,
+          details,
+          retryable,
+          actionHint,
+        });
       }
 
       return payload as T;
@@ -185,12 +220,29 @@ async function requestForm<T>(
 
       if (!response.ok) {
         const message = payload?.message || getPublicErrorMessage('KVM 服务暂时不可用');
+        const code = typeof payload?.code === 'string' ? payload.code : undefined;
+        const details = payload?.error?.details;
+        const retryable = typeof details?.retryable === 'boolean' ? details.retryable : undefined;
+        const actionHint =
+          (typeof details?.action_hint === 'string' && details.action_hint) ||
+          (typeof details?.next_action === 'string' && details.next_action) ||
+          undefined;
         if (isRetryableStatus(response.status) && attempt < maxAttempts) {
-          lastError = new KvmClientError(response.status, message, requestId);
+          lastError = new KvmClientError(response.status, message, requestId, {
+            code,
+            details,
+            retryable,
+            actionHint,
+          });
           await new Promise((resolve) => setTimeout(resolve, 800));
           continue;
         }
-        throw new KvmClientError(response.status, message, requestId);
+        throw new KvmClientError(response.status, message, requestId, {
+          code,
+          details,
+          retryable,
+          actionHint,
+        });
       }
 
       return payload as T;
@@ -265,6 +317,16 @@ export type RelayTcpTicketInput = {
   idle_timeout_ms?: number;
   ticket_ttl_ms?: number;
   single_use?: boolean;
+};
+
+export type PoolSandboxClaimInput = {
+  purpose?: string;
+  timeout_ms?: number;
+};
+
+export type PoolSandboxReleaseInput = {
+  result?: 'success' | 'failed';
+  reason?: string;
 };
 
 function buildUploadForm(input: UploadFileInput) {
@@ -378,6 +440,16 @@ export const kvmOrchestratorClient = {
     request(`/v1/sessions/${encodeURIComponent(sessionId)}/relay/tcp/ticket`, 'POST', body),
   getRelayTcpState: (sessionId: string) =>
     request(`/v1/sessions/${encodeURIComponent(sessionId)}/relay/tcp/state`, 'GET'),
+
+  // warm sandbox pool
+  claimPoolSandbox: (body: PoolSandboxClaimInput) =>
+    request('/v1/pool/sandboxes/claim', 'POST', body || {}),
+  releasePoolSandbox: (sessionId: string, body: PoolSandboxReleaseInput) =>
+    request(`/v1/pool/sandboxes/${encodeURIComponent(sessionId)}/release`, 'POST', body || {}),
+  getPoolSandboxesStatus: () =>
+    request('/v1/pool/sandboxes/status', 'GET'),
+  ensurePoolSandboxes: () =>
+    request('/v1/pool/sandboxes/ensure', 'POST', {}),
 
   // job
   getJob: (jobId: string) => request(`/v1/jobs/${encodeURIComponent(jobId)}`, 'GET'),

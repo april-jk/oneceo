@@ -371,22 +371,42 @@ function isLoopbackBaseUrl(input: string): boolean {
 
 function resolveOpencodeEnv() {
   const proxyPort = Number(process.env.OSAC_LLM_PROXY_PORT || 18111);
-  const defaultBaseUrl = `http://127.0.0.1:${proxyPort}`;
+  const defaultProxyBaseUrl = `http://127.0.0.1:${proxyPort}`;
   const baseUrlCandidate =
     process.env.OPENCODE_BASE_URL ||
     process.env.OPENCODE_PROXY_BASE_URL ||
-    defaultBaseUrl;
+    defaultProxyBaseUrl;
   const apiKeyCandidate =
     process.env.OPENCODE_API_KEY ||
     process.env.OPENCODE_PROXY_API_KEY ||
     'local-proxy';
-  const proxyEnabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'true').trim().toLowerCase();
+  const publicBaseUrlCandidate =
+    process.env.OPENCODE_PUBLIC_BASE_URL ||
+    process.env.LLM_PROXY_UPSTREAM_BASE_URL ||
+    '';
+  const publicApiKeyCandidate =
+    process.env.OPENCODE_PUBLIC_API_KEY ||
+    process.env.LLM_PROXY_UPSTREAM_API_KEY ||
+    '';
+  const proxyEnabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'false').trim().toLowerCase();
   const proxyEnabled = proxyEnabledRaw !== 'false';
   const forcedProxyBaseUrl = normalizeOpenAiBaseUrl(`http://127.0.0.1:${proxyPort}/v1`);
   const normalizedCandidateBaseUrl = normalizeOpenAiBaseUrl(baseUrlCandidate);
-  const useForcedProxyBase = proxyEnabled && !isLoopbackBaseUrl(normalizedCandidateBaseUrl);
-  const baseUrlRaw = useForcedProxyBase ? forcedProxyBaseUrl : baseUrlCandidate;
-  const apiKeyRaw = useForcedProxyBase ? 'local-proxy' : apiKeyCandidate;
+  const useForcedProxyBase = proxyEnabled;
+  const usePublicDirectFallback =
+    !proxyEnabled &&
+    isLoopbackBaseUrl(normalizedCandidateBaseUrl) &&
+    !!publicBaseUrlCandidate;
+  const baseUrlRaw = useForcedProxyBase
+    ? forcedProxyBaseUrl
+    : usePublicDirectFallback
+      ? publicBaseUrlCandidate
+      : baseUrlCandidate;
+  const apiKeyRaw = useForcedProxyBase
+    ? 'local-proxy'
+    : usePublicDirectFallback && publicApiKeyCandidate
+      ? publicApiKeyCandidate
+      : apiKeyCandidate;
 
   const modelRaw =
     process.env.OPENCODE_MODEL ||
@@ -405,12 +425,14 @@ function resolveOpencodeEnv() {
     explicitBaseUrl: Boolean(
       process.env.OPENCODE_BASE_URL ||
       process.env.OPENCODE_PROXY_BASE_URL ||
-      useForcedProxyBase
+      useForcedProxyBase ||
+      usePublicDirectFallback
     ),
     explicitApiKey: Boolean(
       process.env.OPENCODE_API_KEY ||
       process.env.OPENCODE_PROXY_API_KEY ||
-      useForcedProxyBase
+      useForcedProxyBase ||
+      (usePublicDirectFallback && publicApiKeyCandidate)
     ),
     explicitProviderId: Boolean(process.env.OPENCODE_PROVIDER_ID),
   };
@@ -455,7 +477,7 @@ function resolveOsacLlmProxyEnv(requestBaseUrl?: string) {
   const wsPingInterval = (process.env.OSAC_WS_PING_INTERVAL || '').trim();
   const wsIdleTimeout = (process.env.OSAC_WS_IDLE_TIMEOUT || '').trim();
   const instanceLockPath = (process.env.OSAC_INSTANCE_LOCK_PATH || '').trim();
-  const enabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'true').trim().toLowerCase();
+  const enabledRaw = (process.env.OSAC_LLM_PROXY_ENABLE || 'false').trim().toLowerCase();
   const enabled = enabledRaw !== 'false';
   return {
     enabled,

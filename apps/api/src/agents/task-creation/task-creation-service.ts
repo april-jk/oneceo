@@ -31,7 +31,7 @@ export class TaskCreationService {
   private callbacks?: TaskCreationCallbacks;
   private sessionId?: string; // 当前会话 ID
   private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' = 'collecting';
-  private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'true').toLowerCase() === 'true';
+  private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'false').toLowerCase() === 'true';
   private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
 
   constructor(callbacks?: TaskCreationCallbacks) {

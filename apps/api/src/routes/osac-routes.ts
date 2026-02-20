@@ -49,15 +49,6 @@ router.post('/provision', async (req, res) => {
   }
 });
 
-router.get('/warm-pool/status', async (_req, res) => {
-  try {
-    const result = await sandboxAgentProvisionService.getWarmPoolStatus();
-    return res.json({ success: true, data: result });
-  } catch (error) {
-    return handleError(res, error, '获取预热池状态失败');
-  }
-});
-
 router.get('/binaries/:name', async (req, res) => {
   try {
     if (!assertBinaryAccess(req, res)) {

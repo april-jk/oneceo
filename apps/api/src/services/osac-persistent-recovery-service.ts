@@ -43,19 +43,6 @@ function hasRecoverableEndpoint(metadata: unknown) {
   return Boolean(endpoint);
 }
 
-function isWarmPoolMetadata(metadata: unknown) {
-  if (!metadata || typeof metadata !== 'object') return false;
-  const map = metadata as Record<string, unknown>;
-  const owner = typeof map.owner === 'string' ? map.owner.trim() : '';
-  const purpose = typeof map.purpose === 'string' ? map.purpose.trim() : '';
-  const warmPool = map.warmPool && typeof map.warmPool === 'object' ? (map.warmPool as Record<string, unknown>) : null;
-  return (
-    owner === 'osac-warm-pool' ||
-    purpose === 'osac-warm-pool' ||
-    warmPool !== null
-  );
-}
-
 function isRecentEnough(item: any, maxAgeMs: number) {
   if (maxAgeMs <= 0) return true;
   const t = item?.updatedAt || item?.createdAt;
@@ -64,26 +51,7 @@ function isRecentEnough(item: any, maxAgeMs: number) {
   return Date.now() - ms <= maxAgeMs;
 }
 
-function pickWarmPoolState(metadata: unknown): string {
-  if (!metadata || typeof metadata !== 'object') return '';
-  const map = metadata as Record<string, unknown>;
-  const warmPool = map.warmPool && typeof map.warmPool === 'object' ? (map.warmPool as Record<string, unknown>) : null;
-  const state = warmPool?.state;
-  return typeof state === 'string' ? state.trim().toLowerCase() : '';
-}
-
-function recoveryPriority(item: any): number {
-  const warmState = pickWarmPoolState(item?.metadata);
-  if (warmState === 'using') return 0;
-  if (warmState === 'ready') return 1;
-  return 2;
-}
-
 function compareCandidates(a: any, b: any): number {
-  const pa = recoveryPriority(a);
-  const pb = recoveryPriority(b);
-  if (pa !== pb) return pa - pb;
-
   const ta = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
   const tb = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
   return tb - ta;
@@ -138,7 +106,6 @@ export class OsacPersistentRecoveryService {
 
     const limit = Math.max(1, toNumber(process.env.OSAC_PERSISTENT_RECOVER_LIMIT, 30));
     const maxAgeMs = Math.max(60_000, toNumber(process.env.OSAC_PERSISTENT_RECOVER_MAX_AGE_MS, 30 * 60 * 1000));
-    const skipWarmPool = toBool(process.env.OSAC_PERSISTENT_RECOVER_SKIP_WARM_POOL, false);
     const readyGateEnabled = toBool(process.env.OSAC_PERSISTENT_RECOVER_READY_GATE_ENABLED, true);
     const readyGateTimeoutMs = Math.max(
       3000,
@@ -153,7 +120,6 @@ export class OsacPersistentRecoveryService {
         .filter((item) => hasRecoverableToken(item.metadata))
         .filter((item) => hasRecoverableEndpoint(item.metadata))
         .filter((item) => isRecentEnough(item, maxAgeMs))
-        .filter((item) => !skipWarmPool || !isWarmPoolMetadata(item.metadata))
         .sort(compareCandidates)
         .slice(0, limit);
 
@@ -169,7 +135,6 @@ export class OsacPersistentRecoveryService {
           scanLimit,
           limit,
           maxAgeMs,
-          skipWarmPool,
           readyGateEnabled,
         })
       );
@@ -202,7 +167,6 @@ export class OsacPersistentRecoveryService {
               connected,
               gateOk,
               gateError,
-              warmState: pickWarmPoolState(item.metadata),
             })
           );
         } catch (error) {

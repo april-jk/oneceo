@@ -65,7 +65,7 @@ class KvmRelaySocket extends Duplex {
   private outerWs: WebSocket;
   private readonly pendingWrites: Array<{ chunk: Buffer; cb: (error?: Error | null) => void }> = [];
   private connected = false;
-  private closed = false;
+  private relayClosed = false;
   private readonly connectTimer: NodeJS.Timeout;
 
   constructor(private readonly relay: KvmRelayOptions) {
@@ -74,8 +74,8 @@ class KvmRelaySocket extends Duplex {
     this.outerWs = new WebSocket(relay.wsUrl, protocol);
 
     this.connectTimer = setTimeout(() => {
-      if (this.connected || this.closed) return;
-      this.closed = true;
+      if (this.connected || this.relayClosed) return;
+      this.relayClosed = true;
       this.flushPending(new Error('KVM Relay 连接超时'));
       try {
         this.outerWs.terminate();
@@ -89,7 +89,7 @@ class KvmRelaySocket extends Duplex {
     }
 
     this.outerWs.on('open', () => {
-      if (this.closed) return;
+      if (this.relayClosed) return;
       this.connected = true;
       clearTimeout(this.connectTimer);
       this.emit('connect');
@@ -97,15 +97,15 @@ class KvmRelaySocket extends Duplex {
     });
 
     this.outerWs.on('message', (data) => {
-      if (this.closed) return;
+      if (this.relayClosed) return;
       const buf = toBuffer(data);
       if (buf.length === 0) return;
       this.push(buf);
     });
 
     this.outerWs.on('close', (code, reason) => {
-      if (this.closed) return;
-      this.closed = true;
+      if (this.relayClosed) return;
+      this.relayClosed = true;
       clearTimeout(this.connectTimer);
       const reasonText = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || '');
       const error =
@@ -121,8 +121,8 @@ class KvmRelaySocket extends Duplex {
     });
 
     this.outerWs.on('error', (error) => {
-      if (this.closed) return;
-      this.closed = true;
+      if (this.relayClosed) return;
+      this.relayClosed = true;
       clearTimeout(this.connectTimer);
       const err = error instanceof Error ? error : new Error(String(error));
       this.flushPending(err);
@@ -147,7 +147,7 @@ class KvmRelaySocket extends Duplex {
   }
 
   _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
-    if (this.closed) {
+    if (this.relayClosed) {
       callback(new Error('KVM Relay 连接已关闭'));
       return;
     }
@@ -164,7 +164,7 @@ class KvmRelaySocket extends Duplex {
   }
 
   _final(callback: (error?: Error | null) => void): void {
-    if (this.closed) {
+    if (this.relayClosed) {
       callback();
       return;
     }
@@ -177,7 +177,7 @@ class KvmRelaySocket extends Duplex {
   }
 
   _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
-    this.closed = true;
+    this.relayClosed = true;
     clearTimeout(this.connectTimer);
     try {
       if (this.outerWs.readyState === WebSocket.OPEN || this.outerWs.readyState === WebSocket.CONNECTING) {

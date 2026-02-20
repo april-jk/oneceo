@@ -20,18 +20,32 @@ function resolveRequestPolicy(path: string, method: HttpMethod, isForm: boolean)
   const jobTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_JOB_MS, Math.max(baseRequestTimeoutMs, 30000), 1000);
   const execTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_EXEC_MS, Math.max(baseRequestTimeoutMs, 90000), 1000);
   const uploadTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_UPLOAD_MS, Math.max(baseRequestTimeoutMs, 120000), 1000);
+  const poolTimeoutMs = toInt(process.env.KVM_HTTP_TIMEOUT_POOL_MS, Math.max(10000, Math.min(baseRequestTimeoutMs, 25000)), 1000);
+  const poolClaimTimeoutMs = toInt(
+    process.env.KVM_HTTP_TIMEOUT_POOL_CLAIM_MS,
+    Math.max(8000, Math.min(poolTimeoutMs, 20000)),
+    1000
+  );
 
   const metaRetries = toInt(process.env.KVM_HTTP_RETRIES_META, baseRetries, 0);
   const sandboxRetries = toInt(process.env.KVM_HTTP_RETRIES_SANDBOX, Math.max(baseRetries, 1), 0);
   const jobRetries = toInt(process.env.KVM_HTTP_RETRIES_JOB, Math.max(baseRetries, 1), 0);
   const execRetries = toInt(process.env.KVM_HTTP_RETRIES_EXEC, Math.max(baseRetries, 1), 0);
   const uploadRetries = toInt(process.env.KVM_HTTP_RETRIES_UPLOAD, Math.max(baseRetries, 1), 0);
+  const poolRetries = toInt(process.env.KVM_HTTP_RETRIES_POOL, 0, 0);
+  const poolClaimRetries = toInt(process.env.KVM_HTTP_RETRIES_POOL_CLAIM, poolRetries, 0);
 
   if (path === '/health') {
     return { timeoutMs: healthTimeoutMs, retries: 0 };
   }
   if (path.startsWith('/v1/jobs/')) {
     return { timeoutMs: jobTimeoutMs, retries: jobRetries };
+  }
+  if (path.startsWith('/v1/pool/sandboxes/claim')) {
+    return { timeoutMs: poolClaimTimeoutMs, retries: poolClaimRetries };
+  }
+  if (path.startsWith('/v1/pool/')) {
+    return { timeoutMs: poolTimeoutMs, retries: poolRetries };
   }
   if (path.includes('/exec')) {
     return { timeoutMs: execTimeoutMs, retries: execRetries };

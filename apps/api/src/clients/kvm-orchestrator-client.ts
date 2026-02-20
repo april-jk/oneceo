@@ -258,6 +258,15 @@ export type SandboxPortMappingInput = {
   host_ip?: string;
 };
 
+export type RelayTcpTicketInput = {
+  target_port: number;
+  target_host?: 'vm';
+  connect_timeout_ms?: number;
+  idle_timeout_ms?: number;
+  ticket_ttl_ms?: number;
+  single_use?: boolean;
+};
+
 function buildUploadForm(input: UploadFileInput) {
   const form = new FormData();
   const blob = new Blob([input.buffer]);
@@ -363,6 +372,12 @@ export const kvmOrchestratorClient = {
     request(`/v1/sandboxes/${encodeURIComponent(sessionId)}/restart`, 'POST', body),
   deleteSandbox: (sessionId: string, query?: Record<string, string>) =>
     request(`/v1/sandboxes/${encodeURIComponent(sessionId)}${query ? `?${new URLSearchParams(query).toString()}` : ''}`, 'DELETE'),
+
+  // relay (tcp over websocket)
+  createRelayTcpTicket: (sessionId: string, body: RelayTcpTicketInput) =>
+    request(`/v1/sessions/${encodeURIComponent(sessionId)}/relay/tcp/ticket`, 'POST', body),
+  getRelayTcpState: (sessionId: string) =>
+    request(`/v1/sessions/${encodeURIComponent(sessionId)}/relay/tcp/state`, 'GET'),
 
   // job
   getJob: (jobId: string) => request(`/v1/jobs/${encodeURIComponent(jobId)}`, 'GET'),

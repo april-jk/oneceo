@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
+import { Duplex } from 'stream';
 
 export type OsacMessage = {
   type: string;
@@ -12,6 +13,12 @@ type PendingRequest = {
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
   match: (message: OsacMessage) => boolean;
+};
+
+type KvmRelayOptions = {
+  wsUrl: string;
+  subprotocol?: string;
+  connectTimeoutMs?: number;
 };
 
 function firstHeader(value: string | string[] | undefined): string | null {
@@ -37,6 +44,167 @@ function parseBodyErrorCode(body: string): string | null {
   return null;
 }
 
+function toBuffer(data: WebSocket.RawData): Buffer {
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    const chunks = data.map((part) => (Buffer.isBuffer(part) ? part : Buffer.from(part)));
+    return Buffer.concat(chunks);
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  }
+  return Buffer.from(String(data));
+}
+
+class KvmRelaySocket extends Duplex {
+  private outerWs: WebSocket;
+  private readonly pendingWrites: Array<{ chunk: Buffer; cb: (error?: Error | null) => void }> = [];
+  private connected = false;
+  private closed = false;
+  private readonly connectTimer: NodeJS.Timeout;
+
+  constructor(private readonly relay: KvmRelayOptions) {
+    super({ allowHalfOpen: false });
+    const protocol = relay.subprotocol || 'kvm.tcp.v1';
+    this.outerWs = new WebSocket(relay.wsUrl, protocol);
+
+    this.connectTimer = setTimeout(() => {
+      if (this.connected || this.closed) return;
+      this.closed = true;
+      this.flushPending(new Error('KVM Relay 连接超时'));
+      try {
+        this.outerWs.terminate();
+      } catch {
+        // ignore
+      }
+      this.destroy(new Error('KVM Relay 连接超时'));
+    }, Math.max(1000, relay.connectTimeoutMs || 5000));
+    if (typeof this.connectTimer.unref === 'function') {
+      this.connectTimer.unref();
+    }
+
+    this.outerWs.on('open', () => {
+      if (this.closed) return;
+      this.connected = true;
+      clearTimeout(this.connectTimer);
+      this.emit('connect');
+      this.flushPending();
+    });
+
+    this.outerWs.on('message', (data) => {
+      if (this.closed) return;
+      const buf = toBuffer(data);
+      if (buf.length === 0) return;
+      this.push(buf);
+    });
+
+    this.outerWs.on('close', (code, reason) => {
+      if (this.closed) return;
+      this.closed = true;
+      clearTimeout(this.connectTimer);
+      const reasonText = Buffer.isBuffer(reason) ? reason.toString('utf8') : String(reason || '');
+      const error =
+        !this.connected
+          ? new Error(`KVM Relay 提前关闭: code=${code} reason=${reasonText}`)
+          : null;
+      this.flushPending(error || undefined);
+      if (error) {
+        this.destroy(error);
+      } else {
+        this.push(null);
+      }
+    });
+
+    this.outerWs.on('error', (error) => {
+      if (this.closed) return;
+      this.closed = true;
+      clearTimeout(this.connectTimer);
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.flushPending(err);
+      this.destroy(err);
+    });
+  }
+
+  setTimeout(_msecs?: number, _callback?: () => void): this {
+    return this;
+  }
+
+  setNoDelay(_noDelay?: boolean): this {
+    return this;
+  }
+
+  setKeepAlive(_enable?: boolean, _initialDelay?: number): this {
+    return this;
+  }
+
+  _read(_size: number): void {
+    // no-op, data is pushed by outer websocket `message`
+  }
+
+  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    if (this.closed) {
+      callback(new Error('KVM Relay 连接已关闭'));
+      return;
+    }
+
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (!this.connected) {
+      this.pendingWrites.push({ chunk: buf, cb: callback });
+      return;
+    }
+
+    this.outerWs.send(buf, { binary: true }, (error?: Error) => {
+      callback(error || null);
+    });
+  }
+
+  _final(callback: (error?: Error | null) => void): void {
+    if (this.closed) {
+      callback();
+      return;
+    }
+    try {
+      this.outerWs.close();
+    } catch {
+      // ignore close errors
+    }
+    callback();
+  }
+
+  _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.closed = true;
+    clearTimeout(this.connectTimer);
+    try {
+      if (this.outerWs.readyState === WebSocket.OPEN || this.outerWs.readyState === WebSocket.CONNECTING) {
+        this.outerWs.terminate();
+      }
+    } catch {
+      // ignore terminate errors
+    }
+    this.flushPending(error || undefined);
+    callback(error || null);
+  }
+
+  private flushPending(error?: Error): void {
+    while (this.pendingWrites.length > 0) {
+      const current = this.pendingWrites.shift();
+      if (!current) continue;
+      if (error) {
+        current.cb(error);
+        continue;
+      }
+      this.outerWs.send(current.chunk, { binary: true }, (sendError?: Error) => {
+        current.cb(sendError || null);
+      });
+    }
+  }
+}
+
 export class OsacClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
@@ -47,6 +215,7 @@ export class OsacClient extends EventEmitter {
       authToken?: string | null;
       connectTimeoutMs: number;
       requestTimeoutMs: number;
+      kvmRelay?: KvmRelayOptions;
     }
   ) {
     super();
@@ -63,9 +232,23 @@ export class OsacClient extends EventEmitter {
       headers.Authorization = value;
     }
 
+    const relay = this.options.kvmRelay;
+
     await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(this.url, { headers });
+      const ws = relay
+        ? new WebSocket(this.url, {
+            headers,
+            handshakeTimeout: Math.max(1000, this.options.connectTimeoutMs),
+            createConnection: () => {
+              return new KvmRelaySocket({
+                wsUrl: relay.wsUrl,
+                subprotocol: relay.subprotocol || 'kvm.tcp.v1',
+                connectTimeoutMs: relay.connectTimeoutMs || this.options.connectTimeoutMs,
+              }) as unknown as Duplex;
+            },
+          })
+        : new WebSocket(this.url, { headers });
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;

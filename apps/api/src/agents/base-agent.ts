@@ -49,21 +49,35 @@ export abstract class BaseAgent {
   protected config: AgentConfig;
   protected llm: ChatOpenAI;
   protected requestTimeoutMs: number;
+  protected maxRetries: number;
+  protected retryBaseMs: number;
+  protected retryMaxMs: number;
 
   constructor(config: AgentConfig) {
     this.config = config;
 
     // 初始化 LLM
+    const agentModel =
+      config.modelName ||
+      process.env.AGENT_OPENAI_MODEL ||
+      process.env.LLM_MODEL ||
+      'claude-haiku-4-5-20251001';
     this.llm = new ChatOpenAI({
-      modelName: config.modelName || 'claude-sonnet-4-5-20250929',
+      modelName: agentModel,
       temperature: config.temperature || 0.7,
       timeout: Number(process.env.LLM_TIMEOUT_MS || 90000),
-      openAIApiKey: process.env.OPENAI_API_KEY,
+      openAIApiKey: process.env.AGENT_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
       configuration: {
-        baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+        baseURL:
+          process.env.AGENT_OPENAI_BASE_URL ||
+          process.env.OPENAI_BASE_URL ||
+          'https://api.openai.com/v1',
       },
     });
     this.requestTimeoutMs = Number(process.env.LLM_TIMEOUT_MS || 90000);
+    this.maxRetries = Math.max(0, Number(process.env.LLM_MAX_RETRIES || 2));
+    this.retryBaseMs = Math.max(200, Number(process.env.LLM_RETRY_BASE_MS || 800));
+    this.retryMaxMs = Math.max(this.retryBaseMs, Number(process.env.LLM_RETRY_MAX_MS || 4000));
   }
 
   /**
@@ -79,10 +93,14 @@ export abstract class BaseAgent {
         { role: 'user' as const, content: input },
       ];
 
-      const response = await this.withTimeout(
-        this.llm.invoke(messages),
-        this.requestTimeoutMs,
-        'LLM 请求超时'
+      const response = await this.withRetry(
+        () =>
+          this.withTimeout(
+            this.llm.invoke(messages),
+            this.requestTimeoutMs,
+            'LLM 请求超时'
+          ),
+        `${this.config.name} 执行`
       );
 
       return {
@@ -245,6 +263,49 @@ ${rawOutput}`;
     }
   }
 
+  private shouldRetry(error: unknown): boolean {
+    if (!error) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('timeout') ||
+      normalized.includes('timed out') ||
+      normalized.includes('rate limit') ||
+      normalized.includes('429') ||
+      normalized.includes('socket') ||
+      normalized.includes('econnreset') ||
+      normalized.includes('econnrefused') ||
+      normalized.includes('503') ||
+      normalized.includes('502') ||
+      normalized.includes('504') ||
+      normalized.includes('network')
+    );
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+    const maxAttempts = Math.max(1, this.maxRetries + 1);
+
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxAttempts || !this.shouldRetry(error)) {
+          break;
+        }
+        const jitter = Math.floor(Math.random() * 200);
+        const delay = Math.min(this.retryMaxMs, this.retryBaseMs * Math.pow(2, attempt - 1)) + jitter;
+        console.warn(`[${label}] LLM 调用失败，准备重试 (${attempt}/${maxAttempts}):`, (error as any)?.message || error);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`${label} 失败`);
+  }
+
   /**
    * 流式执行 Agent
    * 
@@ -262,7 +323,10 @@ ${rawOutput}`;
         { role: 'user' as const, content: input },
       ];
 
-      const stream = await this.llm.stream(messages);
+      const stream = await this.withRetry(
+        () => this.llm.stream(messages),
+        `${this.config.name} 流式执行`
+      );
       let fullOutput = '';
 
       for await (const chunk of stream) {

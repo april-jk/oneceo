@@ -68,7 +68,7 @@ export class PlanningAgent extends BaseAgent {
 如果需要澄清，设置 needs_clarification 为 true，并添加 clarification_question 字段。`,
 
       tools: [],
-      modelName: 'claude-sonnet-4-5-20250929', // 平衡性能的任务规划
+      modelName: process.env.AGENT_OPENAI_MODEL || 'claude-haiku-4-5-20251001',
       temperature: 0.7,
       maxIterations: 15,
     };
@@ -136,12 +136,25 @@ ${userInput}
         return this.generateTaskDescription(intentResult, `${userInput}\n\n用户补充信息：${userResponse}`);
       }
 
-      return planningResult.task_description;
+      if (planningResult.task_description) {
+        return planningResult.task_description;
+      }
+
+      // 兼容模型直接返回任务描述对象的情况
+      if (planningResult.title || planningResult.objective || planningResult.scope) {
+        return planningResult as TaskDescription;
+      }
+
+      throw new Error('任务规划结果缺少 task_description');
     } catch (error: any) {
       if (isAwaitingUserInputError(error)) {
         throw error;
       }
-      throw new Error(`解析任务描述失败: ${error.message}`);
+      console.warn('[PlanningAgent] 解析任务描述失败，使用兜底方案:', error?.message || error);
+      console.warn('[PlanningAgent] 原始输出（截断）:', (result.output || '').slice(0, 600));
+
+      // 兜底方案：当 JSON 解析失败时，生成基础任务描述，避免流程中断
+      return this.buildFallbackTaskDescription(intentResult, userInput);
     }
   }
 
@@ -169,6 +182,36 @@ ${userInput}
     if (key_info.scope) parts.push(key_info.scope);
 
     return parts.join(' ');
+  }
+
+  private buildFallbackTaskDescription(
+    intentResult: IntentRecognitionResult,
+    userInput: string
+  ): TaskDescription {
+    const target = intentResult.key_info?.target || '新产品';
+    const scope = intentResult.key_info?.scope || '营销策略制定';
+    const title = `${target}营销计划制定`;
+
+    return {
+      title,
+      objective: `基于已知信息，为 ${target} 产出可落地的营销计划方案`,
+      scope,
+      deliverables: [
+        '营销策略文档',
+        '目标市场分析',
+        '渠道策略建议',
+        '阶段性执行计划',
+      ],
+      constraints: [
+        '需确认产品类型与目标市场',
+        '需确认预算范围与时间框架',
+      ],
+      additional_info: {
+        fallback: true,
+        note: '由于解析任务描述失败，已生成基础规划，后续可补充关键信息',
+        userInput,
+      },
+    };
   }
 
   /**

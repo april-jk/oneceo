@@ -67,7 +67,7 @@ export class IntentRecognitionAgent extends BaseAgent {
 如果需要澄清，设置 clarification_needed 为 true，并添加 clarification_question 字段。`,
 
       tools: [],
-      modelName: 'claude-haiku-4-5-20251001', // 快速响应的意图识别
+      modelName: process.env.AGENT_OPENAI_MODEL || 'claude-haiku-4-5-20251001',
       temperature: 0.7,
       maxIterations: 10,
     };

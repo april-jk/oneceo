@@ -67,7 +67,7 @@ export class ExecutionPlanAgent extends BaseAgent {
 - 交付物要具体、可衡量`,
 
       tools: [],
-      modelName: 'claude-opus-4-5-20251101', // 高质量的执行计划生成
+      modelName: process.env.AGENT_OPENAI_MODEL || 'claude-haiku-4-5-20251001',
       temperature: 0.6,
       maxIterations: 10,
     };
@@ -96,66 +96,154 @@ ${JSON.stringify(taskDescription, null, 2)}
 
 请以 JSON 格式返回执行计划。`;
 
-    const result = await this.execute(prompt);
-
-    if (!result.success) {
-      throw new Error(result.error || '生成执行计划失败');
-    }
-
     try {
+      const result = await this.execute(prompt);
+
+      if (!result.success) {
+        throw new Error(result.error || '生成执行计划失败');
+      }
+
       const executionPlan = await this.parseJsonResponse<ExecutionPlan>(
         result.output || '',
         '执行计划'
       );
 
-      // 验证计划的基本结构
-      this.validatePlan(executionPlan);
+      // 验证并补全计划的基本结构
+      const normalized = this.normalizePlan(executionPlan, taskDescription);
 
-      return executionPlan;
+      return normalized;
     } catch (error: any) {
-      throw new Error(`解析执行计划失败: ${error.message}`);
+      console.warn('[ExecutionPlanAgent] 解析执行计划失败，改用兜底计划:', error?.message || error);
+      return this.buildFallbackPlan(taskDescription);
     }
   }
 
   /**
    * 验证计划的基本结构
    */
-  private validatePlan(plan: ExecutionPlan): void {
+  private normalizePlan(plan: ExecutionPlan, taskDescription: TaskDescription): ExecutionPlan {
     if (!plan.project) {
       throw new Error('执行计划缺少 project 字段');
     }
 
-    if (!plan.project.title || !plan.project.description) {
-      throw new Error('项目缺少标题或描述');
-    }
+    const projectTitle = plan.project.title || taskDescription.title || '任务执行计划';
+    const projectDescription =
+      plan.project.description || taskDescription.objective || '执行计划描述待补充';
 
-    if (!plan.project.managers || plan.project.managers.length === 0) {
-      throw new Error('项目至少需要一个经理');
-    }
+    const managers = Array.isArray(plan.project.managers) && plan.project.managers.length > 0
+      ? plan.project.managers
+      : [
+          {
+            id: 'm1',
+            name: '执行经理',
+            description: '负责整体执行计划与协调',
+            tasks: [],
+          },
+        ];
 
-    for (const manager of plan.project.managers) {
-      if (!manager.id || !manager.name || !manager.description) {
-        throw new Error('经理信息不完整');
-      }
+    const normalizedManagers = managers.map((manager, managerIndex) => {
+      const managerId = manager.id || `m${managerIndex + 1}`;
+      const managerName = manager.name || `执行经理${managerIndex + 1}`;
+      const managerDescription = manager.description || '负责任务执行与交付';
 
-      if (!manager.tasks || manager.tasks.length === 0) {
-        throw new Error(`经理 ${manager.name} 没有分配任务`);
-      }
+      const tasks = Array.isArray(manager.tasks) && manager.tasks.length > 0
+        ? manager.tasks
+        : [
+            {
+              id: `t${managerIndex + 1}-1`,
+              title: taskDescription.title || '任务执行',
+              description: taskDescription.objective || '根据任务描述完成执行',
+              estimated_hours: 8,
+              deliverables: taskDescription.deliverables || ['交付物待确认'],
+            },
+          ];
 
-      for (const task of manager.tasks) {
-        if (!task.id || !task.title || !task.description) {
-          throw new Error('任务信息不完整');
-        }
+      const normalizedTasks = tasks.map((task, taskIndex) => {
+        const estimated = typeof task.estimated_hours === 'string'
+          ? Number.parseFloat(task.estimated_hours)
+          : task.estimated_hours;
+        const estimatedHours = Number.isFinite(estimated) && (estimated as number) > 0 ? Number(estimated) : 8;
 
-        if (!task.estimated_hours || task.estimated_hours <= 0) {
-          throw new Error(`任务 ${task.title} 的时间估算无效`);
-        }
+        const deliverables = Array.isArray(task.deliverables)
+          ? task.deliverables
+          : task.deliverables
+            ? [String(task.deliverables)]
+            : (taskDescription.deliverables || ['交付物待确认']);
 
-        if (!task.deliverables || task.deliverables.length === 0) {
-          throw new Error(`任务 ${task.title} 没有定义交付物`);
-        }
-      }
-    }
+        return {
+          ...task,
+          id: task.id || `t${managerIndex + 1}-${taskIndex + 1}`,
+          title: task.title || `任务${taskIndex + 1}`,
+          description: task.description || '待补充任务描述',
+          estimated_hours: estimatedHours,
+          deliverables,
+        };
+      });
+
+      return {
+        ...manager,
+        id: managerId,
+        name: managerName,
+        description: managerDescription,
+        tasks: normalizedTasks,
+      };
+    });
+
+    return {
+      ...plan,
+      project: {
+        ...plan.project,
+        title: projectTitle,
+        description: projectDescription,
+        managers: normalizedManagers,
+      },
+    };
+  }
+
+  private buildFallbackPlan(taskDescription: TaskDescription): ExecutionPlan {
+    const deliverables = Array.isArray(taskDescription.deliverables)
+      ? taskDescription.deliverables
+      : taskDescription.deliverables
+        ? [String(taskDescription.deliverables)]
+        : ['交付物待确认'];
+
+    const tasks = deliverables.map((item, index) => {
+      const title = typeof item === 'string' ? item : (item as any)?.name || `任务${index + 1}`;
+      const description =
+        typeof item === 'string'
+          ? `完成交付物：${item}`
+          : (item as any)?.description || '完成交付物';
+      return {
+        id: `t1-${index + 1}`,
+        title,
+        description,
+        estimated_hours: 8,
+        deliverables: [typeof item === 'string' ? item : (item as any)?.name || '交付物'],
+      };
+    });
+
+    return {
+      project: {
+        title: taskDescription.title || '任务执行计划',
+        description: taskDescription.objective || '执行计划描述待补充',
+        managers: [
+          {
+            id: 'm1',
+            name: '执行经理',
+            description: '负责整体执行计划与协调',
+            tasks: tasks.length > 0 ? tasks : [
+              {
+                id: 't1-1',
+                title: '任务执行',
+                description: taskDescription.objective || '根据任务描述完成执行',
+                estimated_hours: 8,
+                deliverables: ['交付物待确认'],
+              },
+            ],
+          },
+        ],
+      },
+    };
   }
 }
 

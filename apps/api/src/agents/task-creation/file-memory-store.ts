@@ -14,9 +14,20 @@ export interface FileSessionRecord {
   id: string;
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed';
-  stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed';
+  stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed';
+  runtime?: {
+    orchestratorSessionId?: string;
+    opencodeSessionId?: string;
+    updatedAt?: string;
+  };
   pendingQuestion?: string;
   pendingOptions?: string[];
+  pendingResume?: {
+    stage: NonNullable<FileSessionRecord['stage']>;
+    reason?: string;
+    lastUserInput?: string;
+    updatedAt: string;
+  };
   createdAt: string;
   updatedAt: string;
   messages: FileSessionMessage[];
@@ -152,6 +163,35 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async updateRuntimeBinding(
+    sessionId: string,
+    runtime: { orchestratorSessionId?: string; opencodeSessionId?: string }
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+
+      const current = session.runtime || {};
+      const nextOrchestrator =
+        runtime.orchestratorSessionId !== undefined
+          ? runtime.orchestratorSessionId || undefined
+          : current.orchestratorSessionId;
+      const nextOpencode =
+        runtime.opencodeSessionId !== undefined
+          ? runtime.opencodeSessionId || undefined
+          : current.opencodeSessionId;
+
+      session.runtime = {
+        orchestratorSessionId: nextOrchestrator,
+        opencodeSessionId: nextOpencode,
+        updatedAt: new Date().toISOString(),
+      };
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
   async setPendingClarification(sessionId: string, question: string, options?: string[]): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -176,6 +216,37 @@ class TaskCreationFileMemoryStore {
       if (session.status === 'waiting_user') {
         session.status = 'in_progress';
       }
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async setPendingResume(
+    sessionId: string,
+    payload: { stage: NonNullable<FileSessionRecord['stage']>; reason?: string; lastUserInput?: string }
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.pendingResume = {
+        stage: payload.stage,
+        reason: payload.reason,
+        lastUserInput: payload.lastUserInput,
+        updatedAt: new Date().toISOString(),
+      };
+      session.status = 'in_progress';
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async clearPendingResume(sessionId: string): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.pendingResume = undefined;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -208,6 +279,28 @@ class TaskCreationFileMemoryStore {
   async getMessages(sessionId: string): Promise<FileSessionMessage[]> {
     const session = await this.getSession(sessionId);
     return session?.messages || [];
+  }
+
+  async findSessionByOrchestratorSessionId(orchestratorSessionId: string): Promise<FileSessionRecord | null> {
+    const target = orchestratorSessionId.trim();
+    if (!target) return null;
+
+    const memory = await this.readMemory();
+    const candidates = memory.sessions
+      .filter((session) => session.runtime?.orchestratorSessionId === target)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return candidates[0] || null;
+  }
+
+  async findSessionByOpencodeSessionId(opencodeSessionId: string): Promise<FileSessionRecord | null> {
+    const target = opencodeSessionId.trim();
+    if (!target) return null;
+
+    const memory = await this.readMemory();
+    const candidates = memory.sessions
+      .filter((session) => session.runtime?.opencodeSessionId === target)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return candidates[0] || null;
   }
 }
 

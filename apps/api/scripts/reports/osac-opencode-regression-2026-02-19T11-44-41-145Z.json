@@ -1,0 +1,62 @@
+{
+  "summary": {
+    "startedAt": "2026-02-19T11:44:05.405Z",
+    "finishedAt": "2026-02-19T11:44:41.145Z",
+    "sessionId": "sess_d213f66a9d194f58",
+    "provisioned": false,
+    "rounds": 2,
+    "roundsExecuted": 2,
+    "passed": 0,
+    "failed": 2,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 900000,
+    "aborted": true,
+    "abortReason": "Circuit break: 2 consecutive failures reached threshold 2",
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 70,
+    "execTimeoutSeconds": 95,
+    "roundExecTimeoutMs": 150000,
+    "enableProxyPrecheck": true,
+    "proxyPrecheckTimeoutSeconds": 20,
+    "proxyPrecheckExecTimeoutMs": 30000,
+    "proxyPrecheckRetries": 4,
+    "proxyPrecheckRetryDelayMs": 900,
+    "proxyPrecheckBudgetMs": 20000,
+    "disableOsacHealthcheck": true,
+    "resolvedBridgeBaseUrl": "https://hone.vvvv.ee",
+    "wsProbeMode": "open",
+    "wsPingTimeoutMs": 15000,
+    "wsConnectAcquireTimeoutMs": 30000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": false,
+      "status": "precheck_completed",
+      "exit": 0,
+      "durationMs": 16345,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": "bridge_disconnected",
+      "errorMessage": "proxy precheck failed: bridge_disconnected",
+      "stdoutSnippet": "{\"error\":{\"code\":\"bridge_disconnected\",\"message\":\"Circuit open\",\"nextAction\":\"backoff\",\"requestId\":\"b72ef0a8f042528b9474b63155828fdd\",\"retryAfterMs\":8155,\"retryable\":true,\"stage\":\"circuit_open\",\"type\":\"bridge_disconnected\"}}",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 2,
+      "ok": false,
+      "status": "precheck_completed",
+      "exit": 0,
+      "durationMs": 17173,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": "bridge_disconnected",
+      "errorMessage": "proxy precheck failed: bridge_disconnected",
+      "stdoutSnippet": "{\"error\":{\"code\":\"bridge_disconnected\",\"message\":\"Circuit open\",\"nextAction\":\"backoff\",\"requestId\":\"bfadf9f1c42e0c8f61f21ff355e2e9c0\",\"retryAfterMs\":4073,\"retryable\":true,\"stage\":\"circuit_open\",\"type\":\"bridge_disconnected\"}}",
+      "stderrSnippet": ""
+    }
+  ]
+}

@@ -21,6 +21,41 @@ type KvmRelayOptions = {
   connectTimeoutMs?: number;
 };
 
+const relayDebugEnabled = String(process.env.OSAC_KVM_RELAY_DEBUG || '')
+  .trim()
+  .toLowerCase() === 'true';
+
+function relayDebugLog(event: string, payload: Record<string, unknown>) {
+  if (!relayDebugEnabled) return;
+  try {
+    console.log('[OSAC_KVM_RELAY]', JSON.stringify({ event, ...payload }));
+  } catch {
+    // ignore debug log failures
+  }
+}
+
+function relayPreview(buf: Buffer, maxBytes: number = 32) {
+  const slice = buf.subarray(0, Math.max(0, maxBytes));
+  const hex = slice.toString('hex');
+  const ascii = slice.toString('utf8').replace(/[^\x20-\x7e]/g, '.');
+  return {
+    hex,
+    ascii,
+  };
+}
+
+function withBootstrapMessageQuery(url: string, message: OsacMessage | null | undefined): string {
+  if (!message) return url;
+  try {
+    const encoded = Buffer.from(JSON.stringify(message), 'utf8').toString('base64url');
+    const parsed = new URL(url);
+    parsed.searchParams.set('bootstrapMessage', encoded);
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function firstHeader(value: string | string[] | undefined): string | null {
   if (!value) return null;
   if (Array.isArray(value)) {
@@ -153,12 +188,23 @@ class KvmRelaySocket extends Duplex {
     }
 
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    relayDebugLog('write', {
+      connected: this.connected,
+      relayClosed: this.relayClosed,
+      bytes: buf.length,
+      ...relayPreview(buf),
+    });
     if (!this.connected) {
       this.pendingWrites.push({ chunk: buf, cb: callback });
       return;
     }
 
     this.outerWs.send(buf, { binary: true }, (error?: Error) => {
+      relayDebugLog('write_sent', {
+        bytes: buf.length,
+        ok: !error,
+        error: error ? error.message : null,
+      });
       callback(error || null);
     });
   }
@@ -199,6 +245,11 @@ class KvmRelaySocket extends Duplex {
         continue;
       }
       this.outerWs.send(current.chunk, { binary: true }, (sendError?: Error) => {
+        relayDebugLog('write_flush_sent', {
+          bytes: current.chunk.length,
+          ok: !sendError,
+          error: sendError ? sendError.message : null,
+        });
         current.cb(sendError || null);
       });
     }
@@ -216,6 +267,7 @@ export class OsacClient extends EventEmitter {
       connectTimeoutMs: number;
       requestTimeoutMs: number;
       kvmRelay?: KvmRelayOptions;
+      bootstrapMessage?: OsacMessage;
     }
   ) {
     super();
@@ -236,8 +288,14 @@ export class OsacClient extends EventEmitter {
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
+      const connectUrl = withBootstrapMessageQuery(this.url, this.options.bootstrapMessage);
+      relayDebugLog('connect_url', {
+        relay: Boolean(relay),
+        hasBootstrapMessage: Boolean(this.options.bootstrapMessage),
+        connectUrl,
+      });
       const ws = relay
-        ? new WebSocket(this.url, {
+        ? new WebSocket(connectUrl, {
             headers,
             handshakeTimeout: Math.max(1000, this.options.connectTimeoutMs),
             createConnection: () => {
@@ -248,7 +306,7 @@ export class OsacClient extends EventEmitter {
               }) as unknown as Duplex;
             },
           })
-        : new WebSocket(this.url, { headers });
+        : new WebSocket(connectUrl, { headers });
       const timeout = setTimeout(() => {
         if (settled) return;
         settled = true;

@@ -16,6 +16,8 @@ import { normalizeOpencodeModel } from '../../utils/opencode-model';
 import { isAwaitingUserInputError, RecoverableAgentError } from './errors';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { osacAgentService } from '../../services/osac-agent-service';
+import { opencodeRemoteService } from '../../services/opencode-remote-service';
+import { resolveOpencodeWorkspacePath } from '../../utils/opencode-workspace';
 
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
@@ -30,9 +32,11 @@ export class TaskCreationService {
   private layer3: ExecutionPlanAgent;
   private callbacks?: TaskCreationCallbacks;
   private sessionId?: string; // 当前会话 ID
-  private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' = 'collecting';
+  private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed' =
+    'collecting';
   private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'false').toLowerCase() === 'true';
   private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
+  private osacExecutionMode = (process.env.OSAC_EXECUTION_MODE || 'opencode_remote').trim().toLowerCase();
 
   constructor(callbacks?: TaskCreationCallbacks) {
     this.callbacks = callbacks;
@@ -202,8 +206,8 @@ export class TaskCreationService {
       });
 
       // Step 3: 生成执行计划
-      this.setStage('executing');
-      this.sendStatus('execution', '正在生成执行计划...');
+      this.setStage('planning');
+      this.sendStatus('planning', '正在生成执行计划...');
 
       let executionPlan: ExecutionPlan;
       try {
@@ -247,14 +251,6 @@ export class TaskCreationService {
       );
       console.log('[TaskCreationService] 执行计划已保存到数据库');
 
-      // 更新会话状态为完成
-      await this.runDbOperation(
-        'updateSessionStatus:completed',
-        () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
-      );
-      this.setStage('completed');
-      this.sendStatus('execution', '执行计划已生成');
-
       this.sendMessage({
         type: 'plan_generated' as any,
         plan: executionPlan,
@@ -262,12 +258,40 @@ export class TaskCreationService {
 
       // Step 4: 交由 OSAC 在 sandbox 内执行（可开关）
       if (this.osacEnabled) {
+        await this.runDbOperation(
+          'updateSessionStatus:in_progress',
+          () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
+        );
+        this.setStage('executing');
+        this.sendStatus('execution', '执行计划已生成，正在启动执行环境...');
+
         await this.executeInSandbox({
           userInput,
           taskDescription,
           executionPlan,
         });
+
+        if (this.osacExecutionMode !== 'command') {
+          // OpenCode 远程模式下，后续由 OPENCODE_EVENT 决定 completed/failed
+          return executionPlan;
+        }
+
+        await this.runDbOperation(
+          'updateSessionStatus:completed',
+          () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
+        );
+        this.setStage('completed');
+        this.sendStatus('execution', '执行任务已完成');
+        return executionPlan;
       }
+
+      // 未启用 OSAC 时，本轮执行计划生成即视为完成
+      await this.runDbOperation(
+        'updateSessionStatus:completed',
+        () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
+      );
+      this.setStage('completed');
+      this.sendStatus('planning', '执行计划已生成');
 
       return executionPlan;
     } catch (error: any) {
@@ -288,8 +312,15 @@ export class TaskCreationService {
       }
 
       if (error instanceof RecoverableAgentError) {
-        this.setStage('executing');
-        this.sendStatus('execution', '模型暂时不可用，稍后自动继续处理...');
+        const tone =
+          this.stage === 'collecting'
+            ? 'intent'
+            : this.stage === 'planning'
+              ? 'planning'
+              : this.stage === 'reviewing'
+                ? 'review'
+                : 'execution';
+        this.sendStatus(tone, '模型暂时不可用，稍后自动继续处理...');
         if (this.sessionId) {
           try {
             await this.runDbOperation(
@@ -366,17 +397,28 @@ export class TaskCreationService {
     return Math.max(0, Math.min(100, Math.round(normalized)));
   }
 
-  private setStage(stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed'): void {
+  private setStage(
+    stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed'
+  ): void {
     this.stage = stage;
   }
 
   private sendStatus(
-    tone: 'system' | 'intent' | 'planning' | 'execution' | 'error',
+    tone: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error',
     content: string
   ): void {
     this.sendMessage({
       type: 'status_update' as any,
-      agent: tone === 'intent' ? 'intent_recognition' : tone === 'planning' ? 'planning' : tone === 'execution' ? 'execution_plan' : 'system',
+      agent:
+        tone === 'intent'
+          ? 'intent_recognition'
+          : tone === 'planning'
+            ? 'planning'
+            : tone === 'execution'
+              ? 'execution_plan'
+              : tone === 'review'
+                ? 'execution_review'
+                : 'system',
       tone,
       stage: this.stage,
       content,
@@ -403,12 +445,12 @@ export class TaskCreationService {
     }
   }
 
-  private buildOpencodeCommand(payload: {
+  private buildOpencodePrompt(payload: {
     userInput: string;
     taskDescription: any;
     executionPlan: ExecutionPlan;
   }): string {
-    const prompt = [
+    return [
       '你是执行智能体，请依据以下任务信息在当前工作区完成执行：',
       `用户需求: ${payload.userInput}`,
       `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
@@ -418,6 +460,14 @@ export class TaskCreationService {
       '2) 输出可落地的执行结果与产出说明。',
       '3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。',
     ].join('\n');
+  }
+
+  private buildOpencodeCommand(payload: {
+    userInput: string;
+    taskDescription: any;
+    executionPlan: ExecutionPlan;
+  }): string {
+    const prompt = this.buildOpencodePrompt(payload);
 
     const flattened = prompt
       .replace(/\r?\n/g, ' ')
@@ -473,11 +523,17 @@ export class TaskCreationService {
     return normalized.fullModel;
   }
 
+  private resolveWorkspacePath(): string | null {
+    if (!this.sessionId) return null;
+    return resolveOpencodeWorkspacePath(this.sessionId);
+  }
+
   private async executeInSandbox(payload: {
     userInput: string;
     taskDescription: any;
     executionPlan: ExecutionPlan;
   }) {
+    this.setStage('executing');
     this.sendStatus('execution', '正在启动执行环境...');
 
     let lastError: unknown;
@@ -489,6 +545,7 @@ export class TaskCreationService {
             taskTitle: payload.executionPlan?.project?.title,
           },
         });
+        const workspacePath = this.resolveWorkspacePath();
 
         this.sendMessage({
           type: 'agent_message' as any,
@@ -501,12 +558,44 @@ export class TaskCreationService {
             osacConnectionMode: provision.osacConnectionMode,
             osacAuthToken: provision.osacAuthToken,
             orchestratorSessionId: provision.sessionId,
+            workspacePath: workspacePath || undefined,
           },
         });
+
+        if (this.osacExecutionMode !== 'command') {
+          if (!this.sessionId) {
+            throw new Error('当前任务会话不存在，无法下发 OpenCode 指令');
+          }
+
+          const accepted = await opencodeRemoteService.sendUserInput({
+            taskSessionId: this.sessionId,
+            content: this.buildOpencodePrompt(payload),
+            orchestratorSessionId: provision.sessionId,
+            workspacePath: workspacePath || undefined,
+            source: 'agent',
+          });
+
+          this.sendMessage({
+            type: 'agent_message' as any,
+            agent: 'execution_plan',
+            content: '任务已发送到 OpenCode，正在流式执行，后续会实时回传每一步状态...',
+            metadata: {
+              orchestratorSessionId: accepted.orchestratorSessionId,
+              opencodeSessionId: accepted.opencodeSessionId,
+              workspacePath: workspacePath || undefined,
+              executionMode: 'opencode_remote',
+            },
+          });
+          return;
+        }
 
         const maxRounds = Number(process.env.OSAC_EXECUTION_ROUNDS || 3);
         let lastOutput = '';
         let command = this.buildOpencodeCommand(payload);
+        const commandOptions: Record<string, unknown> = {};
+        if (workspacePath) {
+          commandOptions.cwd = workspacePath;
+        }
 
         for (let round = 1; round <= maxRounds; round += 1) {
           this.sendMessage({
@@ -516,12 +605,16 @@ export class TaskCreationService {
             metadata: {
               osacCommand: command,
               orchestratorSessionId: provision.sessionId,
+              workspacePath: workspacePath || undefined,
             },
           });
 
           const result = await osacAgentService.executeCommandAndWait(
             provision.sessionId,
-            { command },
+            {
+              command,
+              options: commandOptions,
+            },
             {
               timeoutMs: Number(process.env.OSAC_COMMAND_TIMEOUT_MS || 900000),
               pollMs: Number(process.env.OSAC_COMMAND_POLL_MS || 2000),
@@ -538,6 +631,9 @@ export class TaskCreationService {
             });
           }
 
+          this.setStage('reviewing');
+          this.sendStatus('review', '正在审查执行结果...');
+
           const review = await executionReviewAgent.review({
             userInput: payload.userInput,
             taskDescription: payload.taskDescription,
@@ -552,12 +648,16 @@ export class TaskCreationService {
             metadata: {
               reviewDone: review.done,
               reviewIssues: review.issues,
+              workspacePath: workspacePath || undefined,
             },
           });
 
           if (review.done || !review.next_instructions) {
             break;
           }
+
+          this.setStage('executing');
+          this.sendStatus('execution', '审查未通过，正在根据反馈继续执行...');
 
           command = this.buildOpencodeCommandWithFeedback({
             ...payload,
@@ -703,6 +803,18 @@ export class TaskCreationService {
       latestUserInput ||
       '';
 
+    if (!intentResultRecord && !taskDescriptionRecord && !executionPlanRecord) {
+      const restartInput = (latestUserInput || firstUserInput || '').trim();
+      if (!restartInput) {
+        throw new RecoverableAgentError('缺少可恢复的用户输入，无法继续任务');
+      }
+
+      this.setStage('collecting');
+      this.sendStatus('intent', '上下文不足，正在重新发起任务流程...');
+      await this.createTask(restartInput, undefined, sessionId, 'user_response');
+      return;
+    }
+
     let taskDescription: any = taskDescriptionRecord
       ? {
           title: taskDescriptionRecord.title,
@@ -756,8 +868,8 @@ export class TaskCreationService {
       : null;
 
     if (!executionPlan) {
-      this.setStage('executing');
-      this.sendStatus('execution', '正在重新生成执行计划...');
+      this.setStage('planning');
+      this.sendStatus('planning', '正在重新生成执行计划...');
       executionPlan = await this.layer3.generateExecutionPlan(taskDescription);
 
       const latestTaskDescription = taskDescriptionRecord || (await taskCreationSessionDAO.getTaskDescription(sessionId));
@@ -779,7 +891,7 @@ export class TaskCreationService {
             managers: executionPlan!.project.managers,
           })
       );
-      this.sendStatus('execution', '执行计划已生成');
+      this.sendStatus('planning', '执行计划已生成');
       this.sendMessage({ type: 'plan_generated' as any, plan: executionPlan });
     }
 

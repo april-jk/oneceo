@@ -1,0 +1,451 @@
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[WebSocket] 消息处理失败: KvmClientError: Rate limit exceeded
+    at request (D:\project\oneceo.ai\oneceo\apps\api\src\clients\kvm-orchestrator-client.ts:184:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Object.getJob (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\kvm-connector.ts:124:43)
+    at async waitForJob (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:163:17)
+    at async ensureVmEnv (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:738:20)
+    at async SandboxAgentProvisionService.ensureFixedOsacProcess (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:1054:5)
+    at async SandboxAgentProvisionService.ensureFixedSessionReady (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:1156:5)
+    at async SandboxAgentProvisionService.provisionFromFixedSandbox (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:1219:27)
+    at async TaskCreationService.executeInSandbox (D:\project\oneceo.ai\oneceo\apps\api\src\agents\task-creation\task-creation-service.ts:528:27)
+    at async TaskCreationService.createTask (D:\project\oneceo.ai\oneceo\apps\api\src\agents\task-creation\task-creation-service.ts:267:9) {
+  status: 429,
+  requestId: 'f3d48ab9-8f3f-4726-835a-c308c24ba9ea',
+  code: 'RATE_LIMITED',
+  details: {
+    limit_per_minute: 120,
+    retry_after_ms: 1076,
+    bucket: 'default',
+    reason_code: 'RATE_LIMIT_BUCKET',
+    retryable: true
+  },
+  retryable: true,
+  actionHint: undefined,
+  __clientNotified: true
+}
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\index.ts:173:12)
+    at ModuleJob.run (node:internal/modules/esm/module_job:430:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:661:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+Emitted 'error' event on WebSocketServer instance at:
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 4000
+}
+
+Node.js v24.13.1
+[ExecutionPlanAgent] 解析执行计划失败，改用兜底计划: 执行计划缺少 project 字段
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c OSAC WebSocket 握手失败: status=409 code=mapping_stale
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+[OSAC_RELAY_CONNECT_FALLBACK] sess_35ff684915754d7c Unexpected server response: 429
+^C

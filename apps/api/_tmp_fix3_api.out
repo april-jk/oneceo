@@ -1,0 +1,323 @@
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ 数据库连接成功
+[OSAC_PERSISTENT_RECOVER] {"candidates":1,"limit":5}
+[OSAC_PERSISTENT_RECOVER_RESULT] {"sessionId":"sess_4fb5239668d94b6f","ok":true}
+[2026-02-18T06:15:50.488Z] GET /health
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:16:25.981Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9049f03bc7e987a70385acc3f529d4c8","method":"POST","path":"/v1/chat/completions","stream":true}
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:16:25.984Z","sessionId":"sess_4fb5239668d94b6f","requestId":"aa0a93e21077aec2acea4a088559a19d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:16:25.986Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T06:16:26.005Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:16:26.006Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7b6d85aa6c3e58f49ceff7c86558b8fc","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:16:26.008Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:17:45.357Z","sessionId":"sess_4fb5239668d94b6f","requestId":"841939c23f92bf960b6eb721caf7f33e","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:17:45.358Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:17:45.363Z","sessionId":"sess_4fb5239668d94b6f","requestId":"dccf61537264bf9b0e2f71bedf1766e8","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:17:45.364Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:17:45.376Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a3c478de3c307ad3ba90f1f2dcbde559","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:17:45.378Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:18:18.988Z","sessionId":"sess_4fb5239668d94b6f","requestId":"bc412b8b673db315cb31ec3944f93637","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:18:18.989Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:19:57.540Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c61ca280a2285dda2270cf429d39b7e4","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:19:57.541Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:19:57.561Z","sessionId":"sess_4fb5239668d94b6f","requestId":"167beac738d7953deadc2dc1430c5736","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:19:57.562Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:19:57.568Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9ca65b76db38df2cd45810319973b629","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:19:57.570Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:20:39.112Z","sessionId":"sess_4fb5239668d94b6f","requestId":"d969df116abb9d23d93c82fa5aea58ed","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:20:39.114Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:21:00.138Z","sessionId":"sess_4fb5239668d94b6f","requestId":"19a3ccdd37bac2a62329819f054f83f9","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:21:00.140Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T06:21:35.421Z] GET /api/sandbox/health
+[2026-02-18T06:21:35.438Z] GET /api/projects
+[2026-02-18T06:21:35.439Z] GET /api/sandbox/environment
+[2026-02-18T06:21:35.440Z] GET /api/tasks
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T06:22:47.455Z] GET /health
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T06:24:21.869Z] GET /api/sandbox/environment
+[2026-02-18T06:24:21.870Z] GET /api/sandbox/health
+[2026-02-18T06:24:22.095Z] GET /api/sandbox/health
+[2026-02-18T06:24:22.095Z] GET /api/sandbox/environment
+[2026-02-18T06:24:22.188Z] GET /api/task-creation/sessions
+[2026-02-18T06:24:22.226Z] GET /health
+[2026-02-18T06:24:22.227Z] GET /api/agents/health
+[2026-02-18T06:24:22.228Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:26:30.704Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7dfa184ad14efbc3b86144a58d7acc13","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:26:30.706Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:26:30.716Z","sessionId":"sess_4fb5239668d94b6f","requestId":"455bf9af48e0cf5a249b45f47f857fc6","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:26:30.718Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:23.889Z","sessionId":"sess_4fb5239668d94b6f","requestId":"0fb3c4fb411cde43c8acdabba6c59f9d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:23.891Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:23.902Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7c2d63dfcbae63e004c603b1ee98d3e7","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:23.903Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:30.145Z","sessionId":"sess_4fb5239668d94b6f","requestId":"30b05b9eb76ab8a26845fe9470e88f84","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:30.147Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:30.165Z","sessionId":"sess_4fb5239668d94b6f","requestId":"1787485bf4ba77e581f93f4b486d6f72","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:30.166Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:30.170Z","sessionId":"sess_4fb5239668d94b6f","requestId":"ebf75128099f4943e3b15ad8998d2548","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:30.171Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:32.929Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f41b5c91b7b17e4040821ba450cc7bd1","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:32.930Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:34.911Z","sessionId":"sess_4fb5239668d94b6f","requestId":"8833272b7058d0c2ebc7a6dd7d4b1df2","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:34.912Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:34.924Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7f1652f0b60f8e96dc525c11cee965cb","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:34.925Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:34.926Z","sessionId":"sess_4fb5239668d94b6f","requestId":"5f9a50a1db4653a152680ee390387aa3","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:34.927Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:40.126Z","sessionId":"sess_4fb5239668d94b6f","requestId":"b7804c22d747ec828702cf4110e0daef","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:40.128Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:40.145Z","sessionId":"sess_4fb5239668d94b6f","requestId":"953d8cfab858888c0c5ca9eaca6f9022","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:40.145Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:40.146Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c7f7e7c6ecb1cc21e074b9c462cfc090","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:40.146Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:44.494Z","sessionId":"sess_4fb5239668d94b6f","requestId":"475180a4337b8d65f90a61e50b8b76bf","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:44.495Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:44.505Z","sessionId":"sess_4fb5239668d94b6f","requestId":"56d0af0ffaed0fa3689fc685c3c19d27","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:44.506Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:27:44.508Z","sessionId":"sess_4fb5239668d94b6f","requestId":"4b647198efde989f28d17814e8b7a699","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:27:44.508Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:28:35.565Z","sessionId":"sess_4fb5239668d94b6f","requestId":"2f8442ee8127ffaa68821eab934a7f1b","method":"POST","path":"/v1/chat/completions","stream":true}
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:28:35.566Z","sessionId":"sess_4fb5239668d94b6f","requestId":"bcea1a139fb2a16b2ed9a6f827785740","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:28:35.567Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T06:28:35.568Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:28:35.572Z","sessionId":"sess_4fb5239668d94b6f","requestId":"1c25aa195a874b97e66da999339e01be","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:28:35.573Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:29:21.615Z","sessionId":"sess_4fb5239668d94b6f","requestId":"d62eabe4f73f169d3b693d7b2e5cd3e2","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:29:21.616Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:29:21.625Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f952fa38a610a6db1983143db225b755","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:29:21.626Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:11.086Z","sessionId":"sess_4fb5239668d94b6f","requestId":"31790e1c16b7e2669b088ee45cdfb267","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:11.088Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:11.108Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7f9a171ea859c2c7e2263d28d73e8834","method":"POST","path":"/v1/chat/completions","stream":true}
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:11.109Z","sessionId":"sess_4fb5239668d94b6f","requestId":"525ad2578bfe6016646f096fb1b0eb28","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:11.110Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T06:30:11.111Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:12.704Z","sessionId":"sess_4fb5239668d94b6f","requestId":"4899ebaeff6a2ffcedf56fcbe0120439","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:12.705Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:12.741Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f36878dbaecfcd0fab0b467db6043d98","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:12.742Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:12.746Z","sessionId":"sess_4fb5239668d94b6f","requestId":"28d54bb978031def741c7256003162d4","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:12.747Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.398Z","sessionId":"sess_4fb5239668d94b6f","requestId":"ae9a070ee87cad7c1a84981329a6cfc0","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.399Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.412Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f76af5c18b90f99495e1fb1c210a7cb5","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.414Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.425Z","sessionId":"sess_4fb5239668d94b6f","requestId":"78e290ba98b9cf40e69ecb5a77d7e21c","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.426Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.657Z","sessionId":"sess_4fb5239668d94b6f","requestId":"27b5319fc6d6024807634270a5650d24","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.657Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.662Z","sessionId":"sess_4fb5239668d94b6f","requestId":"3896701351dde9d25c0f1191aba99fb9","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.663Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:18.670Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9fd65bbb59a8053b81e444f624a35425","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:18.671Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:20.732Z","sessionId":"sess_4fb5239668d94b6f","requestId":"594b6fac07d450a05d2df7189fa38310","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:20.733Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:21.144Z","sessionId":"sess_4fb5239668d94b6f","requestId":"4601cf997760d720f8638114a9afff56","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:21.145Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:22.641Z","sessionId":"sess_4fb5239668d94b6f","requestId":"8790a37cc408d692db9a95d236b17508","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:22.641Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:22.649Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c18790abeaa5fbbe4c18f0e53ca39a6b","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:22.649Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:22.669Z","sessionId":"sess_4fb5239668d94b6f","requestId":"e0b5d6804fbe75380eeb83ee3876f809","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:22.669Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:24.457Z","sessionId":"sess_4fb5239668d94b6f","requestId":"29113bd41de3e1dbeea66fefd01a4821","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:24.458Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:24.470Z","sessionId":"sess_4fb5239668d94b6f","requestId":"57d36608c92d2c3cdb2d913e38927318","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:24.471Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:24.478Z","sessionId":"sess_4fb5239668d94b6f","requestId":"b8248599e40ba63628e1ef4e604a2d59","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:24.478Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:30:26.564Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a177759dba2855ce56751cd19a64a37f","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:30:26.565Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:31:20.292Z","sessionId":"sess_4fb5239668d94b6f","requestId":"1f783d20c1f9614fa7abca1d0632a6a6","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:31:20.293Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:31:50.264Z","sessionId":"sess_4fb5239668d94b6f","requestId":"dc3cf5574a5a494b9c07c5e8535ea827","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:31:50.265Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:31:50.267Z","sessionId":"sess_4fb5239668d94b6f","requestId":"86cb56f2206e7366dc20e07adb42be4d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:31:50.268Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:31:50.290Z","sessionId":"sess_4fb5239668d94b6f","requestId":"6dff3bf17717380581cebd6bc3f94aa9","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:31:50.291Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:20.358Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c9c09bacba84331a1071bb19962f1f7d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:20.360Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:20.368Z","sessionId":"sess_4fb5239668d94b6f","requestId":"93ea101200a39288f80b1829208a0173","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:20.369Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:20.370Z","sessionId":"sess_4fb5239668d94b6f","requestId":"5a5c8536f6b3932ea1e49a9f8b4075a1","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:20.371Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:39.085Z","sessionId":"sess_4fb5239668d94b6f","requestId":"fc68a3bca1aaf66329203af33648fe79","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:39.086Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:39.107Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f30d835ec1455008a23c0fac59727348","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:39.108Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:39.111Z","sessionId":"sess_4fb5239668d94b6f","requestId":"fc95e81f8fbdd8f6cab71c2be14430d0","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:39.112Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:45.181Z","sessionId":"sess_4fb5239668d94b6f","requestId":"480e95edef26f10c2b4705dc49248818","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:45.181Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:45.197Z","sessionId":"sess_4fb5239668d94b6f","requestId":"1e412a6707edf0248666c1f641b04886","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:45.198Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:32:45.212Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9eb62d60178e9b0c20cf7021a80a0804","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:32:45.213Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:08.903Z","sessionId":"sess_4fb5239668d94b6f","requestId":"31eb38ce2a4e8b12d613efdaa24cfeea","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:08.904Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:08.931Z","sessionId":"sess_4fb5239668d94b6f","requestId":"e1899178209629a473bfdb51d93d275e","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:08.932Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:08.933Z","sessionId":"sess_4fb5239668d94b6f","requestId":"3d910da1ad59f2c0bc9972ac284e7bfa","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:08.934Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:11.872Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7ced8ad69c21bdc29d8041b0f3acb75b","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:11.873Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:15.962Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a66c9d59dd6c67b74db8196ddf35618f","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:15.963Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:15.978Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7a7c5751cae9b1173c606d2161a13f69","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:15.980Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:15.984Z","sessionId":"sess_4fb5239668d94b6f","requestId":"0ad563a99803fc02957fac5ce45ac5a8","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:15.986Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:18.797Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f4ee6678ba69d91f4356beb7f9315796","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:18.798Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:21.787Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9fbc00a3591ee2de3aff2362f5812e53","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:21.788Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:21.800Z","sessionId":"sess_4fb5239668d94b6f","requestId":"016c288540cab31432987fb48e64fd6b","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:21.801Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:21.803Z","sessionId":"sess_4fb5239668d94b6f","requestId":"ebfc327ce90000cdf88bb1999984b2e3","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:21.804Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:24.797Z","sessionId":"sess_4fb5239668d94b6f","requestId":"5be182d4ba3fb27d4411ec2719f48f78","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:24.797Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:28.009Z","sessionId":"sess_4fb5239668d94b6f","requestId":"2231f7789d5fe2bb21d292f0275a5ed2","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:28.009Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:28.017Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f4c37a582f4e1908894829290586cde6","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:28.018Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:28.024Z","sessionId":"sess_4fb5239668d94b6f","requestId":"b1e0e4d15894302ebb65f3bd307c187a","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:28.025Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:31.233Z","sessionId":"sess_4fb5239668d94b6f","requestId":"2c336e0fa38c28124c41ec4a2845feb1","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:31.234Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:34.865Z","sessionId":"sess_4fb5239668d94b6f","requestId":"636136bc5293671354a7a3c39336b751","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:34.866Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:34.874Z","sessionId":"sess_4fb5239668d94b6f","requestId":"2f72259e646789eb2b04ddc613c283a1","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:34.875Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:34.878Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a46b4037695356ce13492003d91f5682","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:34.879Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:37.265Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a4524ecc4e03e8249a65f62d799f6471","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:37.266Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:41.118Z","sessionId":"sess_4fb5239668d94b6f","requestId":"720177bf0f01e65b859ab061fe28ffac","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:41.119Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:41.128Z","sessionId":"sess_4fb5239668d94b6f","requestId":"21963734316ecbd6c8cb49e300d9471d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:41.128Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:41.134Z","sessionId":"sess_4fb5239668d94b6f","requestId":"63a460542140ef9ed09f42dc10e2c3e9","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:41.135Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:33:43.669Z","sessionId":"sess_4fb5239668d94b6f","requestId":"b829473f2aba21a0d50579bfe991f410","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:33:43.670Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:01.027Z","sessionId":"sess_4fb5239668d94b6f","requestId":"aff0d3a90dc33e4e2fa1e9f1e6c57012","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:01.029Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:28.061Z","sessionId":"sess_4fb5239668d94b6f","requestId":"e3428693698992bad77f17027da63a7f","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:28.062Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:28.071Z","sessionId":"sess_4fb5239668d94b6f","requestId":"af06245f52a5c13ae9268d4b00422326","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:28.072Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:43.002Z","sessionId":"sess_4fb5239668d94b6f","requestId":"bd80d9120e17e57591804fb8055cf146","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:43.003Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:46.639Z","sessionId":"sess_4fb5239668d94b6f","requestId":"97ac8a546bc675fd8bf9ec062ad5360d","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:46.639Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:46.648Z","sessionId":"sess_4fb5239668d94b6f","requestId":"8ccc6a0c1ed9601e1ebb3eccbdc2d8b5","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:46.649Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:46.652Z","sessionId":"sess_4fb5239668d94b6f","requestId":"0a38c37a591a9b059af2f6ac1a1f6783","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:46.653Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:49.786Z","sessionId":"sess_4fb5239668d94b6f","requestId":"2a08b50387d50035de9f85a8768dbde4","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:49.786Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:53.809Z","sessionId":"sess_4fb5239668d94b6f","requestId":"1e6ce12bbdd7e5d249b63d54f1642b58","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:53.810Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:53.820Z","sessionId":"sess_4fb5239668d94b6f","requestId":"3e9e02fac43383605e16a6a98b16c23a","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:53.821Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:53.825Z","sessionId":"sess_4fb5239668d94b6f","requestId":"f6ff714dc4cf4d5c0253e131b9bde189","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:53.826Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:56.431Z","sessionId":"sess_4fb5239668d94b6f","requestId":"85639ad61b4ce6add9513af708b8b85f","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:56.432Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:59.665Z","sessionId":"sess_4fb5239668d94b6f","requestId":"72ad6590ae184a8dde8a4c1cde2b6695","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:59.666Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:59.677Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c0142f3d56dd82da790d1bfe071b7660","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:59.678Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:34:59.685Z","sessionId":"sess_4fb5239668d94b6f","requestId":"10b4b84b214f164e7c118e561709cef1","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:34:59.686Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:02.062Z","sessionId":"sess_4fb5239668d94b6f","requestId":"425cba1ea7f03e26689689c306ff5ac3","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:02.062Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:05.554Z","sessionId":"sess_4fb5239668d94b6f","requestId":"d3f3cdae4feddb3aff6d984728e4cd30","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:05.555Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:05.567Z","sessionId":"sess_4fb5239668d94b6f","requestId":"9fcb2801e8c6850b83d41f1de2b81254","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:05.568Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:05.570Z","sessionId":"sess_4fb5239668d94b6f","requestId":"5e714a715929300a2216a5a21e594633","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:05.572Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:08.038Z","sessionId":"sess_4fb5239668d94b6f","requestId":"4626578eb2de678abd9a678b437f3317","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:08.039Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:11.680Z","sessionId":"sess_4fb5239668d94b6f","requestId":"7fa61b6b380fdf8e495c57a4d659ee3b","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:11.681Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:11.692Z","sessionId":"sess_4fb5239668d94b6f","requestId":"cd52758f7ff6a89adc4b75513c57a0eb","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:11.692Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:11.698Z","sessionId":"sess_4fb5239668d94b6f","requestId":"4646a61d24995fedbae51ea55f788f90","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:11.699Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:19.705Z","sessionId":"sess_4fb5239668d94b6f","requestId":"a66463b3ed073ee6a09fad6a4ca84c2b","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:19.706Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:19.721Z","sessionId":"sess_4fb5239668d94b6f","requestId":"188c88ca62e50b076c1e46311ad9510a","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:19.721Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T06:35:19.724Z","sessionId":"sess_4fb5239668d94b6f","requestId":"c9d05f360b7ec691edc3d17758b66b00","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T06:35:19.725Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T07:32:20.835Z] GET /api/llm-proxy/v1/models
+[2026-02-18T07:32:20.892Z] POST /api/llm-proxy/v1/chat/completions

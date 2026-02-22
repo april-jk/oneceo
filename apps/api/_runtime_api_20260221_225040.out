@@ -1,0 +1,169 @@
+
+> api@1.0.0 dev D:\project\oneceo.ai\oneceo\apps\api
+> tsx watch src/index.ts
+
+[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+[WebSocket] 客户端连接: client_1771685443497_cmqja9gv9
+[WebSocket] 发送消息 to client_1771685443497_cmqja9gv9: agent_message
+[2026-02-21T14:50:43.500Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:50:43.586Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-21T14:50:49.503Z] GET /api/task-creation/sessions
+[2026-02-21T14:50:55.508Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:01.505Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:07.500Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:51:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:51:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:51:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:51:09.014Z] GET /api/sandbox/environment
+[2026-02-21T14:51:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:51:09.015Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:51:09.341Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:51:13.497Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:19.498Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:25.497Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:31.505Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:37.503Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:43.496Z] GET /api/task-creation/sessions
+[WebSocket] 客户端断开: client_1771685443497_cmqja9gv9
+[WebSocket] 客户端连接: client_1771685509635_y935myz2u
+[WebSocket] 发送消息 to client_1771685509635_y935myz2u: agent_message
+[2026-02-21T14:51:49.637Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:49.710Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:51:49.776Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:51:53.789Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[WebSocket] 客户端断开: client_1771685509635_y935myz2u
+[2026-02-21T14:51:54.905Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[WebSocket] 客户端连接: client_1771685514906_z7921g25q
+[WebSocket] 发送消息 to client_1771685514906_z7921g25q: agent_message
+[2026-02-21T14:51:54.907Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:51:54.937Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:51:55.639Z] GET /api/task-creation/sessions
+[2026-02-21T14:51:58.910Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:01.631Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:02.907Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:06.912Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:07.628Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:52:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:52:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:52:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:52:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:52:09.016Z] GET /api/sandbox/environment
+[2026-02-21T14:52:09.016Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:52:09.390Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:10.909Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:13.632Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:14.908Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:18.919Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:19.637Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:22.920Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:25.627Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:26.920Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:30.919Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:31.634Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:34.920Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:37.631Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:38.921Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+23:15:11 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:22:53 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:47:57 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:48:21 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:40:08 [tsx] change in ./src\agents\task-creation\types\intent.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+✅ 数据库连接成功
+[2026-02-22T01:40:12.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:40:18.380Z] GET /api/task-creation/sessions
+09:40:19 [tsx] change in ./src\agents\task-creation\file-memory-store.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:40:53 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:11 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:36 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:45 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:56 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:43:55 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:44:06 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:44:30 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:44:41 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:02 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:30 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:42 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:47:44 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+✅ 数据库连接成功
+[2026-02-22T01:47:48.384Z] GET /api/task-creation/sessions
+[2026-02-22T01:47:54.384Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:00.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:06.378Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:07.672Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:48:07.675Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:48:07.676Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:48:07.676Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:48:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:48:07.678Z] GET /api/sandbox/environment
+[2026-02-22T01:48:07.679Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:48:12.379Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:18.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:24.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:30.382Z] GET /api/task-creation/sessions
+[WebSocket] 客户端连接: client_1771724910478_e7hhwrx77
+[WebSocket] 发送消息 to client_1771724910478_e7hhwrx77: agent_message
+[2026-02-22T01:48:30.498Z] GET /api/task-creation/sessions/28b169e9-187d-4ffa-b00d-cd847cc3f406/messages
+[2026-02-22T01:48:36.385Z] GET /api/task-creation/sessions
+[2026-02-22T01:48:42.383Z] GET /api/task-creation/sessions
+09:48:45 [tsx] change in ./src\agents\task-creation\websocket-service.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:49:38 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+10:12:47 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check

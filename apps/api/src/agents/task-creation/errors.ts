@@ -10,3 +10,14 @@ export function isAwaitingUserInputError(error: unknown): boolean {
   return Boolean((error as any)?.__awaitingUserInput);
 }
 
+export class RecoverableAgentError extends Error {
+  constructor(message: string = 'RECOVERABLE_AGENT_ERROR') {
+    super(message);
+    this.name = 'RecoverableAgentError';
+    (this as any).__recoverableAgentError = true;
+  }
+}
+
+export function isRecoverableAgentError(error: unknown): boolean {
+  return Boolean((error as any)?.__recoverableAgentError);
+}

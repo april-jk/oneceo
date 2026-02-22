@@ -25,7 +25,7 @@ const auditService = new AuditService();
 const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
 const dashboardService = new DashboardService(kvmOrchestratorConnector, auditService);
 const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
-const conversationService = new ConversationManagementService(oneceoApiConnector);
+const conversationService = new ConversationManagementService(oneceoApiConnector, kvmOrchestratorConnector, auditService);
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
 const sandboxManagementService = new SandboxManagementService(oneceoApiConnector);
 

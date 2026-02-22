@@ -16,6 +16,19 @@ function toBool(value: string | undefined, fallback: boolean) {
   return fallback;
 }
 
+function resolveStartNewVmSwitch(): boolean | null {
+  const raw = (process.env.OSAC_START_NEW_VM || '').trim();
+  if (!raw) return null;
+  return toBool(raw, false);
+}
+
+function shouldSkipPersistentRecover(): boolean {
+  const startNewVm = resolveStartNewVmSwitch();
+  if (startNewVm === true) return false;
+  if (startNewVm === false) return true;
+  return toBool(process.env.OSAC_USE_FIXED_SANDBOX_SESSION, false);
+}
+
 function hasString(value: unknown) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -79,6 +92,11 @@ export class OsacPersistentRecoveryService {
   }
 
   private startPeriodicRecovery() {
+    if (shouldSkipPersistentRecover()) {
+      console.log('[OSAC_PERSISTENT_RECOVER_SKIP]', 'fixed_session_mode');
+      return;
+    }
+
     const enabled = toBool(process.env.OSAC_PERSISTENT_RECOVER_ON_STARTUP, true);
     if (!enabled) {
       return;
@@ -192,6 +210,11 @@ export class OsacPersistentRecoveryService {
       return;
     }
     this.started = true;
+
+    if (shouldSkipPersistentRecover()) {
+      console.log('[OSAC_PERSISTENT_RECOVER_SKIP]', 'fixed_session_mode');
+      return;
+    }
 
     const enabled = toBool(process.env.OSAC_PERSISTENT_RECOVER_ON_STARTUP, true);
     if (!enabled) {

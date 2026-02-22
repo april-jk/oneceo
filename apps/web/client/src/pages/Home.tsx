@@ -50,7 +50,7 @@ export default function Home() {
     messages,
     currentQuestion,
     runtime,
-    sendUserInput,
+    sendChatInput,
     answerQuestion,
   } = useTaskCreationAgent({
     onPlanGenerated: (plan) => {
@@ -71,8 +71,17 @@ export default function Home() {
 
   // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
   useEffect(() => {
-    const input = new URLSearchParams(window.location.search).get("q")?.trim();
-    const sessionInQuery = new URLSearchParams(window.location.search).get("sessionId")?.trim();
+    const params = new URLSearchParams(window.location.search);
+    const input = params.get("q")?.trim();
+    const sessionInQuery = params.get("sessionId")?.trim();
+    const createNewToken = params.get("new")?.trim();
+
+    if (createNewToken) {
+      pendingInputRef.current = null;
+      setMessage("");
+      setMode("input");
+      return;
+    }
 
     if (sessionInQuery) {
       setMode('chat');
@@ -81,7 +90,8 @@ export default function Home() {
     if (input) {
       pendingInputRef.current = input;
       setMode('chat');
-      window.history.replaceState(null, "", "/new-task");
+      const nextUrl = sessionInQuery ? `/new-task?sessionId=${encodeURIComponent(sessionInQuery)}` : "/new-task";
+      window.history.replaceState(null, "", nextUrl);
     }
   }, [location]);
 
@@ -91,8 +101,8 @@ export default function Home() {
     }
     const input = pendingInputRef.current;
     pendingInputRef.current = null;
-    sendUserInput(input);
-  }, [isConnected, sendUserInput]);
+    sendChatInput(input);
+  }, [isConnected, sendChatInput]);
 
   const handleSend = () => {
     if (message.trim()) {
@@ -100,7 +110,7 @@ export default function Home() {
       // 切换到对话模式
       setMode('chat');
       if (isConnected) {
-        sendUserInput(input);
+        sendChatInput(input);
       } else {
         pendingInputRef.current = input;
       }
@@ -111,7 +121,7 @@ export default function Home() {
   const handleQuickAction = (action: string) => {
     setMode('chat');
     if (isConnected) {
-      sendUserInput(action);
+      sendChatInput(action);
     } else {
       pendingInputRef.current = action;
     }
@@ -608,7 +618,14 @@ function NoticeMessage({
 type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; markdown: string }
-  | { kind: "capsule"; label: string; tone: "system" | "intent" | "planning" | "execution" | "error" };
+  | { kind: "capsule"; label: string; tone: "system" | "intent" | "planning" | "execution" | "error" }
+  | {
+      kind: "opencode_tool";
+      eventType: string;
+      event: Record<string, unknown>;
+      content?: string;
+      metadata?: Record<string, unknown>;
+    };
 
 type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
 
@@ -654,6 +671,53 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         label: message.content || "状态更新",
         tone: message.tone || getCapsuleTone(message.content || ""),
       });
+      continue;
+    }
+
+    if (message.type === "opencode_event") {
+      const metadata = toRecord(message.metadata);
+      const eventInfo = getOpencodeEventInfo(metadata);
+      const content = (message.content || "").trim();
+      if (eventInfo.eventType === "message.final" || eventInfo.partType === "text") {
+        if (content) {
+          items.push({
+            kind: "agent",
+            markdown: `**OpenCode**\n\n${content}`,
+          });
+        }
+      } else if (eventInfo.partType === "tool") {
+        const toolName = eventInfo.toolName.toLowerCase();
+        if (toolName && toolName !== "todoread") {
+          items.push({
+            kind: "opencode_tool",
+            eventType: eventInfo.eventType,
+            event: eventInfo.event,
+            content: message.content || "",
+            metadata,
+          });
+        }
+      } else if (
+        eventInfo.eventType.startsWith("file.") ||
+        eventInfo.eventType.startsWith("pty.") ||
+        eventInfo.eventType === "command.executed" ||
+        eventInfo.eventType === "session.diff"
+      ) {
+        items.push({
+          kind: "opencode_tool",
+          eventType: eventInfo.eventType,
+          event: eventInfo.event,
+          content: message.content || "",
+          metadata,
+        });
+      } else if (content.startsWith("[Tool]")) {
+        items.push({
+          kind: "opencode_tool",
+          eventType: eventInfo.eventType,
+          event: eventInfo.event,
+          content: message.content || "",
+          metadata,
+        });
+      }
       continue;
     }
 
@@ -727,6 +791,10 @@ function MessageBubble({ item }: { item: ChatItem }) {
     );
   }
 
+  if (item.kind === "opencode_tool") {
+    return <OpencodeToolCard item={item} />;
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -783,6 +851,263 @@ function getCapsuleTone(label: string): CapsuleTone {
   if (lower.includes("规划") || lower.includes("计划")) return "planning";
   if (lower.includes("执行")) return "execution";
   return "system";
+}
+
+function formatOpencodeEventLabel(eventType: string, stream: boolean): string {
+  if (stream) return "OpenCode · 实时输出";
+  if (!eventType) return "OpenCode";
+  if (eventType === "message.final") return "OpenCode · 最终产出";
+  if (eventType === "session.idle") return "OpenCode · 执行完成";
+  if (eventType === "session.status") return "OpenCode · 状态";
+  return `OpenCode · ${eventType}`;
+}
+
+function parseStructString(value: string): Record<string, unknown> {
+  const text = value.trim();
+  if (!text.startsWith("@{") || !text.endsWith("}")) {
+    return {};
+  }
+  const body = text.slice(2, -1);
+  const result: Record<string, unknown> = {};
+  for (const rawPart of body.split(";")) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const eqIndex = part.indexOf("=");
+    if (eqIndex <= 0) {
+      result[part] = true;
+      continue;
+    }
+    const key = part.slice(0, eqIndex).trim();
+    const val = part.slice(eqIndex + 1).trim();
+    if (!key) continue;
+    result[key] = val;
+  }
+  return result;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object") return value as Record<string, unknown>;
+  if (typeof value === "string") {
+    const parsed = parseStructString(value);
+    if (Object.keys(parsed).length > 0) return parsed;
+  }
+  return {};
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+type OpencodeEventInfo = {
+  eventType: string;
+  event: Record<string, unknown>;
+  properties: Record<string, unknown>;
+  part: Record<string, unknown>;
+  partType: string;
+  toolName: string;
+};
+
+function getOpencodeEventInfo(metadata: Record<string, unknown>): OpencodeEventInfo {
+  const rawPayload = toRecord(metadata.rawPayload);
+  const eventFromMeta = toRecord(metadata.event);
+  const eventFromPayload = toRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const eventType = asText(metadata.eventType) || asText(event.type);
+  const properties = toRecord(event.properties);
+  const part = toRecord(properties.part);
+  const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
+  const toolName = asText(part.tool) || asText(part.name) || asText(properties.tool);
+  return {
+    eventType,
+    event,
+    properties,
+    part,
+    partType,
+    toolName,
+  };
+}
+
+function stringifySafe(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value ?? "");
+  }
+}
+
+function getFilename(path: string | undefined) {
+  if (!path) return "";
+  const parts = path.split(/[/\\]+/);
+  return parts[parts.length - 1] || path;
+}
+
+function getDirectory(path: string | undefined) {
+  if (!path) return "";
+  const normalized = path.replace(/\\+/g, "/");
+  const idx = normalized.lastIndexOf("/");
+  if (idx <= 0) return normalized;
+  return normalized.slice(0, idx + 1);
+}
+
+function getToolInfo(tool: string, input: Record<string, unknown>) {
+  const lower = tool.toLowerCase();
+  switch (lower) {
+    case "read":
+      return { title: "读取", subtitle: getFilename(asText(input.filePath)) };
+    case "list":
+      return { title: "列出", subtitle: getDirectory(asText(input.path) || "/") };
+    case "glob":
+      return { title: "匹配", subtitle: asText(input.pattern) };
+    case "grep":
+      return { title: "搜索", subtitle: asText(input.pattern) };
+    case "webfetch":
+      return { title: "抓取", subtitle: asText(input.url) };
+    case "task":
+      return { title: "子任务", subtitle: asText(input.description) };
+    case "bash":
+      return { title: "Shell", subtitle: asText(input.description) || asText(input.command) };
+    case "edit":
+      return { title: "编辑", subtitle: getFilename(asText(input.filePath)) };
+    case "write":
+      return { title: "写入", subtitle: getFilename(asText(input.filePath)) };
+    case "apply_patch":
+      return {
+        title: "补丁",
+        subtitle: Array.isArray(input.files) ? `${input.files.length} 文件` : "",
+      };
+    case "todowrite":
+      return { title: "待办" };
+    case "question":
+      return { title: "提问" };
+    default:
+      return { title: tool || "Tool" };
+  }
+}
+
+function OpencodeToolCard({ item }: { item: Extract<ChatItem, { kind: "opencode_tool" }> }) {
+  const metadata = item.metadata || {};
+  const { eventType, part, toolName, properties } = getOpencodeEventInfo(metadata);
+  const toolState = toRecord(part.state);
+  const rawInput = toolState.input ?? part.input;
+  const input =
+    typeof rawInput === "string" && rawInput.trim()
+      ? { command: rawInput }
+      : toRecord(rawInput);
+  const metaInfo = toRecord(toolState.metadata);
+  let output = asText(toolState.output) || asText(properties.output) || asText(item.content);
+  const error = asText(toolState.error) || asText(properties.error);
+  const status = asText(toolState.status) || asText(properties.status) || (error ? "error" : "unknown");
+
+  let info = getToolInfo(toolName || "tool", input);
+  if (!toolName) {
+    if (eventType.startsWith("file.")) {
+      const filePath = asText(properties.file) || asText(properties.path);
+      info = {
+        title: eventType === "file.watcher.updated" ? "文件监听" : "文件更新",
+        subtitle: getFilename(filePath),
+      };
+    } else if (eventType === "command.executed") {
+      info = {
+        title: "命令执行",
+        subtitle: asText(properties.command),
+      };
+    } else if (eventType.startsWith("pty.")) {
+      info = {
+        title: "终端",
+        subtitle: eventType.replace("pty.", ""),
+      };
+    } else if (eventType === "session.diff") {
+      info = {
+        title: "Diff",
+        subtitle: "",
+      };
+    }
+  }
+
+  if (!output && eventType.startsWith("file.")) {
+    const filePath = asText(properties.file) || asText(properties.path);
+    const action = asText(properties.event);
+    output = [action, filePath].filter(Boolean).join(" ");
+  }
+  if (!output && eventType === "session.diff") {
+    output = stringifySafe(properties.diff);
+  }
+  if (!output && eventType.startsWith("pty.")) {
+    output = asText(properties.data) || asText(properties.text);
+  }
+  if (!output && eventType === "command.executed") {
+    output = asText(properties.stdout) || asText(properties.output);
+  }
+
+  const showDetails = Boolean(
+    output ||
+      error ||
+      status === "running" ||
+      Object.keys(input).length > 0 ||
+      Object.keys(metaInfo).length > 0
+  );
+  const summaryText = info.subtitle || "";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+    >
+      <details className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-900" open={status === "running"}>
+        <summary className="flex cursor-pointer items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+              {info.title}
+            </div>
+            {summaryText ? <div className="text-xs text-amber-700/80">{summaryText}</div> : null}
+          </div>
+          <div className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+            {status}
+          </div>
+        </summary>
+        {showDetails ? (
+          <div className="mt-3">
+            {error ? (
+              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {error}
+              </div>
+            ) : null}
+            {Object.keys(input).length > 0 ? (
+              <div className="mt-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  输入
+                </div>
+                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-slate-900/95 px-3 py-2 text-xs text-slate-100">
+                  {stringifySafe(input)}
+                </pre>
+              </div>
+            ) : null}
+            {Object.keys(metaInfo).length > 0 ? (
+              <div className="mt-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  元数据
+                </div>
+                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-slate-900/95 px-3 py-2 text-xs text-slate-100">
+                  {stringifySafe(metaInfo)}
+                </pre>
+              </div>
+            ) : null}
+            {output ? (
+              <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950/90 px-3 py-2 text-xs text-slate-100">
+                {output}
+              </pre>
+            ) : null}
+            {!output && !error && eventType ? (
+              <div className="mt-2 text-xs text-slate-600">执行中...</div>
+            ) : null}
+          </div>
+        ) : null}
+      </details>
+    </motion.div>
+  );
 }
 
 /**

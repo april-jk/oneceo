@@ -97,6 +97,29 @@ function formatPercent(value: number | null | undefined) {
   return `${value.toFixed(1)}%`;
 }
 
+function toJsonText(value: unknown) {
+  if (value === undefined) return '-';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function summarizeText(value: string | undefined, max = 260) {
+  if (!value) return '';
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max)}...`;
+}
+
+function traceLevelClass(level: string) {
+  if (level === 'error') return 'trace-level error';
+  if (level === 'warn') return 'trace-level warn';
+  return 'trace-level info';
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
 
@@ -109,6 +132,7 @@ export default function App() {
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
+  const [showOpencodePayload, setShowOpencodePayload] = useState(false);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -134,14 +158,11 @@ export default function App() {
     setHosts(nextHosts);
 
     if (hostResult.status === 'fulfilled') {
-      const now = Date.now();
+      const sampledAt = Date.now();
       setHostTrendMap((previous) => {
         const updated: Record<string, HostTrendPoint[]> = {};
         for (const host of nextHosts) {
           const previousSeries = previous[host.hostId] || [];
-          const sampledAt = host.lastHeartbeat && Number.isFinite(Date.parse(host.lastHeartbeat))
-            ? Date.parse(host.lastHeartbeat)
-            : now;
           const nextPoint: HostTrendPoint = {
             timestamp: sampledAt,
             timeLabel: new Date(sampledAt).toLocaleTimeString('zh-CN', { hour12: false }),
@@ -151,12 +172,7 @@ export default function App() {
           };
 
           const lastPoint = previousSeries[previousSeries.length - 1];
-          const shouldAppend =
-            !lastPoint ||
-            Math.abs(lastPoint.timestamp - nextPoint.timestamp) > 1000 ||
-            lastPoint.cpu !== nextPoint.cpu ||
-            lastPoint.memory !== nextPoint.memory ||
-            lastPoint.storage !== nextPoint.storage;
+          const shouldAppend = !lastPoint || Math.abs(lastPoint.timestamp - nextPoint.timestamp) > 1000;
 
           const series = shouldAppend ? [...previousSeries, nextPoint] : previousSeries;
           updated[host.hostId] = series.slice(-30);
@@ -244,6 +260,22 @@ export default function App() {
   }, [activeSection, loadSection]);
 
   useEffect(() => {
+    if (activeSection !== 'kvm') {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadKvmSection().catch((requestError) => {
+        setError(requestError instanceof Error ? requestError.message : 'KVM 自动刷新失败');
+      });
+    }, 15000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeSection, loadKvmSection]);
+
+  useEffect(() => {
     if (!selectedSessionId || activeSection !== 'conversation') {
       return;
     }
@@ -251,9 +283,13 @@ export default function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const detail = await api.getConversationSessionDetail(selectedSessionId);
+        const [detail, sessions] = await Promise.all([
+          api.getConversationSessionDetail(selectedSessionId),
+          api.listConversationSessions(30),
+        ]);
         if (!cancelled) {
           setConversationDetail(detail);
+          setConversationSessions(sessions.sessions);
         }
       } catch (requestError) {
         if (!cancelled) {
@@ -262,10 +298,14 @@ export default function App() {
       }
     };
 
-    run();
+    void run();
+    const timer = window.setInterval(() => {
+      void run();
+    }, 4000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [activeSection, selectedSessionId]);
 
@@ -359,9 +399,33 @@ export default function App() {
                       <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
                       <Tooltip formatter={(value) => [`${value}%`, '']} />
                       <Legend />
-                      <Line type="monotone" dataKey="cpu" name="CPU" stroke="#0f766e" strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="memory" name="内存" stroke="#0284c7" strokeWidth={2} dot={false} />
-                      <Line type="monotone" dataKey="storage" name="存储" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                      <Line
+                        type="monotone"
+                        dataKey="cpu"
+                        name="CPU"
+                        stroke="#0f766e"
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="memory"
+                        name="内存"
+                        stroke="#0284c7"
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="storage"
+                        name="存储"
+                        stroke="#f59e0b"
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        activeDot={{ r: 4 }}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -541,7 +605,7 @@ export default function App() {
             <p className="empty">请选择左侧会话查看详情。</p>
           ) : (
             <div className="conversation-detail">
-              <div className="detail-grid">
+              <div className="detail-grid detail-grid-wide">
                 <div>
                   <p className="kpi-title">会话 ID</p>
                   <p className="mono">{conversationDetail.session.id}</p>
@@ -554,10 +618,57 @@ export default function App() {
                   <p className="kpi-title">阶段</p>
                   <p>{conversationDetail.session.stage || '-'}</p>
                 </div>
+                <div>
+                  <p className="kpi-title">编排 Session</p>
+                  <p className="mono">{conversationDetail.runtime?.orchestratorSessionId || '-'}</p>
+                </div>
+                <div>
+                  <p className="kpi-title">OpenCode Session</p>
+                  <p className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</p>
+                </div>
+                <div>
+                  <p className="kpi-title">VM 名称</p>
+                  <p className="mono">{conversationDetail.runtime?.vmName || '-'}</p>
+                </div>
+                <div>
+                  <p className="kpi-title">绑定更新时间</p>
+                  <p>{formatDateTime(conversationDetail.runtime?.bindingUpdatedAt)}</p>
+                </div>
+                <div>
+                  <p className="kpi-title">待补充问题</p>
+                  <p>{conversationDetail.runtime?.pendingQuestion || '-'}</p>
+                </div>
+                <div>
+                  <p className="kpi-title">挂起原因</p>
+                  <p>{conversationDetail.runtime?.pendingResume?.reason || '-'}</p>
+                </div>
+              </div>
+
+              <div className="panel-subtitle">
+                全链路时间线 ({conversationDetail.trace?.timeline.length ?? 0})
+              </div>
+              <div className="trace-list">
+                {(conversationDetail.trace?.timeline || []).length === 0 ? (
+                  <p className="empty">无链路事件</p>
+                ) : (
+                  (conversationDetail.trace?.timeline || []).map((event) => (
+                    <article key={event.id} className="trace-item">
+                      <p className="trace-head">
+                        <span className={traceLevelClass(event.level)}>{event.level}</span>
+                        <strong>{event.title}</strong>
+                        <span>{formatDateTime(event.timestamp)}</span>
+                      </p>
+                      <p className="trace-meta mono">
+                        {event.source} / {event.category}
+                      </p>
+                      {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
+                    </article>
+                  ))
+                )}
               </div>
 
               <div className="panel-subtitle">对话消息 ({conversationDetail.messages.length})</div>
-              <div className="message-list">
+              <div className="message-list message-list-large">
                 {conversationDetail.messages.length === 0 ? (
                   <p className="empty">无消息</p>
                 ) : (
@@ -567,8 +678,125 @@ export default function App() {
                         <strong>{message.role}</strong> · {formatDateTime(message.createdAt)}
                       </p>
                       <p className="message-content">{message.content}</p>
+                      {message.metadata !== undefined ? (
+                        <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre>
+                      ) : null}
                     </article>
                   ))
+                )}
+              </div>
+
+              <div className="panel-subtitle">LLM 调用轨迹 ({conversationDetail.trace?.llm.length ?? 0})</div>
+              <div className="llm-trace-list">
+                {(conversationDetail.trace?.llm || []).length === 0 ? (
+                  <p className="empty">无 LLM 调用轨迹</p>
+                ) : (
+                  (conversationDetail.trace?.llm || []).map((item) => (
+                    <article key={item.id} className="sub-panel">
+                      <div className="trace-head">
+                        <strong>{item.stage}</strong>
+                        <span className="mono">{item.source}</span>
+                        <span>{item.inferred ? '推断还原' : '真实命令'}</span>
+                      </div>
+                      <p className="trace-meta">时间: {formatDateTime(item.createdAt)}</p>
+                      <p className="kpi-title">请求内容</p>
+                      <pre className="json-block">{toJsonText(item.request)}</pre>
+                      <p className="kpi-title">返回内容</p>
+                      <pre className="json-block">{toJsonText(item.response)}</pre>
+                    </article>
+                  ))
+                )}
+              </div>
+
+              <div className="panel-subtitle">KVM / Sandbox 调用状态</div>
+              <div className="trace-columns">
+                <article className="sub-panel">
+                  <h3>KVM 摘要</h3>
+                  <pre className="json-block">
+                    {toJsonText({
+                      orchestratorSessionId: conversationDetail.trace?.kvm.orchestratorSessionId,
+                      vmName: conversationDetail.trace?.kvm.vmName,
+                      quota: conversationDetail.trace?.kvm.quota,
+                    })}
+                  </pre>
+                  {conversationDetail.trace?.kvm.errors?.length ? (
+                    <pre className="json-block">{toJsonText(conversationDetail.trace.kvm.errors)}</pre>
+                  ) : null}
+                </article>
+
+                <article className="sub-panel">
+                  <h3>KVM 原始状态</h3>
+                  <pre className="json-block">
+                    {toJsonText({
+                      session: conversationDetail.trace?.kvm.session,
+                      sessionVm: conversationDetail.trace?.kvm.sessionVm,
+                      sandbox: conversationDetail.trace?.kvm.sandbox,
+                      sandboxIp: conversationDetail.trace?.kvm.sandboxIp,
+                      sandboxPorts: conversationDetail.trace?.kvm.sandboxPorts,
+                      vmDetail: conversationDetail.trace?.kvm.vmDetail,
+                      vmMetrics: conversationDetail.trace?.kvm.vmMetrics,
+                    })}
+                  </pre>
+                </article>
+
+                <article className="sub-panel">
+                  <h3>Sandbox 环境记录</h3>
+                  <pre className="json-block">
+                    {toJsonText({
+                      primaryEnvironment: conversationDetail.trace?.sandbox.primaryEnvironment,
+                      relatedEnvironments: conversationDetail.trace?.sandbox.relatedEnvironments,
+                    })}
+                  </pre>
+                </article>
+              </div>
+
+              <div className="panel-subtitle panel-subtitle-row">
+                <span>OSAC / OpenCode 消息 ({conversationDetail.trace?.osac.messages.length ?? 0})</span>
+                <div className="panel-subtitle-actions">
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => setShowOpencodePayload((prev) => !prev)}
+                  >
+                    {showOpencodePayload ? '隐藏原始 payload' : '显示原始 payload'}
+                  </button>
+                </div>
+              </div>
+              <div className="trace-list">
+                {(conversationDetail.trace?.osac.messages || []).length === 0 ? (
+                  <p className="empty">无 OSAC 消息</p>
+                ) : (
+                  (conversationDetail.trace?.osac.messages || []).map((message, index) => {
+                    const payload = (message.payload || {}) as Record<string, unknown>;
+                    const summary = summarizeText(
+                      [
+                        typeof payload.eventType === 'string' ? payload.eventType : '',
+                        typeof payload.message === 'string' ? payload.message : '',
+                        typeof payload.status === 'string' ? payload.status : '',
+                        typeof payload.output === 'string' ? payload.output : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' | '),
+                      320
+                    );
+                    const payloadTimestamp =
+                      typeof payload.timestamp === 'string'
+                        ? payload.timestamp
+                        : typeof payload.time === 'string'
+                          ? payload.time
+                          : undefined;
+                    return (
+                      <article key={`${message.type}-${index}`} className="trace-item">
+                        <p className="trace-head">
+                          <span className="trace-level info">osac</span>
+                          <strong>{message.type}</strong>
+                          <span>{formatDateTime(payloadTimestamp)}</span>
+                        </p>
+                        {summary ? <p className="message-content">{summary}</p> : null}
+                        {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
+                      </article>
+                    );
+                  })
                 )}
               </div>
             </div>

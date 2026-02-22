@@ -87,22 +87,29 @@ export class IntentRecognitionAgent extends BaseAgent {
 
 请分析用户的意图，并以 JSON 格式返回识别结果。`;
 
-    const result = await this.execute(prompt);
-
-    if (!result.success) {
-      throw new Error(result.error || '意图识别失败');
-    }
-
     try {
+      const result = await this.execute(prompt);
+
+      if (!result.success) {
+        throw new Error(result.error || '意图识别失败');
+      }
+
       const intentResult = await this.parseJsonResponse<IntentRecognitionResult>(
         result.output || '',
         '意图识别结果'
       );
 
+      const clarificationList = Array.isArray(intentResult.clarification_questions)
+        ? intentResult.clarification_questions.filter((item) => typeof item === 'string' && item.trim())
+        : [];
+      const clarificationQuestion =
+        intentResult.clarification_question ||
+        (clarificationList.length > 0 ? clarificationList.map((item) => `- ${item.trim()}`).join('\n') : '');
+
       // 如果需要澄清，调用用户回调
-      if (intentResult.clarification_needed && intentResult.clarification_question && this.userCallback) {
-        const userResponse = await this.userCallback(intentResult.clarification_question);
-        
+      if (intentResult.clarification_needed && clarificationQuestion && this.userCallback) {
+        const userResponse = await this.userCallback(clarificationQuestion);
+
         // 使用用户的回复重新识别意图
         return this.recognizeIntent(`${userInput}\n\n用户补充信息：${userResponse}`);
       }
@@ -112,8 +119,41 @@ export class IntentRecognitionAgent extends BaseAgent {
       if (isAwaitingUserInputError(error)) {
         throw error;
       }
-      throw new Error(`解析意图识别结果失败: ${error.message}`);
+      console.warn('[IntentRecognitionAgent] 识别失败，使用兜底意图:', error?.message || error);
+      return this.buildFallbackIntent(userInput);
     }
+  }
+
+  private buildFallbackIntent(userInput: string): IntentRecognitionResult {
+    const text = userInput.toLowerCase();
+    const contains = (keywords: string[]) => keywords.some((kw) => text.includes(kw));
+
+    let intentType: IntentType = IntentType.OTHER;
+    if (contains(['调研', 'research', '市场'])) {
+      intentType = IntentType.RESEARCH;
+    } else if (contains(['分析', 'analysis', '数据'])) {
+      intentType = IntentType.DATA_ANALYSIS;
+    } else if (contains(['seo', '优化'])) {
+      intentType = IntentType.SEO_OPTIMIZATION;
+    } else if (contains(['营销', '策略', 'plan', '规划'])) {
+      intentType = IntentType.STRATEGY_PLANNING;
+    } else if (contains(['开发', '代码', '软件', 'program'])) {
+      intentType = IntentType.SOFTWARE_DEVELOPMENT;
+    } else if (contains(['设计', 'ui', 'ux'])) {
+      intentType = IntentType.DESIGN_CREATION;
+    }
+
+    return {
+      intent_type: intentType,
+      confidence: 0.6,
+      key_info: {
+        target: userInput.slice(0, 80),
+        scope: '待补充',
+        constraints: '待确认',
+      },
+      clarification_needed: false,
+      next_agent: 'planning_agent',
+    } as IntentRecognitionResult;
   }
 
   /**

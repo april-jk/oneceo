@@ -75,6 +75,7 @@ async function sendError(sessionId: string, requestId: string, status: number, m
       sessionId,
       {
         type: 'LLM_PROXY_ERROR',
+        requestId,
         payload: {
           requestId,
           status,
@@ -112,6 +113,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
   try {
     await sendBridgeMessage(sessionId, {
       type: 'LLM_PROXY_ACK',
+      requestId,
       payload: {
         requestId,
         sessionId,
@@ -204,6 +206,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
         const chunk = Buffer.from(value).toString('utf8');
         await sendBridgeMessage(sessionId, {
           type: 'LLM_PROXY_CHUNK',
+          requestId,
           payload: {
             requestId,
             chunk,
@@ -213,6 +216,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
       }
       await sendBridgeMessage(sessionId, {
         type: 'LLM_PROXY_END',
+        requestId,
         payload: {
           requestId,
           status: response.status,
@@ -226,6 +230,7 @@ async function forwardRequest(sessionId: string, payload: LlmProxyRequestPayload
     const bodyText = buffer.toString('utf8');
     await sendBridgeMessage(sessionId, {
       type: 'LLM_PROXY_RESPONSE',
+      requestId,
       payload: {
         requestId,
         status: response.status,

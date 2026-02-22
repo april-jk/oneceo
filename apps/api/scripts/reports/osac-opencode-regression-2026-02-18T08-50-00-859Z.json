@@ -1,0 +1,23 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T08:49:00.542Z",
+    "finishedAt": "2026-02-18T08:50:00.859Z",
+    "sessionId": "sess_f6dfee3687274c74",
+    "provisioned": false,
+    "rounds": 3,
+    "roundsExecuted": 0,
+    "passed": 0,
+    "failed": 0,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 480000,
+    "aborted": true,
+    "abortReason": "ws-ready timeout (60000ms)",
+    "fatalError": "ws-ready timeout (60000ms)",
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 60,
+    "execTimeoutSeconds": 90,
+    "roundExecTimeoutMs": 140000
+  },
+  "rounds": []
+}

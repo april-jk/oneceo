@@ -1,0 +1,1415 @@
+
+> api@1.0.0 dev D:\project\oneceo.ai\oneceo\apps\api
+> tsx watch src/index.ts
+
+[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+[2026-02-21T14:52:41.197Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[WebSocket] 客户端连接: client_1771685561439_avyljt1fb
+[WebSocket] 发送消息 to client_1771685561439_avyljt1fb: agent_message
+[2026-02-21T14:52:41.463Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:52:41.502Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:45.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:46.939Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:49.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:52.936Z] GET /api/task-creation/sessions
+[2026-02-21T14:52:53.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:57.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:52:58.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:01.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:04.940Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:05.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:53:09.016Z] GET /api/sandbox/environment
+[2026-02-21T14:53:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:53:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:53:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:53:09.020Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:53:09.020Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:53:09.452Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:09.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:10.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:13.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:16.936Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:17.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:21.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:22.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:28.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:29.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:34.940Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:37.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:40.937Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:41.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:45.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:46.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:49.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:52.936Z] GET /api/task-creation/sessions
+[2026-02-21T14:53:53.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:57.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:53:58.950Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:01.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:04.940Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:05.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:54:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:54:09.006Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:54:09.006Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:54:09.007Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:54:09.007Z] GET /api/sandbox/environment
+[2026-02-21T14:54:09.008Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:54:09.363Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:09.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:10.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:13.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:16.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:17.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:21.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:22.948Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:25.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:28.948Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:29.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:34.942Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:37.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:40.948Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:41.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:45.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:46.941Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:49.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:52.939Z] GET /api/task-creation/sessions
+[2026-02-21T14:54:53.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:57.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:54:58.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:01.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:04.936Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:05.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:55:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:55:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:55:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:55:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:55:09.012Z] GET /api/sandbox/environment
+[2026-02-21T14:55:09.013Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:55:09.341Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:09.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:10.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:13.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:16.948Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:17.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:21.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:22.950Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:28.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:29.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:33.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:34.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:37.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:40.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:41.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:45.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:46.941Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:49.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:52.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:55:53.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:57.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:55:58.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:01.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:04.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:05.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:56:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:56:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:56:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:56:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:56:09.012Z] GET /api/sandbox/environment
+[2026-02-21T14:56:09.013Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:56:09.290Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:09.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:10.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:13.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:16.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:17.503Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:21.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:22.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:25.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:28.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:29.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:33.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:34.936Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:37.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:40.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:41.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:45.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:46.940Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:49.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:52.950Z] GET /api/task-creation/sessions
+[2026-02-21T14:56:53.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:57.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:56:58.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:01.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:04.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:05.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:09.004Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:57:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:57:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:57:09.007Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:57:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:57:09.009Z] GET /api/sandbox/environment
+[2026-02-21T14:57:09.009Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:57:09.332Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:09.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:10.943Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:13.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:16.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:17.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:21.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:22.939Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:28.943Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:29.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:34.945Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:37.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:40.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:41.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:45.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:46.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:49.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:52.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:57:53.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:57.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:57:58.937Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:01.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:04.941Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:05.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:09.002Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:58:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:58:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:58:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:58:09.006Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:58:09.006Z] GET /api/sandbox/environment
+[2026-02-21T14:58:09.007Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:58:09.338Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:09.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:10.945Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:13.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:16.939Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:17.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:21.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:22.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:25.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:28.944Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:29.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:33.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:34.945Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:37.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:40.939Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:41.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:45.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:46.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:49.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:52.945Z] GET /api/task-creation/sessions
+[2026-02-21T14:58:53.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:57.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:58:58.946Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:01.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:04.937Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:05.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:09.017Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T14:59:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T14:59:09.020Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T14:59:09.020Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T14:59:09.021Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T14:59:09.022Z] GET /api/sandbox/environment
+[2026-02-21T14:59:09.022Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T14:59:09.376Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:09.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:10.938Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:13.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:16.941Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:17.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:21.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:22.949Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:25.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:28.951Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:29.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:33.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:34.941Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:37.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:40.947Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:41.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:45.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:46.949Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:49.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:52.942Z] GET /api/task-creation/sessions
+[2026-02-21T14:59:53.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:57.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T14:59:58.952Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:01.528Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:04.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:05.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:00:09.004Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:00:09.004Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:00:09.007Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:00:09.007Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:00:09.008Z] GET /api/sandbox/environment
+[2026-02-21T15:00:09.008Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:00:09.390Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:09.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:10.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:13.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:16.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:17.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:21.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:22.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:25.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:28.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:29.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:33.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:34.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:37.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:40.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:41.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:45.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:46.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:49.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:52.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:00:53.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:57.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:00:58.943Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:01.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:04.943Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:05.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:01:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:01:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:01:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:01:09.017Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:01:09.017Z] GET /api/sandbox/environment
+[2026-02-21T15:01:09.018Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:01:09.415Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:09.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:10.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:13.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:16.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:17.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:21.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:22.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:25.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:28.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:29.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:33.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:34.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:37.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:40.950Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:41.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:45.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:46.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:49.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:52.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:01:53.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:57.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:01:58.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:01.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:04.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:05.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:09.015Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:02:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:02:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:02:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:02:09.020Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:02:09.020Z] GET /api/sandbox/environment
+✅ 数据库连接成功
+[2026-02-21T15:02:09.346Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:09.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:10.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:13.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:16.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:17.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:21.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:22.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:25.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:28.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:29.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:34.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:37.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:40.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:41.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:45.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:46.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:49.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:52.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:02:53.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:57.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:02:58.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:01.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:04.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:05.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:03:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:03:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:03:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:03:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:03:09.016Z] GET /api/sandbox/environment
+[2026-02-21T15:03:09.016Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:03:09.331Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:09.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:10.950Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:13.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:16.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:17.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:21.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:22.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:25.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:28.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:29.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:34.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:37.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:40.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:41.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:45.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:46.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:49.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:52.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:03:53.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:57.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:03:58.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:01.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:04.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:05.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:09.002Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:04:09.003Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:04:09.006Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:04:09.006Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:04:09.007Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:04:09.008Z] GET /api/sandbox/environment
+[2026-02-21T15:04:09.008Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:04:09.331Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:09.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:10.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:13.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:16.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:17.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:21.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:22.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:25.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:28.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:29.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:33.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:34.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:37.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:40.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:41.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:45.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:46.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:49.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:52.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:04:53.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:57.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:04:58.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:01.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:04.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:05.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:05:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:05:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:05:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:05:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:05:09.017Z] GET /api/sandbox/environment
+[2026-02-21T15:05:09.017Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:05:09.329Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:09.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:10.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:13.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:16.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:17.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:21.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:22.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:25.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:28.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:29.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:33.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:34.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:37.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:40.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:41.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:45.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:46.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:49.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:52.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:05:53.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:57.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:05:58.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:01.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:04.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:05.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:06:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:06:09.005Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:06:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:06:09.009Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:06:09.009Z] GET /api/sandbox/environment
+[2026-02-21T15:06:09.010Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:06:09.397Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:09.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:10.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:13.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:16.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:17.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:21.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:22.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:25.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:28.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:29.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:33.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:34.950Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:37.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:40.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:41.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:45.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:46.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:49.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:52.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:06:53.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:57.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:06:58.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:01.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:04.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:05.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:07:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:07:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:07:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:07:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:07:09.016Z] GET /api/sandbox/environment
+[2026-02-21T15:07:09.017Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:07:09.317Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:09.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:10.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:13.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:16.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:17.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:21.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:22.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:28.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:29.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:33.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:34.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:37.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:40.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:41.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:45.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:46.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:49.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:52.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:07:53.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:57.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:07:58.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:01.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:04.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:05.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:08:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:08:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:08:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:08:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:08:09.017Z] GET /api/sandbox/environment
+[2026-02-21T15:08:09.017Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:08:09.395Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:09.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:10.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:13.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:16.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:17.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:21.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:22.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:25.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:28.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:29.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:33.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:34.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:37.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:40.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:41.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:45.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:46.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:49.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:52.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:08:53.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:57.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:08:58.942Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:01.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:04.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:05.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:09:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:09:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:09:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:09:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:09:09.015Z] GET /api/sandbox/environment
+[2026-02-21T15:09:09.015Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:09:09.276Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:09.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:10.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:13.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:16.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:17.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:21.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:22.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:28.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:29.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:33.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:34.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:37.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:40.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:41.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:45.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:46.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:49.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:52.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:09:53.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:57.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:09:58.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:01.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:04.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:05.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:10:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:10:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:10:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:10:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:10:09.019Z] GET /api/sandbox/environment
+[2026-02-21T15:10:09.020Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:10:09.368Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:09.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:10.943Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:13.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:16.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:17.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:21.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:22.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:25.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:28.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:29.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:33.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:34.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:37.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:40.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:41.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:45.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:46.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:49.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:52.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:10:53.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:57.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:10:58.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:01.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:04.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:05.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:11:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:11:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:11:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:11:09.019Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:11:09.019Z] GET /api/sandbox/environment
+[2026-02-21T15:11:09.020Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:11:09.376Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:09.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:10.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:13.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:16.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:17.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:21.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:22.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:25.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:28.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:29.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:33.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:34.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:37.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:40.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:41.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:45.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:46.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:49.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:52.943Z] GET /api/task-creation/sessions
+[2026-02-21T15:11:53.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:57.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:11:58.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:01.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:04.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:05.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:12:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:12:09.008Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:12:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:12:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:12:09.012Z] GET /api/sandbox/environment
+[2026-02-21T15:12:09.013Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:12:09.332Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:09.503Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:10.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:13.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:16.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:17.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:21.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:22.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:25.516Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:28.936Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:29.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:33.503Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:34.936Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:37.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:40.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:41.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:45.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:46.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:49.515Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:52.944Z] GET /api/task-creation/sessions
+[2026-02-21T15:12:53.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:57.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:12:58.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:01.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:04.946Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:05.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:13:09.011Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:13:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:13:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:13:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:13:09.015Z] GET /api/sandbox/environment
+[2026-02-21T15:13:09.016Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:13:09.295Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:09.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:10.937Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:13.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:16.943Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:17.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:21.505Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:22.951Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:25.518Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:28.947Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:29.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:33.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:34.938Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:37.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:40.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:41.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:45.510Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:46.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:49.519Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:52.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:13:53.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:57.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:13:58.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:01.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:04.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:05.504Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:09.012Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:14:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:14:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:14:09.016Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:14:09.017Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:14:09.017Z] GET /api/sandbox/environment
+[2026-02-21T15:14:09.018Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:14:09.336Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:09.512Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:10.939Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:13.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:16.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:17.503Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:21.514Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:22.936Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:25.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:28.940Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:29.503Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:33.507Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:34.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:37.517Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:40.945Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:41.506Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:45.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:46.941Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:49.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:52.949Z] GET /api/task-creation/sessions
+[2026-02-21T15:14:53.513Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:57.508Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:14:58.997Z] GET /api/task-creation/sessions
+[2026-02-21T15:15:01.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:15:04.948Z] GET /api/task-creation/sessions
+[2026-02-21T15:15:05.511Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:15:09.013Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2
+[2026-02-21T15:15:09.014Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/messages
+[2026-02-21T15:15:09.015Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/intent
+[2026-02-21T15:15:09.017Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/task-description
+[2026-02-21T15:15:09.018Z] GET /api/task-creation/sessions/c9aa91ab-c781-4ebc-af1a-4637a8c7cde2/execution-plan
+[2026-02-21T15:15:09.018Z] GET /api/sandbox/environment
+[2026-02-21T15:15:09.019Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-21T15:15:09.298Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:15:09.509Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-21T15:15:10.944Z] GET /api/task-creation/sessions
+23:15:11 [tsx] change in ./src\services\opencode-remote-service.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:22:53 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:47:57 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+23:48:21 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:40:08 [tsx] change in ./src\agents\task-creation\types\intent.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:40:19 [tsx] change in ./src\agents\task-creation\file-memory-store.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:40:53 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:11 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+✅ 数据库连接成功
+[2026-02-22T01:41:13.399Z] GET /api/task-creation/sessions
+[2026-02-22T01:41:18.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:41:24.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:41:30.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:41:36.381Z] GET /api/task-creation/sessions
+09:41:36 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:45 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:41:56 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:43:55 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+✅ 数据库连接成功
+[2026-02-22T01:44:00.385Z] GET /api/task-creation/sessions
+09:44:06 [tsx] change in ./src\services\opencode-remote-service.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:44:30 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:44:41 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:02 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:30 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:45:42 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:47:44 [tsx] change in ./src\agents\task-creation\task-creation-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:48:45 [tsx] change in ./src\agents\task-creation\websocket-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+09:49:38 [tsx] change in ./src\services\opencode-remote-service.ts Rerunning...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[OSAC_PERSISTENT_RECOVER_SKIP] fixed_session_mode
+
+✅ 数据库连接成功
+[2026-02-22T01:49:42.384Z] GET /api/task-creation/sessions
+[2026-02-22T01:49:48.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:49:54.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:00.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:06.393Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:07.690Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:50:07.693Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:50:07.693Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:50:07.694Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:50:07.696Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:50:07.698Z] GET /api/sandbox/environment
+[2026-02-22T01:50:07.699Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:50:12.378Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:18.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:24.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:30.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:36.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:42.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:48.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:50:54.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:00.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:06.380Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:07.683Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:51:07.684Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:51:07.684Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:51:07.687Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:51:07.688Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:51:07.688Z] GET /api/sandbox/environment
+[2026-02-22T01:51:07.689Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:51:12.394Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:18.380Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:24.378Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:30.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:36.390Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:42.384Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:48.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:51:54.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:00.392Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:06.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:07.678Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:52:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:52:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:52:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:52:07.682Z] GET /api/sandbox/environment
+[2026-02-22T01:52:07.682Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:52:07.683Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:52:12.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:18.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:24.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:30.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:36.385Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:42.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:48.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:52:51.826Z] GET /health
+[2026-02-22T01:52:54.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:00.379Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:06.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:07.684Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:53:07.685Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:53:07.686Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:53:07.688Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:53:07.689Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:53:07.690Z] GET /api/sandbox/environment
+[2026-02-22T01:53:07.690Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:53:12.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:18.380Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:24.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:30.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:36.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:42.386Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:48.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:53:54.377Z] GET /api/task-creation/sessions
+[2026-02-22T01:54:00.397Z] GET /api/task-creation/sessions
+[2026-02-22T01:54:06.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:54:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:54:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:54:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:54:07.683Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:54:07.684Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:54:07.684Z] GET /api/sandbox/environment
+[2026-02-22T01:54:07.685Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:54:12.392Z] GET /api/task-creation/sessions
+[2026-02-22T01:54:18.380Z] GET /api/task-creation/sessions
+[WebSocket] 客户端连接: client_1771725259019_w70ngblef
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: agent_message
+[WebSocket] 收到消息 from client_1771725259019_w70ngblef: {
+  type: 'user_input',
+  content: '请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。'
+}
+[WebSocket] 开始处理任务创建: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始创建任务: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始 Layer 1: 意图识别
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: status_update
+[2026-02-22T01:54:24.390Z] GET /api/task-creation/sessions
+[TaskCreationService] 意图识别完成: {
+  intent_type: 'software_development',
+  confidence: 0.98,
+  key_info: {
+    target: '创建文本文件',
+    file_name: 'hello.txt',
+    file_content: 'Hello Review Gate',
+    location: '当前工作区'
+  },
+  clarification_needed: false,
+  next_agent: 'execution_agent',
+  task_description: "在当前工作目录创建一个名为 hello.txt 的文件，内容为 'Hello Review Gate'"
+}
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: agent_message
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: status_update
+[2026-02-22T01:54:30.388Z] GET /api/task-creation/sessions
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: agent_message
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: status_update
+[2026-02-22T01:54:36.378Z] GET /api/task-creation/sessions
+[TaskCreationService] 执行计划生成完成
+[TaskCreationService] 执行计划已保存到数据库
+[WebSocket] 发送消息 to client_1771725259019_w70ngblef: plan_generated
+[WebSocket] 客户端断开: client_1771725259019_w70ngblef
+✅ 数据库连接成功
+[2026-02-22T01:54:42.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:54:48.390Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_SERVER_ENSURE","at":"2026-02-22T01:54:48.674Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/fae8d7f5-a41b-4a5b-b590-d82f49c6cbbc"}
+[2026-02-22T01:54:54.379Z] GET /api/task-creation/sessions
+[WebSocket] 客户端连接: client_1771725296549_vqar51dye
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: agent_message
+[WebSocket] 收到消息 from client_1771725296549_vqar51dye: {
+  type: 'user_input',
+  content: '请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。'
+}
+[WebSocket] 开始处理任务创建: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始创建任务: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始 Layer 1: 意图识别
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: status_update
+[2026-02-22T01:55:00.389Z] GET /api/task-creation/sessions
+[TaskCreationService] 意图识别完成: {
+  intent_type: 'software_development',
+  confidence: 0.98,
+  key_info: {
+    target: '创建文本文件',
+    file_name: 'hello.txt',
+    file_content: 'Hello Review Gate',
+    location: '当前工作区',
+    operation: '文件创建'
+  },
+  clarification_needed: false,
+  next_agent: 'execution_agent',
+  task_complexity: 'simple',
+  estimated_steps: 1,
+  notes: '这是一个简单的文件创建任务，不需要额外的规划或澄清'
+}
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: agent_message
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: status_update
+[2026-02-22T01:55:06.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:07.676Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:55:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:55:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:55:07.678Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:55:07.678Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:55:07.679Z] GET /api/sandbox/environment
+[2026-02-22T01:55:07.679Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T01:55:08.677Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SERVER_ENSURE","expectedType":"OPENCODE_SERVER_READY","requestId":"oc_ensure_1771725288674_j923bz"}
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: agent_message
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: status_update
+[2026-02-22T01:55:12.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:18.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:24.383Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_SESSION_CREATE","at":"2026-02-22T01:55:25.038Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/fae8d7f5-a41b-4a5b-b590-d82f49c6cbbc"}
+✅ 数据库连接成功
+[TaskCreationService] 执行计划生成完成
+[TaskCreationService] 执行计划已保存到数据库
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: plan_generated
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: status_update
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: status_update
+[2026-02-22T01:55:30.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:36.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:42.385Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:48.393Z] GET /api/task-creation/sessions
+[2026-02-22T01:55:54.390Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:00.379Z] GET /api/task-creation/sessions
+[WebSocket] 发送消息 to client_1771725296549_vqar51dye: agent_message
+[OSAC_AUDIT] {"action":"OPENCODE_SERVER_ENSURE","at":"2026-02-22T01:56:00.740Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/dc40dcc5-aa4a-4da1-b4bf-11696ebdd44d"}
+[2026-02-22T01:56:06.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:56:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:56:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:56:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:56:07.682Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:56:07.683Z] GET /api/sandbox/environment
+[2026-02-22T01:56:07.683Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:56:12.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:18.384Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T01:56:20.738Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SESSION_CREATE","expectedType":"OPENCODE_SESSION_READY","requestId":"oc_create_1771725325038_mhhz3u"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T01:56:20.740Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SERVER_ENSURE","expectedType":"OPENCODE_SERVER_READY","requestId":"oc_ensure_1771725360740_idq8jt"}
+[2026-02-22T01:56:24.383Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:30.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:36.391Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_SESSION_CREATE","at":"2026-02-22T01:56:37.142Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/dc40dcc5-aa4a-4da1-b4bf-11696ebdd44d"}
+✅ 数据库连接成功
+[2026-02-22T01:56:42.395Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:48.391Z] GET /api/task-creation/sessions
+[2026-02-22T01:56:54.379Z] GET /api/task-creation/sessions
+[WebSocket] 客户端断开: client_1771725296549_vqar51dye
+[2026-02-22T01:57:00.395Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:06.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:57:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:57:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:57:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:57:07.682Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:57:07.683Z] GET /api/sandbox/environment
+[2026-02-22T01:57:07.683Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T01:57:12.390Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:18.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:24.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:30.390Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T01:57:32.846Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SESSION_CREATE","expectedType":"OPENCODE_SESSION_READY","requestId":"oc_create_1771725397142_l9f5j6"}
+✅ 数据库连接成功
+[2026-02-22T01:57:36.389Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:42.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:48.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:57:54.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:00.379Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:06.379Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:07.675Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:58:07.676Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:58:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:58:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:58:07.679Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:58:07.680Z] GET /api/sandbox/environment
+[2026-02-22T01:58:07.680Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"OPENCODE_PROMPT_SEND","at":"2026-02-22T01:58:08.564Z","sessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37cee8dc1ffeBllt1cU5wDHuN9","partsCount":1}
+[2026-02-22T01:58:12.392Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:18.390Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:24.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:30.389Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:36.392Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:42.392Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:48.382Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:54.389Z] GET /api/task-creation/sessions
+[2026-02-22T01:58:56.263Z] GET /api/osac/sess_35ff684915754d7c/messages
+[2026-02-22T01:59:00.383Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T01:59:04.303Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_PROMPT_SEND","expectedType":"OPENCODE_PROMPT_ACCEPTED","requestId":"oc_prompt_1771725488564_d4b5io"}
+✅ 数据库连接成功
+[2026-02-22T01:59:06.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T01:59:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T01:59:07.682Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T01:59:07.682Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T01:59:07.683Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T01:59:07.684Z] GET /api/sandbox/environment
+[2026-02-22T01:59:07.685Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:12.378Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:18.389Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:24.387Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:25.622Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-22T01:59:30.390Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_PROMPT_SEND","at":"2026-02-22T01:59:30.593Z","sessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ced4d60ffe60yaif14dzqGoE","partsCount":1}
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_START","at":"2026-02-22T01:59:35.161Z","sessionId":"sess_35ff684915754d7c","requestId":"oc_prompt_1771725488564_d4b5io"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_STOP","at":"2026-02-22T01:59:35.184Z","sessionId":"sess_35ff684915754d7c","reason":"terminal_completed"}
+[OSAC_AUDIT] {"action":"OPENCODE_USER_INPUT","at":"2026-02-22T01:59:35.240Z","taskSessionId":"dc40dcc5-aa4a-4da1-b4bf-11696ebdd44d","orchestratorSessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37cee8dc1ffeBllt1cU5wDHuN9"}
+[WebSocket] 任务创建完成
+[2026-02-22T01:59:36.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:42.388Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:48.381Z] GET /api/task-creation/sessions
+[2026-02-22T01:59:54.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:00.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:06.394Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:07.673Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T02:00:07.674Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T02:00:07.674Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T02:00:07.675Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T02:00:07.676Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T02:00:07.677Z] GET /api/sandbox/environment
+[2026-02-22T02:00:07.677Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T02:00:12.387Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:18.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:24.384Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:00:26.358Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_PROMPT_SEND","expectedType":"OPENCODE_PROMPT_ACCEPTED","requestId":"oc_prompt_1771725570593_m2pe2y"}
+✅ 数据库连接成功
+[2026-02-22T02:00:30.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:36.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:42.387Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:48.382Z] GET /api/task-creation/sessions
+[2026-02-22T02:00:54.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:00.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:02.687Z] GET /health
+[2026-02-22T02:01:06.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:07.688Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T02:01:07.689Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T02:01:07.689Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T02:01:07.690Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T02:01:07.691Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T02:01:07.692Z] GET /api/sandbox/environment
+[2026-02-22T02:01:07.693Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_START","at":"2026-02-22T02:01:09.114Z","sessionId":"sess_35ff684915754d7c","requestId":"oc_prompt_1771725570593_m2pe2y"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_STOP","at":"2026-02-22T02:01:09.146Z","sessionId":"sess_35ff684915754d7c","reason":"terminal_completed"}
+[OSAC_AUDIT] {"action":"OPENCODE_USER_INPUT","at":"2026-02-22T02:01:09.160Z","taskSessionId":"fae8d7f5-a41b-4a5b-b590-d82f49c6cbbc","orchestratorSessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ced4d60ffe60yaif14dzqGoE"}
+[WebSocket] 任务创建完成
+[2026-02-22T02:01:12.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:18.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:24.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:30.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:36.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:42.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:48.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:01:54.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:00.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:06.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:07.687Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T02:02:07.688Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T02:02:07.688Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T02:02:07.690Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T02:02:07.691Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T02:02:07.691Z] GET /api/sandbox/environment
+[2026-02-22T02:02:07.691Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T02:02:12.387Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:18.380Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:24.390Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:30.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:36.390Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:42.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:48.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:02:54.382Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:00.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:06.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:07.677Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501
+[2026-02-22T02:03:07.678Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/messages
+[2026-02-22T02:03:07.678Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/intent
+[2026-02-22T02:03:07.680Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/task-description
+[2026-02-22T02:03:07.681Z] GET /api/task-creation/sessions/83a7d841-8636-4067-9fc4-04011b32e501/execution-plan
+[2026-02-22T02:03:07.681Z] GET /api/sandbox/environment
+[2026-02-22T02:03:07.682Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[2026-02-22T02:03:12.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:18.393Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:24.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:30.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:36.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:42.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:48.390Z] GET /api/task-creation/sessions
+[2026-02-22T02:03:54.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:00.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:06.387Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:12.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:18.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:24.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:30.393Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:36.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:42.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:48.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:04:54.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:05:00.388Z] GET /api/task-creation/sessions
+[WebSocket] 客户端连接: client_1771725903089_mal9nzh1c
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: agent_message
+[WebSocket] 收到消息 from client_1771725903089_mal9nzh1c: {
+  type: 'user_input',
+  content: '请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。'
+}
+[WebSocket] 开始处理任务创建: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始创建任务: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+✅ 数据库连接成功
+[TaskCreationService] 开始 Layer 1: 意图识别
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: status_update
+[2026-02-22T02:05:06.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:05:12.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:05:18.383Z] GET /api/task-creation/sessions
+[TaskCreationService] 意图识别完成: {
+  intent_type: 'software_development',
+  confidence: 0.98,
+  key_info: {
+    target: '创建文本文件',
+    file_name: 'hello.txt',
+    file_content: 'Hello Review Gate',
+    location: '当前工作区',
+    operation: '文件创建'
+  },
+  clarification_needed: false,
+  next_agent: 'execution_agent',
+  task_description: "在当前工作目录创建名为 hello.txt 的文件，写入内容 'Hello Review Gate'"
+}
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: agent_message
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: status_update
+[2026-02-22T02:05:24.386Z] GET /api/task-creation/sessions
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: agent_message
+[WebSocket] 发送消息 to client_1771725903089_mal9nzh1c: status_update
+[WebSocket] 客户端断开: client_1771725903089_mal9nzh1c
+[WebSocket] 客户端连接: client_1771725928217_iwzlnu3j4
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: agent_message
+[WebSocket] 收到消息 from client_1771725928217_iwzlnu3j4: {
+  type: 'user_input',
+  content: '请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。'
+}
+[WebSocket] 开始处理任务创建: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+[TaskCreationService] 开始创建任务: 请在当前工作区创建一个hello.txt文件，内容为Hello Review Gate。
+✅ 数据库连接成功
+[TaskCreationService] 开始 Layer 1: 意图识别
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: status_update
+[2026-02-22T02:05:30.381Z] GET /api/task-creation/sessions
+[TaskCreationService] 意图识别完成: {
+  intent_type: 'software_development',
+  confidence: 0.98,
+  key_info: {
+    target: '创建文本文件',
+    file_name: 'hello.txt',
+    file_content: 'Hello Review Gate',
+    location: '当前工作区'
+  },
+  clarification_needed: false,
+  next_agent: 'execution_agent',
+  task_description: "在当前工作目录创建一个名为 hello.txt 的文件，内容为 'Hello Review Gate'"
+}
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: agent_message
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: status_update
+[2026-02-22T02:05:36.387Z] GET /api/task-creation/sessions
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: agent_message
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: status_update
+[2026-02-22T02:05:42.384Z] GET /api/task-creation/sessions
+[TaskCreationService] 执行计划生成完成
+[TaskCreationService] 执行计划已保存到数据库
+[2026-02-22T02:05:48.385Z] GET /api/task-creation/sessions
+✅ 数据库连接成功
+[TaskCreationService] 执行计划生成完成
+[TaskCreationService] 执行计划已保存到数据库
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: plan_generated
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: status_update
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: status_update
+[OSAC_AUDIT] {"action":"OPENCODE_SERVER_ENSURE","at":"2026-02-22T02:05:50.080Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/934ecdfd-5077-45a3-adfb-c6b8cab2f757"}
+[2026-02-22T02:05:54.379Z] GET /api/task-creation/sessions
+[WebSocket] 发送消息 to client_1771725928217_iwzlnu3j4: agent_message
+[OSAC_AUDIT] {"action":"OPENCODE_SERVER_ENSURE","at":"2026-02-22T02:05:56.517Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/1b99a4a1-7c83-47b3-959c-175e5a0e9271"}
+[2026-02-22T02:06:00.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:06.384Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:06:10.089Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SERVER_ENSURE","expectedType":"OPENCODE_SERVER_READY","requestId":"oc_ensure_1771725950080_iekoqi"}
+✅ 数据库连接成功
+[2026-02-22T02:06:12.390Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:06:16.529Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SERVER_ENSURE","expectedType":"OPENCODE_SERVER_READY","requestId":"oc_ensure_1771725956517_92tiyb"}
+[2026-02-22T02:06:18.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:24.379Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_SESSION_CREATE","at":"2026-02-22T02:06:26.458Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/934ecdfd-5077-45a3-adfb-c6b8cab2f757"}
+✅ 数据库连接成功
+[2026-02-22T02:06:30.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:36.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:42.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:48.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:06:54.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:00.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:06.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:12.381Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:18.388Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:07:22.115Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SESSION_CREATE","expectedType":"OPENCODE_SESSION_READY","requestId":"oc_create_1771725986458_mfvd8s"}
+✅ 数据库连接成功
+[2026-02-22T02:07:24.386Z] GET /api/task-creation/sessions
+[WebSocket] 客户端断开: client_1771725928217_iwzlnu3j4
+[2026-02-22T02:07:30.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:36.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:41.832Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-22T02:07:42.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:07:48.388Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_SESSION_CREATE","at":"2026-02-22T02:07:53.401Z","sessionId":"sess_35ff684915754d7c","workspacePath":"/opt/.altus/opencode/workspaces/1b99a4a1-7c83-47b3-959c-175e5a0e9271"}
+✅ 数据库连接成功
+[2026-02-22T02:07:54.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:00.380Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:06.396Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:12.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:18.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:24.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:30.390Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:36.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:42.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:08:48.378Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:08:49.072Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_SESSION_CREATE","expectedType":"OPENCODE_SESSION_READY","requestId":"oc_create_1771726073401_xar3j9"}
+✅ 数据库连接成功
+[2026-02-22T02:08:54.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:00.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:06.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:12.387Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_PROMPT_SEND","at":"2026-02-22T02:09:15.119Z","sessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ce4623cffe1LRd6f0JGjMjTV","partsCount":1}
+✅ 数据库连接成功
+[2026-02-22T02:09:18.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:24.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:30.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:36.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:42.383Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_PROMPT_SEND","at":"2026-02-22T02:09:47.341Z","sessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ce3e44effeHjyDXtpDF2SyE5","partsCount":1}
+[2026-02-22T02:09:48.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:09:54.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:00.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:06.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:12.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:13.717Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-22T02:10:18.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:24.383Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:30.393Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:36.394Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:42.391Z] GET /api/task-creation/sessions
+[2026-02-22T02:10:48.387Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:10:49.520Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_PROMPT_SEND","expectedType":"OPENCODE_PROMPT_ACCEPTED","requestId":"oc_prompt_1771726155119_l1jlpd"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_FALLBACK","at":"2026-02-22T02:10:49.522Z","sessionId":"sess_35ff684915754d7c","messageType":"OPENCODE_PROMPT_SEND","expectedType":"OPENCODE_PROMPT_ACCEPTED","requestId":"oc_prompt_1771726187341_387jyc"}
+✅ 数据库连接成功
+[2026-02-22T02:10:54.393Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:00.382Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:06.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:12.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:18.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:24.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:30.393Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_START","at":"2026-02-22T02:11:34.202Z","sessionId":"sess_35ff684915754d7c","requestId":"oc_prompt_1771726155119_l1jlpd"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_STOP","at":"2026-02-22T02:11:34.203Z","sessionId":"sess_35ff684915754d7c","reason":"terminal_completed"}
+[OSAC_AUDIT] {"action":"OPENCODE_USER_INPUT","at":"2026-02-22T02:11:34.365Z","taskSessionId":"934ecdfd-5077-45a3-adfb-c6b8cab2f757","orchestratorSessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ce4623cffe1LRd6f0JGjMjTV"}
+[WebSocket] 任务创建完成
+[2026-02-22T02:11:36.388Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:42.385Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:48.378Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:54.386Z] GET /api/task-creation/sessions
+[2026-02-22T02:11:58.907Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[2026-02-22T02:12:00.392Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:06.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:10.603Z] GET /api/sandbox/osac/sess_35ff684915754d7c/messages
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_START","at":"2026-02-22T02:12:12.310Z","sessionId":"sess_35ff684915754d7c","requestId":"oc_prompt_1771726187341_387jyc"}
+[OSAC_AUDIT] {"action":"OPENCODE_BOOTSTRAP_STREAM_STOP","at":"2026-02-22T02:12:12.322Z","sessionId":"sess_35ff684915754d7c","reason":"terminal_completed"}
+[2026-02-22T02:12:12.397Z] GET /api/task-creation/sessions
+[OSAC_AUDIT] {"action":"OPENCODE_USER_INPUT","at":"2026-02-22T02:12:12.557Z","taskSessionId":"1b99a4a1-7c83-47b3-959c-175e5a0e9271","orchestratorSessionId":"sess_35ff684915754d7c","opencodeSessionId":"ses_37ce3e44effeHjyDXtpDF2SyE5"}
+[WebSocket] 任务创建完成
+✅ 数据库连接成功
+[2026-02-22T02:12:18.379Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:24.389Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:30.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:36.384Z] GET /api/task-creation/sessions
+[2026-02-22T02:12:42.387Z] GET /api/task-creation/sessions
+10:12:47 [tsx] change in ./src\services\opencode-remote-service.ts Restarting...
+c[OSAC_CONNECTION_MANAGER] fixed_session_mode: disable background health check
+ ELIFECYCLE  Command failed with exit code 3221225786.

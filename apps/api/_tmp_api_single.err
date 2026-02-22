@@ -1,0 +1,219 @@
+[OSAC_PERSISTENT_CONNECT_ERROR] sess_1e14e4c9354948f5 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+    at OsacConnectionManager.ensurePersistent (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:195:9)
+    at OsacPersistentRecoveryService.recoverReadySessions (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-persistent-recovery-service.ts:56:22)
+[OSAC_PERSISTENT_CONNECT_ERROR] sess_1e14e4c9354948f5 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+    at OsacConnectionManager.ensurePersistent (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:195:9)
+    at OsacPersistentRecoveryService.recoverReadySessions (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-persistent-recovery-service.ts:56:22)
+[OSAC_PERSISTENT_CONNECT_ERROR] sess_1e14e4c9354948f5 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+    at OsacConnectionManager.ensurePersistent (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:195:9)
+    at OsacPersistentRecoveryService.recoverReadySessions (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-persistent-recovery-service.ts:56:22)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_208136575d3742b3 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_208136575d3742b3 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_208136575d3742b3 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_208136575d3742b3 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_208136575d3742b3 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_RECONNECT_ERROR] sess_208136575d3742b3 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_208136575d3742b3 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_208136575d3742b3 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_RECONNECT_ERROR] sess_208136575d3742b3 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_GIVEUP] sess_208136575d3742b3 5
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC 请求超时
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC 请求超时
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_ERROR] sess_f6dfee3687274c74 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 OSAC WebSocket 已断开
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 Unexpected server response: 401
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 Unexpected server response: 401
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+[OSAC_RECONNECT_ERROR] sess_f6dfee3687274c74 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 Unexpected server response: 401
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+[OSAC_RECONNECT_ERROR] sess_bb4f889765cf4125 Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_GIVEUP] sess_bb4f889765cf4125 5
+[OSAC_HEALTHCHECK_ERROR] sess_f6dfee3687274c74 OSAC WebSocket 连接超时
+[OSAC_RECONNECT_ERROR] sess_f6dfee3687274c74 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+[OSAC_HEALTHCHECK_ERROR] sess_bb4f889765cf4125 Unexpected server response: 401
+[OSAC_RECONNECT_ERROR] sess_f6dfee3687274c74 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_ERROR] sess_f6dfee3687274c74 Error: OSAC WebSocket 连接超时
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:214:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:75:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:64:21)
+[OSAC_RECONNECT_GIVEUP] sess_f6dfee3687274c74 5

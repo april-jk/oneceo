@@ -1,0 +1,20 @@
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[2026-02-18T03:34:00.148Z] GET /health
+[2026-02-18T03:34:00.176Z] POST /api/sandbox/osac/provision
+✅ 数据库连接成功
+[2026-02-18T03:38:23.040Z] GET /health
+[2026-02-18T03:38:51.021Z] POST /api/sandbox/osac/provision
+✅ 数据库连接成功
+[2026-02-18T03:42:01.348Z] GET /health
+[2026-02-18T03:45:10.998Z] GET /api/sandbox/osac/sess_b20d406dcb2b4a3c/sessions
+[OSAC_AUDIT] {"action":"GET_SESSION_LIST","at":"2026-02-18T03:45:10.999Z","sessionId":"sess_b20d406dcb2b4a3c"}
+✅ 数据库连接成功
+[2026-02-18T04:30:55.184Z] GET /health

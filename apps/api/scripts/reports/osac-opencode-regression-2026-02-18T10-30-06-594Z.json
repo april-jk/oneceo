@@ -1,0 +1,53 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T10:29:34.024Z",
+    "finishedAt": "2026-02-18T10:30:06.594Z",
+    "sessionId": "sess_7c3ff19c00c8404b",
+    "provisioned": false,
+    "rounds": 2,
+    "roundsExecuted": 2,
+    "passed": 2,
+    "failed": 0,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 900000,
+    "aborted": false,
+    "abortReason": null,
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 120,
+    "execTimeoutSeconds": 150,
+    "roundExecTimeoutMs": 240000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 16187,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771410589850,\"sessionID\":\"ses_38fb3ae8fffew8Umc2zKaKDcqu\",\"part\":{\"id\":\"prt_c704c88960016xV76CfKVlUZZR\",\"sessionID\":\"ses_38fb3ae8fffew8Umc2zKaKDcqu\",\"messageID\":\"msg_c704c51a5001aI0woDxDZW2Tzh\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 14178,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771410606306,\"sessionID\":\"ses_38fb34164ffe2sedDN55NPgg44\",\"part\":{\"id\":\"prt_c704cc8e100184twIgJhjJfDp4\",\"sessionID\":\"ses_38fb34164ffe2sedDN55NPgg44\",\"messageID\":\"msg_c704cbee1001pYyOtrPakZZ61u\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    }
+  ]
+}

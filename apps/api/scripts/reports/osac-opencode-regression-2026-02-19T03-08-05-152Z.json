@@ -1,0 +1,26 @@
+{
+  "summary": {
+    "startedAt": "2026-02-19T03:04:05.024Z",
+    "finishedAt": "2026-02-19T03:08:05.151Z",
+    "sessionId": "",
+    "provisioned": false,
+    "rounds": 1,
+    "roundsExecuted": 0,
+    "passed": 0,
+    "failed": 0,
+    "maxConsecutiveFailures": 1,
+    "maxFailures": 1,
+    "totalBudgetMs": 700000,
+    "aborted": true,
+    "abortReason": "provision timeout (240000ms)",
+    "fatalError": "provision timeout (240000ms)",
+    "model": "openai/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 60,
+    "execTimeoutSeconds": 90,
+    "roundExecTimeoutMs": 180000,
+    "wsProbeMode": "request",
+    "wsPingTimeoutMs": 60000,
+    "persistentBridgeReady": false
+  },
+  "rounds": []
+}

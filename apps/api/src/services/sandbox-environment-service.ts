@@ -45,6 +45,40 @@ async function awaitJobIfNeeded(result: any) {
   return waitForJob(String(jobId));
 }
 
+function isSessionVmNotBoundError(error: unknown): boolean {
+  if (!(error instanceof KvmClientError)) {
+    return false;
+  }
+  const code = String(error.code || '').toUpperCase();
+  if (code === 'SESSION_VM_NOT_BOUND') {
+    return true;
+  }
+  const message = String(error.message || '').toLowerCase();
+  return error.status === 404 && message.includes('no vm binding');
+}
+
+async function waitForSessionVmBinding(sessionId: string) {
+  const maxAttempts = Math.max(1, Number(process.env.KVM_SESSION_VM_BIND_CHECKS || 8));
+  const delayMs = Math.max(200, Number(process.env.KVM_SESSION_VM_BIND_RETRY_MS || 1500));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await kvmConnector.getSessionVm(sessionId);
+    } catch (error) {
+      if (!isSessionVmNotBoundError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      lastError = error;
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`KVM Session 尚未完成 VM 绑定: ${sessionId}`);
+}
+
 function isKvmWarmPoolEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
   if (!metadata) return false;
   const allocationSource = pickString(
@@ -180,6 +214,15 @@ export class SandboxEnvironmentService {
         }
 
         let bindResult: any = null;
+        const bindWithSessionVm = async () => {
+          const result = await kvmConnector.bindSessionVm(orchestratorSessionId, {
+            auto: true,
+            excludeVmNames: sandboxSecurityConfig.protectedVmNames,
+            ...(input.bind || {}),
+          });
+          await awaitJobIfNeeded(result);
+          return result;
+        };
         if (sandboxSecurityConfig.useSandboxApi) {
           const vmName =
             pickString(input.bind?.vm_name, input.bind?.vmName) ||
@@ -213,22 +256,31 @@ export class SandboxEnvironmentService {
             await awaitJobIfNeeded(bindResult);
           } catch (error) {
             if (error instanceof KvmClientError && error.status === 409) {
-              // VM 已存在：尝试复用已有 sandbox 并继续绑定/查询
-              const sandbox = await kvmConnector.getSandbox(orchestratorSessionId);
-              bindResult = sandbox;
+              const conflictCode = String(error.code || '').toUpperCase();
+              const conflictMessage = String(error.message || '').toLowerCase();
+              const sandboxExists =
+                conflictCode === 'SANDBOX_ALREADY_EXISTS' || conflictMessage.includes('already exists');
+              const staticIpExhausted = conflictCode === 'STATIC_IP_EXHAUSTED';
+
+              if (sandboxExists) {
+                // sandbox 已存在：尝试复用已有 sandbox 并继续查询
+                const sandbox = await kvmConnector.getSandbox(orchestratorSessionId);
+                bindResult = sandbox;
+              } else if (staticIpExhausted) {
+                // 静态 IP 资源耗尽时回退到 session-vm 自动绑定
+                bindResult = await bindWithSessionVm();
+              } else {
+                throw error;
+              }
             } else {
               throw error;
             }
           }
         } else {
-          bindResult = await kvmConnector.bindSessionVm(orchestratorSessionId, {
-            auto: true,
-            excludeVmNames: sandboxSecurityConfig.protectedVmNames,
-            ...(input.bind || {}),
-          });
+          bindResult = await bindWithSessionVm();
         }
 
-        const vmResult = await kvmConnector.getSessionVm(orchestratorSessionId);
+        const vmResult = await waitForSessionVmBinding(orchestratorSessionId);
         const vmName = pickString(
           (vmResult.data as any)?.name,
           (vmResult.data as any)?.vmName,

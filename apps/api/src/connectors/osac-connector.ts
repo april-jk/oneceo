@@ -75,6 +75,11 @@ type RelayTicketContext = {
   expiresAt: string | null;
 };
 
+type RelayFallbackContext = {
+  endpoint: string;
+  mappingOverride: Partial<MappingContext>;
+};
+
 function resolveOsacEndpoint(metadata: Record<string, unknown> | null | undefined): string | null {
   if (!metadata) return null;
   const nested = metadata.osac as Record<string, unknown> | undefined;
@@ -135,6 +140,11 @@ function resolveRelayRequestOptions() {
     ticket_ttl_ms: ticketTtlMs,
     single_use: singleUse,
   };
+}
+
+function relayFallbackEnabled(): boolean {
+  const raw = (process.env.OSAC_KVM_RELAY_FALLBACK_TO_PORT_MAPPING || 'true').trim().toLowerCase();
+  return raw !== 'false';
 }
 
 async function issueRelayTcpTicket(sessionId: string): Promise<RelayTicketContext> {
@@ -398,8 +408,15 @@ export type OsacConnectionHandle = {
   close: () => void;
 };
 
+type ConnectForSessionOptions = {
+  bootstrapMessage?: OsacMessage;
+};
+
 export const osacConnector = {
-  async connectForSession(sessionId: string): Promise<OsacConnectionHandle> {
+  async connectForSession(
+    sessionId: string,
+    options?: ConnectForSessionOptions
+  ): Promise<OsacConnectionHandle> {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
 
     const maxAttempts = toNumber(process.env.OSAC_CONNECT_RETRIES, 3);
@@ -417,6 +434,7 @@ export const osacConnector = {
       const connectionMode = resolveConnectionMode(nextMetadata);
       let endpoint = resolveOsacEndpoint(nextMetadata);
       let mappingOverride: Partial<MappingContext> = {};
+      let relayFallback: RelayFallbackContext | null = null;
 
       if (connectionMode === 'port-mapping') {
         try {
@@ -449,6 +467,30 @@ export const osacConnector = {
         endpoint = buildRelayInnerEndpoint(nextMetadata);
         nextMetadata.osacEndpoint = endpoint;
         nextMetadata.osacConnectionMode = 'kvm-tcp-relay';
+        if (relayFallbackEnabled()) {
+          try {
+            const ports = await kvmConnector.listSandboxPorts(
+              sessionId,
+              buildSandboxPortProbeQuery()
+            );
+            const portResolution = resolvePortMapping(
+              nextMetadata,
+              extractSandboxPortMappings(ports?.data as any)
+            );
+            if (portResolution.endpoint) {
+              relayFallback = {
+                endpoint: portResolution.endpoint,
+                mappingOverride: {
+                  mappingId: portResolution.mappingId,
+                  mappingEpoch: portResolution.mappingEpoch,
+                  hostPort: portResolution.hostPort,
+                },
+              };
+            }
+          } catch {
+            // ignore fallback probe errors
+          }
+        }
       }
 
       if (!endpoint) {
@@ -486,20 +528,16 @@ export const osacConnector = {
         }
 
         const authEndpoints = buildAuthEndpoints(endpoint, token, sessionId, mapping);
-        for (const candidate of authEndpoints) {
-          let relay: RelayTicketContext | null = null;
-          if (connectionMode === 'kvm-tcp-relay') {
-            try {
-              relay = await issueRelayTcpTicket(sessionId);
-            } catch (error) {
-              lastError = error;
-              continue;
-            }
-          }
-          const client = new OsacClient(candidate, {
+
+        const tryConnectCandidate = async (
+          connectEndpoint: string,
+          relay: RelayTicketContext | null
+        ): Promise<OsacConnectionHandle | null> => {
+          const client = new OsacClient(connectEndpoint, {
             authToken: token,
             connectTimeoutMs: osacConfig.connectTimeoutMs,
             requestTimeoutMs: osacConfig.requestTimeoutMs,
+            bootstrapMessage: options?.bootstrapMessage,
             kvmRelay: relay
               ? {
                   wsUrl: relay.wsUrl,
@@ -511,15 +549,61 @@ export const osacConnector = {
 
           try {
             await client.connect();
+            const messageHandlers = new Set<(message: OsacMessage) => void>();
+            const closeHandlers = new Set<() => void>();
+            const messageBacklog: OsacMessage[] = [];
+            const maxBacklog = 200;
+
+            client.on('message', (message: OsacMessage) => {
+              if (messageHandlers.size === 0) {
+                messageBacklog.push(message);
+                if (messageBacklog.length > maxBacklog) {
+                  messageBacklog.splice(0, messageBacklog.length - maxBacklog);
+                }
+                return;
+              }
+              for (const handler of messageHandlers) {
+                try {
+                  handler(message);
+                } catch (error) {
+                  console.warn('[OSAC_CONNECTOR_MESSAGE_HANDLER_ERROR]', error);
+                }
+              }
+            });
+
+            client.on('close', () => {
+              for (const handler of closeHandlers) {
+                try {
+                  handler();
+                } catch (error) {
+                  console.warn('[OSAC_CONNECTOR_CLOSE_HANDLER_ERROR]', error);
+                }
+              }
+            });
+
             return {
               sessionId,
-              endpoint: candidate,
+              endpoint: connectEndpoint,
               isOpen: () => client.isOpen(),
               ping: (timeoutMs?: number) => client.ping(timeoutMs),
               send: (message) => client.send(message),
               request: (message, match) => client.request(message, match),
-              onMessage: (handler) => client.on('message', handler),
-              onClose: (handler) => client.on('close', handler),
+              onMessage: (handler) => {
+                messageHandlers.add(handler);
+                if (messageBacklog.length > 0) {
+                  const copy = messageBacklog.splice(0, messageBacklog.length);
+                  for (const pending of copy) {
+                    try {
+                      handler(pending);
+                    } catch (error) {
+                      console.warn('[OSAC_CONNECTOR_BACKLOG_HANDLER_ERROR]', error);
+                    }
+                  }
+                }
+              },
+              onClose: (handler) => {
+                closeHandlers.add(handler);
+              },
               close: () => client.close(),
             };
           } catch (error) {
@@ -528,6 +612,81 @@ export const osacConnector = {
               client.close();
             } catch {
               // ignore
+            }
+            return null;
+          }
+        };
+
+        let relayFallbackTried = false;
+        for (const candidate of authEndpoints) {
+          let relay: RelayTicketContext | null = null;
+          if (connectionMode === 'kvm-tcp-relay') {
+            try {
+              relay = await issueRelayTcpTicket(sessionId);
+            } catch (error) {
+              lastError = error;
+
+              if (relayFallback) {
+                const fallbackMapping = resolveMappingContext(
+                  sessionId,
+                  relayFallback.endpoint,
+                  nextMetadata,
+                  relayFallback.mappingOverride
+                );
+                const fallbackAuthEndpoints = buildAuthEndpoints(
+                  relayFallback.endpoint,
+                  token,
+                  sessionId,
+                  fallbackMapping
+                );
+                console.warn(
+                  '[OSAC_RELAY_FALLBACK]',
+                  sessionId,
+                  error instanceof Error ? error.message : String(error)
+                );
+                for (const fallbackCandidate of fallbackAuthEndpoints) {
+                  const fallbackHandle = await tryConnectCandidate(fallbackCandidate, null);
+                  if (fallbackHandle) {
+                    return fallbackHandle;
+                  }
+                }
+              }
+              continue;
+            }
+          }
+          const handle = await tryConnectCandidate(candidate, relay);
+          if (handle) {
+            return handle;
+          }
+          if (
+            connectionMode === 'kvm-tcp-relay' &&
+            relayFallback &&
+            !relayFallbackTried
+          ) {
+            relayFallbackTried = true;
+            const fallbackMapping = resolveMappingContext(
+              sessionId,
+              relayFallback.endpoint,
+              nextMetadata,
+              relayFallback.mappingOverride
+            );
+            const fallbackAuthEndpoints = buildAuthEndpoints(
+              relayFallback.endpoint,
+              token,
+              sessionId,
+              fallbackMapping
+            );
+            const lastErrorText = lastError instanceof Error ? lastError.message : String(lastError || '');
+            console.warn(
+              '[OSAC_RELAY_CONNECT_FALLBACK]',
+              sessionId,
+              lastErrorText || 'relay_connect_failed'
+            );
+            for (const fallbackCandidate of fallbackAuthEndpoints) {
+              const fallbackHandle = await tryConnectCandidate(fallbackCandidate, null);
+              if (fallbackHandle) {
+                return fallbackHandle;
+              }
             }
           }
         }

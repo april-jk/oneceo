@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T09:04:30.642Z",
+    "finishedAt": "2026-02-18T09:05:55.945Z",
+    "sessionId": "sess_f6dfee3687274c74",
+    "provisioned": false,
+    "rounds": 1,
+    "roundsExecuted": 1,
+    "passed": 1,
+    "failed": 0,
+    "maxConsecutiveFailures": 1,
+    "maxFailures": 1,
+    "totalBudgetMs": 420000,
+    "aborted": false,
+    "abortReason": null,
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 120,
+    "execTimeoutSeconds": 150,
+    "roundExecTimeoutMs": 220000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 83587,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771405551220,\"sessionID\":\"ses_390009149ffe0HtQIB1XI8FC77\",\"part\":{\"id\":\"prt_c6fffa671001m3iO14K38BA4mA\",\"sessionID\":\"ses_390009149ffe0HtQIB1XI8FC77\",\"messageID\":\"msg_c6fff6f27001hj1c6GTE3kuW7z\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    }
+  ]
+}

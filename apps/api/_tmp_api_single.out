@@ -1,0 +1,268 @@
+
+🚀 oneceo.ai API Server
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📡 API server running on http://localhost:4000
+🔌 WebSocket server running on ws://localhost:4000
+🔌 Task Creation WebSocket: ws://localhost:4000/ws/task-creation
+🏥 Health check: http://localhost:4000/health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ 数据库连接成功
+[OSAC_PERSISTENT_RECOVER] {"candidates":4,"limit":5}
+[2026-02-18T08:23:07.254Z] GET /health
+[2026-02-18T08:23:22.485Z] GET /health
+[OSAC_PERSISTENT_RECOVER_RESULT] {"sessionId":"sess_208136575d3742b3","ok":true}
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_PERSISTENT_RECOVER_RESULT] {"sessionId":"sess_1e14e4c9354948f5","ok":false}
+✅ 数据库连接成功
+[OSAC_PERSISTENT_RECOVER_RESULT] {"sessionId":"sess_f6dfee3687274c74","ok":true}
+[OSAC_PERSISTENT_RECOVER_RESULT] {"sessionId":"sess_bb4f889765cf4125","ok":true}
+✅ 数据库连接成功
+[2026-02-18T08:24:59.028Z] GET /api/sandbox/osac/sess_208136575d3742b3/sessions
+[OSAC_AUDIT] {"action":"GET_SESSION_LIST","at":"2026-02-18T08:24:59.030Z","sessionId":"sess_208136575d3742b3"}
+[2026-02-18T08:25:15.265Z] GET /api/sandbox/osac/sess_208136575d3742b3/sessions
+[OSAC_AUDIT] {"action":"GET_SESSION_LIST","at":"2026-02-18T08:25:15.266Z","sessionId":"sess_208136575d3742b3"}
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:01:19.762Z","sessionId":"sess_f6dfee3687274c74","requestId":"a02c006de80cd98c33608790058ee356","method":"GET","path":"/v1/models","stream":false}
+[2026-02-18T09:01:19.764Z] GET /api/llm-proxy/v1/models
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:02:56.129Z","sessionId":"sess_f6dfee3687274c74","requestId":"217c15456ea8ec3fec3d5e84be687846","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:02:56.133Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:02:56.158Z","sessionId":"sess_f6dfee3687274c74","requestId":"01fe3ba2c880102ccb84e86aacff1d0a","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:02:56.160Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:02:56.163Z","sessionId":"sess_f6dfee3687274c74","requestId":"56aa4dbf3418efbd8aee3704f3a9052e","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:02:56.164Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:03:10.915Z","sessionId":"sess_f6dfee3687274c74","requestId":"0e3be10b5a85faff36d97b1e03d5912c","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:03:10.916Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:03:10.918Z","sessionId":"sess_f6dfee3687274c74","requestId":"a5a48ff5a65044e2697ceafb5cdef86f","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:03:10.919Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:03:10.930Z","sessionId":"sess_f6dfee3687274c74","requestId":"028aaf2bf08a6f05cbbd0c674acd0ed3","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:03:10.931Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:05:38.969Z","sessionId":"sess_f6dfee3687274c74","requestId":"f9fcd3d8068b82cb3daac088b306a5ed","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:05:38.971Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:05:38.984Z","sessionId":"sess_f6dfee3687274c74","requestId":"78c9630d7feb3ad5b8ee8afe865060da","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:05:38.985Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:05:38.991Z","sessionId":"sess_f6dfee3687274c74","requestId":"143aec87e4008e53a2fbdf2243bfef75","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:05:38.992Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:07:45.582Z","sessionId":"sess_f6dfee3687274c74","requestId":"581402d495c415e8ea3a3c0fad2b31e9","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:07:45.584Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:07:45.588Z","sessionId":"sess_f6dfee3687274c74","requestId":"2b996b306be89ffdde3cafa0f32803b5","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:07:45.589Z] POST /api/llm-proxy/v1/chat/completions
+[OSAC_AUDIT] {"action":"LLM_PROXY_REQUEST","at":"2026-02-18T09:07:45.606Z","sessionId":"sess_f6dfee3687274c74","requestId":"fc4b85c5bba15c5aa276f3fe3759f9c8","method":"POST","path":"/v1/chat/completions","stream":true}
+[2026-02-18T09:07:45.607Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T09:20:36.990Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T09:20:37.014Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T09:20:37.015Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T09:21:39.095Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T09:21:39.096Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T09:21:39.098Z] POST /api/llm-proxy/v1/chat/completions
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+✅ 数据库连接成功
+[2026-02-18T09:52:38.743Z] GET /health
+[2026-02-18T10:04:53.757Z] GET /health
+[2026-02-18T10:04:53.759Z] GET /api/agents/health
+[2026-02-18T10:04:53.760Z] GET /api/task-creation/sessions
+[2026-02-18T10:04:54.013Z] GET /api/task-creation/sessions
+[2026-02-18T10:04:54.041Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:04:54.042Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:04:54.042Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:04:54.044Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:04:54.044Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:04:54.045Z] GET /api/task-creation/sessions
+[2026-02-18T10:04:55.408Z] GET /health
+[2026-02-18T10:04:55.409Z] GET /api/agents/health
+[2026-02-18T10:04:55.409Z] GET /api/task-creation/sessions
+[2026-02-18T10:05:01.171Z] GET /api/task-creation/sessions
+[2026-02-18T10:05:01.172Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:05:01.173Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:05:01.173Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:05:01.174Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:05:01.175Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:06:43.910Z] GET /api/task-creation/sessions
+[2026-02-18T10:06:43.911Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:06:43.911Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:06:43.912Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:06:43.912Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:06:43.913Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:07:49.780Z] GET /api/task-creation/sessions
+[2026-02-18T10:07:49.788Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:07:49.790Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:07:49.790Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:07:49.792Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:07:49.792Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:07:58.018Z] GET /api/task-creation/sessions
+[2026-02-18T10:07:58.018Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:07:58.019Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:07:58.019Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:07:58.019Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:07:58.020Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:07:59.089Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422
+[2026-02-18T10:07:59.090Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/messages
+[2026-02-18T10:07:59.090Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/intent
+[2026-02-18T10:07:59.091Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/task-description
+[2026-02-18T10:07:59.091Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/execution-plan
+[2026-02-18T10:07:59.098Z] GET /api/task-creation/sessions
+[2026-02-18T10:07:59.123Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422
+[2026-02-18T10:07:59.123Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/messages
+[2026-02-18T10:07:59.124Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/intent
+[2026-02-18T10:07:59.124Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/task-description
+[2026-02-18T10:07:59.125Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/execution-plan
+[2026-02-18T10:07:59.588Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983
+[2026-02-18T10:07:59.589Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/messages
+[2026-02-18T10:07:59.589Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/intent
+[2026-02-18T10:07:59.590Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/task-description
+[2026-02-18T10:07:59.591Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/execution-plan
+[2026-02-18T10:07:59.597Z] GET /api/task-creation/sessions
+[2026-02-18T10:07:59.622Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983
+[2026-02-18T10:07:59.622Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/messages
+[2026-02-18T10:07:59.623Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/intent
+[2026-02-18T10:07:59.624Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/task-description
+[2026-02-18T10:07:59.624Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/execution-plan
+[2026-02-18T10:08:01.545Z] GET /health
+[2026-02-18T10:08:01.546Z] GET /api/agents/health
+[2026-02-18T10:08:01.546Z] GET /api/task-creation/sessions
+[2026-02-18T10:08:04.780Z] GET /api/sandbox/health
+[2026-02-18T10:08:04.781Z] GET /api/sandbox/environment
+✅ 数据库连接成功
+[2026-02-18T10:09:15.173Z] GET /health
+[2026-02-18T10:13:59.561Z] GET /api/task-creation/sessions
+[2026-02-18T10:13:59.562Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983
+[2026-02-18T10:13:59.563Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/messages
+[2026-02-18T10:13:59.563Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/intent
+[2026-02-18T10:13:59.564Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/task-description
+[2026-02-18T10:13:59.565Z] GET /api/task-creation/sessions/8bfdd284-0a25-4f18-b8d6-34494b552983/execution-plan
+[2026-02-18T10:14:01.296Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422
+[2026-02-18T10:14:01.296Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/messages
+[2026-02-18T10:14:01.297Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/intent
+[2026-02-18T10:14:01.297Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/task-description
+[2026-02-18T10:14:01.298Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/execution-plan
+[2026-02-18T10:14:01.306Z] GET /api/task-creation/sessions
+[2026-02-18T10:14:01.334Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422
+[2026-02-18T10:14:01.334Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/messages
+[2026-02-18T10:14:01.334Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/intent
+[2026-02-18T10:14:01.335Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/task-description
+[2026-02-18T10:14:01.335Z] GET /api/task-creation/sessions/f34e60a6-9a5f-402b-a29b-e3e9916f7422/execution-plan
+[2026-02-18T10:14:01.823Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:14:01.824Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:14:01.825Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:14:01.825Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:14:01.826Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:14:01.833Z] GET /api/task-creation/sessions
+[2026-02-18T10:14:01.860Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:14:01.860Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:14:01.861Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:14:01.862Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:14:01.862Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan
+[2026-02-18T10:14:03.217Z] GET /health
+[2026-02-18T10:14:03.218Z] GET /api/agents/health
+[2026-02-18T10:14:03.219Z] GET /api/task-creation/sessions
+[2026-02-18T10:14:09.360Z] GET /api/sandbox/health
+[2026-02-18T10:14:09.361Z] GET /api/sandbox/environment
+✅ 数据库连接成功
+[2026-02-18T10:15:13.694Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:13.703Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:27.650Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:29.187Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:32.368Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:32.373Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:34.918Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:15:34.955Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:29:35.692Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:29:35.713Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:29:49.899Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:29:49.931Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:30:03.655Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:30:03.668Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:30:06.349Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:30:06.381Z] POST /api/llm-proxy/v1/chat/completions
+[2026-02-18T10:39:14.827Z] GET /api/task-creation/sessions
+[2026-02-18T10:39:14.850Z] GET /api/task-creation/sessions
+[2026-02-18T10:39:14.854Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7
+[2026-02-18T10:39:14.854Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/messages
+[2026-02-18T10:39:14.854Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/intent
+[2026-02-18T10:39:14.855Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/task-description
+[2026-02-18T10:39:14.856Z] GET /api/task-creation/sessions/5953ac18-58a6-4395-a3b9-2025cc929ab7/execution-plan

@@ -240,6 +240,82 @@ export interface ConversationSessionDetailResponse {
   intent: Record<string, unknown> | null;
   taskDescription: Record<string, unknown> | null;
   executionPlan: Record<string, unknown> | null;
+  runtime?: {
+    taskSessionId: string;
+    orchestratorSessionId?: string | null;
+    opencodeSessionId?: string | null;
+    vmName?: string | null;
+    bindingUpdatedAt?: string | null;
+    pendingResume?: {
+      stage: string;
+      reason?: string;
+      lastUserInput?: string;
+      updatedAt?: string;
+    } | null;
+    pendingQuestion?: string | null;
+    pendingOptions?: string[];
+  };
+  trace?: {
+    timeline: ConversationTraceEvent[];
+    llm: ConversationLlmTrace[];
+    agentDecisions: ConversationMessage[];
+    opencodeMessages: ConversationMessage[];
+    sandbox: {
+      primaryEnvironment: SandboxEnvironmentItem | null;
+      relatedEnvironments: SandboxEnvironmentItem[];
+    };
+    kvm: {
+      orchestratorSessionId?: string | null;
+      vmName?: string | null;
+      session?: Record<string, unknown> | null;
+      sessionVm?: Record<string, unknown> | null;
+      sandbox?: Record<string, unknown> | null;
+      sandboxIp?: Record<string, unknown> | null;
+      sandboxPorts?: Record<string, unknown> | null;
+      vmDetail?: Record<string, unknown> | null;
+      vmMetrics?: Record<string, unknown> | null;
+      vmLogs?: Record<string, unknown> | null;
+      quota?: Record<string, unknown> | null;
+      auditEntries?: AuditLogEntry[];
+      errors?: string[];
+    };
+    osac: {
+      messages: Array<{
+        type: string;
+        requestId?: string;
+        payload?: Record<string, unknown>;
+      }>;
+      summary: {
+        total: number;
+        byType: Array<{
+          type: string;
+          count: number;
+        }>;
+      };
+      errors: string[];
+    };
+  };
+}
+
+export interface ConversationTraceEvent {
+  id: string;
+  timestamp?: string;
+  source: 'user' | 'agent' | 'system' | 'osac' | 'kvm';
+  category: string;
+  title: string;
+  content?: string;
+  level: 'info' | 'warn' | 'error';
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConversationLlmTrace {
+  id: string;
+  stage: 'intent_recognition' | 'planning' | 'execution_plan' | 'execution_review' | 'opencode_command';
+  source: 'task_creation_agent' | 'opencode';
+  inferred: boolean;
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+  createdAt?: string;
 }
 
 export interface AgentManagementOverview {

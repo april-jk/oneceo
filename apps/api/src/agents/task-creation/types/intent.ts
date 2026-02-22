@@ -92,10 +92,12 @@ export interface Task {
 export enum MessageType {
   USER_INPUT = "user_input",
   USER_RESPONSE = "user_response",
+  OPENCODE_INPUT = "opencode_input",
   AGENT_MESSAGE = "agent_message",
   STATUS_UPDATE = "status_update",
   CLARIFICATION_REQUEST = "clarification_request",
   PLAN_GENERATED = "plan_generated",
+  OPENCODE_EVENT = "opencode_event",
   ERROR = "error",
 }
 
@@ -107,8 +109,8 @@ export interface WebSocketMessage {
   sessionId?: string;
   content?: string;
   agent?: string;
-  stage?: "collecting" | "clarifying" | "planning" | "executing" | "completed" | "failed";
-  tone?: "system" | "intent" | "planning" | "execution" | "error";
+  stage?: "collecting" | "clarifying" | "planning" | "executing" | "reviewing" | "completed" | "failed";
+  tone?: "system" | "intent" | "planning" | "execution" | "review" | "error";
   metadata?: any;
   question?: string;
   options?: string[];

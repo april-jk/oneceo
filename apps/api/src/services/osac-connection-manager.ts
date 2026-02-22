@@ -4,7 +4,6 @@ import type { OsacMessage } from '../clients/osac-client';
 type ConnectionEntry = {
   handle: OsacConnectionHandle;
   lastUsedAt: number;
-  messages: OsacMessage[];
 };
 
 type PendingConnect = {
@@ -16,13 +15,36 @@ type ConnectionOperationOptions = {
   connectAcquireTimeoutMs?: number;
 };
 
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function resolveStartNewVmSwitch(): boolean | null {
+  const raw = (process.env.OSAC_START_NEW_VM || '').trim();
+  if (!raw) return null;
+  return toBool(raw, false);
+}
+
+function isFixedSessionMode(): boolean {
+  const startNewVm = resolveStartNewVmSwitch();
+  if (startNewVm === true) return false;
+  if (startNewVm === false) return true;
+  return toBool(process.env.OSAC_USE_FIXED_SANDBOX_SESSION, false);
+}
+
 export class OsacConnectionManager {
   private connections = new Map<string, ConnectionEntry>();
+  private messageBuffers = new Map<string, OsacMessage[]>();
   private connecting = new Map<string, PendingConnect>();
   private reconnectFailures = new Map<string, number>();
   private maxMessages = 300;
   private handlers: MessageHandler[] = [];
   private persistentSessions = new Set<string>();
+  private bridgeReady = new Map<string, Promise<void>>();
   private reconnectTimers = new Map<string, NodeJS.Timeout>();
   private reconnectDelayMs = Number(process.env.OSAC_RECONNECT_DELAY_MS || 3000);
   private maxReconnectFailures = Number(process.env.OSAC_RECONNECT_MAX_FAILURES || 5);
@@ -42,6 +64,7 @@ export class OsacConnectionManager {
   private persistentHealthCheckMs = Number(process.env.OSAC_PERSISTENT_HEALTHCHECK_MS || 8000);
   private healthCheckMode = (process.env.OSAC_HEALTHCHECK_MODE || 'ping').trim().toLowerCase();
   private healthCheckPingTimeoutMs = Number(process.env.OSAC_HEALTHCHECK_PING_TIMEOUT_MS || 5000);
+  private fixedSessionMode = isFixedSessionMode();
   private defaultOperationConnectAcquireTimeoutMs = Number(
     process.env.OSAC_OPERATION_CONNECT_ACQUIRE_TIMEOUT_MS || 0
   );
@@ -49,6 +72,11 @@ export class OsacConnectionManager {
   private healthChecking = false;
 
   constructor() {
+    if (this.fixedSessionMode) {
+      console.log('[OSAC_CONNECTION_MANAGER]', 'fixed_session_mode: disable background health check');
+      return;
+    }
+
     if (this.persistentHealthCheckMs > 0) {
       this.healthTimer = setInterval(() => {
         void this.healthCheckPersistentSessions();
@@ -142,7 +170,6 @@ export class OsacConnectionManager {
     const entry: ConnectionEntry = {
       handle,
       lastUsedAt: Date.now(),
-      messages: [],
     };
 
     handle.onMessage((message) => {
@@ -157,15 +184,7 @@ export class OsacConnectionManager {
           status: payload.status || null,
         }));
       }
-      entry.messages.push(message);
-      if (entry.messages.length > this.maxMessages) {
-        entry.messages.splice(0, entry.messages.length - this.maxMessages);
-      }
-      for (const handler of this.handlers) {
-        Promise.resolve(handler(sessionId, message)).catch((error) => {
-          console.warn('[OSAC_HANDLER_ERROR]', error);
-        });
-      }
+      this.dispatchMessage(sessionId, message);
     });
 
     handle.onClose(() => {
@@ -173,10 +192,37 @@ export class OsacConnectionManager {
       if (existing?.handle === handle) {
         this.connections.delete(sessionId);
       }
+      this.bridgeReady.delete(sessionId);
       this.triggerReconnectNow(sessionId);
     });
 
     return entry;
+  }
+
+  private async ensureBridgeReady(sessionId: string, entry: ConnectionEntry): Promise<void> {
+    const existing = this.bridgeReady.get(sessionId);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const probe = (async () => {
+      await entry.handle.request(
+        {
+          type: 'GET_SESSION_LIST',
+          payload: { maxCount: 1, format: 'json' },
+        },
+        (message) => message.type === 'SESSION_LIST_RESPONSE'
+      );
+    })();
+
+    this.bridgeReady.set(sessionId, probe);
+    try {
+      await probe;
+    } catch (error) {
+      this.bridgeReady.delete(sessionId);
+      throw error;
+    }
   }
 
   private isSocketNotConnectedError(error: unknown): boolean {
@@ -244,6 +290,9 @@ export class OsacConnectionManager {
   }
 
   private scheduleReconnect(sessionId: string, immediate: boolean = false) {
+    if (this.fixedSessionMode) {
+      return;
+    }
     if (!this.persistentSessions.has(sessionId)) {
       return;
     }
@@ -391,7 +440,9 @@ export class OsacConnectionManager {
       this.reconnectFailures.delete(sessionId);
       this.clearReconnectTimer(sessionId);
     } else {
-      this.triggerReconnectNow(sessionId);
+      if (!this.fixedSessionMode) {
+        this.triggerReconnectNow(sessionId);
+      }
     }
     return false;
   }
@@ -402,6 +453,7 @@ export class OsacConnectionManager {
       existing.handle.close();
       this.connections.delete(sessionId);
     }
+    this.bridgeReady.delete(sessionId);
   }
 
   registerMessageHandler(handler: MessageHandler) {
@@ -416,24 +468,27 @@ export class OsacConnectionManager {
   }
 
   listMessages(sessionId: string, limit: number = 50): OsacMessage[] {
-    const existing = this.connections.get(sessionId);
-    if (!existing) {
+    const buffer = this.messageBuffers.get(sessionId);
+    if (!buffer) {
       return [];
     }
-    return existing.messages.slice(-limit);
+    return buffer.slice(-limit);
   }
 
   getMessageCount(sessionId: string): number {
-    const existing = this.connections.get(sessionId);
-    return existing ? existing.messages.length : 0;
+    return this.messageBuffers.get(sessionId)?.length || 0;
   }
 
   getMessagesSince(sessionId: string, offset: number): OsacMessage[] {
-    const existing = this.connections.get(sessionId);
-    if (!existing) {
+    const buffer = this.messageBuffers.get(sessionId);
+    if (!buffer) {
       return [];
     }
-    return existing.messages.slice(offset);
+    return buffer.slice(offset);
+  }
+
+  emitExternalMessage(sessionId: string, message: OsacMessage) {
+    this.dispatchMessage(sessionId, message);
   }
 
   async send(sessionId: string, message: OsacMessage, options?: ConnectionOperationOptions) {
@@ -449,6 +504,7 @@ export class OsacConnectionManager {
     }
     try {
       const entry = await this.getConnection(sessionId, options);
+      await this.ensureBridgeReady(sessionId, entry);
       entry.lastUsedAt = Date.now();
       entry.handle.send(message);
     } catch (error) {
@@ -462,6 +518,7 @@ export class OsacConnectionManager {
       if (this.isSocketNotConnectedError(error)) {
         this.dropConnection(sessionId);
         const entry = await this.getConnection(sessionId, options);
+        await this.ensureBridgeReady(sessionId, entry);
         entry.lastUsedAt = Date.now();
         entry.handle.send(message);
         return;
@@ -483,12 +540,14 @@ export class OsacConnectionManager {
   ): Promise<OsacMessage> {
     try {
       const entry = await this.getConnection(sessionId, options);
+      await this.ensureBridgeReady(sessionId, entry);
       entry.lastUsedAt = Date.now();
       return await entry.handle.request(message, match);
     } catch (error) {
       if (this.isSocketNotConnectedError(error)) {
         this.dropConnection(sessionId);
         const entry = await this.getConnection(sessionId, options);
+        await this.ensureBridgeReady(sessionId, entry);
         entry.lastUsedAt = Date.now();
         return await entry.handle.request(message, match);
       }
@@ -501,6 +560,21 @@ export class OsacConnectionManager {
       }
       this.triggerReconnectNow(sessionId);
       throw error;
+    }
+  }
+
+  private dispatchMessage(sessionId: string, message: OsacMessage) {
+    const buffer = this.messageBuffers.get(sessionId) || [];
+    buffer.push(message);
+    if (buffer.length > this.maxMessages) {
+      buffer.splice(0, buffer.length - this.maxMessages);
+    }
+    this.messageBuffers.set(sessionId, buffer);
+
+    for (const handler of this.handlers) {
+      Promise.resolve(handler(sessionId, message)).catch((error) => {
+        console.warn('[OSAC_HANDLER_ERROR]', error);
+      });
     }
   }
 }

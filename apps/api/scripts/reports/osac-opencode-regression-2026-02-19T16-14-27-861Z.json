@@ -1,0 +1,50 @@
+{
+  "summary": {
+    "startedAt": "2026-02-19T16:13:57.822Z",
+    "finishedAt": "2026-02-19T16:14:27.861Z",
+    "sessionId": "sess_b5149850bccd4e3a",
+    "provisioned": false,
+    "rounds": 1,
+    "roundsExecuted": 1,
+    "passed": 1,
+    "failed": 0,
+    "maxConsecutiveFailures": 1,
+    "maxFailures": 1,
+    "totalBudgetMs": 600000,
+    "aborted": false,
+    "abortReason": null,
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 60,
+    "execTimeoutSeconds": 90,
+    "roundExecTimeoutMs": 120000,
+    "enableProxyPrecheck": true,
+    "proxyPrecheckTimeoutSeconds": 20,
+    "proxyPrecheckExecTimeoutMs": 30000,
+    "proxyPrecheckRetries": 1,
+    "proxyPrecheckRetryDelayMs": 900,
+    "proxyPrecheckBudgetMs": 15000,
+    "disableOsacHealthcheck": true,
+    "bridgeBaseUrl": "http://127.0.0.1:4000/api/llm-proxy",
+    "localBridgeServerStarted": true,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 15000,
+    "wsConnectAcquireTimeoutMs": 30000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 29398,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771515534944,\"sessionID\":\"ses_389723492ffeR5zRPLHry9R8CE\",\"part\":{\"id\":\"prt_c768dde5d001X4nq7rkXuZSW87\",\"sessionID\":\"ses_389723492ffeR5zRPLHry9R8CE\",\"messageID\":\"msg_c768dcbba001psy7E3DS4YRssi\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    }
+  ]
+}

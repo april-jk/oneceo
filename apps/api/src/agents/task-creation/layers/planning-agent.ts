@@ -116,21 +116,28 @@ ${userInput}
 
     prompt += `\n\n请以 JSON 格式返回任务描述。`;
 
-    const result = await this.execute(prompt);
-
-    if (!result.success) {
-      throw new Error(result.error || '生成任务描述失败');
-    }
-
     try {
+      const result = await this.execute(prompt);
+
+      if (!result.success) {
+        throw new Error(result.error || '生成任务描述失败');
+      }
+
       const planningResult = await this.parseJsonResponse<any>(
         result.output || '',
         '任务规划结果'
       );
 
+      const clarificationList = Array.isArray(planningResult.clarification_questions)
+        ? planningResult.clarification_questions.filter((item: any) => typeof item === 'string' && item.trim())
+        : [];
+      const clarificationQuestion =
+        planningResult.clarification_question ||
+        (clarificationList.length > 0 ? clarificationList.map((item: string) => `- ${item.trim()}`).join('\n') : '');
+
       // 如果需要澄清，调用用户回调
-      if (planningResult.needs_clarification && planningResult.clarification_question && this.userCallback) {
-        const userResponse = await this.userCallback(planningResult.clarification_question);
+      if (planningResult.needs_clarification && clarificationQuestion && this.userCallback) {
+        const userResponse = await this.userCallback(clarificationQuestion);
         
         // 使用用户的回复重新生成任务描述
         return this.generateTaskDescription(intentResult, `${userInput}\n\n用户补充信息：${userResponse}`);
@@ -150,8 +157,7 @@ ${userInput}
       if (isAwaitingUserInputError(error)) {
         throw error;
       }
-      console.warn('[PlanningAgent] 解析任务描述失败，使用兜底方案:', error?.message || error);
-      console.warn('[PlanningAgent] 原始输出（截断）:', (result.output || '').slice(0, 600));
+      console.warn('[PlanningAgent] 任务描述生成失败，使用兜底方案:', error?.message || error);
 
       // 兜底方案：当 JSON 解析失败时，生成基础任务描述，避免流程中断
       return this.buildFallbackTaskDescription(intentResult, userInput);

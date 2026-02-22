@@ -1,1 +1,861 @@
-[]
+[
+  {
+    "id": "audit-df701e08-6d2",
+    "timestamp": "2026-02-20T06:29:16.921Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_13b635d086c1494b",
+    "sessionId": "sess_13b635d086c1494b",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-c1c3c5e7-3ef",
+    "timestamp": "2026-02-20T06:29:07.198Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_5791b6709f584075",
+    "sessionId": "sess_5791b6709f584075",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-48e842ae-659",
+    "timestamp": "2026-02-20T06:28:59.865Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_0042e555cc414cae",
+    "sessionId": "sess_0042e555cc414cae",
+    "result": "failed",
+    "detail": "virsh command failed"
+  },
+  {
+    "id": "audit-60a842ca-de4",
+    "timestamp": "2026-02-20T06:28:59.238Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_003fd14316ef4b5e",
+    "sessionId": "sess_003fd14316ef4b5e",
+    "result": "success"
+  },
+  {
+    "id": "audit-66a37aa0-9f5",
+    "timestamp": "2026-02-20T06:28:58.869Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "kvm_orch_test_20260208_114556",
+    "result": "success"
+  },
+  {
+    "id": "audit-8ef5e774-534",
+    "timestamp": "2026-02-20T06:28:57.267Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_0e6ab87015e74907",
+    "sessionId": "sess_0e6ab87015e74907",
+    "result": "success"
+  },
+  {
+    "id": "audit-e01f51a8-ee2",
+    "timestamp": "2026-02-20T06:28:56.603Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_296b991b78b9462b",
+    "sessionId": "sess_296b991b78b9462b",
+    "result": "success"
+  },
+  {
+    "id": "audit-34efa450-7a0",
+    "timestamp": "2026-02-20T06:28:56.572Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_859badc8977a41fe",
+    "sessionId": "sess_859badc8977a41fe",
+    "result": "success"
+  },
+  {
+    "id": "audit-4b15eafc-65b",
+    "timestamp": "2026-02-20T06:28:55.683Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_af703dc831394e30",
+    "sessionId": "sess_af703dc831394e30",
+    "result": "success"
+  },
+  {
+    "id": "audit-3c9dd549-fce",
+    "timestamp": "2026-02-20T06:28:55.677Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_3427ca0bc5b14d36",
+    "sessionId": "sess_3427ca0bc5b14d36",
+    "result": "success"
+  },
+  {
+    "id": "audit-f9891621-0d8",
+    "timestamp": "2026-02-20T06:28:54.264Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_6bf875b1437f4507",
+    "sessionId": "sess_6bf875b1437f4507",
+    "result": "success"
+  },
+  {
+    "id": "audit-02798c31-6b7",
+    "timestamp": "2026-02-20T06:28:52.667Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_52f60700c0194500",
+    "sessionId": "sess_52f60700c0194500",
+    "result": "success"
+  },
+  {
+    "id": "audit-6d05ba10-87a",
+    "timestamp": "2026-02-20T06:28:52.185Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_3c86217845e24d50",
+    "sessionId": "sess_3c86217845e24d50",
+    "result": "success"
+  },
+  {
+    "id": "audit-fd727594-b9f",
+    "timestamp": "2026-02-20T06:28:51.900Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_1b37b3accdf3445a",
+    "sessionId": "sess_1b37b3accdf3445a",
+    "result": "success"
+  },
+  {
+    "id": "audit-a478e805-a0b",
+    "timestamp": "2026-02-20T06:28:51.527Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_0310ee1bc7ee4c69",
+    "sessionId": "sess_0310ee1bc7ee4c69",
+    "result": "success"
+  },
+  {
+    "id": "audit-1ab16e6e-f96",
+    "timestamp": "2026-02-20T06:28:50.987Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_00ec3ad22c95406a",
+    "sessionId": "sess_00ec3ad22c95406a",
+    "result": "success"
+  },
+  {
+    "id": "audit-c1f1b32c-295",
+    "timestamp": "2026-02-20T06:28:50.644Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_0042e555cc414cae",
+    "sessionId": "sess_0042e555cc414cae",
+    "result": "success"
+  },
+  {
+    "id": "audit-ad6535ce-24e",
+    "timestamp": "2026-02-19T16:10:06.881Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_65a52a23c50d4e04",
+    "sessionId": "sess_65a52a23c50d4e04",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-4ed32ba9-133",
+    "timestamp": "2026-02-19T16:10:05.172Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_b19318e5de984bdc",
+    "result": "success"
+  },
+  {
+    "id": "audit-3a5bf771-879",
+    "timestamp": "2026-02-19T16:10:05.003Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_b5149850bccd4e3a",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-ebf79f39-349",
+    "timestamp": "2026-02-19T16:10:04.568Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_ead3f3d22faa41f9",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-9660a8b6-fc4",
+    "timestamp": "2026-02-19T16:10:04.541Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_d2824a18ccab4e2f",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-e1e4e526-934",
+    "timestamp": "2026-02-19T16:10:04.293Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_501f59b41fd04f24",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-0182f02e-b76",
+    "timestamp": "2026-02-19T16:10:03.348Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_9bcd3da32c434219",
+    "sessionId": "sess_9bcd3da32c434219",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-e5a35cb6-82b",
+    "timestamp": "2026-02-19T16:10:03.211Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_3fb5d8eaa5074e2b",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-81c6d66c-e1f",
+    "timestamp": "2026-02-19T16:10:03.048Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_dcc5984099314dfc",
+    "sessionId": "sess_dcc5984099314dfc",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-2b82acc0-6bf",
+    "timestamp": "2026-02-19T16:10:02.885Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_e2ac1db1228e452e",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-cca5e2ba-6c8",
+    "timestamp": "2026-02-19T16:10:02.611Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_f42bb33156e8448c",
+    "sessionId": "sess_f42bb33156e8448c",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-8302347f-5b9",
+    "timestamp": "2026-02-19T16:10:01.572Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_de1aee9ebb2b4194",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-1b3dd7ec-dc0",
+    "timestamp": "2026-02-19T16:10:01.154Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_9f8ce85d26aa4f8e",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-af049948-c4c",
+    "timestamp": "2026-02-19T16:09:59.488Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_333d4eb073004284",
+    "sessionId": "sess_333d4eb073004284",
+    "result": "success"
+  },
+  {
+    "id": "audit-d69a0011-ac6",
+    "timestamp": "2026-02-19T16:09:59.047Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_f7499b0a80664090",
+    "sessionId": "sess_f7499b0a80664090",
+    "result": "success"
+  },
+  {
+    "id": "audit-b09db6ed-952",
+    "timestamp": "2026-02-19T16:09:58.181Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_bcfed4e1b455433c",
+    "sessionId": "sess_bcfed4e1b455433c",
+    "result": "success"
+  },
+  {
+    "id": "audit-d26e568e-a65",
+    "timestamp": "2026-02-19T16:09:57.239Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_208846c1d1aa40a4",
+    "sessionId": "sess_208846c1d1aa40a4",
+    "result": "success"
+  },
+  {
+    "id": "audit-af1f7cd8-e84",
+    "timestamp": "2026-02-19T16:09:56.083Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_c8cda11d3db14fa7",
+    "sessionId": "sess_c8cda11d3db14fa7",
+    "result": "success"
+  },
+  {
+    "id": "audit-70db784b-c80",
+    "timestamp": "2026-02-19T16:09:54.182Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_582caddb8f3942db",
+    "sessionId": "sess_582caddb8f3942db",
+    "result": "success"
+  },
+  {
+    "id": "audit-efc49909-687",
+    "timestamp": "2026-02-19T16:09:53.493Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_415448b983924c66",
+    "sessionId": "sess_415448b983924c66",
+    "result": "success"
+  },
+  {
+    "id": "audit-7948485c-31f",
+    "timestamp": "2026-02-19T16:09:51.787Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_cc4d7dc378824c9c",
+    "sessionId": "sess_cc4d7dc378824c9c",
+    "result": "success"
+  },
+  {
+    "id": "audit-ca86f6a1-32b",
+    "timestamp": "2026-02-19T16:09:51.434Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_fcc87892822d44c1",
+    "sessionId": "sess_fcc87892822d44c1",
+    "result": "success"
+  },
+  {
+    "id": "audit-b94e2fe3-151",
+    "timestamp": "2026-02-19T16:09:50.898Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_c8deed00f6254d4c",
+    "sessionId": "sess_c8deed00f6254d4c",
+    "result": "success"
+  },
+  {
+    "id": "audit-4e8b22a4-e7f",
+    "timestamp": "2026-02-19T16:09:49.865Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_95fefb8d624649fb",
+    "sessionId": "sess_95fefb8d624649fb",
+    "result": "success"
+  },
+  {
+    "id": "audit-6448d474-2bf",
+    "timestamp": "2026-02-19T16:09:49.335Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_76c7f7506d4643ec",
+    "sessionId": "sess_76c7f7506d4643ec",
+    "result": "success"
+  },
+  {
+    "id": "audit-d9636667-dbd",
+    "timestamp": "2026-02-19T03:10:45.436Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_aafd21094919425e",
+    "sessionId": "sess_aafd21094919425e",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-9991308f-f7f",
+    "timestamp": "2026-02-19T03:10:43.607Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_ab7d1f09954248eb",
+    "sessionId": "sess_ab7d1f09954248eb",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-24c6dbfc-fab",
+    "timestamp": "2026-02-19T03:10:43.577Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_76c7f7506d4643ec",
+    "sessionId": "sess_76c7f7506d4643ec",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-c17ce36e-474",
+    "timestamp": "2026-02-19T03:10:42.578Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_c87bbbf4efea4805",
+    "sessionId": "sess_c87bbbf4efea4805",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-41d9b289-4bf",
+    "timestamp": "2026-02-19T03:10:41.195Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_9a929eefcca04d4d",
+    "sessionId": "sess_9a929eefcca04d4d",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-8891a468-c08",
+    "timestamp": "2026-02-19T03:10:40.851Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_f75710a3b21e49e5",
+    "sessionId": "sess_f75710a3b21e49e5",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-b9f1fd33-8dc",
+    "timestamp": "2026-02-19T03:10:40.731Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_5924d26623ba4900",
+    "sessionId": "sess_5924d26623ba4900",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-501b0803-1f0",
+    "timestamp": "2026-02-19T03:10:40.730Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_033782c6aa924229",
+    "sessionId": "sess_033782c6aa924229",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-f534177d-949",
+    "timestamp": "2026-02-19T03:10:40.467Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_0c89b3bf95574a0b",
+    "sessionId": "sess_0c89b3bf95574a0b",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-aad18f0a-bda",
+    "timestamp": "2026-02-19T03:10:40.358Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_a39c0b76ff054b89",
+    "sessionId": "sess_a39c0b76ff054b89",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-e1f17c36-f1b",
+    "timestamp": "2026-02-19T03:10:39.866Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_976a1d1509374b1b",
+    "sessionId": "sess_976a1d1509374b1b",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-09eb02a0-c6a",
+    "timestamp": "2026-02-19T03:10:39.322Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_4a0fcb779bc64bef",
+    "sessionId": "sess_4a0fcb779bc64bef",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-34925fe4-d6c",
+    "timestamp": "2026-02-19T03:10:39.026Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_8ea7cf2433ba46cc",
+    "sessionId": "sess_8ea7cf2433ba46cc",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-3b3f2115-17f",
+    "timestamp": "2026-02-19T03:10:38.670Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_a626aaabd6e84d9a",
+    "sessionId": "sess_a626aaabd6e84d9a",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-56f113d6-f48",
+    "timestamp": "2026-02-19T03:10:38.094Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_7c3ff19c00c8404b",
+    "sessionId": "sess_7c3ff19c00c8404b",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-755d6fa4-c5e",
+    "timestamp": "2026-02-19T03:10:37.077Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_89274edd6fce4d39",
+    "sessionId": "sess_89274edd6fce4d39",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-2745a3e7-b4d",
+    "timestamp": "2026-02-19T03:10:35.373Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_95fefb8d624649fb",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-875a2263-cc2",
+    "timestamp": "2026-02-19T03:10:32.475Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_26b1967fc72643b3",
+    "sessionId": "sess_26b1967fc72643b3",
+    "result": "success"
+  },
+  {
+    "id": "audit-31a23c86-5bf",
+    "timestamp": "2026-02-19T03:10:27.666Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_4bbca659a751455a",
+    "sessionId": "sess_4bbca659a751455a",
+    "result": "success"
+  },
+  {
+    "id": "audit-ed2f5df1-d03",
+    "timestamp": "2026-02-19T03:10:27.460Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_f619c73a37b14d91",
+    "sessionId": "sess_f619c73a37b14d91",
+    "result": "success"
+  },
+  {
+    "id": "audit-9734a33d-ab4",
+    "timestamp": "2026-02-19T03:10:26.795Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_47ceccbfda2a485c",
+    "sessionId": "sess_47ceccbfda2a485c",
+    "result": "success"
+  },
+  {
+    "id": "audit-89f82f0f-ab2",
+    "timestamp": "2026-02-19T03:10:26.749Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_2278c1b046604a59",
+    "sessionId": "sess_2278c1b046604a59",
+    "result": "success"
+  },
+  {
+    "id": "audit-a862184a-779",
+    "timestamp": "2026-02-19T03:10:26.148Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_7f5dec5eee614d70",
+    "sessionId": "sess_7f5dec5eee614d70",
+    "result": "success"
+  },
+  {
+    "id": "audit-f6a04da4-f8a",
+    "timestamp": "2026-02-19T03:10:16.247Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_00ec3ad22c95406a",
+    "sessionId": "sess_00ec3ad22c95406a",
+    "result": "success"
+  },
+  {
+    "id": "audit-b977892c-410",
+    "timestamp": "2026-02-19T03:10:15.793Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_c5f7f3b9b6584a3c",
+    "sessionId": "sess_c5f7f3b9b6584a3c",
+    "result": "success"
+  },
+  {
+    "id": "audit-5d00eca7-a15",
+    "timestamp": "2026-02-19T03:10:13.112Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_2623f47945c04ca4",
+    "sessionId": "sess_2623f47945c04ca4",
+    "result": "success"
+  },
+  {
+    "id": "audit-cf36ed55-e70",
+    "timestamp": "2026-02-18T10:09:56.047Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_7634acc5c2ab4be2",
+    "sessionId": "sess_7634acc5c2ab4be2",
+    "result": "success"
+  },
+  {
+    "id": "audit-1bacf62f-99b",
+    "timestamp": "2026-02-18T10:09:55.008Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "kvm_orch_test_20260208_114556",
+    "result": "success"
+  },
+  {
+    "id": "audit-6913c3f3-055",
+    "timestamp": "2026-02-18T10:08:11.720Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_7c8523295e3848b1",
+    "sessionId": "sess_7c8523295e3848b1",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-bd62d49a-6f3",
+    "timestamp": "2026-02-18T10:08:10.712Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_88fac327db574929",
+    "sessionId": "sess_88fac327db574929",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-5ecf432e-9be",
+    "timestamp": "2026-02-18T10:08:10.617Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_cd519836105149f0",
+    "sessionId": "sess_cd519836105149f0",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-db622cd5-c3b",
+    "timestamp": "2026-02-18T10:08:08.506Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_eaf60f9da28c4431",
+    "sessionId": "sess_eaf60f9da28c4431",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-4f69cf4f-885",
+    "timestamp": "2026-02-18T10:08:06.406Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_cd407e98f92f4a96",
+    "sessionId": "sess_cd407e98f92f4a96",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-81123269-6b3",
+    "timestamp": "2026-02-18T10:08:05.595Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_dfa82d3b6e804b2a",
+    "sessionId": "sess_dfa82d3b6e804b2a",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-54890619-640",
+    "timestamp": "2026-02-18T10:08:03.774Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_6aafa07c82ee40d0",
+    "sessionId": "sess_6aafa07c82ee40d0",
+    "result": "success"
+  },
+  {
+    "id": "audit-826223f1-837",
+    "timestamp": "2026-02-18T10:08:03.739Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_e0db743b203744ed",
+    "sessionId": "sess_e0db743b203744ed",
+    "result": "failed",
+    "detail": "virsh command failed"
+  },
+  {
+    "id": "audit-cafa619e-266",
+    "timestamp": "2026-02-18T10:08:02.372Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_7abc0cf653534fbe",
+    "sessionId": "sess_7abc0cf653534fbe",
+    "result": "success"
+  },
+  {
+    "id": "audit-33697ea2-cbc",
+    "timestamp": "2026-02-18T10:08:02.360Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_2c4d6747b798427a",
+    "sessionId": "sess_2c4d6747b798427a",
+    "result": "success"
+  },
+  {
+    "id": "audit-1f202e87-fe6",
+    "timestamp": "2026-02-18T10:08:01.830Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_a9ba1785f5b24a6a",
+    "sessionId": "sess_a9ba1785f5b24a6a",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-d7bf546a-664",
+    "timestamp": "2026-02-18T10:08:00.337Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_34ea856bde2c431a",
+    "sessionId": "sess_34ea856bde2c431a",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-a7abd551-6b0",
+    "timestamp": "2026-02-18T10:07:59.995Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_31689492ebb248bc",
+    "sessionId": "sess_31689492ebb248bc",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-b166e839-02d",
+    "timestamp": "2026-02-18T10:07:59.651Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_287619ebfa454bb8",
+    "sessionId": "sess_287619ebfa454bb8",
+    "result": "failed",
+    "detail": "Rate limit exceeded"
+  },
+  {
+    "id": "audit-95013fb4-c27",
+    "timestamp": "2026-02-18T10:07:45.709Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_e95b16ba38f9457e",
+    "sessionId": "sess_e95b16ba38f9457e",
+    "result": "success"
+  },
+  {
+    "id": "audit-e321b194-4c6",
+    "timestamp": "2026-02-18T10:07:35.204Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_bc6d1d3dabc54617",
+    "sessionId": "sess_bc6d1d3dabc54617",
+    "result": "success"
+  },
+  {
+    "id": "audit-ba5ec406-867",
+    "timestamp": "2026-02-18T10:07:29.321Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_4fb5239668d94b6f",
+    "sessionId": "sess_4fb5239668d94b6f",
+    "result": "success"
+  },
+  {
+    "id": "audit-834c7607-1a6",
+    "timestamp": "2026-02-18T10:07:28.629Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_bb4f889765cf4125",
+    "sessionId": "sess_bb4f889765cf4125",
+    "result": "success"
+  },
+  {
+    "id": "audit-1d97eeae-6d9",
+    "timestamp": "2026-02-18T10:07:27.643Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_1e14e4c9354948f5",
+    "sessionId": "sess_1e14e4c9354948f5",
+    "result": "success"
+  },
+  {
+    "id": "audit-e89a2a62-33e",
+    "timestamp": "2026-02-18T10:07:27.335Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_32ab905626434e19",
+    "sessionId": "sess_32ab905626434e19",
+    "result": "success"
+  },
+  {
+    "id": "audit-d5e60c73-4eb",
+    "timestamp": "2026-02-18T10:07:26.826Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_900523405d154a7e",
+    "sessionId": "sess_900523405d154a7e",
+    "result": "success"
+  },
+  {
+    "id": "audit-926da2c8-705",
+    "timestamp": "2026-02-18T10:07:26.367Z",
+    "operator": "admin-ui",
+    "action": "stop",
+    "targetVmId": "sandbox_sess_8129a71839104eea",
+    "sessionId": "sess_8129a71839104eea",
+    "result": "success"
+  }
+]

@@ -1,0 +1,8 @@
+[OSAC_PERSISTENT_CONNECT_ERROR] sess_b20d406dcb2b4a3c Error: Unexpected server response: 401
+    at Object.connectForSession (D:\project\oneceo.ai\oneceo\apps\api\src\connectors\osac-connector.ts:200:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at OsacConnectionManager.createConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:56:20)
+    at OsacConnectionManager.getConnection (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:46:21)
+    at OsacConnectionManager.ensurePersistent (D:\project\oneceo.ai\oneceo\apps\api\src\services\osac-connection-manager.ts:125:7)
+    at SandboxAgentProvisionService.provision (D:\project\oneceo.ai\oneceo\apps\api\src\services\sandbox-agent-provision-service.ts:918:7)
+    at <anonymous> (D:\project\oneceo.ai\oneceo\apps\api\src\routes\osac-routes.ts:40:20)

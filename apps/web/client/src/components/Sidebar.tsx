@@ -47,7 +47,7 @@ interface SidebarProps {
 
 export default function Sidebar({ className = "", collapsed = false, onToggleCollapse, selectedProjectId, onProjectSelect }: SidebarProps) {
   const SESSION_PREVIEW_COUNT = 3;
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const { t } = useTranslation();
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
@@ -212,7 +212,30 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
             const Icon = item.icon;
             const isActive = location === item.href;
             const isNewTask = index === 0; // First item is New Task
-            
+
+            if (isNewTask) {
+              return (
+                <Button
+                  key={item.href}
+                  variant={isNewTask ? "default" : "ghost"}
+                  className={`w-full justify-start gap-3 h-9 px-3 rounded-xl transition-all duration-150 ${
+                    isNewTask
+                      ? "bg-foreground hover:bg-foreground/90 text-background"
+                      : isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                  }`}
+                  onClick={() => {
+                    setLocation(`/new-task?new=${Date.now()}`);
+                    onProjectSelect?.(null);
+                  }}
+                >
+                  <Icon className="w-4 h-4" />
+                  {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
+                </Button>
+              );
+            }
+
             return (
               <Link key={item.href} href={item.href}>
                 <Button

@@ -318,6 +318,10 @@ button:disabled {
   gap: 10px;
 }
 
+.detail-grid-wide {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .panel-subtitle {
   margin: 0;
   font-size: 13px;
@@ -325,11 +329,32 @@ button:disabled {
   font-weight: 600;
 }
 
+.panel-subtitle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.panel-subtitle-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.panel-subtitle-actions .secondary-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 .message-list {
   display: grid;
   gap: 8px;
   max-height: 48vh;
   overflow: auto;
+}
+
+.message-list-large {
+  max-height: 70vh;
 }
 
 .message-item {
@@ -348,6 +373,78 @@ button:disabled {
 .message-content {
   margin: 6px 0 0;
   white-space: pre-wrap;
+}
+
+.message-meta-json {
+  margin-top: 8px;
+  max-height: 180px;
+}
+
+.trace-list {
+  display: grid;
+  gap: 8px;
+  max-height: 42vh;
+  overflow: auto;
+}
+
+.trace-item {
+  border: 1px solid #dbe7f4;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 5px;
+}
+
+.trace-head {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #475569;
+}
+
+.trace-meta {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.trace-level {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trace-level.info {
+  background: #e0f2fe;
+  color: #0c4a6e;
+}
+
+.trace-level.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.trace-level.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.llm-trace-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .capability-grid {
@@ -813,6 +910,11 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .trace-columns,
+  .detail-grid-wide {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .control-grid,
   .form-grid {
     grid-template-columns: 1fr;
@@ -850,6 +952,14 @@ button:focus-visible {
   }
 
   .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid-wide {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-columns {
     grid-template-columns: 1fr;
   }
 

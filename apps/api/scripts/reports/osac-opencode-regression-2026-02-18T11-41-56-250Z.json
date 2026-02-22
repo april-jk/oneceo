@@ -1,0 +1,53 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T11:39:31.814Z",
+    "finishedAt": "2026-02-18T11:41:56.250Z",
+    "sessionId": "sess_47ceccbfda2a485c",
+    "provisioned": true,
+    "rounds": 2,
+    "roundsExecuted": 2,
+    "passed": 2,
+    "failed": 0,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 600000,
+    "aborted": false,
+    "abortReason": null,
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 45,
+    "execTimeoutSeconds": 70,
+    "roundExecTimeoutMs": 90000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 19235,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771414909686,\"sessionID\":\"ses_38f719984ffeEdBsUxQDK6kff6\",\"part\":{\"id\":\"prt_c708e72f4001VPUN4jQFwtpdN6\",\"sessionID\":\"ses_38f719984ffeEdBsUxQDK6kff6\",\"messageID\":\"msg_c708e66ca001PuzLjRC6PydfeQ\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 4090,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771414914931,\"sessionID\":\"ses_38f718371ffeEqOF9k6ztOwZwD\",\"part\":{\"id\":\"prt_c708e8772001PiaNjbgc99KQFV\",\"sessionID\":\"ses_38f718371ffeEqOF9k6ztOwZwD\",\"messageID\":\"msg_c708e7cca001vdC6rY0x6fMOZj\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    }
+  ]
+}

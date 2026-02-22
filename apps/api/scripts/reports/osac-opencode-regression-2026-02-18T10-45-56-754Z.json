@@ -1,0 +1,53 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T10:43:02.107Z",
+    "finishedAt": "2026-02-18T10:45:56.754Z",
+    "sessionId": "sess_a626aaabd6e84d9a",
+    "provisioned": true,
+    "rounds": 3,
+    "roundsExecuted": 2,
+    "passed": 0,
+    "failed": 2,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 1200000,
+    "aborted": true,
+    "abortReason": "Circuit break: 2 consecutive failures reached threshold 2",
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 120,
+    "execTimeoutSeconds": 150,
+    "roundExecTimeoutMs": 240000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": false,
+      "status": "error",
+      "exit": null,
+      "durationMs": 52189,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": "Rate limit exceeded",
+      "stdoutSnippet": "",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 2,
+      "ok": false,
+      "status": "error",
+      "exit": null,
+      "durationMs": 838,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": "Rate limit exceeded",
+      "stdoutSnippet": "",
+      "stderrSnippet": ""
+    }
+  ]
+}

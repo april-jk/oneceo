@@ -16,18 +16,31 @@ export type TaskCreationSession = {
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' | string;
+  runtime?: {
+    orchestratorSessionId?: string;
+    opencodeSessionId?: string;
+    updatedAt?: string;
+  };
   pendingQuestion?: string;
   pendingOptions?: string[];
+  pendingResume?: {
+    stage: string;
+    reason?: string;
+    lastUserInput?: string;
+    updatedAt?: string;
+  };
   createdAt: string;
   updatedAt: string;
-  messages?: Array<{
-    id: string;
-    role: 'user' | 'agent' | 'system' | string;
-    messageType?: string;
-    content: string;
-    createdAt: string;
-    metadata?: unknown;
-  }>;
+  messages?: TaskCreationMessage[];
+};
+
+export type TaskCreationMessage = {
+  id: string;
+  role: 'user' | 'agent' | 'system' | string;
+  messageType?: string;
+  content: string;
+  createdAt: string;
+  metadata?: unknown;
 };
 
 export type SandboxEnvironmentRecord = {
@@ -41,6 +54,12 @@ export type SandboxEnvironmentRecord = {
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
+};
+
+export type OsacMessageRecord = {
+  type: string;
+  requestId?: string;
+  payload?: Record<string, unknown>;
 };
 
 function sleep(ms: number) {
@@ -174,6 +193,16 @@ export class OneceoApiConnector {
   getTaskCreationExecutionPlan(sessionId: string) {
     return this.request<Record<string, unknown>>(
       `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/execution-plan`
+    );
+  }
+
+  getSandboxEnvironment(sessionId: string) {
+    return this.request<SandboxEnvironmentRecord>(`/api/sandbox/environment/${encodeURIComponent(sessionId)}`);
+  }
+
+  listOsacMessages(sessionId: string, limit = 200) {
+    return this.request<OsacMessageRecord[]>(
+      `/api/sandbox/osac/${encodeURIComponent(sessionId)}/messages?limit=${Math.max(1, Math.min(limit, 500))}`
     );
   }
 }

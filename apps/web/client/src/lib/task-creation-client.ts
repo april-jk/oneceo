@@ -24,6 +24,23 @@ export type OsacMessageRecord = {
   requestId?: string;
 };
 
+export type WorkspaceTreeItem = {
+  path: string;
+  type: "file" | "dir";
+};
+
+export type WorkspaceTree = {
+  root: string;
+  items: WorkspaceTreeItem[];
+};
+
+export type WorkspaceFile = {
+  path: string;
+  content: string;
+  truncated?: boolean;
+  size?: number;
+};
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) {
@@ -54,4 +71,25 @@ export async function listOsacMessages(orchestratorSessionId: string, limit: num
   const url = `${getApiBaseUrl()}/api/sandbox/osac/${safeSessionId}/messages?limit=${limit}`;
   const result = await fetchJson<{ data?: OsacMessageRecord[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getWorkspaceTree(sessionId: string): Promise<WorkspaceTree> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/tree`;
+  const result = await fetchJson<{ data?: WorkspaceTree }>(url);
+  if (!result?.data) {
+    throw new Error("workspace tree empty");
+  }
+  return result.data;
+}
+
+export async function getWorkspaceFile(sessionId: string, filePath: string): Promise<WorkspaceFile> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams({ path: filePath });
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/file?${params.toString()}`;
+  const result = await fetchJson<{ data?: WorkspaceFile }>(url);
+  if (!result?.data) {
+    throw new Error("workspace file empty");
+  }
+  return result.data;
 }

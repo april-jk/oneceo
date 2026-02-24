@@ -259,6 +259,7 @@ class KvmRelaySocket extends Duplex {
 export class OsacClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
+  private pingTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly url: string,
@@ -320,6 +321,7 @@ export class OsacClient extends EventEmitter {
         clearTimeout(timeout);
         this.ws = ws;
         this.attachListeners(ws);
+        this.startPing(ws);
         resolve();
       });
 
@@ -418,9 +420,18 @@ export class OsacClient extends EventEmitter {
       }
     });
 
+    ws.on('ping', (data) => {
+      try {
+        ws.pong(data);
+      } catch {
+        // ignore pong errors
+      }
+    });
+
     ws.on('close', () => {
       this.emit('close');
       this.flushPending(new Error('OSAC WebSocket 已断开'));
+      this.stopPing();
       this.ws = null;
     });
 
@@ -432,6 +443,30 @@ export class OsacClient extends EventEmitter {
         console.warn('[OSAC_WS_ERROR]', error instanceof Error ? error.message : String(error));
       }
     });
+  }
+
+  private startPing(ws: WebSocket) {
+    const intervalMs = Number(process.env.OSAC_CLIENT_PING_INTERVAL_MS || 15000);
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    this.stopPing();
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.ping();
+      } catch {
+        // ignore ping errors
+      }
+    }, Math.max(1000, Math.floor(intervalMs)));
+    if (this.pingTimer && typeof this.pingTimer.unref === 'function') {
+      this.pingTimer.unref();
+    }
+  }
+
+  private stopPing() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
   }
 
   private parseMessage(data: WebSocket.Data): OsacMessage | null {

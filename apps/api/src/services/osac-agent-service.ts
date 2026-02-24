@@ -11,6 +11,13 @@ type OpencodePartInput = {
   name?: string;
 };
 
+type OpencodeHttpResponse = {
+  requestId?: string;
+  status?: number;
+  headers?: Record<string, string>;
+  body?: string;
+};
+
 export class OsacAgentService {
   private fallbackStreams = new Map<string, { sessionId: string; stop: () => void }>();
 
@@ -158,6 +165,54 @@ export class OsacAgentService {
     });
 
     return reply.payload || {};
+  }
+
+  async getSessionDiff(sessionId: string, opencodeSessionId: string) {
+    const requestId = `oc_diff_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const message: OsacMessage = {
+      type: 'OPENCODE_SESSION_DIFF',
+      requestId,
+      payload: {
+        requestId,
+        sessionId: opencodeSessionId,
+      },
+    };
+
+    auditOsacAction('OPENCODE_SESSION_DIFF', { sessionId, opencodeSessionId });
+
+    return await this.opencodeRequest(sessionId, message, 'OPENCODE_SESSION_DIFF_RESPONSE');
+  }
+
+  async opencodeHttpRequest(
+    sessionId: string,
+    input: {
+      method: string;
+      path: string;
+      query?: Record<string, string>;
+      headers?: Record<string, string>;
+      body?: string;
+      workspacePath?: string;
+    }
+  ): Promise<OpencodeHttpResponse> {
+    const requestId = `oc_http_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const message: OsacMessage = {
+      type: 'OPENCODE_HTTP_REQUEST',
+      requestId,
+      payload: {
+        requestId,
+        method: input.method,
+        path: input.path,
+        query: input.query,
+        headers: input.headers,
+        body: input.body,
+        workspacePath: input.workspacePath,
+      },
+    };
+
+    auditOsacAction('OPENCODE_HTTP_REQUEST', { sessionId, path: input.path, method: input.method });
+
+    const reply = await this.opencodeRequest(sessionId, message, 'OPENCODE_HTTP_RESPONSE');
+    return reply as OpencodeHttpResponse;
   }
 
   async loadSkill(sessionId: string, input: { skillName: string; skillContent: string; overwrite?: boolean }) {

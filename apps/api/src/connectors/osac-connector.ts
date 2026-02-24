@@ -147,6 +147,11 @@ function relayFallbackEnabled(): boolean {
   return raw !== 'false';
 }
 
+function isMappingStaleError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.includes('mapping_stale') || /mapping_stale/i.test(text);
+}
+
 async function issueRelayTcpTicket(sessionId: string): Promise<RelayTicketContext> {
   const ticket = await kvmConnector.createRelayTcpTicket(sessionId, resolveRelayRequestOptions());
   const payload = (ticket.data || {}) as Record<string, unknown>;
@@ -618,6 +623,7 @@ export const osacConnector = {
         };
 
         let relayFallbackTried = false;
+        let mappingStaleRetry = false;
         for (const candidate of authEndpoints) {
           let relay: RelayTicketContext | null = null;
           if (connectionMode === 'kvm-tcp-relay') {
@@ -658,6 +664,10 @@ export const osacConnector = {
           if (handle) {
             return handle;
           }
+          if (isMappingStaleError(lastError)) {
+            mappingStaleRetry = true;
+            break;
+          }
           if (
             connectionMode === 'kvm-tcp-relay' &&
             relayFallback &&
@@ -682,6 +692,36 @@ export const osacConnector = {
               sessionId,
               lastErrorText || 'relay_connect_failed'
             );
+            for (const fallbackCandidate of fallbackAuthEndpoints) {
+              const fallbackHandle = await tryConnectCandidate(fallbackCandidate, null);
+              if (fallbackHandle) {
+                return fallbackHandle;
+              }
+            }
+          }
+        }
+
+        if (mappingStaleRetry) {
+          const bumpedEpoch = Math.max(1, mapping.mappingEpoch || 1) + 1;
+          nextMetadata.osacMappingEpoch = bumpedEpoch;
+          await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
+            ...nextMetadata,
+          });
+
+          if (attempt >= maxAttempts && relayFallback) {
+            const fallbackMapping = resolveMappingContext(
+              sessionId,
+              relayFallback.endpoint,
+              nextMetadata,
+              relayFallback.mappingOverride
+            );
+            const fallbackAuthEndpoints = buildAuthEndpoints(
+              relayFallback.endpoint,
+              token,
+              sessionId,
+              fallbackMapping
+            );
+            console.warn('[OSAC_MAPPING_STALE_FALLBACK]', sessionId, `epoch_bumped=${bumpedEpoch}`);
             for (const fallbackCandidate of fallbackAuthEndpoints) {
               const fallbackHandle = await tryConnectCandidate(fallbackCandidate, null);
               if (fallbackHandle) {

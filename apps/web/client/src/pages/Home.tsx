@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
+import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { useLocation } from "wouter";
@@ -41,6 +42,8 @@ export default function Home() {
   const [showConnector, setShowConnector] = useState(false);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTab, setPreviewTab] = useState<"files" | "changes">("files");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
 
@@ -48,6 +51,7 @@ export default function Home() {
     isConnected,
     isProcessing,
     messages,
+    sessionId,
     currentQuestion,
     runtime,
     sendChatInput,
@@ -140,6 +144,10 @@ export default function Home() {
   ];
 
   const chatItems = useMemo(() => buildChatItems(messages), [messages]);
+  const openDiffPreview = () => {
+    setPreviewTab("changes");
+    setPreviewOpen(true);
+  };
 
   return (
     <WorkspaceLayout
@@ -363,214 +371,237 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
-                className="flex-1 flex flex-col min-h-0"
+                className="flex-1 flex flex-col md:flex-row gap-4 min-h-0"
               >
-                {/* 对话区域 */}
-                <div className="flex-1 overflow-y-auto min-h-0">
-                  <div className="container mx-auto px-6 py-6 max-w-3xl">
-                    <div className="space-y-4">
-                      {/* 连接状态 */}
-                      {!isConnected && (
-                        <NoticeMessage
-                          tone="warning"
-                          icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                          text="正在连接智能体..."
-                        />
-                      )}
-
-                      {runtime.orchestratorSessionId && (
-                        <div className="flex items-center justify-between gap-3">
-                          <NoticeMessage
-                            tone={runtime.error ? "warning" : "info"}
-                            icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
-                            text={
-                              runtime.error
-                                ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
-                                : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
-                            }
-                          />
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {/* 对话区域 */}
+                  <div className="flex-1 overflow-y-auto min-h-0">
+                    <div className="container mx-auto px-6 py-6 max-w-3xl">
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-end gap-2">
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            className="shrink-0 rounded-full"
-                            onClick={() => setShowRuntimeDrawer(true)}
+                            className="rounded-full"
+                            onClick={() => setPreviewOpen((prev) => !prev)}
                           >
-                            查看执行日志
+                            {previewOpen ? "隐藏预览" : "显示预览"}
                           </Button>
                         </div>
-                      )}
 
-                      {/* 消息列表 */}
-                      <AnimatePresence>
-                        {chatItems.map((item, index) => (
-                          <MessageBubble key={index} item={item} />
-                        ))}
-                      </AnimatePresence>
+                        {/* 连接状态 */}
+                        {!isConnected && (
+                          <NoticeMessage
+                            tone="warning"
+                            icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                            text="正在连接智能体..."
+                          />
+                        )}
 
-                      {/* 处理中指示器 */}
-                      {isProcessing && !currentQuestion && (
-                        <NoticeMessage
-                          tone="info"
-                          icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                          text="智能体正在处理..."
-                        />
-                      )}
-
-                      <div ref={messagesEndRef} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 固定在底部的输入框 */}
-                <motion.div
-                  initial={{ y: 100, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
-                  className="mt-auto border-t border-border bg-background/95 backdrop-blur"
-                >
-                  <div className="container mx-auto px-6 py-4 max-w-3xl">
-                    <div className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200">
-                      <div className="p-4 space-y-3">
-                        <Textarea
-                          placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
-                          value={message}
-                          onChange={(e) => setMessage(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              if (currentQuestion) {
-                                handleAnswerQuestion(message);
-                                setMessage("");
-                              } else {
-                                handleSend();
+                        {runtime.orchestratorSessionId && (
+                          <div className="flex items-center justify-between gap-3">
+                            <NoticeMessage
+                              tone={runtime.error ? "warning" : "info"}
+                              icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
+                              text={
+                                runtime.error
+                                  ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
+                                  : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
                               }
-                            }
-                          }}
-                          className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[80px] px-0 py-0"
-                          rows={3}
-                        />
-
-                        <TooltipProvider>
-                          <div className="flex items-center justify-between pt-2">
-                            <div className="flex items-center gap-1">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                  >
-                                    <Plus className="w-4 h-4 text-muted-foreground" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Add attachment</p>
-                                </TooltipContent>
-                              </Tooltip>
-
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                    onClick={() => setShowConnector(true)}
-                                  >
-                                    <Plug className="w-4 h-4 text-muted-foreground" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Connector</p>
-                                </TooltipContent>
-                              </Tooltip>
-
-                              <DropdownMenu>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
-                                      >
-                                        <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                        <span className="text-sm text-muted-foreground">{selectedModel}</span>
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Select AI model</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                                <DropdownMenuContent align="start" className="w-40">
-                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">Agent Lite</span>
-                                      <span className="text-xs text-muted-foreground">Fast & efficient</span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">Agent Pro</span>
-                                      <span className="text-xs text-muted-foreground">Balanced performance</span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
-                                    <div className="flex flex-col">
-                                      <span className="font-medium">Agent Max</span>
-                                      <span className="text-xs text-muted-foreground">Maximum capability</span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-
-                            <div className="flex items-center gap-1">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                  >
-                                    <Mic className="w-4 h-4 text-muted-foreground" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Voice input</p>
-                                </TooltipContent>
-                              </Tooltip>
-
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    onClick={() => {
-                                      if (currentQuestion) {
-                                        handleAnswerQuestion(message);
-                                        setMessage("");
-                                      } else {
-                                        handleSend();
-                                      }
-                                    }}
-                                    disabled={!message.trim()}
-                                    size="icon"
-                                    className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
-                                  >
-                                    <Send className="w-4 h-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Send message</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="shrink-0 rounded-full"
+                              onClick={() => setShowRuntimeDrawer(true)}
+                            >
+                              查看执行日志
+                            </Button>
                           </div>
-                        </TooltipProvider>
+                        )}
+
+                        {/* 消息列表 */}
+                        <AnimatePresence>
+                          {chatItems.map((item, index) => (
+                            <MessageBubble key={index} item={item} onOpenDiffPreview={openDiffPreview} />
+                          ))}
+                        </AnimatePresence>
+
+                        {/* 处理中指示器 */}
+                        {isProcessing && !currentQuestion && (
+                          <NoticeMessage
+                            tone="info"
+                            icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                            text="智能体正在处理..."
+                          />
+                        )}
+
+                        <div ref={messagesEndRef} />
                       </div>
                     </div>
                   </div>
-                </motion.div>
+
+                  {/* 固定在底部的输入框 */}
+                  <motion.div
+                    initial={{ y: 100, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
+                    className="mt-auto border-t border-border bg-background/95 backdrop-blur"
+                  >
+                    <div className="container mx-auto px-6 py-4 max-w-3xl">
+                      <div className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200">
+                        <div className="p-4 space-y-3">
+                          <Textarea
+                            placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
+                            value={message}
+                            onChange={(e) => setMessage(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                if (currentQuestion) {
+                                  handleAnswerQuestion(message);
+                                  setMessage("");
+                                } else {
+                                  handleSend();
+                                }
+                              }
+                            }}
+                            className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[80px] px-0 py-0"
+                            rows={3}
+                          />
+
+                          <TooltipProvider>
+                            <div className="flex items-center justify-between pt-2">
+                              <div className="flex items-center gap-1">
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                    >
+                                      <Plus className="w-4 h-4 text-muted-foreground" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Add attachment</p>
+                                  </TooltipContent>
+                                </Tooltip>
+
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                      onClick={() => setShowConnector(true)}
+                                    >
+                                      <Plug className="w-4 h-4 text-muted-foreground" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Connector</p>
+                                  </TooltipContent>
+                                </Tooltip>
+
+                                <DropdownMenu>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
+                                        >
+                                          <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                          <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Select AI model</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <DropdownMenuContent align="start" className="w-40">
+                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
+                                      <div className="flex flex-col">
+                                        <span className="font-medium">Agent Lite</span>
+                                        <span className="text-xs text-muted-foreground">Fast & efficient</span>
+                                      </div>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
+                                      <div className="flex flex-col">
+                                        <span className="font-medium">Agent Pro</span>
+                                        <span className="text-xs text-muted-foreground">Balanced performance</span>
+                                      </div>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
+                                      <div className="flex flex-col">
+                                        <span className="font-medium">Agent Max</span>
+                                        <span className="text-xs text-muted-foreground">Maximum capability</span>
+                                      </div>
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                    >
+                                      <Mic className="w-4 h-4 text-muted-foreground" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Voice input</p>
+                                  </TooltipContent>
+                                </Tooltip>
+
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button
+                                      onClick={() => {
+                                        if (currentQuestion) {
+                                          handleAnswerQuestion(message);
+                                          setMessage("");
+                                        } else {
+                                          handleSend();
+                                        }
+                                      }}
+                                      disabled={!message.trim()}
+                                      size="icon"
+                                      className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
+                                    >
+                                      <Send className="w-4 h-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Send message</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
+                            </div>
+                          </TooltipProvider>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                </div>
+
+                <OpencodePreviewPanel
+                  messages={messages}
+                  sessionId={sessionId}
+                  open={previewOpen}
+                  activeTab={previewTab}
+                  onTabChange={setPreviewTab}
+                  onToggle={() => setPreviewOpen(false)}
+                />
               </motion.div>
             )}
           </AnimatePresence>
@@ -752,7 +783,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   return items;
 }
 
-function MessageBubble({ item }: { item: ChatItem }) {
+function MessageBubble({ item, onOpenDiffPreview }: { item: ChatItem; onOpenDiffPreview?: () => void }) {
   if (item.kind === "capsule") {
     const toneClass: Record<CapsuleTone, string> = {
       system: "border-slate-200 bg-slate-50 text-slate-700",
@@ -792,7 +823,7 @@ function MessageBubble({ item }: { item: ChatItem }) {
   }
 
   if (item.kind === "opencode_tool") {
-    return <OpencodeToolCard item={item} />;
+    return <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />;
   }
 
   return (
@@ -985,7 +1016,13 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
   }
 }
 
-function OpencodeToolCard({ item }: { item: Extract<ChatItem, { kind: "opencode_tool" }> }) {
+function OpencodeToolCard({
+  item,
+  onOpenDiffPreview,
+}: {
+  item: Extract<ChatItem, { kind: "opencode_tool" }>;
+  onOpenDiffPreview?: () => void;
+}) {
   const metadata = item.metadata || {};
   const { eventType, part, toolName, properties } = getOpencodeEventInfo(metadata);
   const toolState = toRecord(part.state);
@@ -998,6 +1035,8 @@ function OpencodeToolCard({ item }: { item: Extract<ChatItem, { kind: "opencode_
   let output = asText(toolState.output) || asText(properties.output) || asText(item.content);
   const error = asText(toolState.error) || asText(properties.error);
   const status = asText(toolState.status) || asText(properties.status) || (error ? "error" : "unknown");
+
+  const isDiffEvent = eventType === "session.diff" || (toolName || "").toLowerCase() === "apply_patch";
 
   let info = getToolInfo(toolName || "tool", input);
   if (!toolName) {
@@ -1048,6 +1087,26 @@ function OpencodeToolCard({ item }: { item: Extract<ChatItem, { kind: "opencode_
       Object.keys(metaInfo).length > 0
   );
   const summaryText = info.subtitle || "";
+
+  if (isDiffEvent) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <button
+          type="button"
+          onClick={() => onOpenDiffPreview?.()}
+          className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-slate-900 hover:bg-amber-100/70 transition-colors"
+        >
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Diff</div>
+          <div className="text-xs text-amber-700/80 mt-1">点击在右侧预览更改</div>
+        </button>
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div

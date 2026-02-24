@@ -29,6 +29,30 @@ function pickString(...values: unknown[]): string | null {
   return null;
 }
 
+function isSessionNotFoundError(error: unknown): boolean {
+  if (!(error instanceof KvmClientError)) {
+    return false;
+  }
+  const code = String(error.code || '').toUpperCase();
+  if (code === 'SESSION_NOT_FOUND') {
+    return true;
+  }
+  const message = String(error.message || '').toLowerCase();
+  return error.status === 404 && message.includes('session') && message.includes('not found');
+}
+
+function isSessionVmNotBoundError(error: unknown): boolean {
+  if (!(error instanceof KvmClientError)) {
+    return false;
+  }
+  const code = String(error.code || '').toUpperCase();
+  if (code === 'SESSION_VM_NOT_BOUND') {
+    return true;
+  }
+  const message = String(error.message || '').toLowerCase();
+  return error.status === 404 && message.includes('no vm binding');
+}
+
 type SandboxStatus = 'ready' | 'using';
 type WarmPoolState = 'seeding' | 'ready' | 'using' | 'retired' | 'failed';
 type AllocationSource = 'warm_pool' | 'cold_start' | 'fixed_session';
@@ -976,6 +1000,163 @@ export class SandboxAgentProvisionService {
     return this.fixedSandboxConfig.enabled && Boolean(this.fixedSandboxConfig.sessionId);
   }
 
+  private buildFixedMetadataForSession(
+    metadata: Record<string, unknown>,
+    sessionId: string,
+    vmName: string | null,
+    resetMapping: boolean
+  ): Record<string, unknown> {
+    const fixedSandbox = (metadata.fixedSandbox || {}) as Record<string, unknown>;
+    const next: Record<string, unknown> = {
+      ...metadata,
+      fixedSandbox: {
+        ...fixedSandbox,
+        enabled: true,
+        sessionId,
+        vmName: vmName || (fixedSandbox as any)?.vmName || null,
+      },
+      allocationSource: 'fixed_session',
+      sandboxStatus: pickString(metadata.sandboxStatus) || 'ready',
+      osacConnectionMode:
+        pickString(metadata.osacConnectionMode) || osacBootstrapConfig.connectionMode || 'kvm-tcp-relay',
+    };
+
+    if (resetMapping) {
+      next.osacMappingId = `portmap:${sessionId}:${osacBootstrapConfig.osacPort}`;
+      next.osacMappingEpoch = 1;
+    }
+
+    return next;
+  }
+
+  private async ensureFixedSessionBinding(
+    sessionId: string,
+    vmName: string | null,
+    metadata: Record<string, unknown>
+  ): Promise<{ sessionId: string; metadata: Record<string, unknown> }> {
+    if (!vmName) {
+      return { sessionId, metadata };
+    }
+
+    let exists = true;
+    try {
+      await kvmConnector.getSession(sessionId);
+    } catch (error) {
+      if (isSessionNotFoundError(error)) {
+        exists = false;
+      } else {
+        throw error;
+      }
+    }
+
+    const resolveOwnerSessionId = (error: unknown): string | null => {
+      if (!(error instanceof KvmClientError)) {
+        return null;
+      }
+      const code = String(error.code || '').toUpperCase();
+      if (code !== 'VM_ALREADY_BOUND') {
+        return null;
+      }
+      const details = (error.details || {}) as Record<string, unknown>;
+      return (
+        pickString(
+          details.owner_session_id,
+          details.ownerSessionId,
+          details.session_id,
+          details.sessionId
+        ) || null
+      );
+    };
+
+    if (exists) {
+      try {
+        await kvmConnector.getSessionVm(sessionId);
+      } catch (error) {
+        if (isSessionVmNotBoundError(error)) {
+          try {
+            const bind = await kvmConnector.bindSessionVm(sessionId, { vm_name: vmName });
+            await awaitJobIfNeeded(bind);
+          } catch (bindError) {
+            const ownerSessionId = resolveOwnerSessionId(bindError);
+            if (ownerSessionId) {
+              sessionId = ownerSessionId;
+              exists = true;
+            } else {
+              throw bindError;
+            }
+          }
+        } else if (isSessionNotFoundError(error)) {
+          exists = false;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (exists) {
+      if (sessionId !== this.fixedSandboxConfig.sessionId) {
+        this.fixedSandboxConfig.sessionId = sessionId;
+      }
+      const nextMetadata = this.buildFixedMetadataForSession(metadata, sessionId, vmName, false);
+      return { sessionId, metadata: nextMetadata };
+    }
+
+    const created = await kvmConnector.createSession({ metadata: metadata || {} });
+    const sessionData = created.data as any;
+    const newSessionId = pickString(
+      sessionData?.sessionId,
+      sessionData?.session_id,
+      sessionData?.id,
+      sessionData?.session
+    );
+    if (!newSessionId) {
+      throw new Error('创建固定会话失败：未返回 session_id');
+    }
+
+    try {
+      const bind = await kvmConnector.bindSessionVm(newSessionId, { vm_name: vmName });
+      await awaitJobIfNeeded(bind);
+    } catch (error) {
+      const ownerSessionId = resolveOwnerSessionId(error);
+      if (ownerSessionId) {
+        try {
+          await kvmConnector.getSession(ownerSessionId);
+        } catch (checkError) {
+          if (isSessionNotFoundError(checkError)) {
+            throw new Error(`固定虚拟机已绑定到未知会话(${ownerSessionId})，请先释放绑定`);
+          }
+          throw checkError;
+        }
+        try {
+          await kvmConnector.closeSession(newSessionId, { graceful_shutdown: true });
+        } catch {
+          // ignore cleanup failure
+        }
+        this.fixedSandboxConfig.sessionId = ownerSessionId;
+        const ownerMetadata = this.buildFixedMetadataForSession(metadata, ownerSessionId, vmName, true);
+        await sandboxEnvironmentService.attachPoolEnvironment({
+          sessionId: ownerSessionId,
+          vmName,
+          metadata: ownerMetadata,
+          status: 'ready',
+        });
+        return { sessionId: ownerSessionId, metadata: ownerMetadata };
+      }
+      throw error;
+    }
+
+    const nextMetadata = this.buildFixedMetadataForSession(metadata, newSessionId, vmName, true);
+
+    await sandboxEnvironmentService.attachPoolEnvironment({
+      sessionId: newSessionId,
+      vmName,
+      metadata: nextMetadata,
+      status: 'ready',
+    });
+
+    return { sessionId: newSessionId, metadata: nextMetadata };
+  }
+
   private async ensureFixedVmRunning(sessionId: string, vmName: string | null) {
     if (!vmName) {
       return;
@@ -1058,78 +1239,129 @@ export class SandboxAgentProvisionService {
     const remoteOsacPath = `${remoteDir}/${osacBootstrapConfig.osacBinaryName}`;
     const remoteOpencodePath = `${remoteDir}/${osacBootstrapConfig.opencodeBinaryName}`;
     const launchCommand = (osacBootstrapConfig.launchCommand || remoteOsacPath).trim();
+    const uploadFlag = String(process.env.OSAC_FIXED_UPLOAD_BINARIES || '').trim().toLowerCase();
+    const shouldUpload = ['1', 'true', 'yes', 'on'].includes(uploadFlag);
 
-    const inlineEnvParts = [
-      `OSAC_AUTH_TOKEN='${shellEscapeSingle(token)}'`,
-      `OSAC_LISTEN_ADDR=':${osacBootstrapConfig.osacPort}'`,
-      `OSAC_OPENCODE_PATH='${shellEscapeSingle(remoteOpencodePath)}'`,
-      `OSAC_LOG_DIR='${shellEscapeSingle(`${remoteDir}/log`)}'`,
-      `OSAC_UPDATE_TMP='${shellEscapeSingle(`${remoteDir}/tmp`)}'`,
-      `OPENCODE_BIN='${shellEscapeSingle(remoteOpencodePath)}'`,
-      `OPENCODE_PATH='${shellEscapeSingle(remoteOpencodePath)}'`,
-      `OSAC_LLM_PROXY_ENABLE='${osacLlmEnv.enabled ? 'true' : 'false'}'`,
-    ];
+    if (shouldUpload) {
+      const remoteDirPath = `${remoteDir}/`;
+      const osacBuffer = fs.readFileSync(osacBootstrapConfig.osacBinaryPath);
+      const opencodeBuffer = fs.readFileSync(osacBootstrapConfig.opencodeBinaryPath);
+
+      const osacUpload = await kvmConnector.uploadSessionFile(sessionId, {
+        filename: osacBootstrapConfig.osacBinaryName,
+        buffer: osacBuffer,
+        targetPath: remoteDirPath,
+        overwrite: 'replace',
+        mkdirs: true,
+        chmod: '755',
+        deliveryMode: osacBootstrapConfig.deliveryMode,
+      });
+      const osacUploadJob = await awaitJobIfNeeded(osacUpload);
+      assertJobSuccess(osacUploadJob, '固定会话 OSAC 上传');
+
+      const opencodeUpload = await kvmConnector.uploadSessionFile(sessionId, {
+        filename: osacBootstrapConfig.opencodeBinaryName,
+        buffer: opencodeBuffer,
+        targetPath: remoteDirPath,
+        overwrite: 'replace',
+        mkdirs: true,
+        chmod: '755',
+        deliveryMode: osacBootstrapConfig.deliveryMode,
+      });
+      const opencodeUploadJob = await awaitJobIfNeeded(opencodeUpload);
+      assertJobSuccess(opencodeUploadJob, '固定会话 OpenCode 上传');
+    }
+
+    const inlineEnvParts: string[] = [];
+    const systemdEnvParts: string[] = [];
+    const pushEnv = (key: string, value: string) => {
+      const escaped = shellEscapeSingle(value);
+      inlineEnvParts.push(`${key}='${escaped}'`);
+      systemdEnvParts.push(`--setenv=${key}='${escaped}'`);
+    };
+
+    pushEnv('OSAC_AUTH_TOKEN', token);
+    pushEnv('OSAC_LISTEN_ADDR', `:${osacBootstrapConfig.osacPort}`);
+    pushEnv('OSAC_OPENCODE_PATH', remoteOpencodePath);
+    pushEnv('OSAC_LOG_DIR', `${remoteDir}/log`);
+    pushEnv('OSAC_UPDATE_TMP', `${remoteDir}/tmp`);
+    pushEnv('OPENCODE_BIN', remoteOpencodePath);
+    pushEnv('OPENCODE_PATH', remoteOpencodePath);
+    pushEnv('OSAC_LLM_PROXY_ENABLE', osacLlmEnv.enabled ? 'true' : 'false');
 
     if (Number.isFinite(osacLlmEnv.proxyPort)) {
-      inlineEnvParts.push(`OSAC_LLM_PROXY_PORT='${shellEscapeSingle(String(osacLlmEnv.proxyPort))}'`);
+      pushEnv('OSAC_LLM_PROXY_PORT', String(osacLlmEnv.proxyPort));
     }
     if (osacLlmEnv.upstreamBaseUrl) {
-      inlineEnvParts.push(`OSAC_LLM_UPSTREAM_BASE_URL='${shellEscapeSingle(osacLlmEnv.upstreamBaseUrl)}'`);
+      pushEnv('OSAC_LLM_UPSTREAM_BASE_URL', osacLlmEnv.upstreamBaseUrl);
     }
     if (osacLlmEnv.upstreamToken) {
-      inlineEnvParts.push(`OSAC_LLM_UPSTREAM_TOKEN='${shellEscapeSingle(osacLlmEnv.upstreamToken)}'`);
+      pushEnv('OSAC_LLM_UPSTREAM_TOKEN', osacLlmEnv.upstreamToken);
     }
     if (osacLlmEnv.timeoutMs) {
-      inlineEnvParts.push(`OSAC_LLM_PROXY_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.timeoutMs)}'`);
+      pushEnv('OSAC_LLM_PROXY_TIMEOUT_MS', osacLlmEnv.timeoutMs);
     }
     if (osacLlmEnv.maxInflightPerSession) {
-      inlineEnvParts.push(
-        `OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION='${shellEscapeSingle(osacLlmEnv.maxInflightPerSession)}'`
-      );
+      pushEnv('OSAC_LLM_PROXY_MAX_INFLIGHT_PER_SESSION', osacLlmEnv.maxInflightPerSession);
     }
     if (osacLlmEnv.queueTimeoutMs) {
-      inlineEnvParts.push(`OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.queueTimeoutMs)}'`);
+      pushEnv('OSAC_LLM_PROXY_QUEUE_TIMEOUT_MS', osacLlmEnv.queueTimeoutMs);
     }
     if (osacLlmEnv.streamIdleTimeoutMs) {
-      inlineEnvParts.push(
-        `OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS='${shellEscapeSingle(osacLlmEnv.streamIdleTimeoutMs)}'`
-      );
+      pushEnv('OSAC_LLM_PROXY_STREAM_IDLE_TIMEOUT_MS', osacLlmEnv.streamIdleTimeoutMs);
     }
     if (osacLlmEnv.wsPingInterval) {
-      inlineEnvParts.push(`OSAC_WS_PING_INTERVAL='${shellEscapeSingle(osacLlmEnv.wsPingInterval)}'`);
+      pushEnv('OSAC_WS_PING_INTERVAL', osacLlmEnv.wsPingInterval);
     }
     if (osacLlmEnv.wsIdleTimeout) {
-      inlineEnvParts.push(`OSAC_WS_IDLE_TIMEOUT='${shellEscapeSingle(osacLlmEnv.wsIdleTimeout)}'`);
+      pushEnv('OSAC_WS_IDLE_TIMEOUT', osacLlmEnv.wsIdleTimeout);
     }
     if (osacLlmEnv.instanceLockPath) {
-      inlineEnvParts.push(`OSAC_INSTANCE_LOCK_PATH='${shellEscapeSingle(osacLlmEnv.instanceLockPath)}'`);
+      pushEnv('OSAC_INSTANCE_LOCK_PATH', osacLlmEnv.instanceLockPath);
     }
     if (opencodeEnv.baseUrl) {
-      inlineEnvParts.push(`OPENAI_BASE_URL='${shellEscapeSingle(opencodeEnv.baseUrl)}'`);
+      pushEnv('OPENAI_BASE_URL', opencodeEnv.baseUrl);
     }
     if (opencodeEnv.apiKey) {
-      inlineEnvParts.push(`OPENAI_API_KEY='${shellEscapeSingle(opencodeEnv.apiKey)}'`);
+      pushEnv('OPENAI_API_KEY', opencodeEnv.apiKey);
     }
     if (opencodeEnv.model) {
-      inlineEnvParts.push(`OPENCODE_MODEL='${shellEscapeSingle(opencodeEnv.model)}'`);
+      pushEnv('OPENCODE_MODEL', opencodeEnv.model);
     }
     if (opencodeEnv.providerId) {
-      inlineEnvParts.push(`OPENCODE_PROVIDER_ID='${shellEscapeSingle(opencodeEnv.providerId)}'`);
+      pushEnv('OPENCODE_PROVIDER_ID', opencodeEnv.providerId);
     }
 
     const inlineEnv = inlineEnvParts.join(' ');
+    const systemdEnv = systemdEnvParts.join(' ');
     const escapedOsacPath = shellEscapeSingle(remoteOsacPath);
     const escapedOpencodePath = shellEscapeSingle(remoteOpencodePath);
+    const forceRestart = String(process.env.OSAC_FIXED_FORCE_RESTART || '').trim().toLowerCase();
+    const shouldForceRestart = ['1', 'true', 'yes', 'on'].includes(forceRestart);
+    const useSystemdFlag = String(process.env.OSAC_FIXED_USE_SYSTEMD || '').trim().toLowerCase();
+    const shouldUseSystemd = useSystemdFlag ? ['1', 'true', 'yes', 'on'].includes(useSystemdFlag) : true;
     const startCommand = `set -e;
 mkdir -p '${shellEscapeSingle(remoteDir)}' '${shellEscapeSingle(`${remoteDir}/log`)}' '${shellEscapeSingle(`${remoteDir}/tmp`)}';
+${shouldForceRestart ? `if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop osac.service >/dev/null 2>&1 || true;
+  systemctl reset-failed osac.service >/dev/null 2>&1 || true;
+else
+  pkill -x osac >/dev/null 2>&1 || true;
+fi;` : `if command -v systemctl >/dev/null 2>&1; then
+  systemctl is-active osac.service >/dev/null 2>&1 && exit 0 || true;
+fi;
 if command -v ss >/dev/null 2>&1; then
   ss -ltn | grep -q ':${osacBootstrapConfig.osacPort}' && exit 0 || true;
 elif command -v netstat >/dev/null 2>&1; then
   netstat -ltn | grep -q ':${osacBootstrapConfig.osacPort}' && exit 0 || true;
-fi;
+fi;`}
 [ -x '${escapedOsacPath}' ] || { echo 'missing_osac_binary'; exit 1; };
 [ -x '${escapedOpencodePath}' ] || { echo 'missing_opencode_binary'; exit 1; };
-nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/log/osac.log`)}' 2>&1 < /dev/null &`;
+if ${shouldUseSystemd ? 'command -v systemd-run >/dev/null 2>&1' : 'false'}; then
+  systemd-run --unit=osac --property=Restart=always --property=RestartSec=2 ${systemdEnv} ${launchCommand};
+else
+  nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/log/osac.log`)}' 2>&1 < /dev/null &;
+fi;`;
 
     const startResult = await kvmConnector.execSession(sessionId, {
       path: '/bin/bash',
@@ -1172,15 +1404,26 @@ nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/lo
   }
 
   private async provisionFromFixedSandbox(input: ProvisionInput): Promise<ProvisionResult> {
-    const sessionId = this.fixedSandboxConfig.sessionId;
+    let sessionId = this.fixedSandboxConfig.sessionId;
     if (!sessionId) {
       throw new Error('固定虚拟机模式已开启，但未配置 OSAC_FIXED_SANDBOX_SESSION_ID');
     }
 
     const vmName = this.fixedSandboxConfig.vmName || null;
-    const existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    let existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+
+    if (!existing && vmName) {
+      const latest = await sandboxExecutionEnvironmentDAO.findLatestByVmName(vmName);
+      const latestSessionId = pickString(latest?.sessionId);
+      if (latestSessionId && latestSessionId !== sessionId) {
+        sessionId = latestSessionId;
+        this.fixedSandboxConfig.sessionId = sessionId;
+        existing = latest;
+      }
+    }
+
     const existingMetadata = ((existing?.metadata || {}) as Record<string, unknown>) || {};
-    const mergedMetadata: Record<string, unknown> = {
+    let mergedMetadata: Record<string, unknown> = {
       ...existingMetadata,
       ...(input.metadata || {}),
       fixedSandbox: {
@@ -1203,6 +1446,17 @@ nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/lo
     if (!osacAuthToken) {
       throw new Error(`固定虚拟机会话缺少 OSAC 鉴权信息: ${sessionId}`);
     }
+
+    const binding = await this.ensureFixedSessionBinding(sessionId, vmName, mergedMetadata);
+    if (binding.sessionId !== sessionId) {
+      sessionId = binding.sessionId;
+      this.fixedSandboxConfig.sessionId = sessionId;
+      mergedMetadata = binding.metadata;
+    } else if (binding.metadata !== mergedMetadata) {
+      mergedMetadata = binding.metadata;
+    }
+
+    existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
 
     if (!existing) {
       await sandboxEnvironmentService.attachPoolEnvironment({
@@ -1430,7 +1684,7 @@ nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/lo
           sessionId,
           {
             command: 'curl -sS -m 60 http://127.0.0.1:18111/v1/models -H "Authorization: Bearer local-proxy"',
-            options: {},
+            options: { shell: true },
           },
           {
             timeoutMs: this.warmPoolConfig.readyGateModelsTimeoutMs,
@@ -1503,7 +1757,7 @@ nohup env ${inlineEnv} ${launchCommand} >> '${shellEscapeSingle(`${remoteDir}/lo
                 sessionId,
                 {
                   command: 'curl -sS -m 60 http://127.0.0.1:18111/v1/models -H "Authorization: Bearer local-proxy"',
-                  options: {},
+                  options: { shell: true },
                 },
                 {
                   timeoutMs: modelsTimeoutMs,

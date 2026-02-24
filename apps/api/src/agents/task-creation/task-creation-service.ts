@@ -596,6 +596,7 @@ export class TaskCreationService {
         if (workspacePath) {
           commandOptions.cwd = workspacePath;
         }
+        commandOptions.shell = true;
 
         for (let round = 1; round <= maxRounds; round += 1) {
           this.sendMessage({

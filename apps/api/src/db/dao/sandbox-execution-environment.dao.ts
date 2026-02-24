@@ -24,6 +24,16 @@ export class SandboxExecutionEnvironmentDAO {
       .limit(limit);
   }
 
+  async findLatestByVmName(vmName: string) {
+    const [row] = await db
+      .select()
+      .from(sandboxExecutionEnvironments)
+      .where(eq(sandboxExecutionEnvironments.vmName, vmName))
+      .orderBy(desc(sandboxExecutionEnvironments.updatedAt))
+      .limit(1);
+    return row;
+  }
+
   async updateStatus(
     sessionId: string,
     status: 'creating' | 'ready' | 'closing' | 'closed' | 'failed',

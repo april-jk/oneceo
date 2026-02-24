@@ -1,5 +1,6 @@
 import type { OsacMessage } from '../clients/osac-client';
 import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
+import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from './osac-agent-service';
 import { osacConnectionManager } from './osac-connection-manager';
 import { auditOsacAction } from '../utils/osac-audit';
@@ -79,6 +80,22 @@ function parseStructString(value: string): Record<string, unknown> {
     result[key] = val;
   }
   return result;
+}
+
+function shouldInvalidateWorkspaceCache(eventType: string, toolName: string): boolean {
+  if (
+    eventType === 'file.edited' ||
+    eventType === 'file.watcher.updated' ||
+    eventType === 'session.diff' ||
+    eventType === 'command.executed'
+  ) {
+    return true;
+  }
+  return toolName === 'apply_patch';
+}
+
+function isEmptyDiff(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 0;
 }
 
 function normalizeRecord(value: unknown): Record<string, unknown> {
@@ -440,6 +457,7 @@ export class OpencodeRemoteService {
   private textStreams = new Map<string, OpencodeTextStreamEntry>();
   private finalizedRuns = new Set<string>();
   private opencodeLocks = new Map<string, Promise<void>>();
+  private workspaceGitInit = new Set<string>();
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -447,6 +465,38 @@ export class OpencodeRemoteService {
 
   private buildTextStreamKey(taskSessionId: string, opencodeSessionId: string, partId: string): string {
     return `${taskSessionId}::${opencodeSessionId}::${partId}`;
+  }
+
+  private buildWorkspaceKey(orchestratorSessionId: string, workspacePath: string): string {
+    return `${orchestratorSessionId}::${workspacePath}`;
+  }
+
+  private shellEscapeSingle(value: string): string {
+    return value.replace(/'/g, "'\"'\"'");
+  }
+
+  private async ensureWorkspaceGit(orchestratorSessionId: string, workspacePath: string): Promise<void> {
+    if (!workspacePath) return;
+    const key = this.buildWorkspaceKey(orchestratorSessionId, workspacePath);
+    if (this.workspaceGitInit.has(key)) return;
+    this.workspaceGitInit.add(key);
+
+    const escaped = this.shellEscapeSingle(workspacePath);
+    const command = [
+      "command -v git >/dev/null 2>&1 || exit 0",
+      `mkdir -p '${escaped}'`,
+      `[ -d '${escaped}/.git' ] || git -C '${escaped}' init -q`,
+      `git -C '${escaped}' config core.autocrlf false || true`,
+    ].join(" && ");
+
+    try {
+      await osacAgentService.executeCommandAndWait(orchestratorSessionId, {
+        command,
+        options: { shell: true },
+      });
+    } catch (error) {
+      console.warn("[OPENCODE_WORKSPACE_GIT_INIT_FAILED]", error);
+    }
   }
 
   private async withOpencodeLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -806,6 +856,7 @@ export class OpencodeRemoteService {
 
     return await this.withOpencodeLock(orchestratorSessionId, async () => {
       await osacConnectionManager.ensurePersistent(orchestratorSessionId);
+      await this.ensureWorkspaceGit(orchestratorSessionId, workspacePath);
       await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
         workspacePath: workspacePath || undefined,
         host: opencodeHost,
@@ -1001,9 +1052,31 @@ export class OpencodeRemoteService {
       session.runtime?.opencodeSessionId ||
       '';
     const eventProps = normalizeRecord(event.properties);
+    const shouldFetchDiff =
+      eventType === 'session.diff' &&
+      opencodeSessionId &&
+      (!Array.isArray(eventProps.diff) || isEmptyDiff(eventProps.diff));
+    if (shouldFetchDiff) {
+      try {
+        const diffReply = await osacAgentService.getSessionDiff(orchestratorSessionId, opencodeSessionId);
+        const diffPayload = toRecord(diffReply);
+        const diffItems = diffPayload.diff;
+        if (Array.isArray(diffItems) && diffItems.length > 0) {
+          eventProps.diff = diffItems;
+          event.properties = eventProps;
+          payload.event = event;
+        }
+      } catch (error) {
+        console.warn('[OPENCODE_SESSION_DIFF_FETCH_FAILED]', error);
+      }
+    }
     const partRecord = normalizeRecord(eventProps.part);
     const partType = extractPartType(event);
     const toolName = asString(partRecord.tool).toLowerCase();
+
+    if (shouldInvalidateWorkspaceCache(eventType, toolName)) {
+      await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
+    }
 
     const outcome = detectOpencodeOutcome(eventType, payload);
 

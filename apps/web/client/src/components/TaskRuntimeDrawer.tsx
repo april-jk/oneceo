@@ -60,7 +60,9 @@ interface TaskRuntimeDrawerProps {
 }
 
 export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskRuntimeDrawerProps) {
-  const rows = [...runtime.messages].reverse();
+  const rows = [...runtime.messages]
+    .filter((message) => !String(message.type || "").toUpperCase().includes("ERROR"))
+    .reverse();
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -80,26 +82,27 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
               type="button"
               size="sm"
               variant="outline"
-              disabled={!runtime.orchestratorSessionId || runtime.syncing}
+              disabled={runtime.syncing || runtime.starting}
               onClick={() => {
                 void runtime.refresh();
               }}
             >
-              {runtime.syncing ? (
+              {runtime.syncing || runtime.starting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <RefreshCw className="mr-2 h-4 w-4" />
               )}
-              刷新
+              {runtime.ready ? "刷新" : "加载日志"}
             </Button>
             <span className="text-xs text-muted-foreground">消息数：{runtime.messages.length}</span>
-            {runtime.error && <span className="text-xs text-rose-600">同步失败：{runtime.error}</span>}
           </div>
         </SheetHeader>
 
         <ScrollArea className="h-[calc(100vh-180px)] px-4">
           {rows.length === 0 ? (
-            <div className="py-8 text-sm text-muted-foreground">暂无执行日志。</div>
+            <div className="py-8 text-sm text-muted-foreground">
+              {runtime.ready ? "暂无执行日志。" : "执行日志尚未加载。"}
+            </div>
           ) : (
             <div className="space-y-3 py-4">
               {rows.map((message, index) => {

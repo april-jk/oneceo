@@ -1,6 +1,7 @@
 import { sandboxEnvironmentService } from './sandbox-environment-service';
 import { osacConnectionManager } from './osac-connection-manager';
 import { osacAgentService } from './osac-agent-service';
+import { resolveSandboxProvider } from '../config/sandbox-provider';
 
 function toNumber(value: string | undefined, fallback: number) {
   if (!value) return fallback;
@@ -92,6 +93,9 @@ export class OsacPersistentRecoveryService {
   }
 
   private startPeriodicRecovery() {
+    if (resolveSandboxProvider() === 'e2b') {
+      return;
+    }
     if (shouldSkipPersistentRecover()) {
       console.log('[OSAC_PERSISTENT_RECOVER_SKIP]', 'fixed_session_mode');
       return;
@@ -206,6 +210,9 @@ export class OsacPersistentRecoveryService {
   }
 
   async recoverReadySessions() {
+    if (resolveSandboxProvider() === 'e2b') {
+      return;
+    }
     if (this.started) {
       return;
     }

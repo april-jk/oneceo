@@ -5,11 +5,14 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useLocation } from 'wouter';
+import { useLocation, useSearch } from 'wouter';
 import {
   createTaskCreationSocket,
+  getOpencodeEventStreamUrl,
+  getTaskCreationSession,
   listOsacMessages,
   listTaskCreationMessages,
+  startTaskCreationRuntime,
   type TaskCreationHistoryMessage,
   type OsacMessageRecord,
 } from '@/lib/task-creation-client';
@@ -38,12 +41,16 @@ export interface AgentMessage {
 
 export interface OrchestrationRuntime {
   orchestratorSessionId: string | null;
+  status: string | null;
+  ready: boolean;
+  starting: boolean;
   latestType: string | null;
   latestText: string | null;
   syncing: boolean;
   error: string | null;
   messages: OsacMessageRecord[];
   refresh: () => Promise<void>;
+  ensure: () => Promise<void>;
 }
 
 export interface UseTaskCreationAgentOptions {
@@ -109,6 +116,133 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function compactText(value: string, maxLen: number = 320): string {
+  const text = value.trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}...`;
+}
+
+function normalizeRuntimeStatus(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim().toLowerCase();
+  }
+  return null;
+}
+
+function findSessionId(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findSessionId(item);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  const record = value as Record<string, unknown>;
+  const direct =
+    (typeof record.sessionID === 'string' && record.sessionID.trim()) ||
+    (typeof record.sessionId === 'string' && record.sessionId.trim());
+  if (direct) return direct;
+  for (const child of Object.values(record)) {
+    const hit = findSessionId(child);
+    if (hit) return hit;
+  }
+  return '';
+}
+
+function extractStreamContent(eventType: string, event: Record<string, unknown>) {
+  if (eventType !== 'message.part.delta' && eventType !== 'message.part.updated') {
+    return null;
+  }
+  const properties = toRecord(event.properties);
+  const part = toRecord(properties.part);
+  const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
+  if (partType && partType !== 'text') {
+    return null;
+  }
+  const delta = asText(properties.delta);
+  const text = asText(part.text) || asText(part.content) || asText(properties.text);
+  if (!delta && !text) return null;
+  const partId = asText(part.id) || asText(part.callID) || asText(properties.partId);
+  return {
+    text: delta || text,
+    partId,
+  };
+}
+
+function summarizeOpencodeEvent(eventType: string, event: Record<string, unknown>): string {
+  const properties = toRecord(event.properties);
+  const part = toRecord(properties.part);
+  const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
+  const toolName =
+    asText(part.tool) ||
+    asText(part.name) ||
+    asText(properties.tool) ||
+    asText(properties.name);
+
+  if (eventType === 'message.updated') {
+    const info = toRecord(properties.info);
+    const state = asText(info.state) || asText(info.status) || asText(properties.state) || asText(properties.status);
+    const role = asText(info.role) || asText(properties.role);
+    if (state || role) {
+      return `[Message] ${[role, state].filter(Boolean).join(' · ')}`;
+    }
+  }
+
+  if (eventType === 'message.part.updated' || eventType === 'message.part.delta') {
+    const partState = toRecord(part.state);
+    const partStatus = asText(partState.state) || asText(partState.status);
+    if (partType === 'tool') {
+      const summary = asText(part.summary) || asText(properties.summary);
+      const suffix = summary || partStatus;
+      const label = toolName || 'tool';
+      return suffix ? `[Tool] ${label} · ${suffix}` : `[Tool] ${label}`;
+    }
+    if (partType === 'text') {
+      const text = asText(part.text) || asText(part.content) || asText(properties.text);
+      if (text) return compactText(text, 320);
+      return partStatus ? `[Text] ${partStatus}` : '[Text] updated';
+    }
+    if (partType === 'file') {
+      const filePath = asText(part.path) || asText(properties.path);
+      return filePath ? `[File] ${filePath}` : '[File] updated';
+    }
+  }
+
+  if (eventType === 'command.executed') {
+    const name = asText(properties.name) || asText(properties.command);
+    const args = asText(properties.arguments);
+    const output = compactText(asText(properties.output), 140);
+    const command = [name, args].filter(Boolean).join(' ');
+    if (command && output) return `[Command] ${command} -> ${output}`;
+    return command ? `[Command] ${command}` : '[Command] executed';
+  }
+
+  if (eventType === 'file.edited') {
+    const path = asText(properties.file) || asText(properties.path);
+    return path ? `[File] edited ${path}` : '[File] edited';
+  }
+
+  if (eventType.startsWith('pty.')) {
+    const command = asText(properties.command);
+    const cwd = asText(properties.cwd);
+    const exitCode = asText(properties.exitCode);
+    const suffix = [command, cwd ? `cwd=${cwd}` : '', exitCode ? `exit=${exitCode}` : '']
+      .filter(Boolean)
+      .join(' · ');
+    return suffix ? `[PTY] ${suffix}` : `[PTY] ${eventType}`;
+  }
+
+  const fallback =
+    asText(properties.text) ||
+    asText(properties.message) ||
+    asText(part.text) ||
+    asText(part.content);
+  if (fallback) return compactText(fallback, 320);
+  return `[OpenCode] ${eventType}`;
 }
 
 type OpencodeEventInfo = {
@@ -255,7 +389,11 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
   if (!content) {
     return false;
   }
-  return content.includes('OpenCode 执行完成') || content.includes('OpenCode 执行失败');
+  return (
+    content.includes('OpenCode 执行完成') ||
+    content.includes('OpenCode 执行失败') ||
+    content.includes('OpenCode 执行已结束')
+  );
 }
 
 function mergeRealtimeMessage(
@@ -263,6 +401,9 @@ function mergeRealtimeMessage(
   message: AgentMessage,
   welcomeMessage: string
 ): AgentMessage[] {
+  if (message.type === 'error') {
+    return prev;
+  }
   const lastMessage = prev[prev.length - 1];
   const isDuplicateWelcome =
     message.type === 'agent_message' &&
@@ -364,6 +505,9 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
   for (const item of list) {
     const messageType = asText(item?.messageType);
     const metadata = toRecord(item?.metadata);
+    if (messageType === 'error' || messageType === 'opencode_error') {
+      continue;
+    }
 
     if (messageType === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
       const filtered = result.filter((existing) => {
@@ -414,9 +558,30 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
       continue;
     }
 
+    if (messageType === 'status_update') {
+      const content = asText(item?.content);
+      if (
+        content.includes('OpenCode 执行完成') ||
+        content.includes('OpenCode 执行失败') ||
+        content.includes('OpenCode 执行已结束')
+      ) {
+        const filtered = result.filter((existing) => {
+          if (asText(existing?.messageType) !== 'opencode_event') return true;
+          return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
+        });
+        result.length = 0;
+        result.push(...filtered);
+        streamIndexByKey.clear();
+      }
+    }
+
     if (messageType === 'opencode_status') {
       const content = asText(item?.content);
-      if (content.includes('OpenCode 执行完成') || content.includes('OpenCode 执行失败')) {
+      if (
+        content.includes('OpenCode 执行完成') ||
+        content.includes('OpenCode 执行失败') ||
+        content.includes('OpenCode 执行已结束')
+      ) {
         const filtered = result.filter((existing) => {
           if (asText(existing?.messageType) !== 'opencode_event') return true;
           return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
@@ -445,13 +610,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     options?: string[];
   } | null>(null);
   const [orchestratorSessionId, setOrchestratorSessionId] = useState<string | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<string | null>(null);
+  const [runtimeStarting, setRuntimeStarting] = useState(false);
   const [latestOsacMessage, setLatestOsacMessage] = useState<OsacMessageRecord | null>(null);
   const [runtimeMessages, setRuntimeMessages] = useState<OsacMessageRecord[]>([]);
   const [isSyncingRuntime, setIsSyncingRuntime] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [location] = useLocation();
+  const search = useSearch();
 
   const wsRef = useRef<WebSocket | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+  const sseActiveRef = useRef(false);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
 
@@ -459,6 +629,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setMessages([]);
     setCurrentQuestion(null);
     setOrchestratorSessionId(null);
+    setRuntimeStatus(null);
+    setRuntimeStarting(false);
     setLatestOsacMessage(null);
     setRuntimeMessages([]);
     setRuntimeError(null);
@@ -471,7 +643,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(search);
     const querySessionId = params.get('sessionId')?.trim();
     const createNewToken = params.get('new')?.trim();
 
@@ -488,12 +660,123 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
       return;
     }
-  }, [location, sessionId, messages.length, resetConversationState]);
+  }, [location, search, sessionId, messages.length, resetConversationState]);
 
   useEffect(() => {
     onPlanGeneratedRef.current = options?.onPlanGenerated;
     onErrorRef.current = options?.onError;
   }, [options?.onPlanGenerated, options?.onError]);
+
+  const closeSse = useCallback(() => {
+    if (sseRef.current) {
+      sseRef.current.close();
+      sseRef.current = null;
+    }
+    sseActiveRef.current = false;
+  }, []);
+
+  const refreshRuntimeStatus = useCallback(
+    async (targetSessionId?: string) => {
+      const sid = (targetSessionId || sessionId || '').trim();
+      if (!sid) return;
+      try {
+        const detail = await getTaskCreationSession(sid);
+        if (!detail) return;
+        const nextOrchestrator = (detail.runtime?.orchestratorSessionId || '').trim();
+        if (nextOrchestrator) {
+          setOrchestratorSessionId(nextOrchestrator);
+        } else if (!orchestratorSessionId) {
+          setOrchestratorSessionId(null);
+        }
+        const nextStatus =
+          normalizeRuntimeStatus(detail.runtimeStatus?.status) ||
+          (nextOrchestrator ? 'ready' : null);
+        setRuntimeStatus(nextStatus);
+      } catch (error) {
+        console.warn('[TaskCreationAgent] 获取执行环境状态失败:', error);
+      }
+    },
+    [orchestratorSessionId, sessionId]
+  );
+
+  const handleSsePayload = useCallback((payload: any) => {
+    if (!payload || typeof payload !== 'object') return;
+    if (payload.status === 'ready') return;
+    const event = toRecord(payload.event);
+    if (!event || Object.keys(event).length === 0) return;
+
+    const eventType = asText(event.type) || 'unknown';
+    const stream = extractStreamContent(eventType, event);
+    const opencodeSessionId = asText(payload.opencodeSessionId) || findSessionId(event) || '';
+
+    const metadata: Record<string, unknown> = {
+      eventType,
+      event,
+      rawPayload: { event },
+      opencodeSessionId: opencodeSessionId || undefined,
+    };
+
+    let content = '';
+    if (stream) {
+      content = stream.text;
+      metadata.stream = true;
+      if (stream.partId) {
+        metadata.partId = stream.partId;
+      }
+    } else {
+      content = summarizeOpencodeEvent(eventType, event);
+    }
+
+    if (!content) {
+      content = `[OpenCode] ${eventType}`;
+    }
+
+    const message: AgentMessage = {
+      type: 'opencode_event',
+      content,
+      metadata,
+      sessionId: sessionId || undefined,
+    };
+
+    setMessages((prev) => mergeRealtimeMessage(prev, message, WELCOME_MESSAGE));
+  }, [sessionId, WELCOME_MESSAGE]);
+
+  const openSse = useCallback(
+    (targetSessionId: string) => {
+      const url = getOpencodeEventStreamUrl(targetSessionId);
+      closeSse();
+      const source = new EventSource(url);
+      sseRef.current = source;
+
+      source.onopen = () => {
+        sseActiveRef.current = true;
+      };
+
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          handleSsePayload(payload);
+        } catch (error) {
+          console.warn('[TaskCreationAgent] SSE 解析失败:', error);
+        }
+      };
+
+      source.addEventListener('ready', (event: MessageEvent) => {
+        try {
+          const payload = JSON.parse(event.data);
+          handleSsePayload(payload);
+        } catch {
+          // ignore ready parse errors
+        }
+      });
+
+      source.onerror = () => {
+        sseActiveRef.current = false;
+        void refreshRuntimeStatus(targetSessionId);
+      };
+    },
+    [closeSse, handleSsePayload, refreshRuntimeStatus]
+  );
 
   // 连接 WebSocket
   const connect = useCallback(() => {
@@ -515,6 +798,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       try {
         const message: AgentMessage = JSON.parse(event.data);
         console.log('[TaskCreationAgent] 收到消息:', message);
+        if (message.type === 'error') {
+          return;
+        }
+        if (message.type === 'opencode_event' && sseActiveRef.current) {
+          return;
+        }
         const messageSessionId = message.sessionId || message.metadata?.sessionId;
         if (messageSessionId) {
           setSessionId(messageSessionId);
@@ -531,6 +820,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const orchestratorId = extractOrchestratorSessionId(message);
         if (orchestratorId) {
           setOrchestratorSessionId(orchestratorId);
+          setRuntimeStatus('ready');
         }
 
         setMessages((prev) => mergeRealtimeMessage(prev, message, WELCOME_MESSAGE));
@@ -707,6 +997,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (messageType === 'opencode_agent_input' || messageType === 'opencode_user_input') {
           return null;
         }
+        if (messageType === 'error' || messageType === 'opencode_error') {
+          return null;
+        }
 
         if (role === 'user') {
           return {
@@ -738,16 +1031,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           };
         }
 
-        if (messageType === 'error') {
-          return {
-            type: 'error',
-            message: metadata?.message || item?.content,
-            content: item?.content,
-            sessionId: historySessionId,
-            metadata,
-          };
-        }
-
         if (messageType === 'status_update') {
           return {
             type: 'status_update',
@@ -772,13 +1055,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (messageType === 'opencode_status') {
           const looksLikeError = Boolean(metadata?.code) || Boolean(metadata?.error);
           if (looksLikeError) {
-            return {
-              type: 'error',
-              message: item?.content || metadata?.message || 'OpenCode 执行失败',
-              content: item?.content,
-              sessionId: historySessionId,
-              metadata,
-            };
+            return null;
           }
           return {
             type: 'status_update',
@@ -834,8 +1111,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         .find((value): value is string => Boolean(value));
       if (latestRuntimeSession) {
         setOrchestratorSessionId(latestRuntimeSession);
+        setRuntimeStatus('ready');
       } else {
         setOrchestratorSessionId(null);
+        setRuntimeStatus(null);
         setLatestOsacMessage(null);
         setRuntimeMessages([]);
         setRuntimeError(null);
@@ -872,12 +1151,35 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     [orchestratorSessionId]
   );
 
-  useEffect(() => {
-    if (!orchestratorSessionId) {
-      setLatestOsacMessage(null);
-      setRuntimeMessages([]);
+  const ensureRuntime = useCallback(async () => {
+    const sid = (sessionId || '').trim();
+    if (!sid || runtimeStarting) return;
+    setRuntimeStarting(true);
+    try {
+      const result = await startTaskCreationRuntime(sid);
+      const nextOrchestrator = (result?.orchestratorSessionId || '').trim();
+      if (nextOrchestrator) {
+        setOrchestratorSessionId(nextOrchestrator);
+      }
+      const nextStatus = normalizeRuntimeStatus(result?.status) || 'ready';
+      setRuntimeStatus(nextStatus);
       setRuntimeError(null);
+      if (nextOrchestrator) {
+        await syncRuntime(nextOrchestrator);
+      }
+    } catch (error) {
+      console.warn('[TaskCreationAgent] 启动执行环境失败:', error);
+    } finally {
+      setRuntimeStarting(false);
+    }
+  }, [runtimeStarting, sessionId, syncRuntime]);
+
+  const runtimeReady = runtimeStatus === 'ready' || (!runtimeStatus && Boolean(orchestratorSessionId));
+
+  useEffect(() => {
+    if (!orchestratorSessionId || !runtimeReady) {
       setIsSyncingRuntime(false);
+      setRuntimeError(null);
       return;
     }
 
@@ -889,22 +1191,40 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     return () => {
       window.clearInterval(timer);
     };
-  }, [orchestratorSessionId, syncRuntime]);
+  }, [orchestratorSessionId, runtimeReady, syncRuntime]);
 
   // 自动连接
   useEffect(() => {
     connect();
 
     return () => {
+      closeSse();
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [connect, disconnect, closeSse]);
 
   useEffect(() => {
     if (isConnected && sessionId) {
       void loadHistory(sessionId);
     }
   }, [isConnected, sessionId, loadHistory]);
+
+  useEffect(() => {
+    if (sessionId) {
+      void refreshRuntimeStatus(sessionId);
+    }
+  }, [sessionId, refreshRuntimeStatus]);
+
+  useEffect(() => {
+    if (!sessionId || !orchestratorSessionId || !runtimeReady) {
+      closeSse();
+      return;
+    }
+    openSse(sessionId);
+    return () => {
+      closeSse();
+    };
+  }, [sessionId, orchestratorSessionId, runtimeReady, openSse, closeSse]);
 
   return {
     isConnected,
@@ -914,13 +1234,23 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     currentQuestion,
     runtime: {
       orchestratorSessionId,
+      status: runtimeStatus,
+      ready: runtimeReady,
+      starting: runtimeStarting,
       latestType: latestOsacMessage?.type || null,
       latestText: pickOsacMessageText(latestOsacMessage),
       syncing: isSyncingRuntime,
       error: runtimeError,
       messages: runtimeMessages,
       refresh: async () => {
+        if (!runtimeReady) {
+          await ensureRuntime();
+          return;
+        }
         await syncRuntime();
+      },
+      ensure: async () => {
+        await ensureRuntime();
       },
     } as OrchestrationRuntime,
     sendUserInput,

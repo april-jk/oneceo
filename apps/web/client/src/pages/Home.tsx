@@ -158,7 +158,11 @@ export default function Home() {
       {selectedProjectId ? (
         <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />
       ) : (
-        <div className="flex flex-col min-h-[calc(100vh-6.5rem)]">
+        <div
+          className={`flex flex-col min-h-[calc(100vh-6.5rem)] ${
+            mode === "chat" ? "h-[calc(100vh-6.5rem)] overflow-hidden" : ""
+          }`}
+        >
           <AnimatePresence mode="wait">
             {mode === 'input' ? (
               // 初始输入模式
@@ -372,14 +376,28 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
-                className="flex-1 flex flex-col md:flex-row gap-4 min-h-0"
+                className="flex-1 min-h-0 overflow-hidden"
               >
-                <div className="flex-1 min-w-0 flex flex-col">
-                  {/* 对话区域 */}
-                  <div className="flex-1 overflow-y-auto min-h-0">
-                    <div className="container mx-auto px-6 py-6 max-w-3xl">
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-end gap-2">
+                <div
+                  className={`grid gap-4 h-full min-h-0 ${
+                    previewOpen ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+                  }`}
+                >
+                  <section className="flex flex-col min-h-0 h-full">
+                    <div className="flex flex-1 flex-col min-h-0 h-full rounded-2xl border border-border/70 bg-white shadow-sm overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 border-b border-border/70">
+                        <div className="space-y-1">
+                          <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                            Dialogue
+                          </div>
+                          <div className="text-sm font-semibold text-foreground">对话</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {runtime.orchestratorSessionId && runtime.ready ? (
+                            <span className="text-xs text-muted-foreground">
+                              运行中 · {runtime.orchestratorSessionId}
+                            </span>
+                          ) : null}
                           <Button
                             type="button"
                             variant="outline"
@@ -387,21 +405,35 @@ export default function Home() {
                             className="rounded-full"
                             onClick={() => setPreviewOpen((prev) => !prev)}
                           >
-                            {previewOpen ? "隐藏预览" : "显示预览"}
+                            {previewOpen ? "收起预览" : "显示预览"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="rounded-full"
+                            onClick={() => setShowRuntimeDrawer(true)}
+                            disabled={!runtime.orchestratorSessionId}
+                          >
+                            执行日志
                           </Button>
                         </div>
+                      </div>
+                      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+                        <div
+                          className={`mx-auto w-full ${
+                            previewOpen ? "max-w-3xl" : "max-w-5xl"
+                          } space-y-4`}
+                        >
+                          {!isConnected && (
+                            <NoticeMessage
+                              tone="warning"
+                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                              text="正在连接智能体..."
+                            />
+                          )}
 
-                        {/* 连接状态 */}
-                        {!isConnected && (
-                          <NoticeMessage
-                            tone="warning"
-                            icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                            text="正在连接智能体..."
-                          />
-                        )}
-
-                        {runtime.orchestratorSessionId && runtime.ready && (
-                          <div className="flex items-center justify-between gap-3">
+                          {runtime.orchestratorSessionId && runtime.ready && (
                             <NoticeMessage
                               tone="info"
                               icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
@@ -409,201 +441,198 @@ export default function Home() {
                                 `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
                               }
                             />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="shrink-0 rounded-full"
-                              onClick={() => setShowRuntimeDrawer(true)}
-                            >
-                              查看执行日志
-                            </Button>
-                          </div>
-                        )}
+                          )}
 
-                        {/* 消息列表 */}
-                        <AnimatePresence>
-                          {chatItems.map((item, index) => (
-                            <MessageBubble key={index} item={item} onOpenDiffPreview={openDiffPreview} />
-                          ))}
-                        </AnimatePresence>
+                          <AnimatePresence>
+                            {chatItems.map((item, index) => (
+                              <MessageBubble key={index} item={item} onOpenDiffPreview={openDiffPreview} />
+                            ))}
+                          </AnimatePresence>
 
-                        {/* 处理中指示器 */}
-                        {isProcessing && !currentQuestion && (
-                          <NoticeMessage
-                            tone="info"
-                            icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                            text="智能体正在处理..."
-                          />
-                        )}
+                          {isProcessing && !currentQuestion && (
+                            <NoticeMessage
+                              tone="info"
+                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                              text="智能体正在处理..."
+                            />
+                          )}
 
-                        <div ref={messagesEndRef} />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 固定在底部的输入框 */}
-                  <motion.div
-                    initial={{ y: 100, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
-                    className="mt-auto border-t border-border bg-background/95 backdrop-blur"
-                  >
-                    <div className="container mx-auto px-6 py-4 max-w-3xl">
-                      <div className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200">
-                        <div className="p-4 space-y-3">
-                          <Textarea
-                            placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
-                            value={message}
-                            onChange={(e) => setMessage(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                if (currentQuestion) {
-                                  handleAnswerQuestion(message);
-                                  setMessage("");
-                                } else {
-                                  handleSend();
-                                }
-                              }
-                            }}
-                            className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[80px] px-0 py-0"
-                            rows={3}
-                          />
-
-                          <TooltipProvider>
-                            <div className="flex items-center justify-between pt-2">
-                              <div className="flex items-center gap-1">
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                    >
-                                      <Plus className="w-4 h-4 text-muted-foreground" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Add attachment</p>
-                                  </TooltipContent>
-                                </Tooltip>
-
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                      onClick={() => setShowConnector(true)}
-                                    >
-                                      <Plug className="w-4 h-4 text-muted-foreground" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Connector</p>
-                                  </TooltipContent>
-                                </Tooltip>
-
-                                <DropdownMenu>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <DropdownMenuTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
-                                        >
-                                          <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                          <span className="text-sm text-muted-foreground">{selectedModel}</span>
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>Select AI model</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                  <DropdownMenuContent align="start" className="w-40">
-                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
-                                      <div className="flex flex-col">
-                                        <span className="font-medium">Agent Lite</span>
-                                        <span className="text-xs text-muted-foreground">Fast & efficient</span>
-                                      </div>
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
-                                      <div className="flex flex-col">
-                                        <span className="font-medium">Agent Pro</span>
-                                        <span className="text-xs text-muted-foreground">Balanced performance</span>
-                                      </div>
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
-                                      <div className="flex flex-col">
-                                        <span className="font-medium">Agent Max</span>
-                                        <span className="text-xs text-muted-foreground">Maximum capability</span>
-                                      </div>
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              </div>
-
-                              <div className="flex items-center gap-1">
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                    >
-                                      <Mic className="w-4 h-4 text-muted-foreground" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Voice input</p>
-                                  </TooltipContent>
-                                </Tooltip>
-
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      onClick={() => {
-                                        if (currentQuestion) {
-                                          handleAnswerQuestion(message);
-                                          setMessage("");
-                                        } else {
-                                          handleSend();
-                                        }
-                                      }}
-                                      disabled={!message.trim()}
-                                      size="icon"
-                                      className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
-                                    >
-                                      <Send className="w-4 h-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Send message</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                            </div>
-                          </TooltipProvider>
+                          <div ref={messagesEndRef} />
                         </div>
                       </div>
-                    </div>
-                  </motion.div>
-                </div>
 
-                <OpencodePreviewPanel
-                  messages={messages}
-                  sessionId={sessionId}
-                  open={previewOpen}
-                  activeTab={previewTab}
-                  onTabChange={setPreviewTab}
-                  onToggle={() => setPreviewOpen(false)}
-                  runtimeReady={runtime.ready}
-                  runtimeStarting={runtime.starting}
-                  onEnsureRuntime={runtime.ensure}
-                />
+                      <motion.div
+                        initial={{ y: 100, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
+                        className="mt-auto sticky bottom-0 z-10 border-t border-border/70 bg-background/95 backdrop-blur"
+                      >
+                        <div className="px-6 py-3">
+                          <div
+                            className={`mx-auto w-full ${
+                              previewOpen ? "max-w-3xl" : "max-w-5xl"
+                            } bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200`}
+                          >
+                            <div className="p-4 space-y-3">
+                              <Textarea
+                                placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
+                                value={message}
+                                onChange={(e) => setMessage(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (currentQuestion) {
+                                      handleAnswerQuestion(message);
+                                      setMessage("");
+                                    } else {
+                                      handleSend();
+                                    }
+                                  }
+                                }}
+                                className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[56px] px-0 py-0"
+                                rows={2}
+                              />
+
+                              <TooltipProvider>
+                                <div className="flex items-center justify-between pt-2">
+                                  <div className="flex items-center gap-1">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                        >
+                                          <Plus className="w-4 h-4 text-muted-foreground" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Add attachment</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                          onClick={() => setShowConnector(true)}
+                                        >
+                                          <Plug className="w-4 h-4 text-muted-foreground" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Connector</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+
+                                    <DropdownMenu>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <DropdownMenuTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
+                                            >
+                                              <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                              <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                                            </Button>
+                                          </DropdownMenuTrigger>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Select AI model</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      <DropdownMenuContent align="start" className="w-40">
+                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
+                                          <div className="flex flex-col">
+                                            <span className="font-medium">Agent Lite</span>
+                                            <span className="text-xs text-muted-foreground">Fast & efficient</span>
+                                          </div>
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
+                                          <div className="flex flex-col">
+                                            <span className="font-medium">Agent Pro</span>
+                                            <span className="text-xs text-muted-foreground">Balanced performance</span>
+                                          </div>
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
+                                          <div className="flex flex-col">
+                                            <span className="font-medium">Agent Max</span>
+                                            <span className="text-xs text-muted-foreground">Maximum capability</span>
+                                          </div>
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+
+                                  <div className="flex items-center gap-1">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                        >
+                                          <Mic className="w-4 h-4 text-muted-foreground" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Voice input</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          onClick={() => {
+                                            if (currentQuestion) {
+                                              handleAnswerQuestion(message);
+                                              setMessage("");
+                                            } else {
+                                              handleSend();
+                                            }
+                                          }}
+                                          disabled={!message.trim()}
+                                          size="icon"
+                                          className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
+                                        >
+                                          <Send className="w-4 h-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Send message</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                              </TooltipProvider>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    </div>
+                  </section>
+
+                  {previewOpen ? (
+                    <section className="flex flex-col min-h-0 h-full">
+                      <OpencodePreviewPanel
+                        messages={messages}
+                        sessionId={sessionId}
+                        open={previewOpen}
+                        activeTab={previewTab}
+                        onTabChange={setPreviewTab}
+                        onToggle={() => setPreviewOpen(false)}
+                        runtimeReady={runtime.ready}
+                        runtimeStarting={runtime.starting}
+                        onEnsureRuntime={runtime.ensure}
+                        className="h-full min-h-0"
+                      />
+                    </section>
+                  ) : null}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

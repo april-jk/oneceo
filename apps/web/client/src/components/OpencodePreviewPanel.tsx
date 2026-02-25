@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
 import { getWorkspaceFile, getWorkspaceTree, type WorkspaceTree, type WorkspaceTreeItem } from "@/lib/task-creation-client";
+import { cn } from "@/lib/utils";
 
 interface OpencodePreviewPanelProps {
   messages: AgentMessage[];
@@ -14,6 +15,7 @@ interface OpencodePreviewPanelProps {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  className?: string;
 }
 
 type PreviewTab = "files" | "changes";
@@ -28,6 +30,7 @@ export default function OpencodePreviewPanel({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  className,
 }: OpencodePreviewPanelProps) {
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
@@ -169,7 +172,12 @@ export default function OpencodePreviewPanel({
   const treeCount = tree?.items.length || 0;
 
   return (
-    <aside className="w-full md:w-[360px] lg:w-[420px] shrink-0 border border-border rounded-2xl bg-card flex flex-col min-h-[320px] max-h-[70vh] md:max-h-none">
+    <aside
+      className={cn(
+        "w-full h-full shrink-0 border border-border/70 rounded-2xl bg-gradient-to-b from-white via-white to-slate-50 shadow-sm flex flex-col min-h-0",
+        className
+      )}
+    >
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
           内容预览

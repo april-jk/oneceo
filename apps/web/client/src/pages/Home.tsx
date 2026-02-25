@@ -29,13 +29,14 @@ import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
 type PageMode = 'input' | 'chat';
 
 export default function Home() {
   const [location] = useLocation();
+  const search = useSearch();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [mode, setMode] = useState<PageMode>('input');
   const [message, setMessage] = useState("");
@@ -75,7 +76,7 @@ export default function Home() {
 
   // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(search);
     const input = params.get("q")?.trim();
     const sessionInQuery = params.get("sessionId")?.trim();
     const createNewToken = params.get("new")?.trim();
@@ -97,7 +98,7 @@ export default function Home() {
       const nextUrl = sessionInQuery ? `/new-task?sessionId=${encodeURIComponent(sessionInQuery)}` : "/new-task";
       window.history.replaceState(null, "", nextUrl);
     }
-  }, [location]);
+  }, [location, search]);
 
   useEffect(() => {
     if (!isConnected || !pendingInputRef.current) {
@@ -399,15 +400,13 @@ export default function Home() {
                           />
                         )}
 
-                        {runtime.orchestratorSessionId && (
+                        {runtime.orchestratorSessionId && runtime.ready && (
                           <div className="flex items-center justify-between gap-3">
                             <NoticeMessage
-                              tone={runtime.error ? "warning" : "info"}
+                              tone="info"
                               icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
                               text={
-                                runtime.error
-                                  ? `执行环境状态同步失败（${runtime.orchestratorSessionId}）`
-                                  : `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
+                                `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
                               }
                             />
                             <Button
@@ -601,6 +600,9 @@ export default function Home() {
                   activeTab={previewTab}
                   onTabChange={setPreviewTab}
                   onToggle={() => setPreviewOpen(false)}
+                  runtimeReady={runtime.ready}
+                  runtimeStarting={runtime.starting}
+                  onEnsureRuntime={runtime.ensure}
                 />
               </motion.div>
             )}

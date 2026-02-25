@@ -11,6 +11,9 @@ interface OpencodePreviewPanelProps {
   onToggle: () => void;
   activeTab?: PreviewTab;
   onTabChange?: (tab: PreviewTab) => void;
+  runtimeReady?: boolean;
+  runtimeStarting?: boolean;
+  onEnsureRuntime?: () => Promise<void>;
 }
 
 type PreviewTab = "files" | "changes";
@@ -22,6 +25,9 @@ export default function OpencodePreviewPanel({
   onToggle,
   activeTab,
   onTabChange,
+  runtimeReady,
+  runtimeStarting,
+  onEnsureRuntime,
 }: OpencodePreviewPanelProps) {
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
@@ -52,6 +58,13 @@ export default function OpencodePreviewPanel({
 
   async function handleFileSelect(path: string) {
     if (!sessionId) return;
+    if (runtimeReady === false) {
+      if (onEnsureRuntime) {
+        await onEnsureRuntime();
+      } else {
+        return;
+      }
+    }
     setSelectedPath(path);
     const parts = path.split("/").filter(Boolean);
     if (parts.length > 0) {
@@ -75,18 +88,32 @@ export default function OpencodePreviewPanel({
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取文件失败";
-      setFileError(message);
+      if (message.includes("409")) {
+        setFileError(null);
+      } else {
+        setFileError(message);
+      }
       setFileContent("");
     } finally {
       setFileLoading(false);
     }
   }
 
-  const refreshTree = async () => {
+  const refreshTree = async (mode: "auto" | "manual" = "manual") => {
     if (!sessionId) {
       setTreeError("缺少会话信息");
       setTree(null);
       return;
+    }
+    if (runtimeReady === false) {
+      if (mode === "manual" && onEnsureRuntime) {
+        await onEnsureRuntime();
+      } else {
+        setTree(null);
+        setTreeError(null);
+        setTreeLoading(false);
+        return;
+      }
     }
     setTreeLoading(true);
     setTreeError(null);
@@ -101,7 +128,11 @@ export default function OpencodePreviewPanel({
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "获取文件树失败";
-      setTreeError(message);
+      if (message.includes("409")) {
+        setTreeError(null);
+      } else {
+        setTreeError(message);
+      }
     } finally {
       setTreeLoading(false);
     }
@@ -109,19 +140,20 @@ export default function OpencodePreviewPanel({
 
   useEffect(() => {
     if (!open) return;
-    void refreshTree();
-  }, [open, sessionId]);
+    void refreshTree("auto");
+  }, [open, sessionId, runtimeReady]);
 
   useEffect(() => {
     if (!open) return;
     if (!sessionId) return;
+    if (runtimeReady === false) return;
     const last = messages[messages.length - 1];
     if (!shouldRefreshFromMessage(last)) return;
     if (refreshTimerRef.current) {
       window.clearTimeout(refreshTimerRef.current);
     }
     refreshTimerRef.current = window.setTimeout(() => {
-      void refreshTree();
+      void refreshTree("auto");
     }, 800);
     return () => {
       if (refreshTimerRef.current) {
@@ -194,8 +226,10 @@ export default function OpencodePreviewPanel({
                 return next;
               });
             }}
-            onRefresh={refreshTree}
+            onRefresh={() => void refreshTree("manual")}
             onSelectFile={handleFileSelect}
+            runtimeReady={runtimeReady !== false}
+            runtimeStarting={runtimeStarting === true}
           />
         ) : null}
         {currentTab === "changes" ? (
@@ -296,6 +330,8 @@ function FilePreview({
   onTogglePath,
   onRefresh,
   onSelectFile,
+  runtimeReady,
+  runtimeStarting,
 }: {
   tree: WorkspaceTree | null;
   loading: boolean;
@@ -308,7 +344,19 @@ function FilePreview({
   onTogglePath: (path: string) => void;
   onRefresh: () => void;
   onSelectFile: (path: string) => void;
+  runtimeReady: boolean;
+  runtimeStarting: boolean;
 }) {
+  if (!runtimeReady) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
+        <span>文件预览尚未加载</span>
+        <Button variant="outline" size="sm" onClick={onRefresh} disabled={runtimeStarting}>
+          {runtimeStarting ? "加载中..." : "加载文件"}
+        </Button>
+      </div>
+    );
+  }
   if (loading) {
     return <EmptyState text="正在加载文件树..." />;
   }

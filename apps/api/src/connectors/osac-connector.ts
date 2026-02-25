@@ -4,6 +4,7 @@ import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { OsacClient, type OsacMessage } from '../clients/osac-client';
 import { kvmConnector } from './kvm-connector';
+import { resolveSandboxProvider } from '../config/sandbox-provider';
 import {
   buildSandboxPortProbeQuery,
   extractSandboxPortMappings,
@@ -422,6 +423,9 @@ export const osacConnector = {
     sessionId: string,
     options?: ConnectForSessionOptions
   ): Promise<OsacConnectionHandle> {
+    if (resolveSandboxProvider() === 'e2b') {
+      throw new Error('E2B 模式下不再使用 OSAC WebSocket 连接');
+    }
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
 
     const maxAttempts = toNumber(process.env.OSAC_CONNECT_RETRIES, 3);

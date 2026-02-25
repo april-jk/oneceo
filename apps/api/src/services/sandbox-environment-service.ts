@@ -1,337 +1,99 @@
-import { kvmConnector } from '../connectors/kvm-connector';
-import { KvmClientError } from '../clients/kvm-orchestrator-client';
+import { e2bConnector } from '../connectors/e2b-connector';
+import { e2bConfig } from '../config/e2b-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { ensureDatabaseConnection } from '../config/database';
 import { sandboxSecurityConfig } from '../config/sandbox-security';
 
-class ProtectedVmAllocationError extends Error {
-  constructor(public readonly vmName: string, public readonly sessionId: string) {
-    super(`安全策略阻止使用受保护 VM: ${vmName}`);
-  }
-}
-
-function pickString(...candidates: unknown[]): string | undefined {
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return undefined;
-}
-
-async function sleep(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForJob(jobId: string, timeoutMs: number = 30000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const job = await kvmConnector.getJob(jobId);
-    const data = job.data as any;
-    const status = data?.status;
-    if (status && !['queued', 'running'].includes(status)) {
-      return data;
-    }
-    await sleep(1200);
-  }
-  throw new Error(`等待任务超时: ${jobId}`);
-}
-
-async function awaitJobIfNeeded(result: any) {
-  const jobId = result?.jobId || result?.job_id;
-  if (!jobId) {
-    return result;
-  }
-  return waitForJob(String(jobId));
-}
-
-function isSessionVmNotBoundError(error: unknown): boolean {
-  if (!(error instanceof KvmClientError)) {
-    return false;
-  }
-  const code = String(error.code || '').toUpperCase();
-  if (code === 'SESSION_VM_NOT_BOUND') {
-    return true;
-  }
-  const message = String(error.message || '').toLowerCase();
-  return error.status === 404 && message.includes('no vm binding');
-}
-
-async function waitForSessionVmBinding(sessionId: string) {
-  const maxAttempts = Math.max(1, Number(process.env.KVM_SESSION_VM_BIND_CHECKS || 8));
-  const delayMs = Math.max(200, Number(process.env.KVM_SESSION_VM_BIND_RETRY_MS || 1500));
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      return await kvmConnector.getSessionVm(sessionId);
-    } catch (error) {
-      if (!isSessionVmNotBoundError(error) || attempt >= maxAttempts) {
-        throw error;
-      }
-      lastError = error;
-      await sleep(delayMs);
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`KVM Session 尚未完成 VM 绑定: ${sessionId}`);
-}
-
-function isKvmWarmPoolEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
+function isE2bEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
   if (!metadata) return false;
-  const allocationSource = pickString(
-    metadata.allocationSource,
-    (metadata.kvmWarmPool as any)?.allocationSource,
-    (metadata.kvmWarmPool as any)?.source
-  );
-  return allocationSource === 'warm_pool';
+  return String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
 }
 
 export class SandboxEnvironmentService {
-  private buildIncrementalMapping(sessionId: string) {
-    const fileName = `${sessionId}.qcow2`;
-    const path = `${sandboxSecurityConfig.incrementalStorageDir}/${fileName}`;
-    return {
-      baseImage: sandboxSecurityConfig.baseImageName,
-      incrementalStorageDir: sandboxSecurityConfig.incrementalStorageDir,
-      incrementalFileName: fileName,
-      incrementalFilePath: path,
-    };
-  }
-
   private buildSecurityProfile() {
     return {
-      mode: 'strict',
-      protectedVmNames: sandboxSecurityConfig.protectedVmNames,
+      mode: 'e2b',
+      provider: 'e2b',
       denyCidrs: sandboxSecurityConfig.denyCidrs,
       allowedDomains: sandboxSecurityConfig.allowedDomains,
-      enforceSessionFirst: sandboxSecurityConfig.enforceSessionFirst,
     };
-  }
-
-  async attachPoolEnvironment(input: {
-    sessionId: string;
-    vmName?: string | null;
-    metadata?: Record<string, unknown>;
-    status?: 'creating' | 'ready';
-  }) {
-    await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-
-    const sessionId = input.sessionId.trim();
-    if (!sessionId) {
-      throw new Error('attachPoolEnvironment 缺少 sessionId');
-    }
-
-    const mapping = this.buildIncrementalMapping(sessionId);
-    const securityProfile = this.buildSecurityProfile();
-    const status = input.status || 'ready';
-    const metadata = input.metadata || {};
-
-    const existed = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-    if (!existed) {
-      return sandboxExecutionEnvironmentDAO.createEnvironment({
-        sessionId,
-        orchestratorSessionId: sessionId,
-        vmName: input.vmName || null,
-        baseImage: mapping.baseImage,
-        incrementalStorageDir: mapping.incrementalStorageDir,
-        incrementalFileName: mapping.incrementalFileName,
-        incrementalFilePath: mapping.incrementalFilePath,
-        status,
-        securityProfile,
-        networkPolicy: {
-          mode: 'default_deny_egress',
-          denyCidrs: sandboxSecurityConfig.denyCidrs,
-          allowedDomains: sandboxSecurityConfig.allowedDomains,
-        },
-        metadata,
-      });
-    }
-
-    const mergedMetadata = {
-      ...((existed.metadata || {}) as Record<string, unknown>),
-      ...metadata,
-    };
-    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, mergedMetadata);
-    await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, status, input.vmName || existed.vmName || null);
-    return sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
   }
 
   async openEnvironment(input: {
     metadata?: Record<string, unknown>;
     idempotencyKey?: string;
     bind?: Record<string, unknown>;
+    envs?: Record<string, string>;
   }) {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-    let lastError: unknown;
+    const sandbox = await e2bConnector.createSandbox({
+      template: e2bConfig.template,
+      metadata: input.metadata || {},
+      envs: input.envs,
+      timeoutMs: e2bConfig.timeoutMs,
+      allowInternetAccess: e2bConfig.allowInternetAccess,
+      allowPublicTraffic: e2bConfig.allowPublicTraffic,
+    });
 
-    for (let attempt = 1; attempt <= sandboxSecurityConfig.envOpenMaxAttempts; attempt++) {
-      try {
-        const attemptIdempotencyKey =
-          attempt === 1 ? input.idempotencyKey : undefined;
+    const securityProfile = this.buildSecurityProfile();
+    const mapping = {
+      baseImage: e2bConfig.template,
+      incrementalStorageDir: 'e2b',
+      incrementalFileName: sandbox.sandboxId,
+      incrementalFilePath: sandbox.sandboxId,
+    };
 
-        const created = await kvmConnector.createSession(
-          {
-            metadata: input.metadata || {},
-          },
-          attemptIdempotencyKey
-        );
+    const metadata: Record<string, unknown> = {
+      ...(input.metadata || {}),
+      sandboxProvider: 'e2b',
+      e2b: {
+        sandboxId: sandbox.sandboxId,
+        template: e2bConfig.template,
+        sandboxDomain: sandbox.sandboxDomain,
+        trafficAccessToken: sandbox.trafficAccessToken || null,
+      },
+    };
 
-        const sessionData = created.data as any;
-        const orchestratorSessionId = pickString(
-          sessionData?.sessionId,
-          sessionData?.id,
-          sessionData?.session
-        );
-
-        if (!orchestratorSessionId) {
-          throw new Error('创建 KVM Session 成功，但未返回 session_id');
-        }
-
-        const mapping = this.buildIncrementalMapping(orchestratorSessionId);
-        const securityProfile = this.buildSecurityProfile();
-
-        const existed = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
-        if (!existed) {
-          await sandboxExecutionEnvironmentDAO.createEnvironment({
-            sessionId: orchestratorSessionId,
-            orchestratorSessionId,
-            baseImage: mapping.baseImage,
-            incrementalStorageDir: mapping.incrementalStorageDir,
-            incrementalFileName: mapping.incrementalFileName,
-            incrementalFilePath: mapping.incrementalFilePath,
-            status: 'creating',
-            securityProfile,
-            networkPolicy: {
-              mode: 'default_deny_egress',
-              denyCidrs: sandboxSecurityConfig.denyCidrs,
-              allowedDomains: sandboxSecurityConfig.allowedDomains,
-            },
-            metadata: input.metadata || {},
-          });
-        }
-
-        let bindResult: any = null;
-        const bindWithSessionVm = async () => {
-          const result = await kvmConnector.bindSessionVm(orchestratorSessionId, {
-            auto: true,
-            excludeVmNames: sandboxSecurityConfig.protectedVmNames,
-            ...(input.bind || {}),
-          });
-          await awaitJobIfNeeded(result);
-          return result;
-        };
-        if (sandboxSecurityConfig.useSandboxApi) {
-          const vmName =
-            pickString(input.bind?.vm_name, input.bind?.vmName) ||
-            `sandbox_${orchestratorSessionId}`;
-          const sandboxInput: Record<string, unknown> = {
-            session_id: orchestratorSessionId,
-            vm_name: vmName,
-            auto_bind: true,
-            start: true,
-          };
-          if (sandboxSecurityConfig.sandboxBaseImagePath) {
-            sandboxInput.base_image = sandboxSecurityConfig.sandboxBaseImagePath;
-          }
-          if (sandboxSecurityConfig.sandboxNetwork) {
-            sandboxInput.network = sandboxSecurityConfig.sandboxNetwork;
-          }
-          if (sandboxSecurityConfig.sandboxMemoryMb) {
-            sandboxInput.memory_mb = sandboxSecurityConfig.sandboxMemoryMb;
-          }
-          if (sandboxSecurityConfig.sandboxVcpus) {
-            sandboxInput.vcpus = sandboxSecurityConfig.sandboxVcpus;
-          }
-          if (sandboxSecurityConfig.sandboxOsVariant) {
-            sandboxInput.os_variant = sandboxSecurityConfig.sandboxOsVariant;
-          }
-          const sandboxIdempotencyKey = attemptIdempotencyKey
-            ? `${attemptIdempotencyKey}-sandbox`
-            : undefined;
-          try {
-            bindResult = await kvmConnector.createSandbox(sandboxInput, sandboxIdempotencyKey);
-            await awaitJobIfNeeded(bindResult);
-          } catch (error) {
-            if (error instanceof KvmClientError && error.status === 409) {
-              const conflictCode = String(error.code || '').toUpperCase();
-              const conflictMessage = String(error.message || '').toLowerCase();
-              const sandboxExists =
-                conflictCode === 'SANDBOX_ALREADY_EXISTS' || conflictMessage.includes('already exists');
-              const staticIpExhausted = conflictCode === 'STATIC_IP_EXHAUSTED';
-
-              if (sandboxExists) {
-                // sandbox 已存在：尝试复用已有 sandbox 并继续查询
-                const sandbox = await kvmConnector.getSandbox(orchestratorSessionId);
-                bindResult = sandbox;
-              } else if (staticIpExhausted) {
-                // 静态 IP 资源耗尽时回退到 session-vm 自动绑定
-                bindResult = await bindWithSessionVm();
-              } else {
-                throw error;
-              }
-            } else {
-              throw error;
-            }
-          }
-        } else {
-          bindResult = await bindWithSessionVm();
-        }
-
-        const vmResult = await waitForSessionVmBinding(orchestratorSessionId);
-        const vmName = pickString(
-          (vmResult.data as any)?.name,
-          (vmResult.data as any)?.vmName,
-          (vmResult.data as any)?.vm?.name,
-          (bindResult.data as any)?.name,
-          (bindResult.data as any)?.vmName
-        );
-
-        if (!vmName) {
-          await sandboxExecutionEnvironmentDAO.updateStatus(orchestratorSessionId, 'failed');
-          throw new Error('KVM Session 已创建并绑定，但未获取到 VM 名称');
-        }
-
-        if (sandboxSecurityConfig.protectedVmNames.includes(vmName)) {
-          await kvmConnector.closeSession(orchestratorSessionId, { graceful: true });
-          await sandboxExecutionEnvironmentDAO.updateStatus(orchestratorSessionId, 'failed', vmName);
-          throw new ProtectedVmAllocationError(vmName, orchestratorSessionId);
-        }
-
-        await sandboxExecutionEnvironmentDAO.updateStatus(orchestratorSessionId, 'ready', vmName);
-
-        return {
-          sessionId: orchestratorSessionId,
-          vmName,
-          status: 'ready',
-          attempt,
-          storage: mapping,
-          security: securityProfile,
-          orchestrator: {
-            createRequestId: created.requestId,
-            bindRequestId: bindResult.requestId,
-            vmRequestId: vmResult.requestId,
-          },
-        };
-      } catch (error) {
-        lastError = error;
-        const canRetry =
-          error instanceof ProtectedVmAllocationError &&
-          attempt < sandboxSecurityConfig.envOpenMaxAttempts;
-        if (!canRetry) {
-          break;
-        }
-      }
+    const existed = await sandboxExecutionEnvironmentDAO.getBySessionId(sandbox.sandboxId);
+    if (!existed) {
+      await sandboxExecutionEnvironmentDAO.createEnvironment({
+        sessionId: sandbox.sandboxId,
+        orchestratorSessionId: sandbox.sandboxId,
+        vmName: null,
+        baseImage: mapping.baseImage,
+        incrementalStorageDir: mapping.incrementalStorageDir,
+        incrementalFileName: mapping.incrementalFileName,
+        incrementalFilePath: mapping.incrementalFilePath,
+        status: 'ready',
+        securityProfile,
+        networkPolicy: {
+          mode: 'e2b',
+          denyCidrs: sandboxSecurityConfig.denyCidrs,
+          allowedDomains: sandboxSecurityConfig.allowedDomains,
+        },
+        metadata,
+      });
+    } else {
+      await sandboxExecutionEnvironmentDAO.updateMetadata(sandbox.sandboxId, {
+        ...(existed.metadata || {}),
+        ...metadata,
+      });
+      await sandboxExecutionEnvironmentDAO.updateStatus(sandbox.sandboxId, 'ready', existed.vmName || null);
     }
 
-    if (lastError instanceof ProtectedVmAllocationError) {
-      throw new Error(
-        `多次分配均命中受保护 VM（最后一次: ${lastError.vmName}），请检查上游分配策略或保护名单配置`
-      );
-    }
-    throw lastError instanceof Error ? lastError : new Error('创建执行环境失败');
+    return {
+      sessionId: sandbox.sandboxId,
+      vmName: null,
+      status: 'ready',
+      attempt: 1,
+      storage: mapping,
+      security: securityProfile,
+      orchestrator: {
+        createRequestId: sandbox.sandboxId,
+        bindRequestId: sandbox.sandboxId,
+        vmRequestId: sandbox.sandboxId,
+      },
+    };
   }
 
   async closeEnvironment(sessionId: string) {
@@ -342,26 +104,11 @@ export class SandboxEnvironmentService {
       throw new Error(`未找到环境记录: ${sessionId}`);
     }
     const metadata = ((environment.metadata || {}) as Record<string, unknown>) || {};
-    const fromKvmWarmPool = isKvmWarmPoolEnvironment(metadata);
+    const isE2b = isE2bEnvironment(metadata);
 
     await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closing', environment.vmName || null);
-
-    if (fromKvmWarmPool) {
-      try {
-        await kvmConnector.releasePoolSandbox(environment.orchestratorSessionId, {
-          result: 'success',
-          reason: 'api_close_environment',
-        });
-      } catch (error) {
-        console.warn(
-          '[KVM_POOL_RELEASE_ERROR]',
-          sessionId,
-          error instanceof Error ? error.message : String(error)
-        );
-        await kvmConnector.closeSession(environment.orchestratorSessionId, { graceful: true });
-      }
-    } else {
-      await kvmConnector.closeSession(environment.orchestratorSessionId, { graceful: true });
+    if (isE2b) {
+      await e2bConnector.killSandbox(environment.orchestratorSessionId);
     }
 
     const updated = await sandboxExecutionEnvironmentDAO.updateStatus(

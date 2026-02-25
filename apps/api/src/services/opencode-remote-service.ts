@@ -6,7 +6,7 @@ import { osacConnectionManager } from './osac-connection-manager';
 import { auditOsacAction } from '../utils/osac-audit';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { ensureDatabaseConnection } from '../config/database';
-import { taskCreationSessionDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
 
@@ -45,6 +45,13 @@ function toPositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
+function toNonNegativeInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
   return Math.floor(parsed);
 }
 
@@ -164,29 +171,33 @@ function extractPartType(event: Record<string, unknown>): string {
   return (asString(part.type) || asString(properties.type)).toLowerCase();
 }
 
-function resolveStartNewVmSwitch(): boolean | null {
-  const raw = String(process.env.OSAC_START_NEW_VM || '').trim();
-  if (!raw) return null;
-  const normalized = raw.toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return null;
-}
-
-function resolveFixedOrchestratorSessionId(): string {
-  const startNewVm = resolveStartNewVmSwitch();
-  if (startNewVm === true) return '';
-  const enabledLegacy = String(process.env.OSAC_USE_FIXED_SANDBOX_SESSION || 'false').trim().toLowerCase() !== 'false';
-  const useFixed = startNewVm === false || enabledLegacy;
-  if (!useFixed) return '';
-  return asString(process.env.OSAC_FIXED_SANDBOX_SESSION_ID);
-}
-
 function compact(value: string, maxLen: number = 200): string {
   const text = value.trim().replace(/\s+/g, ' ');
   if (!text) return '';
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}...`;
+}
+
+function isSandboxNotFoundError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+}
+
+async function markSandboxClosed(orchestratorSessionId: string) {
+  try {
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (!environment) return;
+    if (environment.status === 'closed') return;
+    await sandboxExecutionEnvironmentDAO.updateStatus(
+      orchestratorSessionId,
+      'closed',
+      environment.vmName ?? null
+    );
+  } catch (error) {
+    console.warn('[OPENCODE_MARK_CLOSED_FAILED]', orchestratorSessionId, error);
+  }
 }
 
 function buildTaskDescription(record: any): TaskDescription {
@@ -341,6 +352,9 @@ function detectOpencodeOutcome(
   payload: Record<string, unknown>
 ): 'completed' | 'failed' | null {
   const lowerType = eventType.toLowerCase();
+  if (lowerType === 'message.final' || lowerType === 'message.completed' || lowerType === 'message.done') {
+    return 'completed';
+  }
   if (lowerType === 'session.idle') {
     return 'completed';
   }
@@ -350,6 +364,29 @@ function detectOpencodeOutcome(
   const info = toRecord(properties.info);
   const statusRecord = toRecord(properties.status);
   const infoStatusRecord = toRecord(info.status);
+  const part = toRecord(properties.part);
+  const messageStates = [
+    asString(part.state),
+    asString(part.status),
+    asString(properties.state),
+    asString(properties.status),
+    asString(info.state),
+    asString(info.status),
+  ]
+    .map((value) => value.toLowerCase())
+    .filter(Boolean);
+
+  const failStates = new Set(['failed', 'error', 'cancelled', 'canceled', 'aborted', 'timeout']);
+  const doneStates = new Set(['completed', 'done', 'finished', 'success', 'succeeded', 'idle']);
+
+  if (lowerType.startsWith('message.')) {
+    if (messageStates.some((state) => failStates.has(state))) {
+      return 'failed';
+    }
+    if (messageStates.some((state) => doneStates.has(state))) {
+      return 'completed';
+    }
+  }
 
   // 仅在 session 级事件上进行终态判定，避免 message.part.updated 等中间事件提前触发 completed。
   const isSessionScoped = lowerType.startsWith('session.');
@@ -369,9 +406,6 @@ function detectOpencodeOutcome(
   ]
     .map((value) => value.toLowerCase())
     .filter(Boolean);
-
-  const failStates = new Set(['failed', 'error', 'cancelled', 'canceled', 'aborted', 'timeout']);
-  const doneStates = new Set(['completed', 'done', 'finished', 'success', 'succeeded', 'idle']);
 
   if (states.some((state) => failStates.has(state))) {
     return 'failed';
@@ -428,26 +462,6 @@ async function resolveRuntimeBinding(
     };
   }
 
-  const messages = await taskCreationFileMemoryStore.getMessages(taskSessionId);
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const metadata = toRecord(messages[i]?.metadata);
-    const orchestratorId = asString(metadata.orchestratorSessionId);
-    if (orchestratorId) {
-      return {
-        orchestratorSessionId: orchestratorId,
-        opencodeSessionId,
-      };
-    }
-  }
-
-  const configured = resolveFixedOrchestratorSessionId();
-  if (configured) {
-    return {
-      orchestratorSessionId: configured,
-      opencodeSessionId,
-    };
-  }
-
   return null;
 }
 
@@ -458,6 +472,9 @@ export class OpencodeRemoteService {
   private finalizedRuns = new Set<string>();
   private opencodeLocks = new Map<string, Promise<void>>();
   private workspaceGitInit = new Set<string>();
+  private streamIdleTimers = new Map<string, NodeJS.Timeout>();
+  private streamIdleAt = new Map<string, number>();
+  private streamIdleTimeoutMs = toNonNegativeInt(process.env.OPENCODE_STREAM_IDLE_TIMEOUT_MS) ?? 20000;
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -469,6 +486,76 @@ export class OpencodeRemoteService {
 
   private buildWorkspaceKey(orchestratorSessionId: string, workspacePath: string): string {
     return `${orchestratorSessionId}::${workspacePath}`;
+  }
+
+  private buildStreamIdleKey(taskSessionId: string, opencodeSessionId: string): string {
+    return this.buildRunKey(taskSessionId, opencodeSessionId);
+  }
+
+  private clearStreamIdleTimer(key: string) {
+    const timer = this.streamIdleTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamIdleTimers.delete(key);
+    }
+    this.streamIdleAt.delete(key);
+  }
+
+  private touchStreamIdle(taskSessionId: string, orchestratorSessionId: string, opencodeSessionId: string) {
+    if (!opencodeSessionId || this.streamIdleTimeoutMs <= 0) return;
+    const key = this.buildStreamIdleKey(taskSessionId, opencodeSessionId);
+    this.streamIdleAt.set(key, Date.now());
+    const existing = this.streamIdleTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      void this.handleStreamIdleTimeout(taskSessionId, orchestratorSessionId, opencodeSessionId, key);
+    }, this.streamIdleTimeoutMs);
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    this.streamIdleTimers.set(key, timer);
+  }
+
+  private async handleStreamIdleTimeout(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string,
+    key: string
+  ) {
+    const lastAt = this.streamIdleAt.get(key);
+    if (!lastAt) return;
+    if (Date.now() - lastAt < this.streamIdleTimeoutMs) return;
+    this.clearStreamIdleTimer(key);
+
+    const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    if (!session) return;
+    if (session.stage === 'completed' || session.stage === 'failed') return;
+    if (this.finalizedRuns.has(this.buildRunKey(taskSessionId, opencodeSessionId))) return;
+
+    const workspacePath = resolveOpencodeWorkspacePath(taskSessionId);
+    const syntheticEvent: Record<string, unknown> = {
+      type: 'session.idle',
+      properties: {
+        sessionID: opencodeSessionId,
+        status: 'idle',
+      },
+      directory: workspacePath || undefined,
+    };
+    const syntheticMessage: OsacMessage = {
+      type: 'OPENCODE_EVENT',
+      payload: {
+        seq: Date.now(),
+        timestamp: Date.now(),
+        eventType: 'session.idle',
+        event: syntheticEvent,
+        orchestratorSessionId,
+        opencodeSessionId,
+      },
+    };
+
+    await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
   }
 
   private shellEscapeSingle(value: string): string {
@@ -855,7 +942,6 @@ export class OpencodeRemoteService {
     const opencodePort = toPositiveInt(process.env.OPENCODE_SERVER_PORT);
 
     return await this.withOpencodeLock(orchestratorSessionId, async () => {
-      await osacConnectionManager.ensurePersistent(orchestratorSessionId);
       await this.ensureWorkspaceGit(orchestratorSessionId, workspacePath);
       await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
         workspacePath: workspacePath || undefined,
@@ -981,6 +1067,7 @@ export class OpencodeRemoteService {
         });
         this.clearTextStreams(session.id, opencodeSessionId);
         this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
+        this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
       }
       await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
       await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
@@ -1014,14 +1101,23 @@ export class OpencodeRemoteService {
     }
 
     if (message.type === 'OPENCODE_ERROR') {
-      const content = asString(payload.message) || 'OpenCode 远程执行失败';
+      const rawMessage = asString(payload.message) || 'OpenCode 远程执行失败';
+      if (isSandboxNotFoundError(rawMessage)) {
+        await markSandboxClosed(orchestratorSessionId);
+        await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
+        return;
+      }
+      const content = rawMessage;
       const opencodeSessionId = asString(payload.opencodeSessionId) || session.runtime?.opencodeSessionId;
+      if (opencodeSessionId) {
+        this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
+      }
       await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
 
       await taskCreationFileMemoryStore.addMessage(
         session.id,
         'agent',
-        'opencode_status',
+        'opencode_error',
         content,
         {
           ...payload,
@@ -1029,19 +1125,6 @@ export class OpencodeRemoteService {
           opencodeSessionId: opencodeSessionId || undefined,
         }
       );
-
-      await this.notify({
-        taskSessionId: session.id,
-        message: {
-          type: 'error',
-          content,
-          metadata: {
-            ...payload,
-            orchestratorSessionId,
-            opencodeSessionId: opencodeSessionId || undefined,
-          },
-        },
-      });
       return;
     }
 
@@ -1051,6 +1134,9 @@ export class OpencodeRemoteService {
       pickSessionIdFromEvent(event) ||
       session.runtime?.opencodeSessionId ||
       '';
+    if (opencodeSessionId) {
+      this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
+    }
     const eventProps = normalizeRecord(event.properties);
     const shouldFetchDiff =
       eventType === 'session.diff' &&
@@ -1181,6 +1267,9 @@ export class OpencodeRemoteService {
         return;
       }
       this.finalizedRuns.add(runKey);
+      if (runOpencodeSessionId) {
+        this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
+      }
 
       const aggregated = await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
 
@@ -1326,28 +1415,47 @@ export class OpencodeRemoteService {
         return;
       }
       this.finalizedRuns.add(runKey);
+      if (runOpencodeSessionId) {
+        this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
+      }
 
       await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
       await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'failed');
       await taskCreationFileMemoryStore.updateSessionStage(session.id, 'failed');
 
-      const content = 'OpenCode 执行失败，请查看上方事件详情';
+      const errorContent = 'OpenCode 执行失败';
       await taskCreationFileMemoryStore.addMessage(
         session.id,
         'agent',
-        'opencode_status',
-        content,
+        'opencode_error',
+        errorContent,
         {
           ...metadata,
           outcome,
         }
       );
 
+      const content = 'OpenCode 执行已结束';
+      await taskCreationFileMemoryStore.addMessage(
+        session.id,
+        'agent',
+        'status_update',
+        content,
+        {
+          ...metadata,
+          outcome,
+          stage: 'failed',
+          tone: 'execution',
+        }
+      );
+
       await this.notify({
         taskSessionId: session.id,
         message: {
-          type: 'error',
+          type: 'status_update',
           content,
+          stage: 'failed',
+          tone: 'execution',
           metadata: {
             ...metadata,
             outcome,

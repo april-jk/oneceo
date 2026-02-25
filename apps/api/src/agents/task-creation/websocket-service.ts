@@ -214,6 +214,9 @@ export class TaskCreationWebSocketService {
       }
     }
 
+    if (message.type === ('error' as any)) {
+      return;
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       console.log(`[WebSocket] 发送消息 to ${clientId}:`, message.type);
       ws.send(

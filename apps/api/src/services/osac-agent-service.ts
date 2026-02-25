@@ -1,6 +1,12 @@
 import type { OsacMessage } from '../clients/osac-client';
-import { osacConnector } from '../connectors/osac-connector';
+import { ensureDatabaseConnection } from '../config/database';
+import { sandboxExecutionEnvironmentDAO } from '../db/dao';
+import { opencodeHttpClient } from '../connectors/opencode-http-client';
+import { e2bConnector } from '../connectors/e2b-connector';
+import { e2bConfig } from '../config/e2b-config';
 import { osacConnectionManager } from './osac-connection-manager';
+import { opencodeEventStreamService } from './opencode-event-stream-service';
+import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { auditOsacAction } from '../utils/osac-audit';
 
 type OpencodePartInput = {
@@ -18,24 +24,123 @@ type OpencodeHttpResponse = {
   body?: string;
 };
 
-export class OsacAgentService {
-  private fallbackStreams = new Map<string, { sessionId: string; stop: () => void }>();
+type RuntimeInfo = {
+  baseUrl: string;
+  trafficAccessToken?: string | null;
+  workspaceRoot?: string;
+};
 
-  private buildFallbackStreamKey(sessionId: string, requestId: string): string {
-    const normalizedRequestId = requestId || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    return `${sessionId}::${normalizedRequestId}`;
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknown>) {
+  const explicit = asString(metadata.opencodeWorkspaceRoot);
+  if (explicit) return explicit;
+  const taskSessionId = asString(metadata.taskSessionId);
+  if (taskSessionId) return resolveOpencodeWorkspacePath(taskSessionId);
+  return resolveOpencodeWorkspacePath(sessionId);
+}
+
+async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
+  await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+  const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+  if (!environment) {
+    throw new Error(`未找到执行环境: ${sessionId}`);
+  }
+  const metadata = (environment.metadata || {}) as Record<string, unknown>;
+  const baseUrl =
+    asString(metadata.opencodeBaseUrl) ||
+    asString((metadata.opencode as Record<string, unknown>)?.baseUrl) ||
+    asString(metadata.osacEndpoint);
+  if (!baseUrl) {
+    throw new Error('未找到 OpenCode baseUrl（metadata.opencodeBaseUrl）');
+  }
+  const trafficAccessToken =
+    asString((metadata.e2b as Record<string, unknown>)?.trafficAccessToken) ||
+    asString(metadata.trafficAccessToken) ||
+    null;
+  const workspaceRoot = resolveWorkspaceRoot(sessionId, metadata);
+  return { baseUrl, trafficAccessToken, workspaceRoot };
+}
+
+function buildSyntheticMessage(
+  type: OsacMessage['type'],
+  sessionId: string,
+  payload: Record<string, unknown>
+): OsacMessage {
+  return {
+    type,
+    payload: {
+      ...payload,
+      orchestratorSessionId: sessionId,
+    },
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return normalized.includes('aborted') || normalized.includes('timeout');
+}
+
+async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
+  try {
+    await opencodeHttpClient.ensureServerReady(runtime.baseUrl, runtime.trafficAccessToken || undefined);
+    return;
+  } catch {
+    // start server if not ready
   }
 
-  private stopFallbackStreamsForSession(sessionId: string) {
-    for (const [key, value] of this.fallbackStreams.entries()) {
-      if (value.sessionId !== sessionId) continue;
-      this.fallbackStreams.delete(key);
-      try {
-        value.stop();
-      } catch {
-        // ignore stop errors
-      }
+  const command = `nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
+
+  const maxAttempts = Math.max(5, Number(process.env.OPENCODE_SERVER_START_ATTEMPTS || 20));
+  const delayMs = Math.max(200, Number(process.env.OPENCODE_SERVER_START_DELAY_MS || 500));
+  let lastError: unknown = null;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      await opencodeHttpClient.ensureServerReady(runtime.baseUrl, runtime.trafficAccessToken || undefined);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`opencode serve 启动失败: ${message}`);
+}
+
+async function dispatchPromptInSandbox(
+  sessionId: string,
+  input: { opencodeSessionId: string; parts: OpencodePartInput[]; workspacePath?: string }
+) {
+  const directory = input.workspacePath ? `?directory=${encodeURIComponent(input.workspacePath)}` : '';
+  const url = `http://127.0.0.1:${e2bConfig.opencodePort}/session/${encodeURIComponent(
+    input.opencodeSessionId
+  )}/message${directory}`;
+  const payload = JSON.stringify({ parts: input.parts || [] });
+  const payloadB64 = Buffer.from(payload, 'utf-8').toString('base64');
+  const logPath = `/tmp/opencode-prompt-${input.opencodeSessionId}.log`;
+  const scriptPath = `/tmp/opencode-prompt-${input.opencodeSessionId}.py`;
+  const command = `cat <<'PY' > ${scriptPath}
+import base64, urllib.request, sys
+payload = base64.b64decode('${payloadB64}').decode('utf-8')
+url = '${url}'
+req = urllib.request.Request(url, data=payload.encode('utf-8'), headers={'Content-Type':'application/json'})
+try:
+    urllib.request.urlopen(req, timeout=60).read()
+except Exception as e:
+    sys.stderr.write(str(e))
+PY
+nohup python3 ${scriptPath} > ${logPath} 2>&1 &`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+}
+
+export class OsacAgentService {
+  async getRuntimeInfo(sessionId: string): Promise<RuntimeInfo> {
+    return resolveRuntime(sessionId);
   }
 
   async executeCommand(
@@ -47,19 +152,8 @@ export class OsacAgentService {
       options?: Record<string, unknown>;
     }
   ) {
-    const message: OsacMessage = {
-      type: 'EXECUTE_COMMAND',
-      payload: {
-        command: input.command,
-        sessionId: input.sessionId,
-        continueSession: input.continueSession,
-        options: input.options || {},
-      },
-    };
-
     auditOsacAction('EXECUTE_COMMAND', { sessionId, command: input.command });
-
-    await osacConnectionManager.send(sessionId, message);
+    await this.executeCommandAndWait(sessionId, input, { timeoutMs: 900000, pollMs: 2000 });
     return { status: 'sent' };
   }
 
@@ -73,114 +167,82 @@ export class OsacAgentService {
     },
     config?: { timeoutMs?: number; pollMs?: number }
   ) {
-    const startCount = osacConnectionManager.getMessageCount(sessionId);
-    await this.executeCommand(sessionId, input);
-
-    const timeoutMs = config?.timeoutMs ?? Number(process.env.OSAC_COMMAND_TIMEOUT_MS || 900000);
-    const pollMs = config?.pollMs ?? Number(process.env.OSAC_COMMAND_POLL_MS || 2000);
-    const idleMs = Number(process.env.OSAC_COMMAND_IDLE_MS || 60000);
-
-    const startAt = Date.now();
-    let lastOutputAt = Date.now();
-    let lastMessageCount = startCount;
-    let status: string | null = null;
-    while (Date.now() - startAt < timeoutMs) {
-      const newMessages = osacConnectionManager.getMessagesSince(sessionId, lastMessageCount);
-      if (newMessages.length > 0) {
-        lastMessageCount += newMessages.length;
-        const hasOutput = newMessages.some((msg) => msg.type === 'COMMAND_OUTPUT');
-        if (hasOutput) {
-          lastOutputAt = Date.now();
-        }
-      }
-      const messages = osacConnectionManager.getMessagesSince(sessionId, startCount);
-      const statusMessage = [...messages].reverse().find((msg) => msg.type === 'COMMAND_STATUS');
-      if (statusMessage) {
-        const payload = statusMessage.payload || {};
-        status = String(payload.status || payload.state || '');
-        if (status && status !== 'running') {
-          break;
-        }
-      }
-      if (status === 'running' && Date.now() - lastOutputAt > idleMs) {
-        status = 'running_timeout';
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const options = input.options || {};
+    const shell = Boolean(options.shell);
+    const cwd = typeof options.cwd === 'string' ? options.cwd : '';
+    const envs = (options.envs as Record<string, string>) || undefined;
+    let command = input.command;
+    if (shell) {
+      command = `/bin/bash -lc ${shellEscape(input.command)}`;
+    }
+    if (cwd) {
+      command = `cd ${shellEscape(cwd)} && ${command}`;
     }
 
-    const messages = osacConnectionManager.getMessagesSince(sessionId, startCount);
-    const outputs = messages
-      .filter((msg) => msg.type === 'COMMAND_OUTPUT')
-      .map((msg) => {
-        const payload = msg.payload || {};
-        return (
-          payload.output ||
-          payload.content ||
-          payload.text ||
-          payload.data ||
-          ''
-        );
-      })
-      .filter(Boolean)
-      .join('\n');
+    const result: any = await e2bConnector.runCommand(sessionId, command, {
+      envs,
+      timeoutMs: config?.timeoutMs,
+    });
+    const output = String(result?.stdout || result?.output || '');
+    const exitCode = Number.isFinite(result?.exitCode)
+      ? result.exitCode
+      : Number.isFinite(result?.exit_code)
+        ? result.exit_code
+        : Number.isFinite(result?.status)
+          ? result.status
+          : undefined;
+    const status = exitCode === undefined || exitCode === 0 ? 'completed' : 'failed';
+    const messages: OsacMessage[] = [
+      {
+        type: 'COMMAND_OUTPUT',
+        payload: { output },
+      },
+    ];
 
     return {
-      status: status || 'unknown',
-      output: outputs,
+      status,
+      output,
       messages,
     };
   }
 
   async getSessionList(sessionId: string, input?: { maxCount?: number; format?: string }) {
-    const message: OsacMessage = {
-      type: 'GET_SESSION_LIST',
-      payload: {
-        maxCount: input?.maxCount,
-        format: input?.format,
+    const runtime = await resolveRuntime(sessionId);
+    const query: Record<string, string> = {};
+    if (input?.maxCount) query.limit = String(input.maxCount);
+    const response = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
+        method: 'GET',
+        path: '/session',
+        query,
       },
-    };
-
-    auditOsacAction('GET_SESSION_LIST', { sessionId });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'SESSION_LIST_RESPONSE';
-    });
-
-    return reply.payload || {};
+      runtime.trafficAccessToken || undefined
+    );
+    const body = response.body || '[]';
+    return { sessions: JSON.parse(body) };
   }
 
   async getSessionDetails(sessionId: string, opencodeSessionId: string) {
-    const message: OsacMessage = {
-      type: 'GET_SESSION_DETAILS',
-      payload: {
-        sessionId: opencodeSessionId,
+    const runtime = await resolveRuntime(sessionId);
+    const response = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
+        method: 'GET',
+        path: `/session/${encodeURIComponent(opencodeSessionId)}`,
       },
-    };
-
-    auditOsacAction('GET_SESSION_DETAILS', { sessionId, opencodeSessionId });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'SESSION_DETAILS_RESPONSE';
-    });
-
-    return reply.payload || {};
+      runtime.trafficAccessToken || undefined
+    );
+    return JSON.parse(response.body || '{}');
   }
 
   async getSessionDiff(sessionId: string, opencodeSessionId: string) {
-    const requestId = `oc_diff_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const message: OsacMessage = {
-      type: 'OPENCODE_SESSION_DIFF',
-      requestId,
-      payload: {
-        requestId,
-        sessionId: opencodeSessionId,
-      },
-    };
-
-    auditOsacAction('OPENCODE_SESSION_DIFF', { sessionId, opencodeSessionId });
-
-    return await this.opencodeRequest(sessionId, message, 'OPENCODE_SESSION_DIFF_RESPONSE');
+    const runtime = await resolveRuntime(sessionId);
+    return opencodeHttpClient.getSessionDiff(
+      runtime.baseUrl,
+      { sessionId: opencodeSessionId },
+      runtime.trafficAccessToken || undefined
+    );
   }
 
   async opencodeHttpRequest(
@@ -194,515 +256,131 @@ export class OsacAgentService {
       workspacePath?: string;
     }
   ): Promise<OpencodeHttpResponse> {
-    const requestId = `oc_http_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const message: OsacMessage = {
-      type: 'OPENCODE_HTTP_REQUEST',
-      requestId,
-      payload: {
-        requestId,
+    const runtime = await resolveRuntime(sessionId);
+    const response = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
         method: input.method,
         path: input.path,
         query: input.query,
         headers: input.headers,
         body: input.body,
-        workspacePath: input.workspacePath,
       },
+      runtime.trafficAccessToken || undefined
+    );
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: response.body,
     };
-
-    auditOsacAction('OPENCODE_HTTP_REQUEST', { sessionId, path: input.path, method: input.method });
-
-    const reply = await this.opencodeRequest(sessionId, message, 'OPENCODE_HTTP_RESPONSE');
-    return reply as OpencodeHttpResponse;
   }
 
-  async loadSkill(sessionId: string, input: { skillName: string; skillContent: string; overwrite?: boolean }) {
-    const message: OsacMessage = {
-      type: 'LOAD_SKILL',
-      payload: {
-        skillName: input.skillName,
-        skillContent: input.skillContent,
-        overwrite: input.overwrite ?? false,
-      },
-    };
-
-    auditOsacAction('LOAD_SKILL', { sessionId, skillName: input.skillName });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'SKILL_STATUS' && res.payload?.skillName === input.skillName;
-    });
-
-    return reply.payload || {};
+  async loadSkill(
+    sessionId: string,
+    _input?: { skillName: string; skillContent: string; overwrite?: boolean }
+  ) {
+    auditOsacAction('LOAD_SKILL', { sessionId });
+    throw new Error('E2B 模式不支持 OSAC Skill 管理');
   }
 
-  async unloadSkill(sessionId: string, skillName: string) {
-    const message: OsacMessage = {
-      type: 'UNLOAD_SKILL',
-      payload: {
-        skillName,
-      },
-    };
-
-    auditOsacAction('UNLOAD_SKILL', { sessionId, skillName });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'SKILL_STATUS' && res.payload?.skillName === skillName;
-    });
-
-    return reply.payload || {};
+  async unloadSkill(sessionId: string, _skillName?: string) {
+    auditOsacAction('UNLOAD_SKILL', { sessionId });
+    throw new Error('E2B 模式不支持 OSAC Skill 管理');
   }
 
   async addMcpServer(
     sessionId: string,
-    input: { serverName: string; serverConfig: Record<string, unknown>; overwrite?: boolean }
+    _input?: { serverName: string; serverConfig: Record<string, unknown>; overwrite?: boolean }
   ) {
-    const message: OsacMessage = {
-      type: 'ADD_MCP_SERVER',
-      payload: {
-        serverName: input.serverName,
-        serverConfig: input.serverConfig,
-        overwrite: input.overwrite ?? false,
-      },
-    };
-
-    auditOsacAction('ADD_MCP_SERVER', { sessionId, serverName: input.serverName });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'MCP_SERVER_STATUS' && res.payload?.serverName === input.serverName;
-    });
-
-    return reply.payload || {};
+    auditOsacAction('ADD_MCP_SERVER', { sessionId });
+    throw new Error('E2B 模式不支持 OSAC MCP 管理');
   }
 
-  async removeMcpServer(sessionId: string, serverName: string) {
-    const message: OsacMessage = {
-      type: 'REMOVE_MCP_SERVER',
-      payload: {
-        serverName,
-      },
-    };
-
-    auditOsacAction('REMOVE_MCP_SERVER', { sessionId, serverName });
-
-    const reply = await osacConnectionManager.request(sessionId, message, (res) => {
-      return res.type === 'MCP_SERVER_STATUS' && res.payload?.serverName === serverName;
-    });
-
-    return reply.payload || {};
+  async removeMcpServer(sessionId: string, _serverName?: string) {
+    auditOsacAction('REMOVE_MCP_SERVER', { sessionId });
+    throw new Error('E2B 模式不支持 OSAC MCP 管理');
   }
 
   async initiateUpdate(
     sessionId: string,
-    input: { updateType: string; version?: string; downloadUrl?: string; updateCommand?: string }
+    _input?: { updateType: string; version?: string; downloadUrl?: string; updateCommand?: string }
   ) {
-    const message: OsacMessage = {
-      type: 'INITIATE_UPDATE',
-      payload: {
-        updateType: input.updateType,
-        version: input.version,
-        downloadUrl: input.downloadUrl,
-        updateCommand: input.updateCommand,
-      },
-    };
-
-    auditOsacAction('INITIATE_UPDATE', { sessionId, updateType: input.updateType });
-
-    await osacConnectionManager.send(sessionId, message);
-    return { status: 'sent' };
+    auditOsacAction('INITIATE_UPDATE', { sessionId });
+    throw new Error('E2B 模式不支持 OSAC 自更新');
   }
 
-  private async opencodeRequest(
-    sessionId: string,
-    message: OsacMessage,
-    expectedType: string,
-    options?: { streamEvents?: boolean }
-  ): Promise<Record<string, unknown>> {
-    const payload = (message.payload || {}) as Record<string, unknown>;
-    const requestId = String(message.requestId || payload.requestId || '').trim();
-
-    let reply: OsacMessage | null = null;
-    try {
-      reply = await osacConnectionManager.request(
-        sessionId,
-        message,
-        this.matchOpencodeReply(expectedType, requestId)
-      );
-    } catch (error) {
-      if (!this.shouldUseBootstrapFallback(error)) {
-        throw error;
-      }
-      auditOsacAction('OPENCODE_BOOTSTRAP_FALLBACK', {
-        sessionId,
-        messageType: message.type,
-        expectedType,
-        requestId: requestId || null,
-      });
-      await osacConnectionManager.close(sessionId);
-      const maxAttempts = Math.max(1, Number(process.env.OSAC_BOOTSTRAP_CONNECT_ATTEMPTS || 4));
-      const delayMs = Math.max(500, Number(process.env.OSAC_BOOTSTRAP_CONNECT_DELAY_MS || 2500));
-      let fallbackError: unknown = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        try {
-          reply = await this.opencodeRequestViaBootstrap(sessionId, message, expectedType, {
-            requestId,
-            streamEvents: options?.streamEvents === true,
-          });
-          fallbackError = null;
-          break;
-        } catch (fallbackAttemptError) {
-          fallbackError = fallbackAttemptError;
-          if (!this.isMappingStaleError(fallbackAttemptError) || attempt >= maxAttempts) {
-            break;
-          }
-          await this.sleep(delayMs);
-        }
-      }
-      if (fallbackError) {
-        throw fallbackError;
-      }
-    }
-
-    if (!reply) {
-      throw new Error('OSAC OpenCode 请求未返回响应');
-    }
-
-    if (reply.type === 'OPENCODE_ERROR') {
-      const payload = (reply.payload || {}) as Record<string, unknown>;
-      const messageText = String(payload.message || payload.code || 'opencode remote error');
-      throw new Error(messageText);
-    }
-
-    return (reply.payload || {}) as Record<string, unknown>;
-  }
-
-  private matchOpencodeReply(expectedType: string, requestId: string) {
-    return (res: OsacMessage) => {
-      if (res.type !== expectedType && res.type !== 'OPENCODE_ERROR') {
-        return false;
-      }
-      if (!requestId) {
-        return true;
-      }
-      return this.matchRequestId(res, requestId);
-    };
-  }
-
-  private matchRequestId(message: OsacMessage, requestId: string): boolean {
-    if (!requestId) return true;
-    const payload = (message.payload || {}) as Record<string, unknown>;
-    const replyRequestId = String(message.requestId || payload.requestId || '').trim();
-    return replyRequestId === requestId;
-  }
-
-  private shouldUseBootstrapFallback(error: unknown): boolean {
-    if (!this.bootstrapFallbackEnabled()) {
-      return false;
-    }
-    const text = error instanceof Error ? error.message : String(error);
-    return text.includes('OSAC 请求超时') || /request timeout/i.test(text);
-  }
-
-  private isMappingStaleError(error: unknown): boolean {
-    const text = error instanceof Error ? error.message : String(error);
-    return text.includes('code=mapping_stale') || /mapping_stale/i.test(text);
-  }
-
-  private async sleep(ms: number): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private bootstrapFallbackEnabled(): boolean {
-    const raw = String(process.env.OSAC_OPENCODE_BOOTSTRAP_FALLBACK || 'true').trim().toLowerCase();
-    return raw !== 'false';
-  }
-
-  private asString(value: unknown): string {
-    return typeof value === 'string' ? value.trim() : '';
-  }
-
-  private toRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  }
-
-  private detectTerminalOutcome(message: OsacMessage): 'completed' | 'failed' | null {
-    if (message.type === 'OPENCODE_ERROR') {
-      return 'failed';
-    }
-    if (message.type !== 'OPENCODE_EVENT') {
-      return null;
-    }
-
-    const payload = this.toRecord(message.payload);
-    const event = this.toRecord(payload.event);
-    const properties = this.toRecord(event.properties);
-    const info = this.toRecord(properties.info);
-    const eventType = this.asString(payload.eventType) || this.asString(event.type);
-
-    const states = [
-      this.asString(payload.state),
-      this.asString(payload.status),
-      this.asString(event.state),
-      this.asString(event.status),
-      this.asString(properties.state),
-      this.asString(properties.status),
-      this.asString(info.state),
-      this.asString(info.status),
-    ]
-      .map((state) => state.toLowerCase())
-      .filter(Boolean);
-
-    const failStates = new Set(['failed', 'error', 'cancelled', 'canceled', 'aborted', 'timeout']);
-    const doneStates = new Set(['completed', 'done', 'finished', 'success', 'succeeded', 'idle']);
-
-    if (states.some((state) => failStates.has(state))) return 'failed';
-    if (states.some((state) => doneStates.has(state))) return 'completed';
-
-    const lowerType = eventType.toLowerCase();
-    if (/(^|[._-])(failed|error|cancelled|canceled|aborted|timeout)([._-]|$)/.test(lowerType)) {
-      return 'failed';
-    }
-    if (/(^|[._-])(completed|finished|done|succeeded|success|idle)([._-]|$)/.test(lowerType)) {
-      return 'completed';
-    }
-
-    if (
-      event.final === true ||
-      event.done === true ||
-      event.isFinal === true ||
-      properties.final === true ||
-      properties.done === true ||
-      properties.isFinal === true
-    ) {
-      return 'completed';
-    }
-
-    return null;
-  }
-
-  private async opencodeRequestViaBootstrap(
-    sessionId: string,
-    message: OsacMessage,
-    expectedType: string,
-    options?: { requestId?: string; streamEvents?: boolean }
-  ): Promise<OsacMessage> {
-    const requestId = String(options?.requestId || '').trim();
-    const streamEvents = options?.streamEvents === true;
-    const responseTimeoutRaw =
-      message.type === 'OPENCODE_PROMPT_SEND'
-        ? Number(process.env.OSAC_BOOTSTRAP_PROMPT_TIMEOUT_MS || 180000)
-        : Number(process.env.OSAC_BOOTSTRAP_REQUEST_TIMEOUT_MS || process.env.OSAC_REQUEST_TIMEOUT_MS || 45000);
-    const responseTimeoutMs = Math.max(
-      2000,
-      Number.isFinite(responseTimeoutRaw) && responseTimeoutRaw > 0 ? responseTimeoutRaw : 45000
-    );
-    const eventIdleMs = Math.max(5000, Number(process.env.OSAC_BOOTSTRAP_EVENT_IDLE_MS || 120000));
-    const eventMaxMs = Math.max(10000, Number(process.env.OSAC_BOOTSTRAP_EVENT_MAX_MS || 900000));
-    const streamKey = this.buildFallbackStreamKey(sessionId, requestId);
-
-    const handle = await osacConnector.connectForSession(sessionId, { bootstrapMessage: message });
-
-    let responseSettled = false;
-    let streamStarted = false;
-    let idleTimer: NodeJS.Timeout | null = null;
-    let maxTimer: NodeJS.Timeout | null = null;
-    let responseTimer: NodeJS.Timeout | null = null;
-
-    const clearTimers = () => {
-      if (responseTimer) {
-        clearTimeout(responseTimer);
-        responseTimer = null;
-      }
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
-      if (maxTimer) {
-        clearTimeout(maxTimer);
-        maxTimer = null;
-      }
-    };
-
-    const closeHandle = () => {
-      try {
-        handle.close();
-      } catch {
-        // ignore close errors
-      }
-    };
-
-    const stopStreaming = (reason: string) => {
-      this.fallbackStreams.delete(streamKey);
-      if (streamStarted) {
-        auditOsacAction('OPENCODE_BOOTSTRAP_STREAM_STOP', { sessionId, reason });
-      }
-      clearTimers();
-      closeHandle();
-    };
-
-    const armIdleTimer = () => {
-      if (!streamStarted) return;
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-      }
-      idleTimer = setTimeout(() => {
-        stopStreaming('idle_timeout');
-      }, eventIdleMs);
-      if (typeof idleTimer.unref === 'function') {
-        idleTimer.unref();
-      }
-    };
-
-    const startStreaming = () => {
-      if (!streamEvents || streamStarted) return;
-      streamStarted = true;
-      auditOsacAction('OPENCODE_BOOTSTRAP_STREAM_START', { sessionId, requestId: requestId || null });
-      armIdleTimer();
-      maxTimer = setTimeout(() => {
-        stopStreaming('max_timeout');
-      }, eventMaxMs);
-      if (typeof maxTimer.unref === 'function') {
-        maxTimer.unref();
-      }
-
-      const previous = this.fallbackStreams.get(streamKey);
-      if (previous) {
-        previous.stop();
-      }
-      this.fallbackStreams.set(streamKey, { sessionId, stop: streamStopper });
-    };
-
-    const streamStopper = () => {
-      stopStreaming('manual_stop');
-    };
-
-    const response = await new Promise<OsacMessage>((resolve, reject) => {
-      const settle = (fn: () => void) => {
-        if (responseSettled) return;
-        responseSettled = true;
-        if (responseTimer) {
-          clearTimeout(responseTimer);
-          responseTimer = null;
-        }
-        fn();
-      };
-
-      responseTimer = setTimeout(() => {
-        settle(() => {
-          clearTimers();
-          closeHandle();
-          reject(new Error('OSAC 请求超时（bootstrap fallback）'));
-        });
-      }, responseTimeoutMs);
-      if (responseTimer && typeof responseTimer.unref === 'function') {
-        responseTimer.unref();
-      }
-
-      handle.onClose(() => {
-        if (!responseSettled) {
-          settle(() => reject(new Error('OSAC bootstrap 通道在收到响应前已关闭')));
-          return;
-        }
-        if (streamStarted) {
-          this.fallbackStreams.delete(streamKey);
-        }
-        clearTimers();
-      });
-
-      handle.onMessage((reply) => {
-        osacConnectionManager.emitExternalMessage(sessionId, reply);
-
-        if (!responseSettled && this.matchOpencodeReply(expectedType, requestId)(reply)) {
-          settle(() => {
-            if (streamEvents && reply.type === expectedType) {
-              startStreaming();
-            } else {
-              clearTimers();
-              closeHandle();
-            }
-            resolve(reply);
-          });
-          return;
-        }
-
-        if (!streamStarted) {
-          return;
-        }
-        armIdleTimer();
-        const terminal = this.detectTerminalOutcome(reply);
-        if (terminal) {
-          stopStreaming(`terminal_${terminal}`);
-        }
-      });
+  async ensureOpencodeServer(sessionId: string, input?: { host?: string; port?: number; workspacePath?: string }) {
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    await opencodeEventStreamService.ensureStream({
+      orchestratorSessionId: sessionId,
+      baseUrl: runtime.baseUrl,
+      workspaceRoot: runtime.workspaceRoot || input?.workspacePath,
+      trafficAccessToken: runtime.trafficAccessToken || undefined,
     });
-
-    return response;
+    osacConnectionManager.emitExternalMessage(
+      sessionId,
+      buildSyntheticMessage('OPENCODE_SERVER_READY', sessionId, {
+        opencodeBaseUrl: runtime.baseUrl,
+      })
+    );
+    return { opencodeBaseUrl: runtime.baseUrl };
   }
 
-  async ensureOpencodeServer(
-    sessionId: string,
-    input?: { host?: string; port?: number; workspacePath?: string }
-  ) {
-    const requestId = `oc_ensure_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const message: OsacMessage = {
-      type: 'OPENCODE_SERVER_ENSURE',
-      requestId,
-      payload: {
-        requestId,
-        host: input?.host,
-        port: input?.port,
-        workspacePath: input?.workspacePath,
-      },
-    };
-
-    auditOsacAction('OPENCODE_SERVER_ENSURE', { sessionId, workspacePath: input?.workspacePath || null });
-
-    return await this.opencodeRequest(sessionId, message, 'OPENCODE_SERVER_READY');
-  }
-
-  async createOpencodeSession(
-    sessionId: string,
-    input?: { workspacePath?: string; title?: string }
-  ) {
-    const requestId = `oc_create_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const message: OsacMessage = {
-      type: 'OPENCODE_SESSION_CREATE',
-      requestId,
-      payload: {
-        requestId,
-        workspacePath: input?.workspacePath,
+  async createOpencodeSession(sessionId: string, input?: { workspacePath?: string; title?: string }) {
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    const result = await opencodeHttpClient.createSession(
+      runtime.baseUrl,
+      {
+        directory: input?.workspacePath || runtime.workspaceRoot,
         title: input?.title,
       },
-    };
-
-    auditOsacAction('OPENCODE_SESSION_CREATE', { sessionId, workspacePath: input?.workspacePath || null });
-
-    return await this.opencodeRequest(sessionId, message, 'OPENCODE_SESSION_READY');
+      runtime.trafficAccessToken || undefined
+    );
+    osacConnectionManager.emitExternalMessage(
+      sessionId,
+      buildSyntheticMessage('OPENCODE_SESSION_READY', sessionId, {
+        opencodeSessionId: result.id,
+      })
+    );
+    return { opencodeSessionId: result.id };
   }
 
   async sendOpencodePrompt(
     sessionId: string,
     input: { opencodeSessionId: string; parts: OpencodePartInput[]; workspacePath?: string }
   ) {
-    const requestId = `oc_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const message: OsacMessage = {
-      type: 'OPENCODE_PROMPT_SEND',
-      requestId,
-      payload: {
-        requestId,
-        workspacePath: input.workspacePath,
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    try {
+      await opencodeHttpClient.sendPrompt(
+        runtime.baseUrl,
+        {
+          sessionId: input.opencodeSessionId,
+          directory: input.workspacePath || runtime.workspaceRoot,
+          parts: input.parts || [],
+        },
+        runtime.trafficAccessToken || undefined
+      );
+    } catch (error) {
+      if (!isAbortError(error)) {
+        throw error;
+      }
+      console.warn('[OPENCODE_PROMPT_TIMEOUT] fallback to sandbox dispatch:', error);
+      await dispatchPromptInSandbox(sessionId, {
         opencodeSessionId: input.opencodeSessionId,
         parts: input.parts || [],
-      },
-    };
-
-    auditOsacAction('OPENCODE_PROMPT_SEND', {
+        workspacePath: input.workspacePath || runtime.workspaceRoot,
+      });
+    }
+    osacConnectionManager.emitExternalMessage(
       sessionId,
-      opencodeSessionId: input.opencodeSessionId,
-      partsCount: input.parts?.length || 0,
-    });
-
-    return await this.opencodeRequest(sessionId, message, 'OPENCODE_PROMPT_ACCEPTED', {
-      streamEvents: true,
-    });
+      buildSyntheticMessage('OPENCODE_PROMPT_ACCEPTED', sessionId, {
+        opencodeSessionId: input.opencodeSessionId,
+      })
+    );
+    return { opencodeSessionId: input.opencodeSessionId };
   }
 
   listMessages(sessionId: string, limit?: number) {
@@ -710,9 +388,14 @@ export class OsacAgentService {
   }
 
   async closeConnection(sessionId: string) {
-    this.stopFallbackStreamsForSession(sessionId);
+    await opencodeEventStreamService.stopStream(sessionId);
     await osacConnectionManager.close(sessionId);
   }
+}
+
+function shellEscape(value: string): string {
+  if (!value) return "''";
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 export const osacAgentService = new OsacAgentService();

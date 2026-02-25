@@ -16,6 +16,26 @@ export type TaskCreationHistoryMessage = {
   createdAt?: string;
 };
 
+export type TaskCreationRuntimeStatus = {
+  status?: string;
+  provider?: string;
+  updatedAt?: string;
+  sandboxId?: string;
+};
+
+export type TaskCreationSessionDetail = {
+  id: string;
+  title?: string;
+  status?: string;
+  stage?: string;
+  runtime?: {
+    orchestratorSessionId?: string;
+    opencodeSessionId?: string;
+    updatedAt?: string;
+  };
+  runtimeStatus?: TaskCreationRuntimeStatus | null;
+};
+
 export type OsacMessagePayload = Record<string, unknown>;
 
 export type OsacMessageRecord = {
@@ -66,11 +86,44 @@ export async function listTaskCreationMessages(sessionId: string): Promise<TaskC
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
+  const result = await fetchJson<{ data?: TaskCreationSessionDetail }>(url);
+  return result?.data || null;
+}
+
+export async function startTaskCreationRuntime(sessionId: string): Promise<{
+  orchestratorSessionId?: string;
+  status?: string;
+  reused?: boolean;
+}> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/start`;
+  const response = await fetch(url, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: any };
+  return result?.data || {};
+}
+
 export async function listOsacMessages(orchestratorSessionId: string, limit: number = 120): Promise<OsacMessageRecord[]> {
   const safeSessionId = encodeURIComponent(orchestratorSessionId);
   const url = `${getApiBaseUrl()}/api/sandbox/osac/${safeSessionId}/messages?limit=${limit}`;
   const result = await fetchJson<{ data?: OsacMessageRecord[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export function getOpencodeEventStreamUrl(sessionId: string, opencodeSessionId?: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (opencodeSessionId) {
+    params.set('opencodeSessionId', opencodeSessionId);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/opencode/events${suffix}`;
 }
 
 export async function getWorkspaceTree(sessionId: string): Promise<WorkspaceTree> {

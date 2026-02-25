@@ -5,12 +5,14 @@
  */
 
 import express from 'express';
-import { taskCreationSessionDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
+import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import { opencodeHttpClient } from '../connectors/opencode-http-client';
 
 const router = express.Router();
 
@@ -145,6 +147,50 @@ function normalizeWorkspacePath(input: string): string {
   return input.replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isSandboxNotFoundError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+}
+
+async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
+  const sessionId = asText(orchestratorSessionId);
+  if (!sessionId) return null;
+  try {
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    if (!environment) return null;
+    return {
+      status: environment.status,
+      provider: (environment.metadata as any)?.sandboxProvider || undefined,
+      updatedAt: environment.updatedAt,
+      sandboxId: environment.sessionId,
+    };
+  } catch (error) {
+    console.warn('[TASK_CREATION_RUNTIME_STATUS_FAILED]', sessionId, error);
+    return null;
+  }
+}
+
+async function markSandboxClosed(orchestratorSessionId: string) {
+  try {
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (!environment) return;
+    if (environment.status === 'closed') return;
+    await sandboxExecutionEnvironmentDAO.updateStatus(
+      orchestratorSessionId,
+      'closed',
+      environment.vmName ?? null
+    );
+  } catch (error) {
+    console.warn('[TASK_CREATION_MARK_CLOSED_FAILED]', orchestratorSessionId, error);
+  }
+}
+
 function truncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean; size: number } {
   const buffer = Buffer.from(text || '', 'utf8');
   if (buffer.length <= maxBytes) {
@@ -194,6 +240,49 @@ async function buildWorkspaceTreeFromOpencode(input: {
   };
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function findSessionId(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = findSessionId(item);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  const record = value as Record<string, unknown>;
+  const direct =
+    (typeof record.sessionID === 'string' && record.sessionID.trim()) ||
+    (typeof record.sessionId === 'string' && record.sessionId.trim());
+  if (direct) return direct;
+  for (const child of Object.values(record)) {
+    const hit = findSessionId(child);
+    if (hit) return hit;
+  }
+  return '';
+}
+
+function normalizeEvent(event: Record<string, unknown>) {
+  if (event.payload && typeof event.payload === 'object') {
+    const payload = event.payload as Record<string, unknown>;
+    if (event.directory) {
+      return { ...payload, directory: event.directory };
+    }
+    return payload;
+  }
+  return event;
+}
+
+function writeSse(res: express.Response, payload: unknown, eventName?: string) {
+  if (eventName) {
+    res.write(`event: ${eventName}\n`);
+  }
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 /**
  * GET /api/task-creation/sessions
  * 获取最近的任务创建会话列表
@@ -232,9 +321,14 @@ router.get('/sessions/:sessionId', async (req, res) => {
       });
     }
 
+    const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
+
     res.json({
       success: true,
-      data: sessionData,
+      data: {
+        ...sessionData,
+        runtimeStatus,
+      },
     });
   } catch (error: any) {
     console.error('获取会话详情失败:', error);
@@ -268,6 +362,83 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
 });
 
 /**
+ * POST /api/task-creation/sessions/:sessionId/runtime/start
+ * 显式启动/恢复任务执行环境
+ */
+router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+      if (environment?.status === 'ready') {
+        try {
+          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+            workspacePath: workspaceRoot || undefined,
+          });
+          const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+          return res.json({
+            success: true,
+            data: {
+              orchestratorSessionId,
+              status: runtimeStatus?.status || 'ready',
+              reused: true,
+            },
+          });
+        } catch (error) {
+          if (!isSandboxNotFoundError(error)) {
+            return res.status(502).json({
+              success: false,
+              error: getPublicErrorMessage('执行环境启动失败，请稍后重试'),
+            });
+          }
+          await markSandboxClosed(orchestratorSessionId);
+        }
+      }
+    }
+
+    const provision = await sandboxAgentProvisionService.provision({
+      metadata: {
+        taskSessionId: sessionId,
+        taskTitle: session.title,
+      },
+    });
+
+    await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
+      orchestratorSessionId: provision.sessionId,
+      opencodeSessionId: '',
+    });
+    await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+
+    const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
+
+    return res.json({
+      success: true,
+      data: {
+        orchestratorSessionId: provision.sessionId,
+        status: runtimeStatus?.status || provision.status || 'ready',
+        reused: false,
+      },
+    });
+  } catch (error: any) {
+    console.error('启动执行环境失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('启动执行环境失败，请稍后重试'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/workspace/tree
  * 获取会话对应工作区的文件树
  */
@@ -293,6 +464,13 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未就绪，无法读取工作区'),
+      });
+    }
+    const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未启动，无法读取工作区'),
       });
     }
 
@@ -323,6 +501,17 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   } catch (error: any) {
     const tenantKey = resolveTenantKey(req);
     const { sessionId } = req.params;
+    if (isSandboxNotFoundError(error)) {
+      const session = await taskCreationFileMemoryStore.getSession(sessionId);
+      const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+      if (orchestratorSessionId) {
+        await markSandboxClosed(orchestratorSessionId);
+      }
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      });
+    }
     const fallback = await taskCreationCacheStore.getWorkspaceTree(tenantKey, sessionId, { allowStale: true });
     if (fallback) {
       return res.json({
@@ -376,6 +565,13 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         error: getPublicErrorMessage('执行环境未就绪，无法读取文件'),
       });
     }
+    const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未启动，无法读取文件'),
+      });
+    }
 
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const maxBytes = clampNumber(Number(req.query.maxBytes || 200000), 20000, 500000);
@@ -407,6 +603,17 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   } catch (error: any) {
     const tenantKey = resolveTenantKey(req);
     const { sessionId } = req.params;
+    if (isSandboxNotFoundError(error)) {
+      const session = await taskCreationFileMemoryStore.getSession(sessionId);
+      const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+      if (orchestratorSessionId) {
+        await markSandboxClosed(orchestratorSessionId);
+      }
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      });
+    }
     const relativePath = String(req.query.path || '').trim();
     const normalizedPath = relativePath.replace(/\\/g, '/');
     const fallback = await taskCreationCacheStore.getWorkspaceFile(tenantKey, sessionId, normalizedPath, {
@@ -425,6 +632,128 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       error: getPublicErrorMessage('读取工作区文件失败，请稍后重试'),
     });
   }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/opencode/events
+ * SSE 转发 OpenCode 全局事件流（按会话过滤）
+ */
+router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = await taskCreationFileMemoryStore.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({
+      success: false,
+      error: getPublicErrorMessage('会话不存在'),
+    });
+  }
+
+  const orchestratorSessionId = session.runtime?.orchestratorSessionId;
+  if (!orchestratorSessionId) {
+    return res.status(409).json({
+      success: false,
+      error: getPublicErrorMessage('执行环境未就绪，无法订阅事件流'),
+    });
+  }
+
+  const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+  if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+    return res.status(409).json({
+      success: false,
+      error: getPublicErrorMessage('执行环境未启动，无法订阅事件流'),
+    });
+  }
+
+  const opencodeSessionId =
+    (typeof req.query.opencodeSessionId === 'string' && req.query.opencodeSessionId.trim()) ||
+    session.runtime?.opencodeSessionId ||
+    '';
+
+  const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+
+  try {
+    await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+      workspacePath: workspaceRoot,
+    });
+  } catch (error: any) {
+    if (isSandboxNotFoundError(error)) {
+      await markSandboxClosed(orchestratorSessionId);
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      });
+    }
+    return res.status(502).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || 'OpenCode 服务未就绪'),
+    });
+  }
+
+  const runtime = await osacAgentService.getRuntimeInfo(orchestratorSessionId);
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const abort = new AbortController();
+  const pingMs = Math.max(5000, Number(process.env.OPENCODE_EVENT_PROXY_PING_MS || 15000));
+  const retryMs = Math.max(500, Number(process.env.OPENCODE_EVENT_PROXY_RETRY_MS || 1500));
+
+  const pingTimer = setInterval(() => {
+    res.write(': ping\n\n');
+  }, pingMs);
+
+  req.on('close', () => {
+    abort.abort();
+  });
+
+  writeSse(res, { status: 'ready', opencodeSessionId: opencodeSessionId || undefined }, 'ready');
+
+  while (!abort.signal.aborted) {
+    try {
+      await opencodeHttpClient.subscribeEvents(
+        runtime.baseUrl,
+        {
+          directory: workspaceRoot,
+          signal: abort.signal,
+          onEvent: (event) => {
+            const normalized = normalizeEvent(event);
+            const eventSessionId = findSessionId(normalized);
+            if (opencodeSessionId && eventSessionId && eventSessionId !== opencodeSessionId) {
+              return;
+            }
+            writeSse(res, {
+              opencodeSessionId: eventSessionId || opencodeSessionId || undefined,
+              event: normalized,
+            });
+          },
+        },
+        runtime.trafficAccessToken || undefined
+      );
+    } catch (error) {
+      if (abort.signal.aborted) {
+        break;
+      }
+      if (isSandboxNotFoundError(error)) {
+        await markSandboxClosed(orchestratorSessionId);
+        break;
+      }
+      writeSse(
+        res,
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'error'
+      );
+      await sleep(retryMs);
+    }
+  }
+
+  clearInterval(pingTimer);
+  res.end();
 });
 
 /**

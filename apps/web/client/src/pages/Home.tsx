@@ -11,7 +11,20 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import ProjectDetail from "./ProjectDetail";
-import { Mic, Plug, Send, Plus, Sparkles, Loader2 } from "lucide-react";
+import {
+  Mic,
+  Plug,
+  Send,
+  Plus,
+  Sparkles,
+  Loader2,
+  FilePlus,
+  FilePenLine,
+  FileText,
+  FileDiff,
+  Terminal,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -185,8 +198,8 @@ export default function Home() {
         <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />
       ) : (
         <div
-          className={`flex flex-col min-h-[calc(100vh-6.5rem)] ${
-            mode === "chat" ? "h-[calc(100vh-6.5rem)] overflow-hidden" : ""
+          className={`flex flex-col min-h-[calc(100vh-2rem)] ${
+            mode === "chat" ? "h-[calc(100vh-2rem)] overflow-hidden" : ""
           }`}
         >
           <AnimatePresence mode="wait">
@@ -197,7 +210,7 @@ export default function Home() {
                 initial={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
-                className="flex items-center justify-center min-h-[calc(100vh-8rem)]"
+                className="flex items-center justify-center min-h-[calc(100vh-2rem)]"
               >
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
@@ -1121,6 +1134,24 @@ function OpencodeToolCard({
   const isDiffEvent = eventType === "session.diff" || (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
 
+  const capsuleTone =
+    status === "error"
+      ? "border-rose-200 bg-rose-50 text-rose-700"
+      : "border-slate-200 bg-slate-50 text-slate-700";
+
+  const EventCapsule = ({
+    icon: Icon,
+    text,
+  }: {
+    icon: LucideIcon;
+    text: string;
+  }) => (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${capsuleTone}`}>
+      <Icon className="w-4 h-4" />
+      <span>{text}</span>
+    </span>
+  );
+
   let info = getToolInfo(toolName || "tool", input);
   if (!toolName) {
     if (eventType.startsWith("file.")) {
@@ -1182,10 +1213,9 @@ function OpencodeToolCard({
         <button
           type="button"
           onClick={() => onOpenDiffPreview?.({ diffId: item.diffId })}
-          className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-slate-900 hover:bg-amber-100/70 transition-colors"
+          className="text-left"
         >
-          <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Diff</div>
-          <div className="text-xs text-amber-700/80 mt-1">点击在右侧预览更改</div>
+          <EventCapsule icon={FileDiff} text="Diff · 点击查看更改" />
         </button>
       </motion.div>
     );
@@ -1252,18 +1282,8 @@ function OpencodeToolCard({
     const filePath =
       asText(input.filePath) || asText(input.path) || asText(properties.file) || asText(properties.path);
     const label = toolKey === "write" ? "写入文件" : "编辑文件";
-    const cardBody = (
-      <>
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-        <div className="mt-1 text-sm text-slate-800">{getFilename(filePath) || "已更新文件"}</div>
-        {onOpenDiffPreview ? (
-          <div className="mt-2 text-xs text-slate-500">点击查看更改</div>
-        ) : null}
-        {status === "error" ? (
-          <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
-        ) : null}
-      </>
-    );
+    const fileName = getFilename(filePath) || "文件";
+    const capsuleText = `${label} · ${fileName}`;
     return (
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -1275,14 +1295,12 @@ function OpencodeToolCard({
           <button
             type="button"
             onClick={() => onOpenDiffPreview?.({ filePath: filePath || null })}
-            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-900 shadow-sm transition-colors hover:bg-slate-50"
+            className="text-left"
           >
-            {cardBody}
+            <EventCapsule icon={toolKey === "write" ? FilePlus : FilePenLine} text={capsuleText} />
           </button>
         ) : (
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-            {cardBody}
-          </div>
+          <EventCapsule icon={toolKey === "write" ? FilePlus : FilePenLine} text={capsuleText} />
         )}
       </motion.div>
     );
@@ -1300,25 +1318,20 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">命令执行</div>
+        <div className="space-y-2">
+          <EventCapsule icon={Terminal} text="Shell 执行" />
           {commandText ? (
-            <div className="mt-2 rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
+            <div className="rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
               {commandText}
             </div>
-          ) : (
-            <div className="mt-1 text-sm text-slate-800">命令已完成</div>
-          )}
+          ) : null}
           {outputText ? (
-            <div className="mt-2 rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono whitespace-pre-wrap">
+            <div className="rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono whitespace-pre-wrap">
               {outputText}
             </div>
           ) : null}
           {truncated ? (
-            <div className="mt-1 text-[11px] text-slate-500">输出已截断，请查看日志</div>
-          ) : null}
-          {status === "error" ? (
-            <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
+            <div className="text-[11px] text-slate-500">输出已截断，请查看日志</div>
           ) : null}
         </div>
       </motion.div>
@@ -1335,10 +1348,7 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-          <div className="mt-1 text-sm text-slate-800">{getFilename(filePath) || "文件已更新"}</div>
-        </div>
+        <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
       </motion.div>
     );
   }
@@ -1350,13 +1360,7 @@ function OpencodeToolCard({
       transition={{ duration: 0.2 }}
       className="w-full"
     >
-      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{info.title}</div>
-        {summaryText ? <div className="mt-1 text-sm text-slate-800">{summaryText}</div> : null}
-        {status === "error" ? (
-          <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
-        ) : null}
-      </div>
+      <EventCapsule icon={FileText} text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`} />
     </motion.div>
   );
 }

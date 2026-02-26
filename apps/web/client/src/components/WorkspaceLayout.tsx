@@ -6,7 +6,6 @@
  */
 
 import { useState } from "react";
-import Header from "./Header";
 import Sidebar from "./Sidebar";
 
 interface WorkspaceLayoutProps {
@@ -15,7 +14,11 @@ interface WorkspaceLayoutProps {
   onProjectSelect?: (projectId: string | null) => void;
 }
 
-export default function WorkspaceLayout({ children, selectedProjectId, onProjectSelect }: WorkspaceLayoutProps) {
+export default function WorkspaceLayout({
+  children,
+  selectedProjectId,
+  onProjectSelect,
+}: WorkspaceLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
@@ -26,9 +29,8 @@ export default function WorkspaceLayout({ children, selectedProjectId, onProject
         selectedProjectId={selectedProjectId}
         onProjectSelect={onProjectSelect}
       />
-      <Header />
-      <main className={`${sidebarCollapsed ? 'ml-16' : 'ml-60'} pt-14 min-h-screen transition-all duration-300`}>
-        <div className="container py-6">{children}</div>
+      <main className={`${sidebarCollapsed ? 'ml-20' : 'ml-64'} pt-4 pb-4 min-h-screen transition-all duration-300`}>
+        <div className="container py-0">{children}</div>
       </main>
     </div>
   );

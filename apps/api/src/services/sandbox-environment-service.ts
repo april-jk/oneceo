@@ -46,6 +46,8 @@ export class SandboxEnvironmentService {
     const metadata: Record<string, unknown> = {
       ...(input.metadata || {}),
       sandboxProvider: 'e2b',
+      lastActiveAt: new Date().toISOString(),
+      lastActiveReason: 'create',
       e2b: {
         sandboxId: sandbox.sandboxId,
         template: e2bConfig.template,

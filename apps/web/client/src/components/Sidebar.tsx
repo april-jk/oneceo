@@ -14,6 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -31,11 +38,15 @@ import {
   ChevronLeft,
   User,
   CheckCircle2,
+  Bell,
+  Coins,
+  Crown,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import React from 'react';
 import { listTaskCreationSessions } from '@/lib/task-creation-client';
+import { SettingsDialog } from "@/components/SettingsDialog";
 
 interface SidebarProps {
   className?: string;
@@ -52,6 +63,8 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
+  const [settingsDialogOpen, setSettingsDialogOpen] = React.useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<Array<{
     sessionId: string;
     title: string;
@@ -62,7 +75,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
     let disposed = false;
     const load = async () => {
       try {
-        const list = await listTaskCreationSessions(20);
+        const list = await listTaskCreationSessions('all');
         if (disposed) return;
         const mapped = list.map((session: any) => ({
           sessionId: session.id,
@@ -171,12 +184,12 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border-r border-sidebar-border flex flex-col shadow-sm transition-all duration-300 ${className}`}
+      className={`fixed left-4 top-4 bottom-4 ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border border-sidebar-border flex flex-col shadow-lg rounded-3xl backdrop-blur-sm transition-all duration-300 ${className}`}
     >
       {/* Logo */}
-      <div className="h-14 flex items-center justify-between px-4 border-b border-sidebar-border">
+      <div className={`h-14 flex items-center ${collapsed ? "px-3 justify-center" : "px-4 justify-between"} border-b border-sidebar-border relative`}>
         <Link href="/">
-          <div className="flex items-center gap-2 cursor-pointer">
+          <div className={`flex items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer shrink-0`}>
             <img 
               src="/logo.png"
               alt="oneceo"
@@ -193,7 +206,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className={`h-8 w-8 shrink-0 ${collapsed ? "absolute right-2" : ""}`}
             onClick={onToggleCollapse}
           >
             {collapsed ? (
@@ -207,7 +220,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
       {/* Navigation */}
       <ScrollArea className="flex-1">
-        <div className="p-3 space-y-1">
+        <div className={`p-3 space-y-1 ${collapsed ? "items-center" : ""}`}>
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = location === item.href;
@@ -218,7 +231,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                 <Button
                   key={item.href}
                   variant={isNewTask ? "default" : "ghost"}
-                  className={`w-full justify-start gap-3 h-9 px-3 rounded-xl transition-all duration-150 ${
+                  className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl transition-all duration-150 ${
                     isNewTask
                       ? "bg-foreground hover:bg-foreground/90 text-background"
                       : isActive
@@ -240,7 +253,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
               <Link key={item.href} href={item.href}>
                 <Button
                   variant={isNewTask ? "default" : "ghost"}
-                  className={`w-full justify-start gap-3 h-9 px-3 rounded-xl transition-all duration-150 ${
+                  className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl transition-all duration-150 ${
                     isNewTask
                       ? "bg-foreground hover:bg-foreground/90 text-background"
                       : isActive
@@ -289,11 +302,11 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                     </Button>
                     <Button
                       variant="ghost"
-                      className="flex-1 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      className="flex-1 min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                       onClick={() => onProjectSelect?.(project.id)}
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
-                      <span className="text-sm truncate">{project.name}</span>
+                      <span className="text-sm truncate min-w-0">{project.name}</span>
                     </Button>
                   </div>
 
@@ -320,10 +333,10 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                               </Button>
                               <Button
                                 variant="ghost"
-                                className="flex-1 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                className="flex-1 min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                               >
                                 <User className="w-3 h-3" />
-                                <span className="text-xs truncate">{manager.name}</span>
+                                <span className="text-xs truncate min-w-0">{manager.name}</span>
                               </Button>
                             </div>
 
@@ -334,10 +347,10 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                                   <Link key={task.id} href={`/task/${project.id}/${manager.id}/${task.id}`}>
                                     <Button
                                       variant="ghost"
-                                      className="w-full justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                      className="w-full min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                                     >
                                       <CheckCircle2 className={`w-3 h-3 ${task.status === 'completed' ? 'text-green-500' : 'text-muted-foreground'}`} />
-                                      <span className="text-xs truncate">{task.name}</span>
+                                      <span className="text-xs truncate min-w-0">{task.name}</span>
                                     </Button>
                                   </Link>
                                 ))}
@@ -370,11 +383,11 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                 <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
                   <Button
                     variant="ghost"
-                    className="w-full justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                    className="w-full min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                   >
                     <FileText className="w-3.5 h-3.5" />
-                    <span className="text-xs truncate flex-1 text-left">{session.title}</span>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-xs truncate flex-1 min-w-0 text-left">{session.title}</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">
                       {formatSessionStatus(session.status)}
                     </span>
                   </Button>
@@ -403,25 +416,82 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       </ScrollArea>
 
       {/* Bottom Section */}
-      <div className="border-t border-sidebar-border p-3">
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-        >
-          <Settings className="w-4 h-4" />
-          {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
-        </Button>
+      <div
+        className="border-t border-sidebar-border p-3"
+        onMouseEnter={() => setSettingsMenuOpen(true)}
+        onMouseLeave={() => setSettingsMenuOpen(false)}
+      >
+        <DropdownMenu open={settingsMenuOpen} onOpenChange={setSettingsMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150`}
+              onClick={() => setSettingsDialogOpen(true)}
+            >
+              <Settings className="w-4 h-4" />
+              {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="start"
+            className="w-72 p-0 rounded-2xl border border-border shadow-lg"
+          >
+            <div className="p-4 border-b border-border">
+              <div className="flex items-center gap-3 mb-3">
+                <Avatar className="h-12 w-12">
+                  <AvatarImage src="https://avatar.vercel.sh/user" alt="User" />
+                  <AvatarFallback>U</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-foreground truncate">
+                    John Doe
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    john.doe@example.com
+                  </div>
+                </div>
+              </div>
+              <div className="bg-accent/50 rounded-xl p-3 border border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm font-medium text-foreground">Credits</span>
+                  </div>
+                  <span className="text-sm font-bold text-foreground">13,639</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Crown className="w-4 h-4 text-purple-500" />
+                  <span className="text-xs text-muted-foreground">Pro Member</span>
+                </div>
+              </div>
+            </div>
+            <div className="p-2">
+              <DropdownMenuItem className="rounded-lg py-2.5 px-3">
+                <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
+                <span className="text-sm">通知</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="rounded-lg py-2.5 px-3"
+                onSelect={() => setSettingsDialogOpen(true)}
+              >
+                <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
+                <span className="text-sm">设置</span>
+              </DropdownMenuItem>
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>
-        <DialogContent className="max-w-2xl p-0 gap-0">
+        <DialogContent className="max-w-2xl p-0 gap-0 flex flex-col h-[80vh] max-h-[80vh] min-h-[420px] overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-4 border-b">
             <DialogTitle>{t('sidebar.allTasks')}</DialogTitle>
             <DialogDescription>
               {`共 ${sessionTasks.length} 个任务会话`}
             </DialogDescription>
           </DialogHeader>
-          <ScrollArea className="max-h-[65vh] px-4 py-4">
+          <ScrollArea className="flex-1 min-h-0 px-4 py-4 pr-6">
             {sessionTasks.length === 0 ? (
               <div className="text-sm text-muted-foreground px-2 py-6 text-center">
                 暂无任务会话
@@ -432,12 +502,12 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                   <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
                     <Button
                       variant="ghost"
-                      className="w-full justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      className="w-full min-w-0 justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                       onClick={() => setTasksDialogOpen(false)}
                     >
                       <span className="flex items-center gap-2 min-w-0">
                         <FileText className="w-4 h-4 shrink-0" />
-                        <span className="text-sm truncate">{session.title}</span>
+                        <span className="text-sm truncate min-w-0">{session.title}</span>
                       </span>
                       <span className="text-xs text-muted-foreground shrink-0">
                         {formatSessionStatus(session.status)}
@@ -450,6 +520,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           </ScrollArea>
         </DialogContent>
       </Dialog>
+      <SettingsDialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
     </aside>
   );
 }

@@ -73,8 +73,10 @@ export function createTaskCreationSocket(): WebSocket {
   return new WebSocket(getTaskCreationWsUrl());
 }
 
-export async function listTaskCreationSessions(limit: number = 20): Promise<TaskCreationSessionSummary[]> {
-  const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${limit}`;
+export async function listTaskCreationSessions(
+  limit: number | 'all' = 200
+): Promise<TaskCreationSessionSummary[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
 }

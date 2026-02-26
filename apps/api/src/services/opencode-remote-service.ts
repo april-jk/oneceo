@@ -9,6 +9,7 @@ import { ensureDatabaseConnection } from '../config/database';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
+import { touchSandbox } from './sandbox-activity-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -994,6 +995,8 @@ export class OpencodeRemoteService {
         opencodeSessionId,
       });
 
+      await touchSandbox(orchestratorSessionId, 'opencode_user_input');
+
       return {
         orchestratorSessionId,
         opencodeSessionId,
@@ -1010,6 +1013,8 @@ export class OpencodeRemoteService {
     ) {
       return;
     }
+
+    await touchSandbox(orchestratorSessionId, 'opencode_event');
 
     const payload = toRecord(message.payload);
     const event = toRecord(payload.event);

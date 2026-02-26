@@ -13,6 +13,7 @@ import { osacAgentService } from '../services/osac-agent-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
+import { touchSandbox } from '../services/sandbox-activity-service';
 
 const router = express.Router();
 
@@ -394,6 +395,7 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
           await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
             workspacePath: workspaceRoot || undefined,
           });
+          await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
           const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
           return res.json({
             success: true,
@@ -427,6 +429,7 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
       opencodeSessionId: '',
     });
     await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+    await touchSandbox(provision.sessionId, 'runtime_start_new');
 
     const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
 
@@ -494,6 +497,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       maxDepth,
       maxEntries,
     });
+    await touchSandbox(orchestratorSessionId, 'workspace_tree');
 
     const ttlMs = clampNumber(
       Number(process.env.TASK_CREATION_CACHE_TTL_TREE_MS || 10000),
@@ -603,6 +607,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
+    await touchSandbox(orchestratorSessionId, 'workspace_file');
 
     return res.json({
       success: true,
@@ -700,6 +705,8 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   const runtime = await osacAgentService.getRuntimeInfo(orchestratorSessionId);
 
+  await touchSandbox(orchestratorSessionId, 'opencode_events');
+
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -734,6 +741,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
             if (opencodeSessionId && eventSessionId && eventSessionId !== opencodeSessionId) {
               return;
             }
+            void touchSandbox(orchestratorSessionId, 'opencode_event_stream');
             writeSse(res, {
               opencodeSessionId: eventSessionId || opencodeSessionId || undefined,
               event: normalized,

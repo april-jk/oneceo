@@ -14,6 +14,7 @@ import { testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
+import { startSandboxArchiveJob } from './services/sandbox-archive-job';
 
 const app = express();
 const httpServer = createServer(app);
@@ -184,6 +185,8 @@ httpServer.listen(PORT, () => {
   void testDatabaseConnection({ retries: 5, delayMs: 1500 });
   // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
   void osacPersistentRecoveryService.recoverReadySessions();
+  // 启动 Sandbox 空闲归档任务
+  startSandboxArchiveJob();
   
   console.log('');
 });

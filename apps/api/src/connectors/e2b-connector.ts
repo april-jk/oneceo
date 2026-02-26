@@ -96,8 +96,8 @@ function normalizeMetadata(metadata?: Record<string, unknown>): Record<string, s
 
 async function createSandbox(input: CreateSandboxInput = {}): Promise<Sandbox> {
   requireE2bApiKey();
-  const sandbox = await withRetry('createSandbox', () =>
-    Sandbox.create(input.template || e2bConfig.template, {
+  const sandbox = await withRetry('createSandbox', () => {
+    const options = {
       timeoutMs: input.timeoutMs ?? e2bConfig.timeoutMs,
       metadata: normalizeMetadata(input.metadata),
       envs: input.envs,
@@ -105,8 +105,13 @@ async function createSandbox(input: CreateSandboxInput = {}): Promise<Sandbox> {
       network: {
         allowPublicTraffic: input.allowPublicTraffic ?? e2bConfig.allowPublicTraffic,
       },
-    })
-  );
+      autoPause: true,
+    };
+    if (typeof (Sandbox as any).betaCreate === 'function') {
+      return (Sandbox as any).betaCreate(input.template || e2bConfig.template, options);
+    }
+    return Sandbox.create(input.template || e2bConfig.template, options as any);
+  });
   touch(sandbox);
   return sandbox;
 }
@@ -147,6 +152,27 @@ async function runCommand(sandboxId: string, command: string, options?: RunComma
   });
 }
 
+async function pauseSandbox(sandboxId: string): Promise<void> {
+  const sandbox = await connectSandbox(sandboxId);
+  const candidate = (sandbox as any).betaPause || (sandbox as any).pause || (sandbox as any).stop;
+  if (typeof candidate === 'function') {
+    await candidate.call(sandbox);
+    return;
+  }
+  throw new Error('E2B sandbox pause method not supported');
+}
+
+async function readFile(sandboxId: string, filePath: string): Promise<Uint8Array> {
+  const sandbox = await connectSandbox(sandboxId);
+  const result = await (sandbox as any).files.read(filePath, { format: 'bytes' });
+  return result instanceof Uint8Array ? result : Uint8Array.from(result || []);
+}
+
+async function writeFile(sandboxId: string, filePath: string, data: Uint8Array | Buffer): Promise<void> {
+  const sandbox = await connectSandbox(sandboxId);
+  await (sandbox as any).files.write(filePath, data);
+}
+
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
@@ -159,4 +185,7 @@ export const e2bConnector = {
   getSandboxInfo,
   getSandboxHost,
   runCommand,
+  pauseSandbox,
+  readFile,
+  writeFile,
 };

@@ -6,6 +6,9 @@ import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
+import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
+import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
+import { touchSandbox } from './sandbox-activity-service';
 
 type ProvisionInput = {
   metadata?: Record<string, unknown>;
@@ -311,6 +314,7 @@ export class SandboxAgentProvisionService {
         });
 
     const sessionId = reusable?.sessionId || environment.sessionId;
+    const isReused = Boolean(reusable);
 
     const info = await e2bConnector.getSandboxInfo(sessionId);
     const trafficAccessToken =
@@ -320,6 +324,13 @@ export class SandboxAgentProvisionService {
     const baseUrl = `https://${host}`;
 
     const workspaceRoot = await ensureWorkspace(sessionId, taskSessionId || undefined);
+
+    if (!isReused) {
+      const restored = await restoreWorkspaceIfArchived(sessionId);
+      if (restored && taskSessionId) {
+        await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+      }
+    }
 
     await writeOpencodeConfig(sessionId, envInput);
     await startOpencodeServer(sessionId, baseUrl, envInput, trafficAccessToken);
@@ -348,6 +359,8 @@ export class SandboxAgentProvisionService {
         orchestratorSessionId: sessionId,
       });
     }
+
+    await touchSandbox(sessionId, 'provisioned');
 
     return {
       sessionId,

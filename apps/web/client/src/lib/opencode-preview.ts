@@ -216,6 +216,88 @@ function resolveDiffOutput(
   return "";
 }
 
+function getFilename(path: string): string {
+  if (!path) return "";
+  const normalized = path.replace(/\\+/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function extractFileFromApplyPatch(diffText: string): string | null {
+  const match = diffText.match(/^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+)$/m);
+  if (match && match[1]) return match[1].trim();
+  return null;
+}
+
+function extractFileFromUnifiedDiff(diffText: string): string | null {
+  const gitMatch = diffText.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+  if (gitMatch && gitMatch[2]) return gitMatch[2].trim();
+  const plusMatch = diffText.match(/^\+\+\+\s+b\/(.+)$/m);
+  if (plusMatch && plusMatch[1]) return plusMatch[1].trim();
+  return null;
+}
+
+function splitUnifiedDiffText(diffText: string) {
+  const lines = diffText.split("\n");
+  const blocks: { text: string; file?: string | null }[] = [];
+  let current: string[] = [];
+  lines.forEach((line) => {
+    if (line.startsWith("diff --git") && current.length > 0) {
+      const text = current.join("\n");
+      blocks.push({ text, file: extractFileFromUnifiedDiff(text) });
+      current = [];
+    }
+    current.push(line);
+  });
+  if (current.length > 0) {
+    const text = current.join("\n");
+    blocks.push({ text, file: extractFileFromUnifiedDiff(text) });
+  }
+  return blocks;
+}
+
+function splitApplyPatchText(diffText: string) {
+  const lines = diffText.split("\n");
+  const blocks: { text: string; file?: string | null }[] = [];
+  let current: string[] = [];
+  const startRegex = /^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+/;
+  lines.forEach((line) => {
+    if (startRegex.test(line) && current.length > 0) {
+      const text = current.join("\n");
+      blocks.push({ text, file: extractFileFromApplyPatch(text) });
+      current = [];
+    }
+    current.push(line);
+  });
+  if (current.length > 0) {
+    const text = current.join("\n");
+    blocks.push({ text, file: extractFileFromApplyPatch(text) });
+  }
+  return blocks;
+}
+
+function buildDiffTitle(
+  payload: StructuredFileDiff[] | string | null,
+  source: string,
+  index: number
+): string {
+  if (Array.isArray(payload) && payload.length > 0) {
+    if (payload.length === 1) {
+      return `文件: ${getFilename(payload[0].file) || payload[0].file}`;
+    }
+    return `修改 ${payload.length} 个文件`;
+  }
+  if (typeof payload === "string" && payload.trim()) {
+    const byApply = extractFileFromApplyPatch(payload);
+    if (byApply) return `文件: ${getFilename(byApply)}`;
+    const byUnified = extractFileFromUnifiedDiff(payload);
+    if (byUnified) return `文件: ${getFilename(byUnified)}`;
+  }
+  if (source === "apply_patch") return "补丁";
+  if (source === "session.diff") return "Diff";
+  return `Diff ${index + 1}`;
+}
+
 export function buildPreviewItems(messages: AgentMessage[]) {
   const diffItems: PreviewDiffItem[] = [];
 
@@ -233,14 +315,29 @@ export function buildPreviewItems(messages: AgentMessage[]) {
 
     if (toolName) {
       const lower = toolName.toLowerCase();
-      if (lower === "apply_patch" && output) {
-        diffItems.push({
-          id: `diff-${idBase}`,
-          title: "补丁",
-          diff: output,
-          source: "apply_patch",
-          createdAt,
-        });
+    if (lower === "apply_patch" && output) {
+        const blocks = splitApplyPatchText(output);
+        if (blocks.length > 1) {
+          blocks.forEach((block, blockIndex) => {
+            const title = buildDiffTitle(block.text, "apply_patch", diffItems.length);
+            diffItems.push({
+              id: `diff-${idBase}-${blockIndex}`,
+              title,
+              diff: block.text,
+              source: "apply_patch",
+              createdAt,
+            });
+          });
+        } else {
+          const title = buildDiffTitle(output, "apply_patch", diffItems.length);
+          diffItems.push({
+            id: `diff-${idBase}-0`,
+            title,
+            diff: output,
+            source: "apply_patch",
+            createdAt,
+          });
+        }
       }
     }
 
@@ -248,12 +345,15 @@ export function buildPreviewItems(messages: AgentMessage[]) {
       const diffPayload = extractSessionDiff(metadata, info);
       if (Array.isArray(diffPayload)) {
         if (diffPayload.length > 0) {
-          diffItems.push({
-            id: `diff-${idBase}`,
-            title: "Diff",
-            files: diffPayload,
-            source: "session.diff",
-            createdAt,
+          diffPayload.forEach((file, fileIndex) => {
+            const title = buildDiffTitle([file], "session.diff", diffItems.length);
+            diffItems.push({
+              id: `diff-${idBase}-${fileIndex}`,
+              title,
+              files: [file],
+              source: "session.diff",
+              createdAt,
+            });
           });
         }
         return;
@@ -265,13 +365,28 @@ export function buildPreviewItems(messages: AgentMessage[]) {
         !diffText.startsWith("[OpenCode]") &&
         !diffText.startsWith("[Tool]")
       ) {
-        diffItems.push({
-          id: `diff-${idBase}`,
-          title: "Diff",
-          diff: diffText,
-          source: "session.diff",
-          createdAt,
-        });
+        const blocks = splitUnifiedDiffText(diffText);
+        if (blocks.length > 1) {
+          blocks.forEach((block, blockIndex) => {
+            const title = buildDiffTitle(block.text, "session.diff", diffItems.length);
+            diffItems.push({
+              id: `diff-${idBase}-${blockIndex}`,
+              title,
+              diff: block.text,
+              source: "session.diff",
+              createdAt,
+            });
+          });
+        } else {
+          const title = buildDiffTitle(diffText, "session.diff", diffItems.length);
+          diffItems.push({
+            id: `diff-${idBase}-0`,
+            title,
+            diff: diffText,
+            source: "session.diff",
+            createdAt,
+          });
+        }
       }
     }
   });

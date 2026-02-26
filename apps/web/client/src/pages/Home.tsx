@@ -29,6 +29,7 @@ import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
+import { buildPreviewItems } from "@/lib/opencode-preview";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -45,6 +46,7 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTab, setPreviewTab] = useState<"files" | "changes">("files");
+  const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
 
@@ -145,9 +147,33 @@ export default function Home() {
   ];
 
   const chatItems = useMemo(() => buildChatItems(messages), [messages]);
-  const openDiffPreview = () => {
+  const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
+
+  const findDiffIdForFile = (filePath: string | null | undefined) => {
+    if (!filePath) return null;
+    const fileName = getFilename(filePath).toLowerCase();
+    if (!fileName) return null;
+    for (let i = diffItems.length - 1; i >= 0; i -= 1) {
+      const item = diffItems[i];
+      if (item.files?.some((file) => file.file.toLowerCase().includes(fileName))) {
+        return item.id;
+      }
+      if (item.diff && item.diff.toLowerCase().includes(fileName)) {
+        return item.id;
+      }
+    }
+    return null;
+  };
+
+  const openDiffPreview = (options?: { diffId?: string | null; filePath?: string | null }) => {
     setPreviewTab("changes");
     setPreviewOpen(true);
+    const target =
+      options?.diffId ||
+      findDiffIdForFile(options?.filePath || null) ||
+      diffItems[diffItems.length - 1]?.id ||
+      null;
+    setSelectedDiffId(target);
   };
 
   return (
@@ -625,6 +651,8 @@ export default function Home() {
                         activeTab={previewTab}
                         onTabChange={setPreviewTab}
                         onToggle={() => setPreviewOpen(false)}
+                        selectedDiffId={selectedDiffId}
+                        onSelectDiff={(id) => setSelectedDiffId(id)}
                         runtimeReady={runtime.ready}
                         runtimeStarting={runtime.starting}
                         onEnsureRuntime={runtime.ensure}
@@ -687,6 +715,7 @@ type ChatItem =
       event: Record<string, unknown>;
       content?: string;
       metadata?: Record<string, unknown>;
+      diffId?: string;
     };
 
 type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
@@ -694,7 +723,8 @@ type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
 function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
 
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
       items.push({
         kind: "user",
@@ -740,6 +770,10 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
+      const diffId =
+        eventInfo.eventType === "session.diff" || eventInfo.toolName.toLowerCase() === "apply_patch"
+          ? `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`
+          : undefined;
       if (eventInfo.eventType === "message.final" || eventInfo.partType === "text") {
         if (content) {
           items.push({
@@ -756,6 +790,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
             event: eventInfo.event,
             content: message.content || "",
             metadata,
+            diffId,
           });
         }
       } else if (
@@ -770,6 +805,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           event: eventInfo.event,
           content: message.content || "",
           metadata,
+          diffId,
         });
       } else if (content.startsWith("[Tool]")) {
         items.push({
@@ -778,6 +814,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           event: eventInfo.event,
           content: message.content || "",
           metadata,
+          diffId,
         });
       }
       continue;
@@ -814,7 +851,13 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   return items;
 }
 
-function MessageBubble({ item, onOpenDiffPreview }: { item: ChatItem; onOpenDiffPreview?: () => void }) {
+function MessageBubble({
+  item,
+  onOpenDiffPreview,
+}: {
+  item: ChatItem;
+  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null }) => void;
+}) {
   if (item.kind === "capsule") {
     const toneClass: Record<CapsuleTone, string> = {
       system: "border-slate-200 bg-slate-50 text-slate-700",
@@ -998,6 +1041,14 @@ function stringifySafe(value: unknown): string {
   }
 }
 
+function truncateText(value: string, maxLength = 800) {
+  if (!value) return { text: "", truncated: false };
+  if (value.length <= maxLength) {
+    return { text: value, truncated: false };
+  }
+  return { text: `${value.slice(0, maxLength)}…`, truncated: true };
+}
+
 function getFilename(path: string | undefined) {
   if (!path) return "";
   const parts = path.split(/[/\\]+/);
@@ -1052,7 +1103,7 @@ function OpencodeToolCard({
   onOpenDiffPreview,
 }: {
   item: Extract<ChatItem, { kind: "opencode_tool" }>;
-  onOpenDiffPreview?: () => void;
+  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null }) => void;
 }) {
   const metadata = item.metadata || {};
   const { eventType, part, toolName, properties } = getOpencodeEventInfo(metadata);
@@ -1068,6 +1119,7 @@ function OpencodeToolCard({
   const status = asText(toolState.status) || asText(properties.status) || (error ? "error" : "unknown");
 
   const isDiffEvent = eventType === "session.diff" || (toolName || "").toLowerCase() === "apply_patch";
+  const toolKey = (toolName || "").toLowerCase();
 
   let info = getToolInfo(toolName || "tool", input);
   if (!toolName) {
@@ -1129,12 +1181,164 @@ function OpencodeToolCard({
       >
         <button
           type="button"
-          onClick={() => onOpenDiffPreview?.()}
+          onClick={() => onOpenDiffPreview?.({ diffId: item.diffId })}
           className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-slate-900 hover:bg-amber-100/70 transition-colors"
         >
           <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Diff</div>
           <div className="text-xs text-amber-700/80 mt-1">点击在右侧预览更改</div>
         </button>
+      </motion.div>
+    );
+  }
+
+  const todos = Array.isArray((input as { todos?: unknown[] }).todos)
+    ? (input as { todos: Array<Record<string, unknown>> }).todos
+    : [];
+
+  if (toolKey === "todowrite") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">待办</div>
+          {todos.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {todos.map((todo, index) => {
+                const content = asText(todo.content) || "待办事项";
+                const statusText = asText(todo.status) || "pending";
+                const priority = asText(todo.priority);
+                const statusLabel =
+                  statusText === "completed"
+                    ? "已完成"
+                    : statusText === "in_progress"
+                      ? "进行中"
+                      : "待处理";
+                const statusTone =
+                  statusText === "completed"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : statusText === "in_progress"
+                      ? "bg-blue-50 text-blue-700 border-blue-200"
+                      : "bg-slate-50 text-slate-600 border-slate-200";
+                return (
+                  <div key={`${content}-${index}`} className="flex items-center justify-between gap-3">
+                    <div className="text-sm text-slate-800">{content}</div>
+                    <div className="flex items-center gap-2">
+                      {priority ? (
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                          {priority === "high" ? "高优先级" : priority === "medium" ? "中优先级" : "低优先级"}
+                        </span>
+                      ) : null}
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-muted-foreground">已生成待办列表</div>
+          )}
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (toolKey === "write" || toolKey === "edit") {
+    const filePath =
+      asText(input.filePath) || asText(input.path) || asText(properties.file) || asText(properties.path);
+    const label = toolKey === "write" ? "写入文件" : "编辑文件";
+    const cardBody = (
+      <>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+        <div className="mt-1 text-sm text-slate-800">{getFilename(filePath) || "已更新文件"}</div>
+        {onOpenDiffPreview ? (
+          <div className="mt-2 text-xs text-slate-500">点击查看更改</div>
+        ) : null}
+        {status === "error" ? (
+          <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
+        ) : null}
+      </>
+    );
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        {onOpenDiffPreview ? (
+          <button
+            type="button"
+            onClick={() => onOpenDiffPreview?.({ filePath: filePath || null })}
+            className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-900 shadow-sm transition-colors hover:bg-slate-50"
+          >
+            {cardBody}
+          </button>
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+            {cardBody}
+          </div>
+        )}
+      </motion.div>
+    );
+  }
+
+  if (eventType === "command.executed") {
+    const commandText = asText(properties.command) || asText(input.command) || asText(properties.cmd);
+    const rawOutput =
+      asText(properties.stdout) || asText(properties.output) || asText(properties.text) || output || error;
+    const { text: outputText, truncated } = truncateText(rawOutput, 1200);
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">命令执行</div>
+          {commandText ? (
+            <div className="mt-2 rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
+              {commandText}
+            </div>
+          ) : (
+            <div className="mt-1 text-sm text-slate-800">命令已完成</div>
+          )}
+          {outputText ? (
+            <div className="mt-2 rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono whitespace-pre-wrap">
+              {outputText}
+            </div>
+          ) : null}
+          {truncated ? (
+            <div className="mt-1 text-[11px] text-slate-500">输出已截断，请查看日志</div>
+          ) : null}
+          {status === "error" ? (
+            <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
+          ) : null}
+        </div>
+      </motion.div>
+    );
+  }
+
+  if (eventType.startsWith("file.")) {
+    const filePath = asText(properties.file) || asText(properties.path);
+    const label = eventType === "file.watcher.updated" ? "文件监听" : "文件更新";
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+          <div className="mt-1 text-sm text-slate-800">{getFilename(filePath) || "文件已更新"}</div>
+        </div>
       </motion.div>
     );
   }
@@ -1146,56 +1350,13 @@ function OpencodeToolCard({
       transition={{ duration: 0.2 }}
       className="w-full"
     >
-      <details className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-900" open={status === "running"}>
-        <summary className="flex cursor-pointer items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-              {info.title}
-            </div>
-            {summaryText ? <div className="text-xs text-amber-700/80">{summaryText}</div> : null}
-          </div>
-          <div className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-            {status}
-          </div>
-        </summary>
-        {showDetails ? (
-          <div className="mt-3">
-            {error ? (
-              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                {error}
-              </div>
-            ) : null}
-            {Object.keys(input).length > 0 ? (
-              <div className="mt-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  输入
-                </div>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-slate-900/95 px-3 py-2 text-xs text-slate-100">
-                  {stringifySafe(input)}
-                </pre>
-              </div>
-            ) : null}
-            {Object.keys(metaInfo).length > 0 ? (
-              <div className="mt-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  元数据
-                </div>
-                <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-slate-900/95 px-3 py-2 text-xs text-slate-100">
-                  {stringifySafe(metaInfo)}
-                </pre>
-              </div>
-            ) : null}
-            {output ? (
-              <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950/90 px-3 py-2 text-xs text-slate-100">
-                {output}
-              </pre>
-            ) : null}
-            {!output && !error && eventType ? (
-              <div className="mt-2 text-xs text-slate-600">执行中...</div>
-            ) : null}
-          </div>
+      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{info.title}</div>
+        {summaryText ? <div className="mt-1 text-sm text-slate-800">{summaryText}</div> : null}
+        {status === "error" ? (
+          <div className="mt-2 text-xs text-rose-600">执行失败，请查看日志</div>
         ) : null}
-      </details>
+      </div>
     </motion.div>
   );
 }

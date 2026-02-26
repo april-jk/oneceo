@@ -12,6 +12,8 @@ interface OpencodePreviewPanelProps {
   onToggle: () => void;
   activeTab?: PreviewTab;
   onTabChange?: (tab: PreviewTab) => void;
+  selectedDiffId?: string | null;
+  onSelectDiff?: (id: string | null) => void;
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
@@ -27,6 +29,8 @@ export default function OpencodePreviewPanel({
   onToggle,
   activeTab,
   onTabChange,
+  selectedDiffId: controlledSelectedDiffId,
+  onSelectDiff,
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
@@ -35,7 +39,7 @@ export default function OpencodePreviewPanel({
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
   const [internalTab, setInternalTab] = useState<PreviewTab>("files");
-  const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [internalSelectedDiffId, setInternalSelectedDiffId] = useState<string | null>(null);
   const [autoDiff, setAutoDiff] = useState(true);
   const [tree, setTree] = useState<WorkspaceTree | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
@@ -48,8 +52,18 @@ export default function OpencodePreviewPanel({
   const refreshTimerRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
 
+  const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
+  const setSelectedDiffId = (id: string | null) => {
+    if (onSelectDiff) {
+      onSelectDiff(id);
+    } else {
+      setInternalSelectedDiffId(id);
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
+    if (controlledSelectedDiffId) return;
     if (autoDiff) {
       const latest = diffItems[diffItems.length - 1];
       setSelectedDiffId(latest ? latest.id : null);
@@ -57,7 +71,7 @@ export default function OpencodePreviewPanel({
       const latest = diffItems[diffItems.length - 1];
       setSelectedDiffId(latest ? latest.id : null);
     }
-  }, [autoDiff, diffItems, open, selectedDiffId]);
+  }, [autoDiff, diffItems, open, selectedDiffId, controlledSelectedDiffId]);
 
   async function handleFileSelect(path: string) {
     if (!sessionId) return;
@@ -269,6 +283,26 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function formatPreviewTimestamp(value?: string | null) {
+  if (!value) return "";
+  let date: Date | null = null;
+  const raw = value.trim();
+  if (!raw) return "";
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    date = new Date(asNumber);
+  } else {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    }
+  }
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 function shouldRefreshFromMessage(message: AgentMessage | undefined): boolean {
@@ -503,11 +537,25 @@ function DiffPreview({
           {items
             .slice()
             .reverse()
-            .map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title}
-              </option>
-            ))}
+            .map((item, index, reversed) => {
+              const timeLabel = formatPreviewTimestamp(item.createdAt);
+              const suffix = timeLabel || `#${reversed.length - index}`;
+              const diffStats = item.files?.[0];
+              const additions = diffStats?.additions;
+              const deletions = diffStats?.deletions;
+              const statsLabel =
+                typeof additions === "number" || typeof deletions === "number"
+                  ? ` +${additions ?? 0} -${deletions ?? 0}`
+                  : "";
+              const label = item.title
+                ? `${item.title}${statsLabel} · ${suffix}`
+                : `Diff${statsLabel} · ${suffix}`;
+              return (
+                <option key={item.id} value={item.id}>
+                  {label}
+                </option>
+              );
+            })}
         </select>
       </div>
       <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
@@ -557,7 +605,7 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
 
   if (baseFiles.length === 0) {
     return (
-      <div className="rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono whitespace-pre-wrap break-words">
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 font-mono whitespace-pre-wrap break-words">
         {diff || "暂无更改"}
       </div>
     );
@@ -596,12 +644,12 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
   };
 
   return (
-    <div className="rounded-lg bg-slate-950 text-xs text-slate-100 font-mono overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 text-[11px] text-slate-300">
+    <div className="flex h-full flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 text-[11px] text-slate-500">
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="rounded-full border border-slate-700 px-2 py-0.5 hover:bg-slate-800"
+            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
             onClick={() => {
               setCollapsedFiles(new Set(allFileIds));
               setCollapsedHunks(new Set(allHunkIds));
@@ -611,7 +659,7 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
           </button>
           <button
             type="button"
-            className="rounded-full border border-slate-700 px-2 py-0.5 hover:bg-slate-800"
+            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
             onClick={() => {
               setCollapsedFiles(new Set());
               setCollapsedHunks(new Set());
@@ -623,8 +671,8 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-800 ${
-              showWhitespace ? "border-emerald-600 text-emerald-200" : "border-slate-700"
+            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+              showWhitespace ? "border-emerald-500 text-emerald-700" : "border-slate-200"
             }`}
             onClick={() => setShowWhitespace((prev) => !prev)}
           >
@@ -632,8 +680,8 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
           </button>
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-800 ${
-              ignoreWhitespace ? "border-emerald-600 text-emerald-200" : "border-slate-700"
+            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+              ignoreWhitespace ? "border-emerald-500 text-emerald-700" : "border-slate-200"
             }`}
             onClick={() => setIgnoreWhitespace((prev) => !prev)}
           >
@@ -642,34 +690,34 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
         </div>
       </div>
       {showGlobalHeader ? (
-        <div className="grid grid-cols-2 border-b border-slate-800 text-[11px] uppercase tracking-wide text-slate-400">
-          <div className="px-3 py-2 border-r border-slate-800">Before</div>
+        <div className="grid grid-cols-2 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
+          <div className="px-3 py-2 border-r border-slate-200">Before</div>
           <div className="px-3 py-2">After</div>
         </div>
       ) : null}
-      <div className="max-h-[420px] overflow-auto">
+      <div className="flex-1 min-h-0 overflow-auto">
         {displayFiles.map(({ file, stats, mode, hunks }) => {
           const fileCollapsed = collapsedFiles.has(file.id);
           return (
-            <div key={file.id} className="border-b border-slate-800">
-              <div className="flex items-center justify-between px-3 py-2 text-slate-200 bg-slate-900/60">
+            <div key={file.id} className="border-b border-slate-200">
+              <div className="flex items-center justify-between px-3 py-2 text-slate-700 bg-slate-50">
                 <div>
                   <div className="text-xs font-semibold">文件: {file.displayPath}</div>
                   {(file.oldPath || file.newPath) && (
-                    <div className="text-[11px] text-slate-400">
+                    <div className="text-[11px] text-slate-500">
                       {file.oldPath ? `- ${file.oldPath}` : ""}
                       {file.oldPath && file.newPath ? " | " : ""}
                       {file.newPath ? `+ ${file.newPath}` : ""}
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-3 text-[11px] text-slate-300">
-                  <span className="text-emerald-300">+{stats.additions}</span>
-                  <span className="text-rose-300">-{stats.deletions}</span>
+                <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                  <span className="text-emerald-600">+{stats.additions}</span>
+                  <span className="text-rose-600">-{stats.deletions}</span>
                   <button
                     type="button"
                     onClick={() => toggleFile(file.id)}
-                    className="text-[11px] text-slate-300 hover:text-white"
+                    className="text-[11px] text-slate-500 hover:text-slate-900"
                   >
                     {fileCollapsed ? "展开" : "收起"}
                   </button>
@@ -678,12 +726,12 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
 
               {!fileCollapsed && !showGlobalHeader ? (
                 mode === "split" ? (
-                  <div className="grid grid-cols-2 border-t border-slate-800 border-b border-slate-800 text-[11px] uppercase tracking-wide text-slate-400">
-                    <div className="px-3 py-2 border-r border-slate-800">Before</div>
+                  <div className="grid grid-cols-2 border-t border-slate-200 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
+                    <div className="px-3 py-2 border-r border-slate-200">Before</div>
                     <div className="px-3 py-2">After</div>
                   </div>
                 ) : (
-                  <div className="border-t border-slate-800 border-b border-slate-800 px-3 py-2 text-[11px] uppercase tracking-wide text-slate-400">
+                  <div className="border-t border-slate-200 border-b border-slate-200 px-3 py-2 text-[11px] uppercase tracking-wide text-slate-500">
                     {mode === "add-only" ? "新增" : "删除"}
                   </div>
                 )
@@ -693,13 +741,13 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                 hunks.map((hunk) => {
                   const hunkCollapsed = collapsedHunks.has(hunk.id);
                   return (
-                    <div key={hunk.id} className="border-t border-slate-800">
-                      <div className="flex items-center justify-between px-3 py-1 text-slate-400 bg-slate-900/30">
+                    <div key={hunk.id} className="border-t border-slate-200">
+                      <div className="flex items-center justify-between px-3 py-1 text-slate-500 bg-slate-50">
                         <span>{hunk.header}</span>
                         <button
                           type="button"
                           onClick={() => toggleHunk(hunk.id)}
-                          className="text-[11px] text-slate-300 hover:text-white"
+                          className="text-[11px] text-slate-500 hover:text-slate-900"
                         >
                           {hunkCollapsed ? "展开" : "收起"}
                         </button>
@@ -710,21 +758,21 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                             hunk.lines.map((row, index) => (
                               <div key={`${hunk.id}-row-${index}`} className="grid grid-cols-2">
                                 <div
-                                  className={`flex gap-2 px-3 py-0.5 border-r border-slate-800 ${
-                                    row.leftType === "del" ? "bg-rose-950/40 text-rose-200" : "text-slate-100"
+                                  className={`flex gap-2 px-3 py-0.5 border-r border-slate-200 ${
+                                    row.leftType === "del" ? "bg-rose-50 text-rose-700" : "text-slate-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-500">{row.leftLine ?? ""}</span>
+                                  <span className="w-8 text-right text-slate-400">{row.leftLine ?? ""}</span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
                                     {renderWhitespace(row.leftText, showWhitespace)}
                                   </span>
                                 </div>
                                 <div
                                   className={`flex gap-2 px-3 py-0.5 ${
-                                    row.rightType === "add" ? "bg-emerald-950/40 text-emerald-200" : "text-slate-100"
+                                    row.rightType === "add" ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-500">{row.rightLine ?? ""}</span>
+                                  <span className="w-8 text-right text-slate-400">{row.rightLine ?? ""}</span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
                                     {renderWhitespace(row.rightText, showWhitespace)}
                                   </span>
@@ -738,10 +786,10 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                                 <div
                                   key={`${hunk.id}-row-${index}`}
                                   className={`flex gap-2 px-3 py-0.5 ${
-                                    isAdd ? "bg-emerald-950/40 text-emerald-200" : "bg-rose-950/40 text-rose-200"
+                                    isAdd ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-500">
+                                  <span className="w-8 text-right text-slate-400">
                                     {isAdd ? row.rightLine ?? "" : row.leftLine ?? ""}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
@@ -753,7 +801,7 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                         </div>
                       )}
                       {hunkCollapsed && (
-                        <div className="px-3 py-1 text-[11px] text-slate-500">...</div>
+                        <div className="px-3 py-1 text-[11px] text-slate-400">...</div>
                       )}
                     </div>
                   );

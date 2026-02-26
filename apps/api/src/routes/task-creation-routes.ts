@@ -289,7 +289,16 @@ function writeSse(res: express.Response, payload: unknown, eventName?: string) {
  */
 router.get('/sessions', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 10;
+    const rawLimit = (req.query.limit as string | undefined)?.trim();
+    let limit = 200;
+    if (rawLimit === 'all') {
+      limit = Number.MAX_SAFE_INTEGER;
+    } else if (rawLimit) {
+      const parsed = Number.parseInt(rawLimit, 10);
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        limit = Math.min(parsed, 5000);
+      }
+    }
     const sessions = await taskCreationFileMemoryStore.listSessions(limit);
 
     res.json({

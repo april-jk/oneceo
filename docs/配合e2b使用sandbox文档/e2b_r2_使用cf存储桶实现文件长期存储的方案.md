@@ -871,3 +871,60 @@ E2B 的 `sandbox.lifecycle.killed` Webhook 在沙盒**已经销毁后**才触发
 6. [GitHub: E2B Issue #884 - Paused sandbox file persistence bug](https://github.com/e2b-dev/E2B/issues/884)
 7. [AWS SDK for JavaScript v3: S3 Client](https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/clients/client-s3/)
 8. [boto3 S3 Documentation](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html)
+
+---
+
+## 十、oneceo 落地实现说明（2026-02）
+
+### 10.1 集成范围
+
+- 后端服务位于 `oneceo/apps/api`。
+- E2B Sandbox 通过 `e2b` SDK 管理，启用 `autoPause`。
+- 归档与恢复由后端主动触发，归档对象存放在 Cloudflare R2。
+
+### 10.2 归档策略
+
+- **归档对象键**：`sessions/<taskSessionId>/workspace.tar.gz`
+- **元数据对象键**：`sessions/<taskSessionId>/metadata.json`
+- **触发规则**：沙盒超过 `E2B_ARCHIVE_IDLE_MINUTES`（默认 40 分钟）无活跃，后台任务自动归档并 pause。
+- **恢复规则**：sandbox 创建后若 R2 中存在归档则自动还原。
+
+### 10.3 关键环境变量
+
+```
+E2B_API_KEY=
+E2B_TEMPLATE=opencode
+E2B_TIMEOUT_MS=1800000
+E2B_ALLOW_INTERNET=true
+E2B_ALLOW_PUBLIC_TRAFFIC=true
+OPENCODE_SERVER_PORT=4096
+OPENCODE_SERVER_HOST=0.0.0.0
+OPENCODE_TASK_WORKSPACE_ROOT=/opt/.altus/opencode/workspaces
+
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+R2_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+
+E2B_ARCHIVE_JOB_ENABLED=true
+E2B_ARCHIVE_IDLE_MINUTES=40
+E2B_ARCHIVE_JOB_INTERVAL_MS=600000
+E2B_ARCHIVE_SCAN_LIMIT=500
+SANDBOX_ACTIVITY_MIN_INTERVAL_MS=30000
+```
+
+### 10.4 主要代码入口
+
+- R2 客户端：`apps/api/src/services/r2-client.ts`
+- 归档逻辑：`apps/api/src/services/sandbox-archive-service.ts`
+- 空闲归档任务：`apps/api/src/services/sandbox-archive-job.ts`
+- 活跃度记录：`apps/api/src/services/sandbox-activity-service.ts`
+- 启动归档任务：`apps/api/src/index.ts`
+
+### 10.5 运维注意事项
+
+- 归档任务依赖沙盒可恢复（autoPause），如 sandbox 已被 kill，则无法归档。
+- R2 不回收历史归档对象，如需版本清理需新增策略。
+- 建议在生产环境仅启用一个 API 实例运行归档任务。
+

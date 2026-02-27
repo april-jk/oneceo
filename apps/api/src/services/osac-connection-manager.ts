@@ -42,6 +42,7 @@ export class OsacConnectionManager {
   private connecting = new Map<string, PendingConnect>();
   private reconnectFailures = new Map<string, number>();
   private maxMessages = 300;
+  private maxPayloadChars = Number(process.env.OSAC_MESSAGE_MAX_CHARS || 50000);
   private handlers: MessageHandler[] = [];
   private persistentSessions = new Set<string>();
   private bridgeReady = new Map<string, Promise<void>>();
@@ -454,6 +455,7 @@ export class OsacConnectionManager {
       this.connections.delete(sessionId);
     }
     this.bridgeReady.delete(sessionId);
+    this.messageBuffers.delete(sessionId);
   }
 
   registerMessageHandler(handler: MessageHandler) {
@@ -465,6 +467,7 @@ export class OsacConnectionManager {
     this.reconnectFailures.delete(sessionId);
     this.clearReconnectTimer(sessionId);
     this.dropConnection(sessionId);
+    this.messageBuffers.delete(sessionId);
   }
 
   listMessages(sessionId: string, limit: number = 50): OsacMessage[] {
@@ -565,7 +568,7 @@ export class OsacConnectionManager {
 
   private dispatchMessage(sessionId: string, message: OsacMessage) {
     const buffer = this.messageBuffers.get(sessionId) || [];
-    buffer.push(message);
+    buffer.push(this.sanitizeMessage(message));
     if (buffer.length > this.maxMessages) {
       buffer.splice(0, buffer.length - this.maxMessages);
     }
@@ -575,6 +578,31 @@ export class OsacConnectionManager {
       Promise.resolve(handler(sessionId, message)).catch((error) => {
         console.warn('[OSAC_HANDLER_ERROR]', error);
       });
+    }
+  }
+
+  private sanitizeMessage(message: OsacMessage): OsacMessage {
+    const maxChars = Number.isFinite(this.maxPayloadChars) ? Math.max(2000, this.maxPayloadChars) : 50000;
+    if (!message || typeof message !== 'object') return message;
+    if (!message.payload || maxChars <= 0) return message;
+    try {
+      const payloadText = JSON.stringify(message.payload);
+      if (payloadText.length <= maxChars) return message;
+      return {
+        ...message,
+        payload: {
+          truncated: true,
+          preview: payloadText.slice(0, maxChars) + '...',
+        },
+      };
+    } catch {
+      return {
+        ...message,
+        payload: {
+          truncated: true,
+          preview: '[unserializable payload]',
+        },
+      };
     }
   }
 }

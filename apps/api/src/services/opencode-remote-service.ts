@@ -36,6 +36,7 @@ type OpencodeTextStreamEntry = {
   partId: string;
   text: string;
   updatedAt: number;
+  truncated?: boolean;
 };
 
 function asString(value: unknown): string {
@@ -181,9 +182,41 @@ function compact(value: string, maxLen: number = 200): string {
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+  const texts: string[] = [];
+  const pushText = (value: unknown) => {
+    if (!value) return;
+    const text = String(value);
+    if (text) texts.push(text);
+  };
+  if (error instanceof Error) {
+    pushText(error.message);
+    pushText(error.name);
+    pushText((error as any).cause);
+  }
+  pushText(error);
+  const serialized = (() => {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '';
+    }
+  })();
+  pushText(serialized);
+  const normalized = texts.join(' | ').toLowerCase();
+  if (!normalized) return false;
+  if (normalized.includes('sandbox was not found') || normalized.includes('sandbox not found')) {
+    return true;
+  }
+  if (normalized.includes('paused sandbox') && normalized.includes('not found')) {
+    return true;
+  }
+  if (normalized.includes('the sandbox was not found')) {
+    return true;
+  }
+  if (error instanceof Error && error.name === 'NotFoundError') {
+    return true;
+  }
+  return false;
 }
 
 async function markSandboxClosed(orchestratorSessionId: string) {
@@ -476,6 +509,8 @@ export class OpencodeRemoteService {
   private streamIdleTimers = new Map<string, NodeJS.Timeout>();
   private streamIdleAt = new Map<string, number>();
   private streamIdleTimeoutMs = toNonNegativeInt(process.env.OPENCODE_STREAM_IDLE_TIMEOUT_MS) ?? 20000;
+  private streamMaxChars = toNonNegativeInt(process.env.OPENCODE_STREAM_MAX_CHARS) ?? 200000;
+  private streamMaxEntries = toNonNegativeInt(process.env.OPENCODE_STREAM_MAX_ENTRIES) ?? 200;
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -662,6 +697,9 @@ export class OpencodeRemoteService {
   }): { streamKey: string; text: string } {
     const streamKey = this.buildTextStreamKey(input.taskSessionId, input.opencodeSessionId, input.partId);
     const previous = this.textStreams.get(streamKey);
+    if (previous?.truncated) {
+      return { streamKey, text: previous.text };
+    }
 
     let nextText = input.text;
     if (!nextText && previous) {
@@ -673,6 +711,12 @@ export class OpencodeRemoteService {
       nextText = previous ? `${previous.text}${input.delta}` : input.delta;
     }
 
+    let truncated = false;
+    if (this.streamMaxChars > 0 && nextText.length > this.streamMaxChars) {
+      nextText = `${nextText.slice(0, this.streamMaxChars)}...`;
+      truncated = true;
+    }
+
     const entry: OpencodeTextStreamEntry = {
       taskSessionId: input.taskSessionId,
       orchestratorSessionId: input.orchestratorSessionId,
@@ -680,8 +724,17 @@ export class OpencodeRemoteService {
       partId: input.partId,
       text: nextText,
       updatedAt: Number.isFinite(input.updatedAt) ? input.updatedAt : Date.now(),
+      truncated,
     };
     this.textStreams.set(streamKey, entry);
+    if (this.streamMaxEntries > 0 && this.textStreams.size > this.streamMaxEntries) {
+      const entries = Array.from(this.textStreams.entries());
+      entries.sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+      const removeCount = entries.length - this.streamMaxEntries;
+      for (let i = 0; i < removeCount; i += 1) {
+        this.textStreams.delete(entries[i][0]);
+      }
+    }
 
     return {
       streamKey,

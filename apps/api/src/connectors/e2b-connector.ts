@@ -23,9 +23,32 @@ type RunCommandOptions = {
 };
 
 const sandboxCache = new Map<string, CachedSandbox>();
+const cacheTtlMs = toPositiveInt(process.env.E2B_SANDBOX_CACHE_TTL_MS, 10 * 60 * 1000);
+const cacheMaxSize = toPositiveInt(process.env.E2B_SANDBOX_CACHE_MAX, 80);
+
+function pruneSandboxCache() {
+  if (!sandboxCache.size) return;
+  const now = Date.now();
+  if (cacheTtlMs > 0) {
+    for (const [key, entry] of sandboxCache.entries()) {
+      if (now - entry.lastUsedAt > cacheTtlMs) {
+        sandboxCache.delete(key);
+      }
+    }
+  }
+  if (cacheMaxSize > 0 && sandboxCache.size > cacheMaxSize) {
+    const entries = Array.from(sandboxCache.entries());
+    entries.sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+    const removeCount = entries.length - cacheMaxSize;
+    for (let i = 0; i < removeCount; i += 1) {
+      sandboxCache.delete(entries[i][0]);
+    }
+  }
+}
 
 function touch(sandbox: Sandbox) {
   sandboxCache.set(sandbox.sandboxId, { sandbox, lastUsedAt: Date.now() });
+  pruneSandboxCache();
 }
 
 function toPositiveInt(value: string | undefined, fallback: number): number {

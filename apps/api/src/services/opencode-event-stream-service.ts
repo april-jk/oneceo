@@ -5,9 +5,41 @@ import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+  const texts: string[] = [];
+  const pushText = (value: unknown) => {
+    if (!value) return;
+    const text = String(value);
+    if (text) texts.push(text);
+  };
+  if (error instanceof Error) {
+    pushText(error.message);
+    pushText(error.name);
+    pushText((error as any).cause);
+  }
+  pushText(error);
+  const serialized = (() => {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '';
+    }
+  })();
+  pushText(serialized);
+  const normalized = texts.join(' | ').toLowerCase();
+  if (!normalized) return false;
+  if (normalized.includes('sandbox was not found') || normalized.includes('sandbox not found')) {
+    return true;
+  }
+  if (normalized.includes('paused sandbox') && normalized.includes('not found')) {
+    return true;
+  }
+  if (normalized.includes('the sandbox was not found')) {
+    return true;
+  }
+  if (error instanceof Error && error.name === 'NotFoundError') {
+    return true;
+  }
+  return false;
 }
 
 async function markSandboxClosed(orchestratorSessionId: string) {

@@ -31,6 +31,7 @@ function Router() {
       <Route path="/manager-node" component={ManagerNode} />
       <Route path="/manager-view" component={ManagerView} />
       <Route path="/new-task" component={Home} />
+      <Route path="/session/:sessionId" component={Home} />
       <Route path="/ai-workspace" component={AIWorkspace} />
       <Route path="/agent-project" component={AgentProject} />
       <Route path="/ceo-view" component={CEOView} />

@@ -176,6 +176,7 @@ class TaskCreationCacheStore {
         invalidatedAt: undefined,
       };
       session.updatedAt = now;
+      this.pruneSessions(cache, Number(process.env.TASK_CREATION_CACHE_MAX_SESSIONS || 200));
       await this.writeCache(cache);
     });
   }
@@ -238,6 +239,7 @@ class TaskCreationCacheStore {
       session.workspace.files = files;
       session.updatedAt = now;
       this.pruneFiles(session, Number(process.env.TASK_CREATION_CACHE_MAX_FILES || 200));
+      this.pruneSessions(cache, Number(process.env.TASK_CREATION_CACHE_MAX_SESSIONS || 200));
       await this.writeCache(cache);
     });
   }
@@ -301,6 +303,23 @@ class TaskCreationCacheStore {
     const removeCount = entries.length - maxFiles;
     for (let i = 0; i < removeCount; i += 1) {
       delete session.workspace.files[entries[i][0]];
+    }
+  }
+
+  private pruneSessions(cache: CacheFileShape, maxSessions: number) {
+    if (maxSessions <= 0) return;
+    for (const tenant of Object.values(cache.tenants)) {
+      const entries = Object.entries(tenant.sessions || {});
+      if (entries.length <= maxSessions) continue;
+      entries.sort((a, b) => {
+        const aTime = Date.parse(a[1].updatedAt || '') || 0;
+        const bTime = Date.parse(b[1].updatedAt || '') || 0;
+        return aTime - bTime;
+      });
+      const removeCount = entries.length - maxSessions;
+      for (let i = 0; i < removeCount; i += 1) {
+        delete tenant.sessions[entries[i][0]];
+      }
     }
   }
 }

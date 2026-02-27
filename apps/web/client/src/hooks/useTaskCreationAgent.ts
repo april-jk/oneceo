@@ -56,6 +56,7 @@ export interface OrchestrationRuntime {
 export interface UseTaskCreationAgentOptions {
   onPlanGenerated?: (plan: any) => void;
   onError?: (error: string) => void;
+  autoRuntime?: boolean;
 }
 
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
@@ -170,6 +171,7 @@ function extractStreamContent(eventType: string, event: Record<string, unknown>)
   return {
     text: delta || text,
     partId,
+    isDelta: Boolean(delta),
   };
 }
 
@@ -435,9 +437,15 @@ function mergeRealtimeMessage(
 
     if (idx >= 0) {
       const next = [...prev];
+      const existing = next[idx];
+      const nextContent =
+        metadata.streamDelta === true && (existing?.content || '').trim()
+          ? `${existing?.content || ''}${message.content || ''}`
+          : message.content;
       next[idx] = {
         ...next[idx],
         ...message,
+        content: nextContent,
         metadata: {
           ...toRecord(next[idx].metadata),
           ...metadata,
@@ -502,6 +510,12 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
   const result: TaskCreationHistoryMessage[] = [];
   const streamIndexByKey = new Map<string, number>();
 
+  const isDeltaStream = (metadata: Record<string, unknown>) => {
+    const eventType = asText(metadata.eventType).toLowerCase();
+    if (eventType === 'message.part.delta') return true;
+    return Boolean(metadata.streamDelta);
+  };
+
   for (const item of list) {
     const messageType = asText(item?.messageType);
     const metadata = toRecord(item?.metadata);
@@ -550,7 +564,17 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
 
       const existingIndex = streamIndexByKey.get(streamKey);
       if (existingIndex !== undefined) {
-        result[existingIndex] = item;
+        const existing = result[existingIndex];
+        if (isDeltaStream(metadata)) {
+          const nextContent = `${existing?.content || ''}${item?.content || ''}`;
+          result[existingIndex] = {
+            ...existing,
+            ...item,
+            content: nextContent,
+          };
+        } else {
+          result[existingIndex] = item;
+        }
       } else {
         streamIndexByKey.set(streamKey, result.length);
         result.push(item);
@@ -601,6 +625,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
 export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const SESSION_STORAGE_KEY = 'task_creation_session_id';
   const WELCOME_MESSAGE = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
+  const autoRuntime = options?.autoRuntime !== false;
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -616,6 +641,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [runtimeMessages, setRuntimeMessages] = useState<OsacMessageRecord[]>([]);
   const [isSyncingRuntime, setIsSyncingRuntime] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeEnabled, setRuntimeEnabled] = useState(autoRuntime);
   const [location] = useLocation();
   const search = useSearch();
 
@@ -624,6 +650,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const sseActiveRef = useRef(false);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
+  const ensureRuntimeRef = useRef<() => Promise<void>>(async () => {});
+  const startRuntimeOnNextSessionRef = useRef(false);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -634,18 +662,22 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setLatestOsacMessage(null);
     setRuntimeMessages([]);
     setRuntimeError(null);
+    setRuntimeEnabled(autoRuntime);
     setSessionId(nextSessionId);
     if (nextSessionId) {
       window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
     } else {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
     }
-  }, []);
+  }, [autoRuntime]);
 
   useEffect(() => {
     const params = new URLSearchParams(search);
     const querySessionId = params.get('sessionId')?.trim();
     const createNewToken = params.get('new')?.trim();
+    const pathMatch = location.match(/^\/session\/([^/?#]+)/);
+    const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+    const resolvedSessionId = pathSessionId || querySessionId || '';
 
     if (createNewToken) {
       if (sessionId !== null || messages.length > 0) {
@@ -654,13 +686,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
 
-    if (querySessionId) {
-      if (querySessionId !== sessionId) {
-        resetConversationState(querySessionId);
+    if (resolvedSessionId) {
+      if (resolvedSessionId !== sessionId) {
+        resetConversationState(resolvedSessionId);
       }
       return;
     }
   }, [location, search, sessionId, messages.length, resetConversationState]);
+
+  useEffect(() => {
+    setRuntimeEnabled(autoRuntime);
+  }, [autoRuntime, sessionId]);
 
   useEffect(() => {
     onPlanGeneratedRef.current = options?.onPlanGenerated;
@@ -674,6 +710,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
     sseActiveRef.current = false;
   }, []);
+
+  const runtimeReady =
+    runtimeEnabled && (runtimeStatus === 'ready' || (!runtimeStatus && Boolean(orchestratorSessionId)));
 
   const refreshRuntimeStatus = useCallback(
     async (targetSessionId?: string) => {
@@ -723,6 +762,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (stream.partId) {
         metadata.partId = stream.partId;
       }
+      metadata.streamDelta = stream.isDelta === true;
     } else {
       content = summarizeOpencodeEvent(eventType, event);
     }
@@ -809,12 +849,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           setSessionId(messageSessionId);
           window.localStorage.setItem(SESSION_STORAGE_KEY, messageSessionId);
           const params = new URLSearchParams(window.location.search);
-          const currentInQuery = params.get('sessionId')?.trim();
-          if (currentInQuery !== messageSessionId || params.get('new')) {
-            params.set('sessionId', messageSessionId);
+          const currentPath = window.location.pathname;
+          const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
+          const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
+          if (currentInPath !== messageSessionId || params.get('new') || params.get('sessionId')) {
             params.delete('new');
+            params.delete('sessionId');
             const query = params.toString();
-            window.history.replaceState(null, '', query ? `/new-task?${query}` : '/new-task');
+            const base = `/session/${encodeURIComponent(messageSessionId)}`;
+            window.history.replaceState(null, '', query ? `${base}?${query}` : base);
+          }
+
+          if (startRuntimeOnNextSessionRef.current && autoRuntime) {
+            startRuntimeOnNextSessionRef.current = false;
+            void ensureRuntimeRef.current();
           }
         }
         const orchestratorId = extractOrchestratorSessionId(message);
@@ -893,67 +941,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setIsConnected(false);
   }, []);
 
-  // 发送用户输入
-  const sendUserInput = useCallback((input: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error('[TaskCreationAgent] WebSocket 未连接');
-      return;
-    }
-
-    setIsProcessing(true);
-    setCurrentQuestion(null);
-    setMessages((prev) => [
-      ...prev,
-      {
-        type: 'user_input',
-        content: input,
-      },
-    ]);
-
-    wsRef.current.send(
-      JSON.stringify({
-        type: 'user_input',
-        content: input,
-        sessionId: sessionId || undefined,
-      })
-    );
-  }, [sessionId]);
-
-  const sendChatInput = useCallback((input: string) => {
-    const text = input.trim();
-    if (!text) return;
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error('[TaskCreationAgent] WebSocket 未连接');
-      return;
-    }
-
-    const orchestratorId = (orchestratorSessionId || '').trim();
-    if (orchestratorId && !currentQuestion) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          type: 'user_input',
-          content: text,
-        },
-      ]);
-
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'opencode_input',
-          content: text,
-          sessionId: sessionId || undefined,
-          metadata: {
-            orchestratorSessionId: orchestratorId,
-          },
-        })
-      );
-      return;
-    }
-
-    sendUserInput(text);
-  }, [currentQuestion, orchestratorSessionId, sendUserInput, sessionId]);
-
   // 回答澄清问题
   const answerQuestion = useCallback((answer: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -988,7 +975,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistory = useCallback(async (historySessionId: string) => {
     try {
       const list = await listTaskCreationMessages(historySessionId);
-      const compacted = compactHistoryMessages(list);
+      const ordered = [...list].sort((a, b) => {
+        const ta = a?.createdAt ? Date.parse(a.createdAt) : NaN;
+        const tb = b?.createdAt ? Date.parse(b.createdAt) : NaN;
+        if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;
+        return ta - tb;
+      });
+      const compacted = compactHistoryMessages(ordered);
       const mapped: AgentMessage[] = compacted.map((item: any) => {
         const metadata = item?.metadata || {};
         const messageType = item?.messageType;
@@ -1126,6 +1119,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const syncRuntime = useCallback(
     async (targetSessionId?: string) => {
+      if (!runtimeEnabled) {
+        setLatestOsacMessage(null);
+        setRuntimeMessages([]);
+        setRuntimeError(null);
+        setIsSyncingRuntime(false);
+        return;
+      }
       const sid = (targetSessionId || orchestratorSessionId || '').trim();
       if (!sid) {
         setLatestOsacMessage(null);
@@ -1148,12 +1148,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setIsSyncingRuntime(false);
       }
     },
-    [orchestratorSessionId]
+    [orchestratorSessionId, runtimeEnabled]
   );
 
   const ensureRuntime = useCallback(async () => {
     const sid = (sessionId || '').trim();
-    if (!sid || runtimeStarting) return;
+    if (!sid || runtimeStarting || runtimeReady) return;
+    if (!runtimeEnabled) {
+      setRuntimeEnabled(true);
+    }
     setRuntimeStarting(true);
     try {
       const result = await startTaskCreationRuntime(sid);
@@ -1172,12 +1175,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     } finally {
       setRuntimeStarting(false);
     }
-  }, [runtimeStarting, sessionId, syncRuntime]);
-
-  const runtimeReady = runtimeStatus === 'ready' || (!runtimeStatus && Boolean(orchestratorSessionId));
+  }, [runtimeStarting, sessionId, runtimeEnabled, runtimeReady, syncRuntime]);
 
   useEffect(() => {
-    if (!orchestratorSessionId || !runtimeReady) {
+    ensureRuntimeRef.current = ensureRuntime;
+  }, [ensureRuntime]);
+
+  useEffect(() => {
+    if (!orchestratorSessionId || !runtimeReady || !runtimeEnabled) {
       setIsSyncingRuntime(false);
       setRuntimeError(null);
       return;
@@ -1191,7 +1196,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     return () => {
       window.clearInterval(timer);
     };
-  }, [orchestratorSessionId, runtimeReady, syncRuntime]);
+  }, [orchestratorSessionId, runtimeReady, runtimeEnabled, syncRuntime]);
 
   // 自动连接
   useEffect(() => {
@@ -1216,7 +1221,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [sessionId, refreshRuntimeStatus]);
 
   useEffect(() => {
-    if (!sessionId || !orchestratorSessionId || !runtimeReady) {
+    if (!sessionId || !orchestratorSessionId || !runtimeReady || !runtimeEnabled) {
       closeSse();
       return;
     }
@@ -1224,7 +1229,76 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     return () => {
       closeSse();
     };
-  }, [sessionId, orchestratorSessionId, runtimeReady, openSse, closeSse]);
+  }, [sessionId, orchestratorSessionId, runtimeReady, runtimeEnabled, openSse, closeSse]);
+
+  // 发送用户输入
+  const sendUserInput = useCallback((input: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error('[TaskCreationAgent] WebSocket 未连接');
+      return;
+    }
+
+    startRuntimeOnNextSessionRef.current = true;
+    if (autoRuntime && runtimeEnabled && sessionId && !runtimeReady && !runtimeStarting) {
+      void ensureRuntime();
+    }
+
+    setIsProcessing(true);
+    setCurrentQuestion(null);
+    setMessages((prev) => [
+      ...prev,
+      {
+        type: 'user_input',
+        content: input,
+      },
+    ]);
+
+    wsRef.current.send(
+      JSON.stringify({
+        type: 'user_input',
+        content: input,
+        sessionId: sessionId || undefined,
+      })
+    );
+  }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, sessionId]);
+
+  const sendChatInput = useCallback(async (input: string) => {
+    const text = input.trim();
+    if (!text) return;
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error('[TaskCreationAgent] WebSocket 未连接');
+      return;
+    }
+
+    const orchestratorId = (orchestratorSessionId || '').trim();
+    if (orchestratorId && !currentQuestion) {
+      if (!runtimeReady) {
+        await ensureRuntime();
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          type: 'user_input',
+          content: text,
+        },
+      ]);
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'opencode_input',
+          content: text,
+          sessionId: sessionId || undefined,
+          metadata: {
+            orchestratorSessionId: orchestratorId,
+          },
+        })
+      );
+      return;
+    }
+
+    sendUserInput(text);
+  }, [currentQuestion, orchestratorSessionId, runtimeReady, ensureRuntime, sendUserInput, sessionId]);
 
   return {
     isConnected,

@@ -70,10 +70,19 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
     title: string;
     status: string;
   }>>([]);
+  const listLoadingRef = React.useRef(false);
+  const lastListFetchRef = React.useRef(0);
+  const LIST_POLL_MS = 30000;
 
   React.useEffect(() => {
     let disposed = false;
-    const load = async () => {
+    const load = async (force = false) => {
+      if (disposed) return;
+      if (listLoadingRef.current) return;
+      if (!force && document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (!force && now - lastListFetchRef.current < 3000) return;
+      listLoadingRef.current = true;
       try {
         const list = await listTaskCreationSessions('all');
         if (disposed) return;
@@ -83,15 +92,27 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           status: session.status || "in_progress",
         }));
         setSessionTasks(mapped);
+        lastListFetchRef.current = Date.now();
       } catch {
         // ignore
+      } finally {
+        listLoadingRef.current = false;
       }
     };
-    void load();
-    const timer = window.setInterval(load, 6000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void load(true);
+      }
+    };
+    void load(true);
+    const timer = window.setInterval(() => {
+      void load(false);
+    }, LIST_POLL_MS);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -380,7 +401,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           {sessionTasks.length > 0 && (
             <div className="mt-2 space-y-1">
               {sessionPreviewList.map((session) => (
-                <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
+                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
                   <Button
                     variant="ghost"
                     className="w-full min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
@@ -499,7 +520,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
             ) : (
               <div className="space-y-2">
                 {sessionTasks.map((session) => (
-                  <Link key={session.sessionId} href={`/new-task?sessionId=${session.sessionId}`}>
+                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
                     <Button
                       variant="ghost"
                       className="w-full min-w-0 justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"

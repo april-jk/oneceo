@@ -298,7 +298,26 @@ async function startOpencodeServer(
   throw new Error(`opencode serve 启动失败: ${message}`);
 }
 
+const provisionLocks = new Map<string, Promise<ProvisionResult>>();
+
 export class SandboxAgentProvisionService {
+  async provisionWithLock(input: ProvisionInput): Promise<ProvisionResult> {
+    const taskSessionId = pickString(input.metadata?.taskSessionId);
+    if (!taskSessionId) {
+      return this.provision(input);
+    }
+    const existing = provisionLocks.get(taskSessionId);
+    if (existing) {
+      return existing;
+    }
+    const promise = this.provision(input)
+      .finally(() => {
+        provisionLocks.delete(taskSessionId);
+      });
+    provisionLocks.set(taskSessionId, promise);
+    return promise;
+  }
+
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
 

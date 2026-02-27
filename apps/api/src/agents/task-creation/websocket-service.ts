@@ -12,6 +12,7 @@ import { taskCreationFileMemoryStore } from './file-memory-store';
 import { AwaitingUserInputError, isAwaitingUserInputError, isRecoverableAgentError } from './errors';
 import { randomUUID } from 'crypto';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
+import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
@@ -304,6 +305,10 @@ export class TaskCreationWebSocketService {
       );
     }
 
+    if (sessionId) {
+      this.prefetchRuntime(sessionId, message.content || '');
+    }
+
     if (sessionId && pendingResume) {
       try {
         await taskCreationFileMemoryStore.clearPendingResume(sessionId);
@@ -386,6 +391,21 @@ export class TaskCreationWebSocketService {
       }
       throw error;
     }
+  }
+
+  private prefetchRuntime(sessionId: string, taskTitle: string) {
+    const enabled = String(process.env.TASK_CREATION_PREFETCH_RUNTIME || 'true').trim().toLowerCase() !== 'false';
+    if (!enabled) return;
+    void sandboxAgentProvisionService
+      .provisionWithLock({
+        metadata: {
+          taskSessionId: sessionId,
+          taskTitle: taskTitle?.slice(0, 80) || '新建任务会话',
+        },
+      })
+      .catch((error) => {
+        console.warn('[TASK_CREATION_PREFETCH_RUNTIME_FAILED]', sessionId, error);
+      });
   }
 
   private async handleOpencodeInput(clientId: string, message: WebSocketMessage): Promise<void> {

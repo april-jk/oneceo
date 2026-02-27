@@ -47,6 +47,131 @@ function resolveTenantKey(req: express.Request): string {
   return 'default';
 }
 
+function toIso(value: Date | string | null | undefined): string {
+  if (!value) return new Date().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+  return new Date().toISOString();
+}
+
+async function findEnvironmentByTaskSessionId(taskSessionId: string) {
+  const limit = clampNumber(Number(process.env.SANDBOX_RUNTIME_LOOKUP_LIMIT || 500), 50, 5000);
+  const environments = await sandboxExecutionEnvironmentDAO.listRecent(limit);
+  for (const env of environments) {
+    const meta = (env.metadata || {}) as Record<string, unknown>;
+    const metaTaskId = typeof (meta as any).taskSessionId === 'string' ? String((meta as any).taskSessionId) : '';
+    if (metaTaskId && metaTaskId === taskSessionId) {
+      return env;
+    }
+  }
+  return null;
+}
+
+async function buildFileSessionFromDb(sessionId: string) {
+  const session = await taskCreationSessionDAO.getSession(sessionId);
+  if (!session) return null;
+  const [taskDescription, messages] = await Promise.all([
+    taskCreationSessionDAO.getTaskDescription(sessionId),
+    taskCreationSessionDAO.getMessages(sessionId),
+  ]);
+  const titleCandidate =
+    taskDescription?.title ||
+    messages?.find((m) => m.role === 'user')?.content ||
+    '新建任务会话';
+
+  const status =
+    session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
+      ? session.status
+      : 'in_progress';
+  const stage =
+    status === 'completed'
+      ? 'completed'
+      : status === 'failed'
+        ? 'failed'
+        : status === 'waiting_user'
+          ? 'clarifying'
+          : 'executing';
+
+  const env = await findEnvironmentByTaskSessionId(sessionId);
+  const orchestratorSessionId = env?.sessionId;
+
+  return {
+    id: session.id,
+    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    status,
+    stage,
+    runtime: orchestratorSessionId
+      ? {
+          orchestratorSessionId,
+          updatedAt: toIso(env?.updatedAt as any),
+        }
+      : undefined,
+    createdAt: toIso(session.createdAt as any),
+    updatedAt: toIso(session.updatedAt as any),
+    messages: Array.isArray(messages)
+      ? messages.map((m) => ({
+          id: String(m.id),
+          role: (m.role as any) || 'agent',
+          messageType: m.messageType || 'message',
+          content: m.content || '',
+          metadata: m.metadata || undefined,
+          createdAt: toIso(m.createdAt as any),
+        }))
+      : [],
+  };
+}
+
+async function hydrateFileSessionFromDb(sessionId: string) {
+  const record = await buildFileSessionFromDb(sessionId);
+  if (!record) return null;
+  await taskCreationFileMemoryStore.createSession(record.title, record.id);
+  await taskCreationFileMemoryStore.updateSessionStatus(record.id, record.status as any);
+  if (record.runtime?.orchestratorSessionId) {
+    await taskCreationFileMemoryStore.updateRuntimeBinding(record.id, {
+      orchestratorSessionId: record.runtime.orchestratorSessionId,
+      opencodeSessionId: record.runtime.opencodeSessionId,
+    });
+  }
+  return record;
+}
+
+type SessionListCache = {
+  fetchedAt: number;
+  limit: number;
+  data: any[];
+};
+
+let sessionListCache: SessionListCache | null = null;
+
+function mapStageFromStatus(status: string | null | undefined) {
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'waiting_user') return 'clarifying';
+  return 'executing';
+}
+
+async function buildSessionSummaryFromDb(limit: number) {
+  const sessions = await taskCreationSessionDAO.getRecentSessions(limit);
+  const result: any[] = [];
+  for (const session of sessions) {
+    const description = await taskCreationSessionDAO.getTaskDescription(session.id);
+    const title =
+      description?.title ||
+      `任务会话 ${String(session.id).slice(-6)}`;
+    result.push({
+      id: session.id,
+      title: title.trim().slice(0, 80),
+      status: session.status,
+      stage: mapStageFromStatus(session.status),
+      createdAt: toIso(session.createdAt as any),
+      updatedAt: toIso(session.updatedAt as any),
+      messages: [],
+    });
+  }
+  return result;
+}
+
 async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot: string) {
   const enabledRaw = String(process.env.OPENCODE_SERVER_ENSURE_ON_READ || 'true').trim().toLowerCase();
   if (enabledRaw === 'false') return;
@@ -300,11 +425,62 @@ router.get('/sessions', async (req, res) => {
         limit = Math.min(parsed, 5000);
       }
     }
-    const sessions = await taskCreationFileMemoryStore.listSessions(limit);
+    const refresh = parseRefreshFlag(req.query.refresh);
+    const cacheTtlMs = clampNumber(
+      Number(process.env.TASK_CREATION_LIST_CACHE_TTL_MS || 10000),
+      1000,
+      60000
+    );
+    const now = Date.now();
 
-    res.json({
+    let sessions = await taskCreationFileMemoryStore.listSessions(limit);
+    if (!refresh && sessions.length > 0) {
+      return res.json({
+        success: true,
+        data: sessions,
+      });
+    }
+
+    if (
+      !refresh &&
+      sessionListCache &&
+      now - sessionListCache.fetchedAt < cacheTtlMs &&
+      sessionListCache.data.length > 0
+    ) {
+      const cached = limit >= sessionListCache.data.length
+        ? sessionListCache.data
+        : sessionListCache.data.slice(0, limit);
+      return res.json({
+        success: true,
+        data: cached,
+        cache: { hit: true, ageMs: now - sessionListCache.fetchedAt },
+      });
+    }
+
+    if (sessions.length === 0) {
+      const summaries = await buildSessionSummaryFromDb(limit);
+      sessionListCache = {
+        fetchedAt: now,
+        limit,
+        data: summaries,
+      };
+      return res.json({
+        success: true,
+        data: summaries,
+        cache: { hit: false },
+      });
+    }
+
+    sessionListCache = {
+      fetchedAt: now,
+      limit,
+      data: sessions,
+    };
+
+    return res.json({
       success: true,
       data: sessions,
+      cache: { hit: false },
     });
   } catch (error: any) {
     console.error('获取会话列表失败:', error);
@@ -322,7 +498,10 @@ router.get('/sessions', async (req, res) => {
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const sessionData = await taskCreationFileMemoryStore.getSession(sessionId);
+    let sessionData = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!sessionData) {
+      sessionData = await hydrateFileSessionFromDb(sessionId);
+    }
 
     if (!sessionData) {
       return res.status(404).json({
@@ -356,7 +535,20 @@ router.get('/sessions/:sessionId', async (req, res) => {
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const messages = await taskCreationFileMemoryStore.getMessages(sessionId);
+    let messages = await taskCreationFileMemoryStore.getMessages(sessionId);
+    if (!messages || messages.length === 0) {
+      const fallback = await taskCreationSessionDAO.getMessages(sessionId);
+      messages = Array.isArray(fallback)
+        ? fallback.map((m) => ({
+            id: String(m.id),
+            role: (m.role as any) || 'agent',
+            messageType: m.messageType || 'message',
+            content: m.content || '',
+            metadata: m.metadata || undefined,
+            createdAt: toIso(m.createdAt as any),
+          }))
+        : [];
+    }
 
     res.json({
       success: true,
@@ -417,7 +609,7 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
       }
     }
 
-    const provision = await sandboxAgentProvisionService.provision({
+    const provision = await sandboxAgentProvisionService.provisionWithLock({
       metadata: {
         taskSessionId: sessionId,
         taskTitle: session.title,

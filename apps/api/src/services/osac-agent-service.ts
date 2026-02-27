@@ -367,7 +367,12 @@ export class OsacAgentService {
       if (!isAbortError(error)) {
         throw error;
       }
-      console.warn('[OPENCODE_PROMPT_TIMEOUT] fallback to sandbox dispatch:', error);
+      const logTimeout = String(process.env.OPENCODE_PROMPT_TIMEOUT_LOG || 'false')
+        .trim()
+        .toLowerCase() === 'true';
+      if (logTimeout) {
+        console.warn('[OPENCODE_PROMPT_TIMEOUT] fallback to sandbox dispatch:', error);
+      }
       await dispatchPromptInSandbox(sessionId, {
         opencodeSessionId: input.opencodeSessionId,
         parts: input.parts || [],

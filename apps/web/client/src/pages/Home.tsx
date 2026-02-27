@@ -62,6 +62,14 @@ export default function Home() {
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
+  const sessionIdFromPath = useMemo(() => {
+    const match = location.match(/^\/session\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }, [location]);
+  const isHistoryView = useMemo(() => {
+    const params = new URLSearchParams(search);
+    return params.get("view") === "history";
+  }, [search]);
 
   const {
     isConnected,
@@ -73,6 +81,7 @@ export default function Home() {
     sendChatInput,
     answerQuestion,
   } = useTaskCreationAgent({
+    autoRuntime: !isHistoryView,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
       // TODO: 跳转到项目详情页面或更新左侧项目列表
@@ -93,7 +102,7 @@ export default function Home() {
   useEffect(() => {
     const params = new URLSearchParams(search);
     const input = params.get("q")?.trim();
-    const sessionInQuery = params.get("sessionId")?.trim();
+    const sessionInQuery = sessionIdFromPath || params.get("sessionId")?.trim();
     const createNewToken = params.get("new")?.trim();
 
     if (createNewToken) {
@@ -105,15 +114,21 @@ export default function Home() {
 
     if (sessionInQuery) {
       setMode('chat');
+      if (location.startsWith("/new-task") && sessionInQuery === params.get("sessionId")?.trim()) {
+        const nextUrl = `/session/${encodeURIComponent(sessionInQuery)}${isHistoryView ? "?view=history" : ""}`;
+        window.history.replaceState(null, "", nextUrl);
+      }
     }
 
-    if (input) {
+    if (input && location.startsWith("/new-task")) {
       pendingInputRef.current = input;
       setMode('chat');
-      const nextUrl = sessionInQuery ? `/new-task?sessionId=${encodeURIComponent(sessionInQuery)}` : "/new-task";
+      const nextUrl = sessionInQuery
+        ? `/session/${encodeURIComponent(sessionInQuery)}`
+        : "/new-task";
       window.history.replaceState(null, "", nextUrl);
     }
-  }, [location, search]);
+  }, [location, search, sessionIdFromPath]);
 
   useEffect(() => {
     if (!isConnected || !pendingInputRef.current) {
@@ -121,8 +136,18 @@ export default function Home() {
     }
     const input = pendingInputRef.current;
     pendingInputRef.current = null;
-    sendChatInput(input);
+    void sendChatInput(input);
   }, [isConnected, sendChatInput]);
+
+  const exitHistoryView = () => {
+    if (!isHistoryView) return;
+    const base = sessionId
+      ? `/session/${encodeURIComponent(sessionId)}`
+      : location.startsWith("/session/")
+        ? location
+        : "/new-task";
+    window.history.replaceState(null, "", base);
+  };
 
   const handleSend = () => {
     if (message.trim()) {
@@ -130,7 +155,8 @@ export default function Home() {
       // 切换到对话模式
       setMode('chat');
       if (isConnected) {
-        sendChatInput(input);
+        exitHistoryView();
+        void sendChatInput(input);
       } else {
         pendingInputRef.current = input;
       }
@@ -141,7 +167,8 @@ export default function Home() {
   const handleQuickAction = (action: string) => {
     setMode('chat');
     if (isConnected) {
-      sendChatInput(action);
+      exitHistoryView();
+      void sendChatInput(action);
     } else {
       pendingInputRef.current = action;
     }
@@ -149,6 +176,7 @@ export default function Home() {
   };
 
   const handleAnswerQuestion = (answer: string) => {
+    exitHistoryView();
     answerQuestion(answer);
   };
 
@@ -721,7 +749,13 @@ function NoticeMessage({
 type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; markdown: string }
-  | { kind: "capsule"; label: string; tone: "system" | "intent" | "planning" | "execution" | "error" }
+  | {
+      kind: "capsule";
+      label: string;
+      tone: "system" | "intent" | "planning" | "execution" | "error";
+      loading?: boolean;
+      segments?: string[];
+    }
   | {
       kind: "opencode_tool";
       eventType: string;
@@ -735,10 +769,31 @@ type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
 
 function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
+  let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
+
+  const flushProgress = () => {
+    if (!progressBuffer) return;
+    items.push({
+      kind: "capsule",
+      label: progressBuffer.label,
+      tone: progressBuffer.tone,
+      loading: progressBuffer.loading,
+    });
+    progressBuffer = null;
+  };
+
+  const pushProgress = (label: string, tone: CapsuleTone) => {
+    progressBuffer = {
+      label,
+      tone,
+      loading: isProgressLoadingLabel(label),
+    };
+  };
 
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
+      flushProgress();
       items.push({
         kind: "user",
         text: message.content || "",
@@ -749,6 +804,11 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     if (message.type === "agent_message") {
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
+        if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
+          pushProgress(parsed.label, getCapsuleTone(parsed.label));
+          continue;
+        }
+        flushProgress();
         items.push({
           kind: "capsule",
           label: parsed.label,
@@ -763,6 +823,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
+      flushProgress();
       items.push({
         kind: "agent",
         markdown: `**${getAgentName(message.agent)}**\n\n${message.content || ""}`,
@@ -771,15 +832,23 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "status_update") {
-      items.push({
-        kind: "capsule",
-        label: message.content || "状态更新",
-        tone: message.tone || getCapsuleTone(message.content || ""),
-      });
+      const label = message.content || "状态更新";
+      const tone = message.tone || getCapsuleTone(label);
+      if (isProgressStatusLabel(label)) {
+        pushProgress(label, tone);
+      } else {
+        flushProgress();
+        items.push({
+          kind: "capsule",
+          label,
+          tone,
+        });
+      }
       continue;
     }
 
     if (message.type === "opencode_event") {
+      flushProgress();
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
@@ -834,6 +903,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "error") {
+      flushProgress();
       items.push({
         kind: "agent",
         markdown: `**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`,
@@ -842,6 +912,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "clarification_request") {
+      flushProgress();
       const optionLines =
         message.options && message.options.length > 0
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
@@ -854,6 +925,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "plan_generated") {
+      flushProgress();
       items.push({
         kind: "agent",
         markdown: `**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`,
@@ -861,6 +933,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
+  flushProgress();
   return items;
 }
 
@@ -879,6 +952,8 @@ function MessageBubble({
       execution: "border-amber-200 bg-amber-50 text-amber-700",
       error: "border-rose-200 bg-rose-50 text-rose-700",
     };
+    const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
+    const lastIndex = segments.length - 1;
 
     return (
       <motion.div
@@ -887,8 +962,25 @@ function MessageBubble({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${toneClass[item.tone]}`}>
-          {item.label}
+        <div
+          className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${toneClass[item.tone]} ${
+            item.loading ? "relative overflow-hidden" : ""
+          }`}
+        >
+          <span className="relative z-10 inline-flex flex-wrap items-center gap-1">
+            {segments.map((segment, index) => {
+              const shimmer =
+                item.loading && (segments.length === 1 || index < lastIndex)
+                  ? "bg-gradient-to-r from-slate-500 via-slate-900 to-slate-500 bg-[length:200%_100%] animate-shimmer text-transparent bg-clip-text"
+                  : "";
+              return (
+                <span key={`${segment}-${index}`} className={shimmer}>
+                  {segment}
+                  {index < lastIndex ? <span className="px-1 text-slate-400">·</span> : null}
+                </span>
+              );
+            })}
+          </span>
         </div>
       </motion.div>
     );
@@ -940,10 +1032,14 @@ function extractCapsule(content: string): { label: string; rest: string } | null
   // 纯状态消息，直接渲染胶囊，不再下沉为正文
   const statusCapsules = [
     "正在分析您的任务需求",
+    "正在分析您的任务需求...",
     "已识别任务类型",
     "正在规划任务详情",
+    "正在规划任务详情...",
     "任务规划完成",
+    "任务规划完成：",
     "正在生成执行计划",
+    "正在生成执行计划...",
     "执行计划已生成",
   ];
   for (const status of statusCapsules) {
@@ -960,6 +1056,42 @@ function extractCapsule(content: string): { label: string; rest: string } | null
     }
   }
   return null;
+}
+
+function isProgressStatusLabel(label: string): boolean {
+  const text = label.trim();
+  if (!text) return false;
+  if (text.includes("错误") || text.includes("失败") || text.toLowerCase().includes("error")) {
+    return false;
+  }
+  const keywords = [
+    "正在分析您的任务需求",
+    "正在分析您的任务需求...",
+    "已识别任务类型",
+    "正在规划任务详情",
+    "正在规划任务详情...",
+    "任务规划完成",
+    "任务规划完成：",
+    "正在生成执行计划",
+    "正在生成执行计划...",
+    "执行计划已生成",
+    "正在启动执行环境",
+    "执行环境已就绪",
+  ];
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function isProgressLoadingLabel(label: string): boolean {
+  const text = label.trim();
+  if (!text) return false;
+  if (text.includes("错误") || text.includes("失败") || text.toLowerCase().includes("error")) {
+    return false;
+  }
+  const completeKeywords = ["完成", "已生成", "已就绪", "已接入", "成功"];
+  if (completeKeywords.some((keyword) => text.includes(keyword))) {
+    return false;
+  }
+  return true;
 }
 
 function getCapsuleTone(label: string): CapsuleTone {

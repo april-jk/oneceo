@@ -42,6 +42,47 @@ const MEMORY_FILE = path.join(DATA_DIR, 'task-creation-memory.json');
 
 class TaskCreationFileMemoryStore {
   private writeLock: Promise<void> = Promise.resolve();
+  private maxMessagesPerSession = Number(process.env.TASK_CREATION_MAX_MESSAGES || 1200);
+  private maxMessageLength = Number(process.env.TASK_CREATION_MAX_MESSAGE_LENGTH || 20000);
+  private maxMetadataLength = Number(process.env.TASK_CREATION_MAX_METADATA_LENGTH || 20000);
+
+  private clampMax(value: number, fallback: number) {
+    if (!Number.isFinite(value) || value <= 0) return fallback;
+    return Math.floor(value);
+  }
+
+  private sanitizeText(text: string): { text: string; truncated: boolean } {
+    const maxLen = this.clampMax(this.maxMessageLength, 20000);
+    if (!text || text.length <= maxLen) {
+      return { text, truncated: false };
+    }
+    return { text: `${text.slice(0, maxLen)}...`, truncated: true };
+  }
+
+  private sanitizeMetadata(metadata: any): { metadata?: any; truncated: boolean } {
+    if (!metadata || typeof metadata !== 'object') {
+      return { metadata, truncated: false };
+    }
+    const maxLen = this.clampMax(this.maxMetadataLength, 20000);
+    let truncated = false;
+
+    if (Object.prototype.hasOwnProperty.call(metadata, 'rawPayload')) {
+      try {
+        const rawText = JSON.stringify((metadata as any).rawPayload);
+        if (rawText.length > maxLen) {
+          (metadata as any).rawPayload = rawText.slice(0, maxLen) + '...';
+          (metadata as any).rawPayloadTruncated = true;
+          truncated = true;
+        }
+      } catch {
+        (metadata as any).rawPayload = '[unserializable payload]';
+        (metadata as any).rawPayloadTruncated = true;
+        truncated = true;
+      }
+    }
+
+    return { metadata, truncated };
+  }
 
   private async ensureFile(): Promise<void> {
     await fs.mkdir(DATA_DIR, { recursive: true });
@@ -263,14 +304,24 @@ class TaskCreationFileMemoryStore {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
+      const sanitized = this.sanitizeText(String(content || ''));
+      const meta = this.sanitizeMetadata(metadata);
       session.messages.push({
         id: this.createId('msg'),
         role,
         messageType,
-        content,
-        metadata,
+        content: sanitized.text,
+        metadata: meta.metadata
+          ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
+          : sanitized.truncated
+            ? { contentTruncated: true }
+            : meta.metadata,
         createdAt: new Date().toISOString(),
       });
+      const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
+      if (maxMessages > 0 && session.messages.length > maxMessages) {
+        session.messages.splice(0, session.messages.length - maxMessages);
+      }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });

@@ -38,9 +38,41 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
 function isSandboxNotFound(error: unknown): boolean {
   if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+  const texts: string[] = [];
+  const pushText = (value: unknown) => {
+    if (!value) return;
+    const text = String(value);
+    if (text) texts.push(text);
+  };
+  if (error instanceof Error) {
+    pushText(error.message);
+    pushText(error.name);
+    pushText((error as any).cause);
+  }
+  pushText(error);
+  const serialized = (() => {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '';
+    }
+  })();
+  pushText(serialized);
+  const normalized = texts.join(' | ').toLowerCase();
+  if (!normalized) return false;
+  if (normalized.includes('sandbox was not found') || normalized.includes('sandbox not found')) {
+    return true;
+  }
+  if (normalized.includes('paused sandbox') && normalized.includes('not found')) {
+    return true;
+  }
+  if (normalized.includes('the sandbox was not found')) {
+    return true;
+  }
+  if (error instanceof Error && error.name === 'NotFoundError') {
+    return true;
+  }
+  return false;
 }
 
 async function runOnce(): Promise<void> {
@@ -93,10 +125,17 @@ async function runOnce(): Promise<void> {
           pausedAt: new Date().toISOString(),
         });
       } catch (error) {
-        console.warn('[SANDBOX_ARCHIVE_JOB] archive failed', env.sessionId, error);
-        if (isSandboxNotFound(error)) {
+        const notFound = isSandboxNotFound(error);
+        if (notFound) {
+          console.info('[SANDBOX_ARCHIVE_JOB] sandbox not found, mark closed', env.sessionId);
           await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName ?? null);
+          await setSandboxMetadata(env.sessionId, {
+            archiveStatus: 'missing',
+            archiveError: 'sandbox_not_found',
+          });
+          continue;
         }
+        console.warn('[SANDBOX_ARCHIVE_JOB] archive failed', env.sessionId, error);
         await setSandboxMetadata(env.sessionId, {
           archiveStatus: 'failed',
           archiveError: error instanceof Error ? error.message : String(error),

@@ -58,7 +58,7 @@ export default function Home() {
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTab, setPreviewTab] = useState<"files" | "changes">("files");
+  const [previewTab, setPreviewTab] = useState<"files" | "changes" | "debug">("files");
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);

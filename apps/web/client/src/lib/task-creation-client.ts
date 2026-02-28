@@ -23,6 +23,15 @@ export type TaskCreationRuntimeStatus = {
   sandboxId?: string;
 };
 
+export type TaskCreationDebugInfo = {
+  ready: boolean;
+  url?: string;
+  status?: string;
+  updatedAt?: string;
+  sandboxId?: string;
+  message?: string;
+};
+
 export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
@@ -95,6 +104,24 @@ export async function getTaskCreationSession(sessionId: string): Promise<TaskCre
   return result?.data || null;
 }
 
+export async function getTaskCreationDebugInfo(sessionId: string): Promise<TaskCreationDebugInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/debug`;
+  const result = await fetchJson<{ data?: TaskCreationDebugInfo }>(url);
+  return result?.data || null;
+}
+
+export async function startTaskCreationDebug(sessionId: string): Promise<TaskCreationDebugInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/debug/start`;
+  const response = await fetch(url, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationDebugInfo };
+  return result?.data || null;
+}
+
 export async function startTaskCreationRuntime(sessionId: string): Promise<{
   orchestratorSessionId?: string;
   status?: string;
@@ -108,6 +135,15 @@ export async function startTaskCreationRuntime(sessionId: string): Promise<{
   }
   const result = (await response.json()) as { data?: any };
   return result?.data || {};
+}
+
+export async function touchTaskCreationRuntime(sessionId: string): Promise<void> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/touch`;
+  const response = await fetch(url, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
 }
 
 export async function listOsacMessages(orchestratorSessionId: string, limit: number = 120): Promise<OsacMessageRecord[]> {

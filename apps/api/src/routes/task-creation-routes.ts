@@ -14,6 +14,8 @@ import { sandboxAgentProvisionService } from '../services/sandbox-agent-provisio
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { touchSandbox } from '../services/sandbox-activity-service';
+import { ensureNekoDebug } from '../services/sandbox-debug-service';
+import { e2bConnector } from '../connectors/e2b-connector';
 
 const router = express.Router();
 
@@ -275,6 +277,11 @@ function normalizeWorkspacePath(input: string): string {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function pickRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object') return value as Record<string, unknown>;
+  return {};
 }
 
 function isSandboxNotFoundError(error: unknown): boolean {
@@ -638,6 +645,177 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('启动执行环境失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/runtime/touch
+ * 心跳维持执行环境（用于前端保持会话时防止自动回收）
+ */
+router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    let session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session) {
+      session = await hydrateFileSessionFromDb(sessionId);
+    }
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+    if (!orchestratorSessionId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未就绪，无法维持状态'),
+      });
+    }
+
+    await touchSandbox(orchestratorSessionId, 'ui_keepalive');
+    try {
+      await e2bConnector.getSandboxInfo(orchestratorSessionId);
+    } catch (error) {
+      console.warn('[RUNTIME_TOUCH] sandbox info failed', orchestratorSessionId, error);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        orchestratorSessionId,
+        touchedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error: any) {
+    console.error('维持执行环境失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('维持执行环境失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/debug
+ * 获取调试浏览器信息（仅查询，不触发启动）
+ */
+router.get('/sessions/:sessionId/debug', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    let session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session) {
+      session = await hydrateFileSessionFromDb(sessionId);
+    }
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+    if (!orchestratorSessionId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未就绪，无法获取调试信息'),
+      });
+    }
+
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (!environment) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境不存在'),
+      });
+    }
+
+    const metadata = pickRecord(environment.metadata);
+    const debugMeta = pickRecord(metadata.debug);
+    const nekoMeta = pickRecord(debugMeta.neko);
+    const baseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
+    const status = asText(nekoMeta.status) || environment.status;
+    const ready = Boolean(baseUrl) && (status === 'running' || status === 'ready') && environment.status === 'ready';
+
+    return res.json({
+      success: true,
+      data: {
+        ready,
+        url: baseUrl || undefined,
+        status: status || environment.status,
+        updatedAt: toIso(environment.updatedAt as any),
+        sandboxId: orchestratorSessionId,
+        message: baseUrl ? asText(nekoMeta.message) || undefined : '调试服务未配置或未启动',
+      },
+    });
+  } catch (error: any) {
+    console.error('获取调试信息失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取调试信息失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/debug/start
+ * 启动调试浏览器（会执行 sandbox 内安装与启动，不创建新 sandbox）
+ */
+router.post('/sessions/:sessionId/debug/start', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    let session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session) {
+      session = await hydrateFileSessionFromDb(sessionId);
+    }
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+    if (!orchestratorSessionId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未就绪，无法启动调试'),
+      });
+    }
+
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (!environment) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境不存在'),
+      });
+    }
+    if (environment.status !== 'ready') {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未启动，无法启动调试'),
+      });
+    }
+
+    const result = await ensureNekoDebug(orchestratorSessionId);
+    return res.json({
+      success: true,
+      data: {
+        ready: result.ready,
+        url: result.url,
+        status: result.status,
+        updatedAt: result.updatedAt,
+        sandboxId: result.sandboxId,
+        message: result.message,
+      },
+    });
+  } catch (error: any) {
+    console.error('启动调试失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('启动调试失败，请稍后重试'),
     });
   }
 });

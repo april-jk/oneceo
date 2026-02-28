@@ -13,6 +13,7 @@ import {
   listOsacMessages,
   listTaskCreationMessages,
   startTaskCreationRuntime,
+  touchTaskCreationRuntime,
   type TaskCreationHistoryMessage,
   type OsacMessageRecord,
 } from '@/lib/task-creation-client';
@@ -1197,6 +1198,35 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       window.clearInterval(timer);
     };
   }, [orchestratorSessionId, runtimeReady, runtimeEnabled, syncRuntime]);
+
+  useEffect(() => {
+    if (!sessionId || !orchestratorSessionId || !runtimeReady || !runtimeEnabled) {
+      return;
+    }
+    let cancelled = false;
+    const envMs = (import.meta as any)?.env?.VITE_RUNTIME_KEEPALIVE_MS;
+    const intervalMs = Math.max(15000, Number(envMs || 30000));
+
+    const touch = async () => {
+      if (cancelled) return;
+      if (document.hidden) return;
+      try {
+        await touchTaskCreationRuntime(sessionId);
+      } catch {
+        // keepalive failure is non-fatal
+      }
+    };
+
+    void touch();
+    const timer = window.setInterval(() => {
+      void touch();
+    }, intervalMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionId, orchestratorSessionId, runtimeReady, runtimeEnabled]);
 
   // 自动连接
   useEffect(() => {

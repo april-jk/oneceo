@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
-import { getWorkspaceFile, getWorkspaceTree, type WorkspaceTree, type WorkspaceTreeItem } from "@/lib/task-creation-client";
+import {
+  getTaskCreationDebugInfo,
+  startTaskCreationDebug,
+  getWorkspaceFile,
+  getWorkspaceTree,
+  type TaskCreationDebugInfo,
+  type WorkspaceTree,
+  type WorkspaceTreeItem,
+} from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
 
 interface OpencodePreviewPanelProps {
@@ -20,7 +28,7 @@ interface OpencodePreviewPanelProps {
   className?: string;
 }
 
-type PreviewTab = "files" | "changes";
+type PreviewTab = "files" | "changes" | "debug";
 
 export default function OpencodePreviewPanel({
   messages,
@@ -49,7 +57,14 @@ export default function OpencodePreviewPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(null);
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugStarting, setDebugStarting] = useState(false);
+  const [debugError, setDebugError] = useState<string | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
+  const debugBootRef = useRef(false);
+  const debugRuntimeBootRef = useRef(false);
+  const debugPollRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
@@ -161,6 +176,103 @@ export default function OpencodePreviewPanel({
   }, [open, sessionId, runtimeReady]);
 
   useEffect(() => {
+    debugBootRef.current = false;
+    debugRuntimeBootRef.current = false;
+    if (debugPollRef.current) {
+      window.clearTimeout(debugPollRef.current);
+      debugPollRef.current = null;
+    }
+    setDebugInfo(null);
+    setDebugError(null);
+    setDebugLoading(false);
+    setDebugStarting(false);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (runtimeReady === false) {
+      debugBootRef.current = false;
+      debugRuntimeBootRef.current = false;
+    }
+  }, [runtimeReady]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (currentTab !== "debug") return;
+    if (!sessionId) {
+      setDebugInfo(null);
+      setDebugError("缺少会话信息");
+      return;
+    }
+    if (runtimeReady === false) {
+      setDebugInfo(null);
+      setDebugError(null);
+      if (onEnsureRuntime && !runtimeStarting && !debugRuntimeBootRef.current) {
+        debugRuntimeBootRef.current = true;
+        setDebugStarting(true);
+        onEnsureRuntime()
+          .catch(() => undefined)
+          .finally(() => {
+            setDebugStarting(false);
+          });
+      }
+      return;
+    }
+    let cancelled = false;
+    const loadDebug = async () => {
+      setDebugLoading(true);
+      setDebugError(null);
+      try {
+        let info = await getTaskCreationDebugInfo(sessionId);
+        if ((!info?.ready || !info.url) && !debugBootRef.current) {
+          debugBootRef.current = true;
+          setDebugStarting(true);
+          try {
+            await startTaskCreationDebug(sessionId);
+          } finally {
+            setDebugStarting(false);
+          }
+          info = await getTaskCreationDebugInfo(sessionId);
+        }
+        if (!cancelled) {
+          setDebugInfo(info);
+          if (!info?.ready && info?.status === "starting") {
+            if (debugPollRef.current) {
+              window.clearTimeout(debugPollRef.current);
+            }
+            debugPollRef.current = window.setTimeout(() => {
+              if (!cancelled) {
+                void loadDebug();
+              }
+            }, 2000);
+          }
+        }
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "加载调试信息失败";
+        setDebugError(message);
+        setDebugInfo(null);
+        if (message.toLowerCase().includes("failed to fetch") || message.toLowerCase().includes("network")) {
+          if (debugPollRef.current) {
+            window.clearTimeout(debugPollRef.current);
+          }
+          debugPollRef.current = window.setTimeout(() => {
+            if (!cancelled) {
+              void loadDebug();
+            }
+          }, 3000);
+        }
+      } finally {
+        if (cancelled) return;
+        setDebugLoading(false);
+      }
+    };
+    void loadDebug();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, currentTab, sessionId, runtimeReady]);
+
+  useEffect(() => {
     if (!open) return;
     if (!sessionId) return;
     if (runtimeReady === false) return;
@@ -224,6 +336,17 @@ export default function OpencodePreviewPanel({
         >
           更改
         </button>
+        <span>/</span>
+        <button
+          type="button"
+          onClick={() => {
+            onTabChange?.("debug");
+            if (!onTabChange) setInternalTab("debug");
+          }}
+          className={currentTab === "debug" ? "text-foreground font-semibold" : ""}
+        >
+          调试
+        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -261,6 +384,37 @@ export default function OpencodePreviewPanel({
             onSelect={(id) => {
               setSelectedDiffId(id);
               setAutoDiff(false);
+            }}
+          />
+        ) : null}
+        {currentTab === "debug" ? (
+          <DebugPreview
+            info={debugInfo}
+            loading={debugLoading}
+            error={debugError}
+            runtimeReady={runtimeReady !== false}
+            starting={debugStarting}
+            onStart={async () => {
+              if (!sessionId) return;
+              if (runtimeReady === false) {
+                if (onEnsureRuntime) {
+                  await onEnsureRuntime();
+                } else {
+                  return;
+                }
+              }
+              setDebugStarting(true);
+              setDebugError(null);
+              try {
+                await startTaskCreationDebug(sessionId);
+                const info = await getTaskCreationDebugInfo(sessionId);
+                setDebugInfo(info);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "启动调试失败";
+                setDebugError(message);
+              } finally {
+                setDebugStarting(false);
+              }
             }}
           />
         ) : null}
@@ -560,6 +714,90 @@ function DiffPreview({
       </div>
       <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
         {current ? <DiffBlock diff={current.diff} files={current.files} /> : <EmptyState text="暂无更改" />}
+      </div>
+    </div>
+  );
+}
+
+function DebugPreview({
+  info,
+  loading,
+  error,
+  runtimeReady,
+  starting,
+  onStart,
+}: {
+  info: TaskCreationDebugInfo | null;
+  loading: boolean;
+  error: string | null;
+  runtimeReady: boolean;
+  starting: boolean;
+  onStart: () => void;
+}) {
+  const debugUrl = useMemo(() => {
+    if (!info?.url) return "";
+    try {
+      const url = new URL(info.url);
+      if (!url.searchParams.get("usr")) {
+        url.searchParams.set("usr", "oneceo");
+      }
+      if (!url.searchParams.get("pwd")) {
+        url.searchParams.set("pwd", "oneceo");
+      }
+      return url.toString();
+    } catch {
+      return info.url;
+    }
+  }, [info?.url]);
+
+  if (!runtimeReady) {
+    return (
+      <EmptyState text={starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"} />
+    );
+  }
+  if (loading) {
+    return <EmptyState text="正在加载调试画面..." />;
+  }
+  if (error) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
+        <span>{error}</span>
+      </div>
+    );
+  }
+  if (!info?.ready || !info.url) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
+        <span>{info?.message || "调试服务未就绪"}</span>
+        <Button variant="outline" size="sm" onClick={onStart} disabled={starting}>
+          {starting ? "启动中..." : "启动调试"}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+        <div className="text-xs text-muted-foreground">远程浏览器调试</div>
+        <a
+          href={debugUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-blue-600 hover:text-blue-700"
+        >
+          打开新窗口
+        </a>
+      </div>
+      <div className="flex-1 min-h-0 p-3">
+        <div className="h-full w-full rounded-xl border border-border overflow-hidden bg-black/5">
+          <iframe
+            title="remote-debug"
+            src={debugUrl}
+            className="h-full w-full"
+            allow="clipboard-read; clipboard-write; fullscreen; autoplay; microphone; camera; display-capture"
+          />
+        </div>
       </div>
     </div>
   );

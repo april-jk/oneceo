@@ -15,6 +15,8 @@ export interface FileSessionRecord {
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed';
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed';
+  phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
+  phaseCycle?: number;
   runtime?: {
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
@@ -65,23 +67,46 @@ class TaskCreationFileMemoryStore {
     }
     const maxLen = this.clampMax(this.maxMetadataLength, 20000);
     let truncated = false;
+    const sanitized: Record<string, any> = { ...(metadata as Record<string, any>) };
 
-    if (Object.prototype.hasOwnProperty.call(metadata, 'rawPayload')) {
-      try {
-        const rawText = JSON.stringify((metadata as any).rawPayload);
-        if (rawText.length > maxLen) {
-          (metadata as any).rawPayload = rawText.slice(0, maxLen) + '...';
-          (metadata as any).rawPayloadTruncated = true;
+    const truncateValue = (value: unknown, label: string): unknown => {
+      if (typeof value === 'string') {
+        if (value.length > maxLen) {
           truncated = true;
+          sanitized[`${label}Truncated`] = true;
+          return value.slice(0, maxLen) + '...';
         }
-      } catch {
-        (metadata as any).rawPayload = '[unserializable payload]';
-        (metadata as any).rawPayloadTruncated = true;
-        truncated = true;
+        return value;
       }
+      if (value && typeof value === 'object') {
+        try {
+          const rawText = JSON.stringify(value);
+          if (rawText.length > maxLen) {
+            truncated = true;
+            sanitized[`${label}Truncated`] = true;
+            return rawText.slice(0, maxLen) + '...';
+          }
+          return value;
+        } catch {
+          truncated = true;
+          sanitized[`${label}Truncated`] = true;
+          return '[unserializable payload]';
+        }
+      }
+      return value;
+    };
+
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'rawPayload')) {
+      sanitized.rawPayload = truncateValue(sanitized.rawPayload, 'rawPayload');
+    }
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'event')) {
+      sanitized.event = truncateValue(sanitized.event, 'event');
+    }
+    if (Object.prototype.hasOwnProperty.call(sanitized, 'diff')) {
+      sanitized.diff = truncateValue(sanitized.diff, 'diff');
     }
 
-    return { metadata, truncated };
+    return { metadata: sanitized, truncated };
   }
 
   private async ensureFile(): Promise<void> {
@@ -150,6 +175,8 @@ class TaskCreationFileMemoryStore {
         title: title.trim().slice(0, 80) || '新建任务会话',
         status: 'in_progress',
         stage: 'collecting',
+        phase: 'ideation',
+        phaseCycle: 0,
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -199,6 +226,24 @@ class TaskCreationFileMemoryStore {
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
       session.stage = stage;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionPhase(
+    sessionId: string,
+    phase: NonNullable<FileSessionRecord['phase']>,
+    options?: { cycle?: number }
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      session.phase = phase;
+      if (Number.isFinite(options?.cycle)) {
+        session.phaseCycle = options?.cycle as number;
+      }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -300,12 +345,12 @@ class TaskCreationFileMemoryStore {
     content: string,
     metadata?: any
   ): Promise<void> {
+    const sanitized = this.sanitizeText(String(content || ''));
+    const meta = this.sanitizeMetadata(metadata);
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      const sanitized = this.sanitizeText(String(content || ''));
-      const meta = this.sanitizeMetadata(metadata);
       session.messages.push({
         id: this.createId('msg'),
         role,

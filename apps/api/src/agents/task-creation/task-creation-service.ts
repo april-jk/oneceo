@@ -18,6 +18,7 @@ import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provi
 import { osacAgentService } from '../../services/osac-agent-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
 import { resolveOpencodeWorkspacePath } from '../../utils/opencode-workspace';
+import { taskCreationFileMemoryStore } from './file-memory-store';
 
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
@@ -34,6 +35,7 @@ export class TaskCreationService {
   private sessionId?: string; // 当前会话 ID
   private stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed' =
     'collecting';
+  private phase: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery' = 'ideation';
   private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'false').toLowerCase() === 'true';
   private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
   private osacExecutionMode = (process.env.OSAC_EXECUTION_MODE || 'opencode_remote').trim().toLowerCase();
@@ -116,7 +118,8 @@ export class TaskCreationService {
       // Step 1: 意图识别
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
       this.setStage('collecting');
-      this.sendStatus('intent', '正在分析您的任务需求...');
+      this.sendPhaseStatus('ideation', '构思阶段：正在整理需求...', 'system');
+      this.sendPhaseStatus('analysis', '分析阶段：正在分析您的任务需求...', 'intent');
 
       let intentResult;
       try {
@@ -158,7 +161,7 @@ export class TaskCreationService {
 
       // Step 2: 任务规划
       this.setStage('planning');
-      this.sendStatus('planning', '正在规划任务详情...');
+      this.sendPhaseStatus('analysis', '分析阶段：正在规划任务详情...', 'planning');
 
       let taskDescription;
       try {
@@ -207,7 +210,7 @@ export class TaskCreationService {
 
       // Step 3: 生成执行计划
       this.setStage('planning');
-      this.sendStatus('planning', '正在生成执行计划...');
+      this.sendPhaseStatus('analysis', '分析阶段：正在生成执行计划...', 'planning');
 
       let executionPlan: ExecutionPlan;
       try {
@@ -263,7 +266,7 @@ export class TaskCreationService {
           () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
         );
         this.setStage('executing');
-        this.sendStatus('execution', '执行计划已生成，正在启动执行环境...');
+        this.sendPhaseStatus('development', '开发阶段：执行计划已生成，正在启动执行环境...', 'execution');
 
         await this.executeInSandbox({
           userInput,
@@ -281,7 +284,7 @@ export class TaskCreationService {
           () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
         );
         this.setStage('completed');
-        this.sendStatus('execution', '执行任务已完成');
+        this.sendPhaseStatus('delivery', '交付阶段：执行任务已完成', 'execution');
         return executionPlan;
       }
 
@@ -291,7 +294,7 @@ export class TaskCreationService {
         () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'completed')
       );
       this.setStage('completed');
-      this.sendStatus('planning', '执行计划已生成');
+      this.sendPhaseStatus('delivery', '交付阶段：执行计划已生成', 'planning');
 
       return executionPlan;
     } catch (error: any) {
@@ -403,6 +406,34 @@ export class TaskCreationService {
     this.stage = stage;
   }
 
+  private setPhase(
+    phase: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery'
+  ): void {
+    this.phase = phase;
+    if (this.sessionId) {
+      void taskCreationFileMemoryStore.updateSessionPhase(this.sessionId, phase);
+    }
+  }
+
+  private sendPhaseStatus(
+    phase: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery',
+    content: string,
+    tone: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error' = 'system'
+  ): void {
+    this.setPhase(phase);
+    this.sendMessage({
+      type: 'status_update' as any,
+      agent: 'system',
+      tone,
+      stage: this.stage,
+      phase,
+      content,
+      metadata: {
+        phase,
+      },
+    } as any);
+  }
+
   private sendStatus(
     tone: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error',
     content: string
@@ -445,12 +476,31 @@ export class TaskCreationService {
     }
   }
 
-  private buildOpencodePrompt(payload: {
-    userInput: string;
-    taskDescription: any;
-    executionPlan: ExecutionPlan;
-  }): string {
+  private buildOpencodePrompt(
+    payload: {
+      userInput: string;
+      taskDescription: any;
+      executionPlan: ExecutionPlan;
+    },
+    phase: 'development' | 'testing' | 'repair' = 'development'
+  ): string {
+    const phaseHint =
+      phase === 'testing'
+        ? '当前处于【测试阶段】'
+        : phase === 'repair'
+          ? '当前处于【修复阶段】'
+          : '当前处于【开发阶段】';
+    const playwrightRequirement = [
+      '必须使用 playwright-mcp 进行浏览器自动化验证（在开发/测试/修复阶段均需使用）。',
+      '必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+      '连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
+      '要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。',
+      '若需启动网页服务，请使用可访问端口并明确输出访问地址。',
+      '在输出中说明测试步骤、结果与发现的问题。',
+      '如需用户协助（账号/权限/业务确认），请明确提出。',
+    ].join('\n');
     return [
+      phaseHint,
       '你是执行智能体，请依据以下任务信息在当前工作区完成执行：',
       `用户需求: ${payload.userInput}`,
       `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
@@ -459,6 +509,7 @@ export class TaskCreationService {
       '1) 以命令行模式执行（不要进入交互式界面）。',
       '2) 输出可落地的执行结果与产出说明。',
       '3) 如需生成文件，请直接写入当前工作区并在输出中说明文件路径。',
+      '4) ' + playwrightRequirement,
     ].join('\n');
   }
 
@@ -467,7 +518,7 @@ export class TaskCreationService {
     taskDescription: any;
     executionPlan: ExecutionPlan;
   }): string {
-    const prompt = this.buildOpencodePrompt(payload);
+    const prompt = this.buildOpencodePrompt(payload, 'development');
 
     const flattened = prompt
       .replace(/\r?\n/g, ' ')
@@ -487,6 +538,7 @@ export class TaskCreationService {
     feedback: string;
   }): string {
     const prompt = [
+      '当前处于【修复阶段】',
       '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
       `用户需求: ${payload.userInput}`,
       `任务描述: ${JSON.stringify(this.pickTaskDescription(payload.taskDescription))}`,
@@ -497,6 +549,9 @@ export class TaskCreationService {
       '1) 继续命令行模式执行（不要进入交互式界面）。',
       '2) 补齐缺口并输出更新后的交付物说明。',
       '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
+      '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
+      '5) 必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+      '6) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
     ].join('\n');
 
     const flattened = prompt
@@ -534,7 +589,7 @@ export class TaskCreationService {
     executionPlan: ExecutionPlan;
   }) {
     this.setStage('executing');
-    this.sendStatus('execution', '正在启动执行环境...');
+    this.sendPhaseStatus('development', '开发阶段：正在启动执行环境...', 'execution');
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.osacMaxAttempts; attempt++) {
@@ -562,6 +617,8 @@ export class TaskCreationService {
           },
         });
 
+        await osacAgentService.ensurePlaywrightMcp(provision.sessionId);
+
         if (this.osacExecutionMode !== 'command') {
           if (!this.sessionId) {
             throw new Error('当前任务会话不存在，无法下发 OpenCode 指令');
@@ -569,7 +626,7 @@ export class TaskCreationService {
 
           const accepted = await opencodeRemoteService.sendUserInput({
             taskSessionId: this.sessionId,
-            content: this.buildOpencodePrompt(payload),
+            content: this.buildOpencodePrompt(payload, 'development'),
             orchestratorSessionId: provision.sessionId,
             workspacePath: workspacePath || undefined,
             source: 'agent',
@@ -732,6 +789,7 @@ export class TaskCreationService {
           metadata: {
             agent: message.agent,
             stage: (message as any).stage,
+            phase: (message as any).phase || (message as any).metadata?.phase,
             tone: (message as any).tone,
             options: message.options,
             plan: message.plan,

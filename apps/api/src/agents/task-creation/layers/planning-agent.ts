@@ -144,12 +144,20 @@ ${userInput}
       }
 
       if (planningResult.task_description) {
-        return planningResult.task_description;
+        const description = planningResult.task_description as TaskDescription;
+        if (this.isIntentMismatch(intentResult, description)) {
+          return this.buildFallbackTaskDescription(intentResult, userInput);
+        }
+        return description;
       }
 
       // 兼容模型直接返回任务描述对象的情况
       if (planningResult.title || planningResult.objective || planningResult.scope) {
-        return planningResult as TaskDescription;
+        const description = planningResult as TaskDescription;
+        if (this.isIntentMismatch(intentResult, description)) {
+          return this.buildFallbackTaskDescription(intentResult, userInput);
+        }
+        return description;
       }
 
       throw new Error('任务规划结果缺少 task_description');
@@ -162,6 +170,17 @@ ${userInput}
       // 兜底方案：当 JSON 解析失败时，生成基础任务描述，避免流程中断
       return this.buildFallbackTaskDescription(intentResult, userInput);
     }
+  }
+
+  private isIntentMismatch(intentResult: IntentRecognitionResult, description: TaskDescription): boolean {
+    if (intentResult.intent_type !== 'software_development') {
+      return false;
+    }
+    const text = `${description.title || ''} ${description.objective || ''} ${
+      Array.isArray(description.deliverables) ? description.deliverables.join(' ') : ''
+    }`;
+    const mismatchKeywords = ['营销', '市场', '渠道', '策略', '分析', '推广'];
+    return mismatchKeywords.some((keyword) => text.includes(keyword));
   }
 
   /**
@@ -194,7 +213,31 @@ ${userInput}
     intentResult: IntentRecognitionResult,
     userInput: string
   ): TaskDescription {
-    const target = intentResult.key_info?.target || '新产品';
+    const intentType = intentResult.intent_type;
+    const keyTarget = intentResult.key_info?.target || '';
+    const normalizedInput = userInput.trim();
+
+    if (intentType === 'software_development') {
+      const target = keyTarget || normalizedInput || 'Web 应用';
+      const title = normalizedInput ? normalizedInput.replace(/。/g, '') : `${target} 开发`;
+      const deliverables = ['可运行的网页应用', '完整源代码', '基础使用说明'];
+      const constraints = ['单文件或少量文件交付', '确保浏览器可运行'];
+
+      return {
+        title,
+        objective: `基于用户需求实现可运行的网页应用（${target}）`,
+        scope: '单页或单文件实现，覆盖核心交互',
+        deliverables,
+        constraints,
+        additional_info: {
+          fallback: true,
+          note: '解析任务描述失败，已回退至软件开发默认模板',
+          userInput,
+        },
+      };
+    }
+
+    const target = keyTarget || '新产品';
     const scope = intentResult.key_info?.scope || '营销策略制定';
     const title = `${target}营销计划制定`;
 

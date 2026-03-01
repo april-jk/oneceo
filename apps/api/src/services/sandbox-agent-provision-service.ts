@@ -9,6 +9,8 @@ import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
+import { osacAgentService } from './osac-agent-service';
+import { ensureNekoDebug } from './sandbox-debug-service';
 
 type ProvisionInput = {
   metadata?: Record<string, unknown>;
@@ -90,6 +92,16 @@ function buildSandboxEnv(): Record<string, string> {
   if (providerRaw) {
     env.OPENCODE_PROVIDER_ID = providerRaw.toLowerCase();
   }
+  const display = (process.env.NEKO_DISPLAY || ':0').trim();
+  if (display) {
+    env.DISPLAY = display;
+  }
+  env.PLAYWRIGHT_HEADLESS = 'false';
+  const browsersPath = (process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim();
+  if (browsersPath) {
+    env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+  }
+  env.XDG_RUNTIME_DIR = '/tmp';
   return env;
 }
 
@@ -99,6 +111,7 @@ type OpencodeConfigPayload = {
   model: string;
   small_model: string;
   provider: Record<string, Record<string, unknown>>;
+  mcp?: Record<string, unknown>;
 };
 
 function buildOpencodeConfig(envs: Record<string, string>): string {
@@ -137,6 +150,13 @@ function buildOpencodeConfig(envs: Record<string, string>): string {
     small_model: `${providerId}/${modelId}`,
     provider: {
       [providerId]: providerBase,
+    },
+    mcp: {
+      playwright: {
+        type: 'local',
+        command: ['npx', '@playwright/mcp@latest', '--cdp-endpoint', 'http://127.0.0.1:9222'],
+        enabled: true,
+      },
     },
   };
 
@@ -263,6 +283,73 @@ ${remotePath} > ${logPath} 2>&1`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs });
 }
 
+async function ensurePlaywrightDeps(sessionId: string) {
+  const command = `
+set -euo pipefail
+PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
+
+if [[ ! -d "$PLAYWRIGHT_BROWSERS_PATH" ]]; then
+  echo "[playwright] browsers path missing: $PLAYWRIGHT_BROWSERS_PATH"
+  exit 21
+fi
+
+if ! ls "$PLAYWRIGHT_BROWSERS_PATH"/chromium-* >/dev/null 2>&1; then
+  echo "[playwright] chromium browser not installed in $PLAYWRIGHT_BROWSERS_PATH"
+  exit 22
+fi
+
+CHROME_BIN=""
+for candidate in "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome; do
+  if [[ -x "$candidate" ]]; then
+    CHROME_BIN="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$CHROME_BIN" ]]; then
+  echo "[playwright] chromium executable missing"
+  exit 23
+fi
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+}
+
+async function assertPlaywrightReady(sessionId: string) {
+  const command = `
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+playwright --version >/dev/null 2>&1
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
+}
+
+async function assertOpencodeReady(sessionId: string) {
+  const command = `
+set -euo pipefail
+command -v opencode >/dev/null 2>&1
+opencode --version >/dev/null 2>&1 || true
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+}
+
+async function waitForSandboxCommands(sessionId: string) {
+  const maxAttempts = Math.max(5, Number(process.env.E2B_COMMANDS_READY_ATTEMPTS || 10));
+  const delayMs = Math.max(500, Number(process.env.E2B_COMMANDS_READY_DELAY_MS || 1000));
+  let lastError: unknown;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      await e2bConnector.runCommand(sessionId, 'echo ready', { timeoutMs: 10000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`sandbox command channel not ready: ${message}`);
+}
+
 async function startOpencodeServer(
   sessionId: string,
   baseUrl: string,
@@ -320,6 +407,14 @@ export class SandboxAgentProvisionService {
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+    const runStep = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`[PROVISION:${name}] ${message}`);
+      }
+    };
 
     const envInput = buildSandboxEnv();
     const taskSessionId = pickString(input.metadata?.taskSessionId) || undefined;
@@ -327,22 +422,30 @@ export class SandboxAgentProvisionService {
 
     const environment = reusable
       ? reusable.environment
-      : await sandboxEnvironmentService.openEnvironment({
-          metadata: input.metadata || {},
-          envs: envInput,
-        });
+      : await runStep('open_environment', () =>
+          sandboxEnvironmentService.openEnvironment({
+            metadata: input.metadata || {},
+            envs: envInput,
+          })
+        );
 
     const sessionId = reusable?.sessionId || environment.sessionId;
     const isReused = Boolean(reusable);
 
-    const info = await e2bConnector.getSandboxInfo(sessionId);
+    const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
     const trafficAccessToken =
       (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
 
-    const host = await e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort);
+    const host = await runStep('sandbox_host', () => e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort));
     const baseUrl = `https://${host}`;
 
-    const workspaceRoot = await ensureWorkspace(sessionId, taskSessionId || undefined);
+    await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
+    await runStep('opencode_present', () => assertOpencodeReady(sessionId));
+    await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
+
+    const workspaceRoot = await runStep('workspace_prepare', () => ensureWorkspace(sessionId, taskSessionId || undefined));
+
+    await ensurePlaywrightDeps(sessionId);
 
     if (!isReused) {
       const restored = await restoreWorkspaceIfArchived(sessionId);
@@ -351,9 +454,11 @@ export class SandboxAgentProvisionService {
       }
     }
 
-    await writeOpencodeConfig(sessionId, envInput);
-    await startOpencodeServer(sessionId, baseUrl, envInput, trafficAccessToken);
-    await runSandboxVerify(sessionId);
+    await runStep('opencode_config', () => writeOpencodeConfig(sessionId, envInput));
+    await runStep('opencode_start', () => startOpencodeServer(sessionId, baseUrl, envInput, trafficAccessToken));
+    await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
+    await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
+    await runStep('neko_debug', () => ensureNekoDebug(sessionId));
 
     const existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
     const mergedMetadata: Record<string, unknown> = {

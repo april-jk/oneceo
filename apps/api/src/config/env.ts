@@ -20,9 +20,13 @@ const caFile = String(process.env.E2B_TLS_CA_FILE || '').trim();
 const httpProxy = String(process.env.HTTP_PROXY || process.env.http_proxy || '').trim();
 const httpsProxy = String(process.env.HTTPS_PROXY || process.env.https_proxy || '').trim();
 const noProxy = String(process.env.NO_PROXY || process.env.no_proxy || '').trim();
+const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
+  .trim()
+  .toLowerCase();
+const proxyEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
 
 const shouldConfigureTls = Boolean(insecureTls || caFile);
-const shouldConfigureProxy = Boolean(httpProxy || httpsProxy || noProxy);
+const shouldConfigureProxy = proxyEnabled && Boolean(httpProxy || httpsProxy || noProxy);
 
 if (shouldConfigureTls || shouldConfigureProxy) {
   try {
@@ -56,6 +60,8 @@ if (shouldConfigureTls || shouldConfigureProxy) {
         })
       );
       console.warn('[E2B_PROXY] 已启用代理转发');
+    } else if (!proxyEnabled && (httpProxy || httpsProxy)) {
+      console.warn('[E2B_PROXY] 代理已通过开关禁用');
     } else {
       setGlobalDispatcher(
         new Agent({
@@ -92,6 +98,7 @@ if (shouldConfigureTls || shouldConfigureProxy) {
     }) as typeof fetch;
 
     globalThis.fetch = wrappedFetch;
+    (globalThis as any).__ONECEO_HTTP_DISPATCHER_READY = true;
   } catch (error) {
     console.warn('[E2B_TLS] TLS/代理配置失败:', error);
   }

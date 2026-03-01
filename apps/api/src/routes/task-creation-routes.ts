@@ -57,6 +57,24 @@ function toIso(value: Date | string | null | undefined): string {
   return new Date().toISOString();
 }
 
+function toSessionSummary(session: any) {
+  return {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    stage: session.stage,
+    phase: session.phase,
+    phaseCycle: session.phaseCycle,
+    runtime: session.runtime,
+    pendingQuestion: session.pendingQuestion,
+    pendingOptions: session.pendingOptions,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
+    messages: [],
+  };
+}
+
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
   const limit = clampNumber(Number(process.env.SANDBOX_RUNTIME_LOOKUP_LIMIT || 500), 50, 5000);
   const environments = await sandboxExecutionEnvironmentDAO.listRecent(limit);
@@ -440,7 +458,8 @@ router.get('/sessions', async (req, res) => {
     );
     const now = Date.now();
 
-    let sessions = await taskCreationFileMemoryStore.listSessions(limit);
+    const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
+    const sessions = rawSessions.map(toSessionSummary);
     if (!refresh && sessions.length > 0) {
       return res.json({
         success: true,
@@ -736,6 +755,7 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
     const debugMeta = pickRecord(metadata.debug);
     const nekoMeta = pickRecord(debugMeta.neko);
     const baseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
+    const clientUrl = asText(nekoMeta.clientUrl);
     const status = asText(nekoMeta.status) || environment.status;
     const ready = Boolean(baseUrl) && (status === 'running' || status === 'ready') && environment.status === 'ready';
 
@@ -743,7 +763,7 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
       success: true,
       data: {
         ready,
-        url: baseUrl || undefined,
+        url: clientUrl || baseUrl || undefined,
         status: status || environment.status,
         updatedAt: toIso(environment.updatedAt as any),
         sandboxId: orchestratorSessionId,

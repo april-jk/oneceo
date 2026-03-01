@@ -5,6 +5,7 @@ export type TaskCreationSessionSummary = {
   title?: string;
   status?: string;
   stage?: string;
+  phase?: string;
   updatedAt?: string;
 };
 
@@ -37,6 +38,7 @@ export type TaskCreationSessionDetail = {
   title?: string;
   status?: string;
   stage?: string;
+  phase?: string;
   runtime?: {
     orchestratorSessionId?: string;
     opencodeSessionId?: string;

@@ -24,7 +24,7 @@ function toNumber(value: string | undefined, fallback: number): number {
 
 export const e2bConfig: E2bConfig = {
   apiKey: process.env.E2B_API_KEY ? process.env.E2B_API_KEY.trim() : null,
-  template: (process.env.E2B_TEMPLATE || 'opencode').trim() || 'opencode',
+  template: (process.env.E2B_TEMPLATE || 'opencode-playwright-mcp').trim() || 'opencode-playwright-mcp',
   timeoutMs: Math.max(10_000, toNumber(process.env.E2B_TIMEOUT_MS, 30 * 60 * 1000)),
   allowInternetAccess: toBool(process.env.E2B_ALLOW_INTERNET, true),
   allowPublicTraffic: toBool(process.env.E2B_ALLOW_PUBLIC_TRAFFIC, true),

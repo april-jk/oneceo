@@ -41,8 +41,9 @@ export class OsacConnectionManager {
   private messageBuffers = new Map<string, OsacMessage[]>();
   private connecting = new Map<string, PendingConnect>();
   private reconnectFailures = new Map<string, number>();
-  private maxMessages = 300;
-  private maxPayloadChars = Number(process.env.OSAC_MESSAGE_MAX_CHARS || 50000);
+  private maxMessages = Number(process.env.OSAC_MESSAGE_MAX_COUNT || 120);
+  private maxPayloadChars = Number(process.env.OSAC_MESSAGE_MAX_CHARS || 15000);
+  private maxBufferSessions = Number(process.env.OSAC_MESSAGE_BUFFER_MAX_SESSIONS || 200);
   private handlers: MessageHandler[] = [];
   private persistentSessions = new Set<string>();
   private bridgeReady = new Map<string, Promise<void>>();
@@ -569,15 +570,42 @@ export class OsacConnectionManager {
   private dispatchMessage(sessionId: string, message: OsacMessage) {
     const buffer = this.messageBuffers.get(sessionId) || [];
     buffer.push(this.sanitizeMessage(message));
-    if (buffer.length > this.maxMessages) {
-      buffer.splice(0, buffer.length - this.maxMessages);
+    const maxMessages = Number.isFinite(this.maxMessages) ? Math.max(20, this.maxMessages) : 120;
+    if (buffer.length > maxMessages) {
+      buffer.splice(0, buffer.length - maxMessages);
     }
     this.messageBuffers.set(sessionId, buffer);
+    this.pruneMessageBuffers();
 
     for (const handler of this.handlers) {
       Promise.resolve(handler(sessionId, message)).catch((error) => {
         console.warn('[OSAC_HANDLER_ERROR]', error);
       });
+    }
+  }
+
+  private pruneMessageBuffers() {
+    const maxSessions = Number.isFinite(this.maxBufferSessions)
+      ? Math.max(20, this.maxBufferSessions)
+      : 200;
+    if (this.messageBuffers.size <= maxSessions) return;
+
+    for (const key of Array.from(this.messageBuffers.keys())) {
+      if (this.messageBuffers.size <= maxSessions) return;
+      if (!this.connections.has(key) && !this.persistentSessions.has(key)) {
+        this.messageBuffers.delete(key);
+      }
+    }
+
+    if (this.messageBuffers.size <= maxSessions) return;
+    const entries = Array.from(this.messageBuffers.keys()).map((key) => ({
+      key,
+      lastUsedAt: this.connections.get(key)?.lastUsedAt ?? 0,
+    }));
+    entries.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+    for (const entry of entries) {
+      if (this.messageBuffers.size <= maxSessions) break;
+      this.messageBuffers.delete(entry.key);
     }
   }
 

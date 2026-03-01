@@ -16,6 +16,36 @@ import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { startSandboxArchiveJob } from './services/sandbox-archive-job';
 
+function mergeNoProxy(entries: string[], current?: string): string {
+  const normalized = (current || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const set = new Set(normalized);
+  for (const entry of entries) {
+    if (entry) set.add(entry);
+  }
+  return Array.from(set).join(',');
+}
+
+const proxyEnabled =
+  Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
+  Boolean(process.env.HTTPS_PROXY || process.env.https_proxy);
+
+if (proxyEnabled) {
+  const bypass = [
+    '127.0.0.1',
+    'localhost',
+    '::1',
+    '.e2b.app',
+    'api.e2b.dev',
+    'e2b.dev',
+  ];
+  const merged = mergeNoProxy(bypass, process.env.NO_PROXY || process.env.no_proxy);
+  process.env.NO_PROXY = merged;
+  process.env.no_proxy = merged;
+}
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {

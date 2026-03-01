@@ -1,4 +1,5 @@
 import { Sandbox } from 'e2b';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { e2bConfig, requireE2bApiKey } from '../config/e2b-config';
 
 type CachedSandbox = {
@@ -25,6 +26,16 @@ type RunCommandOptions = {
 const sandboxCache = new Map<string, CachedSandbox>();
 const cacheTtlMs = toPositiveInt(process.env.E2B_SANDBOX_CACHE_TTL_MS, 10 * 60 * 1000);
 const cacheMaxSize = toPositiveInt(process.env.E2B_SANDBOX_CACHE_MAX, 80);
+
+const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
+  .trim()
+  .toLowerCase();
+const proxyEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
+const proxyUrl = proxyEnabled ? (process.env.HTTPS_PROXY || process.env.HTTP_PROXY) : '';
+const dispatcherReady = (globalThis as any).__ONECEO_HTTP_DISPATCHER_READY;
+if (!dispatcherReady && proxyEnabled && proxyUrl) {
+  setGlobalDispatcher(new ProxyAgent(proxyUrl));
+}
 
 function pruneSandboxCache() {
   if (!sandboxCache.size) return;

@@ -110,6 +110,7 @@ export interface WebSocketMessage {
   content?: string;
   agent?: string;
   stage?: "collecting" | "clarifying" | "planning" | "executing" | "reviewing" | "completed" | "failed";
+  phase?: "ideation" | "analysis" | "development" | "testing" | "repair" | "delivery";
   tone?: "system" | "intent" | "planning" | "execution" | "review" | "error";
   metadata?: any;
   question?: string;

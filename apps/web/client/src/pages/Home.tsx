@@ -1031,6 +1031,12 @@ function extractCapsule(content: string): { label: string; rest: string } | null
 
   // 纯状态消息，直接渲染胶囊，不再下沉为正文
   const statusCapsules = [
+    "构思阶段",
+    "分析阶段",
+    "开发阶段",
+    "测试阶段",
+    "修复阶段",
+    "交付阶段",
     "正在分析您的任务需求",
     "正在分析您的任务需求...",
     "已识别任务类型",
@@ -1065,6 +1071,12 @@ function isProgressStatusLabel(label: string): boolean {
     return false;
   }
   const keywords = [
+    "构思阶段",
+    "分析阶段",
+    "开发阶段",
+    "测试阶段",
+    "修复阶段",
+    "交付阶段",
     "正在分析您的任务需求",
     "正在分析您的任务需求...",
     "已识别任务类型",
@@ -1097,6 +1109,12 @@ function isProgressLoadingLabel(label: string): boolean {
 function getCapsuleTone(label: string): CapsuleTone {
   const lower = label.toLowerCase();
   if (lower.includes("错误") || lower.includes("error")) return "error";
+  if (lower.includes("构思")) return "system";
+  if (lower.includes("分析")) return "intent";
+  if (lower.includes("开发")) return "execution";
+  if (lower.includes("测试")) return "review";
+  if (lower.includes("修复")) return "execution";
+  if (lower.includes("交付")) return "planning";
   if (lower.includes("意图")) return "intent";
   if (lower.includes("规划") || lower.includes("计划")) return "planning";
   if (lower.includes("执行")) return "execution";
@@ -1353,9 +1371,31 @@ function OpencodeToolCard({
     );
   }
 
-  const todos = Array.isArray((input as { todos?: unknown[] }).todos)
-    ? (input as { todos: Array<Record<string, unknown>> }).todos
-    : [];
+  const extractTodos = (value: unknown): Array<Record<string, unknown>> => {
+    if (Array.isArray(value)) {
+      return value.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+    }
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (Array.isArray(record.todos)) {
+        return record.todos.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+      }
+    }
+    if (typeof value === "string" && value.trim()) {
+      try {
+        const parsed = JSON.parse(value);
+        return extractTodos(parsed);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+
+  const todosFromInput = extractTodos((input as { todos?: unknown[] }).todos);
+  const todosFromOutput = todosFromInput.length > 0 ? [] : extractTodos(output);
+  const todosFromProps = todosFromInput.length > 0 || todosFromOutput.length > 0 ? [] : extractTodos(properties.todos);
+  const todos = todosFromInput.length > 0 ? todosFromInput : todosFromOutput.length > 0 ? todosFromOutput : todosFromProps;
 
   if (toolKey === "todowrite") {
     return (

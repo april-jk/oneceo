@@ -139,6 +139,124 @@ nohup python3 ${scriptPath} > ${logPath} 2>&1 &`;
 }
 
 export class OsacAgentService {
+  async ensurePlaywrightMcp(sessionId: string): Promise<void> {
+    try {
+      await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+      const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+      if (!environment) {
+        console.warn('[MCP] sandbox environment not found', sessionId);
+        return;
+      }
+      const metadata = (environment.metadata || {}) as Record<string, unknown>;
+      const opencodeMeta = (metadata.opencode as Record<string, unknown>) || {};
+      const mcpMeta = (opencodeMeta.mcp as Record<string, unknown>) || {};
+      const playwrightMeta = (mcpMeta.playwright as Record<string, unknown>) || {};
+      const cdpPort = Number(process.env.NEKO_CDP_PORT || 9222);
+      const desiredCdpEndpoint = `http://127.0.0.1:${Number.isFinite(cdpPort) && cdpPort > 0 ? cdpPort : 9222}`;
+      if (
+        playwrightMeta.installedAt &&
+        playwrightMeta.status === 'ready' &&
+        asString(playwrightMeta.cdpEndpoint) === desiredCdpEndpoint
+      ) {
+        return;
+      }
+
+      const command = `python3 - <<'PY'
+import json
+from pathlib import Path
+
+config_path = Path.home() / ".config" / "opencode" / "opencode.json"
+config_path.parent.mkdir(parents=True, exist_ok=True)
+
+data = {}
+if config_path.exists():
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        data = {}
+
+if not isinstance(data, dict):
+    data = {}
+
+mcp = data.get("mcp")
+if not isinstance(mcp, dict):
+    mcp = {}
+
+import shutil
+import os
+
+display = os.environ.get("NEKO_DISPLAY", ":0")
+
+use_bin = shutil.which("playwright-mcp") is not None
+base_cmd = ["playwright-mcp"] if use_bin else ["npx", "@playwright/mcp@latest"]
+mcp["playwright"] = {
+    "type": "local",
+    "command": [
+        "/usr/bin/env",
+        f"DISPLAY={display}",
+        "PLAYWRIGHT_HEADLESS=false",
+        "XDG_RUNTIME_DIR=/tmp",
+        *base_cmd,
+        "--cdp-endpoint",
+        "${desiredCdpEndpoint}",
+    ],
+    "enabled": True
+}
+
+data["mcp"] = mcp
+
+if "$schema" not in data:
+    data["$schema"] = "https://opencode.ai/config.json"
+
+config_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+print("playwright mcp configured")
+PY`;
+      await e2bConnector.runCommand(sessionId, command, { timeoutMs: 120000 });
+
+      const updated = {
+        ...metadata,
+        opencode: {
+          ...opencodeMeta,
+          mcp: {
+            ...mcpMeta,
+            playwright: {
+              status: 'ready',
+              installedAt: new Date().toISOString(),
+              command: 'opencode.json.mcp.playwright',
+              cdpEndpoint: desiredCdpEndpoint,
+            },
+          },
+        },
+      };
+      await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, updated);
+    } catch (error) {
+      console.warn('[MCP] ensure playwright mcp failed', sessionId, error);
+      try {
+        const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+        if (!environment) return;
+        const metadata = (environment.metadata || {}) as Record<string, unknown>;
+        const opencodeMeta = (metadata.opencode as Record<string, unknown>) || {};
+        const mcpMeta = (opencodeMeta.mcp as Record<string, unknown>) || {};
+        await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
+          ...metadata,
+          opencode: {
+            ...opencodeMeta,
+            mcp: {
+              ...mcpMeta,
+              playwright: {
+                status: 'failed',
+                error: error instanceof Error ? error.message : String(error),
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      } catch (metaError) {
+        console.warn('[MCP] update metadata failed', metaError);
+      }
+    }
+  }
+
   async getRuntimeInfo(sessionId: string): Promise<RuntimeInfo> {
     return resolveRuntime(sessionId);
   }

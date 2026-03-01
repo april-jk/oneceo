@@ -35,6 +35,7 @@ export class TaskCreationWebSocketService {
           content: message.content,
           metadata: message.metadata,
           stage: message.stage as any,
+          phase: message.phase as any,
           tone: message.tone as any,
           sessionId: taskSessionId,
         } as WebSocketMessage, { skipPersistence: true });
@@ -188,9 +189,16 @@ export class TaskCreationWebSocketService {
       if (message.type === 'status_update' && message.stage) {
         void taskCreationFileMemoryStore.updateSessionStage(sessionId, message.stage as any);
       }
+      const phaseValue =
+        (message as any).phase ||
+        (message.metadata && (message.metadata as any).phase);
+      if (phaseValue) {
+        void taskCreationFileMemoryStore.updateSessionPhase(sessionId, phaseValue as any);
+      }
       const metadata = {
         ...message.metadata,
         stage: message.stage,
+        phase: (message as any).phase,
         tone: message.tone,
         agent: message.agent,
         options: message.options,

@@ -76,6 +76,79 @@ export class IntentRecognitionAgent extends BaseAgent {
     this.userCallback = userCallback;
   }
 
+  private containsKeyword(input: string, keywords: string[]): boolean {
+    return keywords.some((kw) => input.includes(kw));
+  }
+
+  private isLikelySoftwareIntent(userInput: string): boolean {
+    const text = userInput.toLowerCase();
+    const softwareKeywords = [
+      'html',
+      'css',
+      'javascript',
+      'js',
+      'typescript',
+      'ts',
+      'react',
+      'vue',
+      'node',
+      'api',
+      'web',
+      'app',
+      'game',
+      '小游戏',
+      '游戏',
+      '网页',
+      '前端',
+      '后端',
+      '程序',
+      '代码',
+      '开发',
+      '编程',
+      '脚本',
+      '应用',
+      '接口',
+      '算法',
+      '实现',
+    ];
+    const marketingKeywords = [
+      '营销',
+      '市场',
+      '策略',
+      '推广',
+      '投放',
+      '品牌',
+      '渠道',
+      '增长',
+      '运营',
+      '商业',
+      '销售',
+    ];
+    const hasSoftware = this.containsKeyword(text, softwareKeywords);
+    const hasMarketing = this.containsKeyword(text, marketingKeywords);
+    return hasSoftware && !hasMarketing;
+  }
+
+  private coerceIntent(userInput: string, intentResult: IntentRecognitionResult): IntentRecognitionResult {
+    if (!this.isLikelySoftwareIntent(userInput)) {
+      return intentResult;
+    }
+
+    if (intentResult.intent_type === IntentType.SOFTWARE_DEVELOPMENT) {
+      return intentResult;
+    }
+
+    return {
+      ...intentResult,
+      intent_type: IntentType.SOFTWARE_DEVELOPMENT,
+      confidence: Math.max(0.72, intentResult.confidence || 0),
+      key_info: {
+        ...intentResult.key_info,
+        target: intentResult.key_info?.target || userInput.slice(0, 80),
+      },
+    };
+  }
+
   /**
    * 识别用户意图
    * 
@@ -114,13 +187,14 @@ export class IntentRecognitionAgent extends BaseAgent {
         return this.recognizeIntent(`${userInput}\n\n用户补充信息：${userResponse}`);
       }
 
-      return intentResult;
+      return this.coerceIntent(userInput, intentResult);
     } catch (error: any) {
       if (isAwaitingUserInputError(error)) {
         throw error;
       }
       console.warn('[IntentRecognitionAgent] 识别失败，使用兜底意图:', error?.message || error);
-      return this.buildFallbackIntent(userInput);
+      const fallback = this.buildFallbackIntent(userInput);
+      return this.coerceIntent(userInput, fallback);
     }
   }
 
@@ -137,7 +211,7 @@ export class IntentRecognitionAgent extends BaseAgent {
       intentType = IntentType.SEO_OPTIMIZATION;
     } else if (contains(['营销', '策略', 'plan', '规划'])) {
       intentType = IntentType.STRATEGY_PLANNING;
-    } else if (contains(['开发', '代码', '软件', 'program'])) {
+    } else if (contains(['开发', '代码', '软件', 'program', 'html', 'css', 'js', 'javascript', '游戏', '小游戏', '网页'])) {
       intentType = IntentType.SOFTWARE_DEVELOPMENT;
     } else if (contains(['设计', 'ui', 'ux'])) {
       intentType = IntentType.DESIGN_CREATION;

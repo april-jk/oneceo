@@ -10,6 +10,8 @@ import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/da
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
 import { touchSandbox } from './sandbox-activity-service';
+import { ensureNekoDebug } from './sandbox-debug-service';
+import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -18,6 +20,7 @@ type OpencodeEventListenerPayload = {
     content: string;
     metadata: Record<string, unknown>;
     stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed';
+    phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
     tone?: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error';
   };
 };
@@ -134,10 +137,133 @@ function normalizeDirectory(value: unknown): string {
   return text.replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
+function normalizePath(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  let text = value.trim();
+  if (!text) return '';
+  if (text.startsWith('file://')) {
+    try {
+      text = new URL(text).pathname || text;
+    } catch {
+      // ignore
+    }
+  }
+  return text.replace(/\\/g, '/').replace(/\/+/g, '/');
+}
+
+function isWorkspaceFilePath(path: string, workspaceRoot: string): boolean {
+  const normalized = normalizePath(path);
+  if (!normalized) return false;
+  const lower = normalized.toLowerCase();
+  if (lower.includes('/.git/') || lower.startsWith('.git/') || lower.endsWith('/.git')) {
+    return false;
+  }
+  if (lower.includes('/node_modules/') || lower.startsWith('node_modules/')) {
+    return false;
+  }
+  const root = normalizeDirectory(workspaceRoot);
+  if (root) {
+    if (normalized.startsWith(root + '/')) return true;
+    if (!normalized.startsWith('/') && !/^[a-z]:/i.test(normalized)) return true;
+    return false;
+  }
+  return !normalized.startsWith('/') && !/^[a-z]:/i.test(normalized);
+}
+
+function extractDiffPaths(diff: unknown): string[] {
+  const paths: string[] = [];
+  const addPath = (value: unknown) => {
+    const text = normalizePath(value);
+    if (text) paths.push(text);
+  };
+  const parseDiffText = (text: string) => {
+    const lines = text.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      let match = /^diff --git a\/(.+?) b\/(.+)$/.exec(trimmed);
+      if (match) {
+        addPath(match[1]);
+        addPath(match[2]);
+        continue;
+      }
+      match = /^\+\+\+ b\/(.+)$/.exec(trimmed);
+      if (match) {
+        addPath(match[1]);
+        continue;
+      }
+      match = /^--- a\/(.+)$/.exec(trimmed);
+      if (match) {
+        addPath(match[1]);
+      }
+    }
+  };
+
+  if (Array.isArray(diff)) {
+    for (const item of diff) {
+      if (!item) continue;
+      if (typeof item === 'string') {
+        parseDiffText(item);
+        continue;
+      }
+      if (typeof item === 'object') {
+        const record = item as Record<string, unknown>;
+        addPath(record.path);
+        addPath(record.file);
+        addPath(record.filename);
+        if (typeof record.diff === 'string') {
+          parseDiffText(record.diff);
+        }
+      }
+    }
+  } else if (typeof diff === 'string') {
+    parseDiffText(diff);
+  }
+
+  return Array.from(new Set(paths));
+}
+
+function diffHasWorkspaceChange(diff: unknown, workspaceRoot: string): boolean {
+  const paths = extractDiffPaths(diff);
+  if (paths.length === 0) return false;
+  return paths.some((path) => isWorkspaceFilePath(path, workspaceRoot));
+}
+
+function extractFilePathsFromEvent(properties: Record<string, unknown>, event?: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  const add = (value: unknown) => {
+    const text = normalizePath(value);
+    if (text) paths.push(text);
+  };
+  add(properties.file);
+  add(properties.path);
+  add((properties as any).relativePath);
+  add((properties as any).filename);
+  add(event?.path);
+  add((event as any)?.file);
+  return Array.from(new Set(paths));
+}
+
 function resolveWorkspaceRoot(): string {
   return (process.env.OPENCODE_TASK_WORKSPACE_ROOT || '/opt/.altus/opencode/workspaces')
     .trim()
     .replace(/[\\/]+$/, '');
+}
+
+async function resolveRuntimeFromEnvironment(
+  orchestratorSessionId: string
+): Promise<{ ready: boolean; status?: string | null }> {
+  try {
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (!environment) {
+      return { ready: false, status: null };
+    }
+    return {
+      ready: environment.status === 'ready',
+      status: environment.status,
+    };
+  } catch {
+    return { ready: false, status: null };
+  }
 }
 
 function extractTaskSessionIdFromDirectory(directory: string): string | null {
@@ -178,6 +304,91 @@ function compact(value: string, maxLen: number = 200): string {
   if (!text) return '';
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}...`;
+}
+
+function truncateText(value: unknown, maxLen: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= maxLen) return trimmed;
+  return `${trimmed.slice(0, maxLen)}...`;
+}
+
+function buildDiffPreview(diff: unknown, maxLen: number = 8000) {
+  if (!diff) return undefined;
+  if (typeof diff === 'string') {
+    return truncateText(diff, maxLen) || diff;
+  }
+  if (Array.isArray(diff)) {
+    const maxItems = 20;
+    const items = diff.slice(0, maxItems).map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const record = item as Record<string, unknown>;
+      const preview: Record<string, unknown> = {};
+      if (record.file) preview.file = record.file;
+      if (record.path) preview.path = record.path;
+      if (record.status) preview.status = record.status;
+      if (record.additions !== undefined) preview.additions = record.additions;
+      if (record.deletions !== undefined) preview.deletions = record.deletions;
+      if (record.diff) preview.diff = truncateText(String(record.diff), maxLen);
+      if (record.before) preview.before = truncateText(String(record.before), maxLen);
+      if (record.after) preview.after = truncateText(String(record.after), maxLen);
+      return preview;
+    });
+    return diff.length > maxItems ? [...items, { truncated: true, total: diff.length }] : items;
+  }
+  try {
+    const text = JSON.stringify(diff);
+    return text.length > maxLen ? `${text.slice(0, maxLen)}...` : diff;
+  } catch {
+    return '[unserializable diff]';
+  }
+}
+
+function buildEventPreview(event: Record<string, unknown>): Record<string, unknown> {
+  const properties = normalizeRecord(event.properties);
+  const previewProps: Record<string, unknown> = {};
+
+  const part = normalizeRecord(properties.part);
+  const partType = asString(part.type) || asString(properties.type);
+  if (partType) {
+    const partPreview: Record<string, unknown> = { type: partType };
+    const partId = asString(part.id) || asString(part.callID) || asString(properties.partId);
+    if (partId) partPreview.id = partId;
+    const toolName = asString(part.tool) || asString(part.name) || asString(properties.tool);
+    if (toolName) partPreview.tool = toolName;
+    const state = asString(part.state) || asString(part.status);
+    if (state) partPreview.status = state;
+    const summary = compact(asString(part.summary) || asString(properties.summary), 160);
+    if (summary) partPreview.summary = summary;
+    previewProps.part = partPreview;
+  }
+
+  const path = asString(properties.path) || asString((properties as any).file) || asString((properties as any).filename);
+  if (path) previewProps.path = path;
+  const command = asString(properties.command) || asString(properties.name);
+  if (command) previewProps.command = compact(command, 200);
+  const cwd = asString(properties.cwd);
+  if (cwd) previewProps.cwd = cwd;
+  if (properties.exitCode !== undefined) previewProps.exitCode = properties.exitCode;
+  const state = asString(properties.state) || asString(properties.status);
+  if (state) previewProps.state = state;
+
+  const diffPreview = buildDiffPreview((properties as any).diff);
+  if (diffPreview) previewProps.diff = diffPreview;
+
+  return {
+    type: asString(event.type) || undefined,
+    properties: previewProps,
+    directory: asString((event as any).directory) || undefined,
+  };
+}
+
+function buildRawPayloadPreview(eventType: string, eventPreview: Record<string, unknown>) {
+  return {
+    eventType,
+    event: eventPreview,
+  };
 }
 
 function isSandboxNotFoundError(error: unknown): boolean {
@@ -272,6 +483,23 @@ function buildExecutionSummary(executionPlan: ExecutionPlan): Record<string, unk
   };
 }
 
+type FlowPhase = 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
+
+const PHASE_LABEL: Record<FlowPhase, string> = {
+  ideation: '构思阶段',
+  analysis: '分析阶段',
+  development: '开发阶段',
+  testing: '测试阶段',
+  repair: '修复阶段',
+  delivery: '交付阶段',
+};
+
+function formatPhaseStatus(phase: FlowPhase, message: string): string {
+  const prefix = PHASE_LABEL[phase] || '阶段';
+  const suffix = message?.trim() || '';
+  return suffix ? `${prefix}：${suffix}` : prefix;
+}
+
 function buildReviewFeedbackPrompt(payload: {
   userInput: string;
   taskDescription: TaskDescription;
@@ -280,6 +508,7 @@ function buildReviewFeedbackPrompt(payload: {
   feedback: string;
 }): string {
   return [
+    '当前处于【修复阶段】',
     '你是执行智能体，请基于上一轮执行结果进行修订与完善：',
     `用户需求: ${payload.userInput}`,
     `任务描述: ${JSON.stringify(payload.taskDescription)}`,
@@ -290,7 +519,36 @@ function buildReviewFeedbackPrompt(payload: {
     '1) 继续命令行模式执行（不要进入交互式界面）。',
     '2) 补齐缺口并输出更新后的交付物说明。',
     '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
+    '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
   ].join('\n');
+}
+
+function buildPlaywrightTestPrompt(payload: {
+  userInput: string;
+  taskDescription: TaskDescription;
+  executionPlan: ExecutionPlan;
+  lastOutput?: string;
+}): string {
+  return [
+    '当前处于【测试阶段】',
+    '你是执行智能体，需要对当前实现进行浏览器自动化测试。',
+    `用户需求: ${payload.userInput}`,
+    `任务描述: ${JSON.stringify(payload.taskDescription)}`,
+    `执行计划摘要: ${JSON.stringify(buildExecutionSummary(payload.executionPlan))}`,
+    payload.lastOutput ? `当前交付物摘要: ${payload.lastOutput}` : '',
+    '要求：',
+    '1) 必须使用 playwright-mcp 执行浏览器自动化测试。',
+    '2) 必须连接到与 n.eko 同一实例的 Chromium（使用 CDP 9222 端口，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+    '3) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；如果没有页面，只能在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
+    '4) 测试请以可视模式运行（headless=false），确保调试画面可在 n.eko 中查看。',
+    '5) 为保证用户可观察，请在关键步骤后显式等待（例如 page.waitForTimeout(1000)），最后在结果页停留至少 5 秒再结束。',
+    '6) 如果需要启动服务，请使用可访问端口并说明访问地址。',
+    '7) 输出测试步骤、覆盖的关键路径，以及每项测试结果（通过/失败）。',
+    '8) 如发现问题，请总结失败原因，等待下一步修复指令，不要直接进入修复。',
+    '9) 如需用户协助（例如账号、权限、业务确认），请明确提出。',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function pickSessionIdFromEvent(event: Record<string, unknown>): string | null {
@@ -504,6 +762,7 @@ export class OpencodeRemoteService {
   private listeners = new Set<OpencodeEventListener>();
   private textStreams = new Map<string, OpencodeTextStreamEntry>();
   private finalizedRuns = new Set<string>();
+  private runArtifacts = new Map<string, { hasFileChange: boolean }>();
   private opencodeLocks = new Map<string, Promise<void>>();
   private workspaceGitInit = new Set<string>();
   private streamIdleTimers = new Map<string, NodeJS.Timeout>();
@@ -511,9 +770,22 @@ export class OpencodeRemoteService {
   private streamIdleTimeoutMs = toNonNegativeInt(process.env.OPENCODE_STREAM_IDLE_TIMEOUT_MS) ?? 20000;
   private streamMaxChars = toNonNegativeInt(process.env.OPENCODE_STREAM_MAX_CHARS) ?? 200000;
   private streamMaxEntries = toNonNegativeInt(process.env.OPENCODE_STREAM_MAX_ENTRIES) ?? 200;
+  private streamBroadcastTimers = new Map<string, NodeJS.Timeout>();
+  private streamBroadcastAt = new Map<string, number>();
+  private streamBroadcastMeta = new Map<string, Record<string, unknown>>();
+  private streamBroadcastIntervalMs = toNonNegativeInt(process.env.OPENCODE_STREAM_BROADCAST_INTERVAL_MS) ?? 250;
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
+  }
+
+  private getRunArtifact(runKey: string) {
+    let record = this.runArtifacts.get(runKey);
+    if (!record) {
+      record = { hasFileChange: false };
+      this.runArtifacts.set(runKey, record);
+    }
+    return record;
   }
 
   private buildTextStreamKey(taskSessionId: string, opencodeSessionId: string, partId: string): string {
@@ -620,6 +892,66 @@ export class OpencodeRemoteService {
     } catch (error) {
       console.warn("[OPENCODE_WORKSPACE_GIT_INIT_FAILED]", error);
     }
+  }
+
+  private async recoverRuntime(taskSessionId: string): Promise<RuntimeBinding> {
+    const provision = await sandboxAgentProvisionService.provisionWithLock({
+      metadata: {
+        taskSessionId,
+      },
+    });
+
+    await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
+      orchestratorSessionId: provision.sessionId,
+    });
+
+    return {
+      orchestratorSessionId: provision.sessionId,
+      opencodeSessionId: undefined,
+    };
+  }
+
+  private async emitPhaseStatus(params: {
+    sessionId: string;
+    phase: FlowPhase;
+    message: string;
+    stage?: FileSessionRecord['stage'];
+    tone?: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error';
+    metadata?: Record<string, unknown>;
+  }) {
+    const session = await taskCreationFileMemoryStore.getSession(params.sessionId);
+    const currentCycle = session?.phaseCycle ?? 0;
+    const nextCycle =
+      params.phase === 'development' ? 0 : params.phase === 'repair' ? currentCycle + 1 : currentCycle;
+
+    await taskCreationFileMemoryStore.updateSessionPhase(params.sessionId, params.phase, { cycle: nextCycle });
+
+    const content = formatPhaseStatus(params.phase, params.message);
+    const metadata: Record<string, unknown> = {
+      ...(params.metadata || {}),
+      phase: params.phase,
+      phaseCycle: nextCycle,
+    };
+
+    await taskCreationFileMemoryStore.addMessage(
+      params.sessionId,
+      'agent',
+      'status_update',
+      content,
+      metadata
+    );
+
+    await this.notify({
+      taskSessionId: params.sessionId,
+      message: {
+        type: 'status_update',
+        content,
+        stage: params.stage as any,
+        tone: params.tone || 'system',
+        phase: params.phase,
+        metadata,
+      },
+    });
   }
 
   private async withOpencodeLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -747,7 +1079,59 @@ export class OpencodeRemoteService {
       if (entry.taskSessionId !== taskSessionId) continue;
       if (opencodeSessionId && entry.opencodeSessionId !== opencodeSessionId) continue;
       this.textStreams.delete(key);
+      this.clearStreamBroadcast(key);
     }
+  }
+
+  private clearStreamBroadcast(streamKey: string) {
+    const timer = this.streamBroadcastTimers.get(streamKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamBroadcastTimers.delete(streamKey);
+    }
+    this.streamBroadcastAt.delete(streamKey);
+    this.streamBroadcastMeta.delete(streamKey);
+  }
+
+  private scheduleStreamBroadcast(taskSessionId: string, streamKey: string) {
+    const interval = this.streamBroadcastIntervalMs;
+    if (interval <= 0) {
+      void this.sendStreamBroadcast(taskSessionId, streamKey);
+      return;
+    }
+    const lastAt = this.streamBroadcastAt.get(streamKey) ?? 0;
+    const now = Date.now();
+    const delay = Math.max(0, interval - (now - lastAt));
+    if (delay === 0) {
+      void this.sendStreamBroadcast(taskSessionId, streamKey);
+      return;
+    }
+    if (this.streamBroadcastTimers.has(streamKey)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.streamBroadcastTimers.delete(streamKey);
+      void this.sendStreamBroadcast(taskSessionId, streamKey);
+    }, delay);
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    this.streamBroadcastTimers.set(streamKey, timer);
+  }
+
+  private async sendStreamBroadcast(taskSessionId: string, streamKey: string) {
+    const entry = this.textStreams.get(streamKey);
+    const metadata = this.streamBroadcastMeta.get(streamKey);
+    if (!entry || !metadata) return;
+    this.streamBroadcastAt.set(streamKey, Date.now());
+    await this.notify({
+      taskSessionId,
+      message: {
+        type: 'opencode_event',
+        content: entry.text,
+        metadata,
+      },
+    });
   }
 
   private async flushTextStreams(
@@ -761,6 +1145,7 @@ export class OpencodeRemoteService {
       if (opencodeSessionId && entry.opencodeSessionId !== opencodeSessionId) continue;
       matched.push(entry);
       this.textStreams.delete(key);
+      this.clearStreamBroadcast(key);
     }
     if (matched.length === 0) {
       return null;
@@ -945,12 +1330,26 @@ export class OpencodeRemoteService {
     this.initialized = true;
 
     osacConnectionManager.registerMessageHandler(async (orchestratorSessionId, message) => {
-      await this.handleOsacMessage(orchestratorSessionId, message);
+      try {
+        await this.handleOsacMessage(orchestratorSessionId, message);
+      } catch (error) {
+        if (isSandboxNotFoundError(error)) {
+          await markSandboxClosed(orchestratorSessionId);
+        }
+        console.warn('[OPENCODE_REMOTE_HANDLER_ERROR]', orchestratorSessionId, error);
+      }
     });
   }
 
   async ingestExternalMessage(orchestratorSessionId: string, message: OsacMessage) {
-    await this.handleOsacMessage(orchestratorSessionId, message);
+    try {
+      await this.handleOsacMessage(orchestratorSessionId, message);
+    } catch (error) {
+      if (isSandboxNotFoundError(error)) {
+        await markSandboxClosed(orchestratorSessionId);
+      }
+      console.warn('[OPENCODE_REMOTE_EXTERNAL_ERROR]', orchestratorSessionId, error);
+    }
   }
 
   subscribe(listener: OpencodeEventListener): () => void {
@@ -986,75 +1385,96 @@ export class OpencodeRemoteService {
       throw new Error('content is required');
     }
 
-    const runtime = await resolveRuntimeBinding(taskSessionId, input.orchestratorSessionId);
+    let runtime = await resolveRuntimeBinding(taskSessionId, input.orchestratorSessionId);
     if (!runtime) {
-      throw new Error('当前任务尚未绑定执行环境（orchestratorSessionId）');
+      runtime = await this.recoverRuntime(taskSessionId);
     }
-    const orchestratorSessionId = runtime.orchestratorSessionId;
+
+    let orchestratorSessionId = runtime.orchestratorSessionId;
     const workspacePath = asString(input.workspacePath) || resolveOpencodeWorkspacePath(taskSessionId);
     const opencodeHost = asString(process.env.OPENCODE_SERVER_HOST) || undefined;
     const opencodePort = toPositiveInt(process.env.OPENCODE_SERVER_PORT);
 
-    return await this.withOpencodeLock(orchestratorSessionId, async () => {
-      await this.ensureWorkspaceGit(orchestratorSessionId, workspacePath);
-      await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
-        workspacePath: workspacePath || undefined,
-        host: opencodeHost,
-        port: opencodePort,
-      });
-
-      let opencodeSessionId = runtime.opencodeSessionId;
-      if (!opencodeSessionId) {
-        const created = await osacAgentService.createOpencodeSession(orchestratorSessionId, {
-          workspacePath: workspacePath || undefined,
-        });
-        opencodeSessionId = asString(created.opencodeSessionId);
-        if (!opencodeSessionId) {
-          throw new Error('创建 OpenCode 会话失败：缺少 opencodeSessionId');
-        }
-        await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-          orchestratorSessionId,
-          opencodeSessionId,
-        });
-      } else {
-        await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-          orchestratorSessionId,
-        });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const runtimeStatus = await resolveRuntimeFromEnvironment(orchestratorSessionId);
+      if (!runtimeStatus.ready) {
+        runtime = await this.recoverRuntime(taskSessionId);
+        orchestratorSessionId = runtime.orchestratorSessionId;
       }
 
-      await osacAgentService.sendOpencodePrompt(orchestratorSessionId, {
-        opencodeSessionId,
-        workspacePath: workspacePath || undefined,
-        parts: [{ type: 'text', text: content }],
-      });
+      try {
+        return await this.withOpencodeLock(orchestratorSessionId, async () => {
+          await this.ensureWorkspaceGit(orchestratorSessionId, workspacePath);
+          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+            workspacePath: workspacePath || undefined,
+            host: opencodeHost,
+            port: opencodePort,
+          });
 
-      const role = input.source === 'agent' ? 'agent' : 'user';
-      const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
-      await taskCreationFileMemoryStore.addMessage(
-        taskSessionId,
-        role,
-        messageType,
-        content,
-        {
-          orchestratorSessionId,
-          opencodeSessionId,
-          workspacePath,
+          let opencodeSessionId = runtime?.opencodeSessionId;
+          if (!opencodeSessionId) {
+            const created = await osacAgentService.createOpencodeSession(orchestratorSessionId, {
+              workspacePath: workspacePath || undefined,
+            });
+            opencodeSessionId = asString(created.opencodeSessionId);
+            if (!opencodeSessionId) {
+              throw new Error('创建 OpenCode 会话失败：缺少 opencodeSessionId');
+            }
+            await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
+              orchestratorSessionId,
+              opencodeSessionId,
+            });
+          } else {
+            await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
+              orchestratorSessionId,
+            });
+          }
+
+          await osacAgentService.sendOpencodePrompt(orchestratorSessionId, {
+            opencodeSessionId,
+            workspacePath: workspacePath || undefined,
+            parts: [{ type: 'text', text: content }],
+          });
+
+          const role = input.source === 'agent' ? 'agent' : 'user';
+          const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
+          await taskCreationFileMemoryStore.addMessage(
+            taskSessionId,
+            role,
+            messageType,
+            content,
+            {
+              orchestratorSessionId,
+              opencodeSessionId,
+              workspacePath,
+            }
+          );
+
+          auditOsacAction('OPENCODE_USER_INPUT', {
+            taskSessionId,
+            orchestratorSessionId,
+            opencodeSessionId,
+          });
+
+          await touchSandbox(orchestratorSessionId, 'opencode_user_input');
+
+          return {
+            orchestratorSessionId,
+            opencodeSessionId,
+          };
+        });
+      } catch (error) {
+        if (isSandboxNotFoundError(error) && attempt < 2) {
+          await markSandboxClosed(orchestratorSessionId);
+          runtime = await this.recoverRuntime(taskSessionId);
+          orchestratorSessionId = runtime.orchestratorSessionId;
+          continue;
         }
-      );
+        throw error;
+      }
+    }
 
-      auditOsacAction('OPENCODE_USER_INPUT', {
-        taskSessionId,
-        orchestratorSessionId,
-        opencodeSessionId,
-      });
-
-      await touchSandbox(orchestratorSessionId, 'opencode_user_input');
-
-      return {
-        orchestratorSessionId,
-        opencodeSessionId,
-      };
-    });
+    throw new Error('无法发送 OpenCode 指令');
   }
 
   private async handleOsacMessage(orchestratorSessionId: string, message: OsacMessage) {
@@ -1125,10 +1545,14 @@ export class OpencodeRemoteService {
         });
         this.clearTextStreams(session.id, opencodeSessionId);
         this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
+        this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), { hasFileChange: false });
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
       }
       await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
       await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
+      if (!session.phase) {
+        await taskCreationFileMemoryStore.updateSessionPhase(session.id, 'development');
+      }
 
       const content = 'OpenCode 已接收指令，正在执行并回传实时事件...';
       await taskCreationFileMemoryStore.addMessage(
@@ -1236,27 +1660,22 @@ export class OpencodeRemoteService {
         updatedAt: Number(payload.timestamp) || Date.now(),
       });
 
+      const eventPreview = buildEventPreview(event);
       const metadata: Record<string, unknown> = {
         orchestratorSessionId,
         opencodeSessionId: textStream.opencodeSessionId,
         eventType,
         seq: payload.seq,
         timestamp: payload.timestamp,
-        event,
-        rawPayload: payload,
+        event: eventPreview,
+        rawPayload: buildRawPayloadPreview(eventType, eventPreview),
         stream: true,
         streamKey: stream.streamKey,
         partId: textStream.partId,
       };
 
-      await this.notify({
-        taskSessionId: session.id,
-        message: {
-          type: 'opencode_event',
-          content: stream.text,
-          metadata,
-        },
-      });
+      this.streamBroadcastMeta.set(stream.streamKey, metadata);
+      this.scheduleStreamBroadcast(session.id, stream.streamKey);
       return;
     }
 
@@ -1289,15 +1708,32 @@ export class OpencodeRemoteService {
       });
     }
 
+    const eventPreview = buildEventPreview(event);
     const metadata: Record<string, unknown> = {
       orchestratorSessionId,
       opencodeSessionId: opencodeSessionId || undefined,
       eventType,
       seq: payload.seq,
       timestamp: payload.timestamp,
-      event,
-      rawPayload: payload,
+      event: eventPreview,
+      rawPayload: buildRawPayloadPreview(eventType, eventPreview),
     };
+
+    if (opencodeSessionId) {
+      const runKey = this.buildRunKey(session.id, opencodeSessionId);
+      const artifact = this.getRunArtifact(runKey);
+      const workspaceRoot = resolveOpencodeWorkspacePath(session.id) || '';
+      let hasWorkspaceChange = false;
+      if (eventType === 'file.edited' || eventType === 'file.watcher.updated') {
+        const paths = extractFilePathsFromEvent(eventProps, event);
+        hasWorkspaceChange = paths.some((path) => isWorkspaceFilePath(path, workspaceRoot));
+      } else if (eventType === 'session.diff') {
+        hasWorkspaceChange = diffHasWorkspaceChange(eventProps.diff, workspaceRoot);
+      }
+      if (hasWorkspaceChange) {
+        artifact.hasFileChange = true;
+      }
+    }
 
     if (shouldPersist) {
       await taskCreationFileMemoryStore.addMessage(
@@ -1330,30 +1766,69 @@ export class OpencodeRemoteService {
       }
 
       const aggregated = await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+      const currentPhase = (session.phase as FlowPhase) || 'development';
+      const artifact = this.runArtifacts.get(runKey);
 
-      await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
-      await taskCreationFileMemoryStore.updateSessionStage(session.id, 'reviewing');
+      if (currentPhase === 'development' || currentPhase === 'repair') {
+        if (!artifact?.hasFileChange) {
+          await this.emitPhaseStatus({
+            sessionId: session.id,
+            phase: 'analysis',
+            message: '未检测到交付物产出，已暂停自动测试，请检查需求或继续开发。',
+            stage: 'reviewing',
+            tone: 'review',
+            metadata: {
+              ...metadata,
+              outcome,
+              reason: 'no_artifacts',
+            },
+          });
+          return;
+        }
+        await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
+        await taskCreationFileMemoryStore.updateSessionStage(session.id, 'reviewing');
 
-      const reviewingContent = 'OpenCode 执行完成，正在进行结果审查...';
-      await taskCreationFileMemoryStore.addMessage(session.id, 'agent', 'opencode_status', reviewingContent, {
-        ...metadata,
-        outcome,
-        stage: 'reviewing',
-      });
-
-      await this.notify({
-        taskSessionId: session.id,
-        message: {
-          type: 'status_update',
-          content: reviewingContent,
+        await this.emitPhaseStatus({
+          sessionId: session.id,
+          phase: 'testing',
+          message: '正在执行自动化测试...',
           stage: 'reviewing',
           tone: 'review',
           metadata: {
             ...metadata,
             outcome,
           },
-        },
-      });
+        });
+
+        await osacAgentService.ensurePlaywrightMcp(orchestratorSessionId);
+        try {
+          await ensureNekoDebug(orchestratorSessionId);
+        } catch (error) {
+          if (isSandboxNotFoundError(error)) {
+            await markSandboxClosed(orchestratorSessionId);
+            return;
+          }
+          console.warn('[OPENCODE_NEKO_START_FAILED]', error);
+        }
+
+        const context = await this.resolveReviewContext(session.id);
+        if (context) {
+          const testPrompt = buildPlaywrightTestPrompt({
+            userInput: context.userInput || '（未提供用户输入）',
+            taskDescription: context.taskDescription,
+            executionPlan: context.executionPlan,
+            lastOutput: aggregated || undefined,
+          });
+          await this.sendUserInput({
+            taskSessionId: session.id,
+            content: testPrompt,
+            orchestratorSessionId,
+            workspacePath: resolveOpencodeWorkspacePath(session.id) || undefined,
+            source: 'agent',
+          });
+        }
+        return;
+      }
 
       const lastOutput = aggregated || (await this.resolveLatestOutput(session.id));
       const reviewResult = await this.runReviewGate({
@@ -1363,7 +1838,7 @@ export class OpencodeRemoteService {
         executionOutput: lastOutput || '（无输出）',
       });
 
-      if (reviewResult.status === 'retry') {
+      if (currentPhase === 'testing' && reviewResult.status === 'retry') {
         const context = await this.resolveReviewContext(session.id);
         const feedbackPrompt =
           context && reviewResult.nextInstructions
@@ -1379,21 +1854,15 @@ export class OpencodeRemoteService {
         await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
         await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
 
-        const retryContent = reviewResult.summary || '执行结果未通过审查，正在根据反馈继续执行...';
-        await taskCreationFileMemoryStore.addMessage(session.id, 'agent', 'agent_message', retryContent, {
-          reviewDone: false,
-          reviewIssues: reviewResult.issues,
-        });
-
-        await this.notify({
-          taskSessionId: session.id,
-          message: {
-            type: 'agent_message',
-            content: retryContent,
-            metadata: {
-              reviewDone: false,
-              reviewIssues: reviewResult.issues,
-            },
+        await this.emitPhaseStatus({
+          sessionId: session.id,
+          phase: 'repair',
+          message: reviewResult.summary || '测试未通过，正在根据反馈修复...',
+          stage: 'executing',
+          tone: 'execution',
+          metadata: {
+            reviewDone: false,
+            reviewIssues: reviewResult.issues,
           },
         });
 
@@ -1438,8 +1907,30 @@ export class OpencodeRemoteService {
         );
       }
 
+      if (currentPhase === 'testing') {
+        await this.emitPhaseStatus({
+          sessionId: session.id,
+          phase: 'delivery',
+          message: '测试完成，正在整理交付物...',
+          stage: 'reviewing',
+          tone: 'review',
+          metadata: {
+            ...metadata,
+            outcome,
+          },
+        });
+      }
+
       await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'completed');
       await taskCreationFileMemoryStore.updateSessionStage(session.id, 'completed');
+      this.runArtifacts.delete(runKey);
+      if (orchestratorSessionId) {
+        try {
+          await osacAgentService.closeConnection(orchestratorSessionId);
+        } catch (error) {
+          console.warn('[OPENCODE_REMOTE_CLOSE_FAILED]', orchestratorSessionId, error);
+        }
+      }
 
       const content = 'OpenCode 执行完成';
       await taskCreationFileMemoryStore.addMessage(
@@ -1480,6 +1971,14 @@ export class OpencodeRemoteService {
       await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
       await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'failed');
       await taskCreationFileMemoryStore.updateSessionStage(session.id, 'failed');
+      this.runArtifacts.delete(runKey);
+      if (orchestratorSessionId) {
+        try {
+          await osacAgentService.closeConnection(orchestratorSessionId);
+        } catch (error) {
+          console.warn('[OPENCODE_REMOTE_CLOSE_FAILED]', orchestratorSessionId, error);
+        }
+      }
 
       const errorContent = 'OpenCode 执行失败';
       await taskCreationFileMemoryStore.addMessage(

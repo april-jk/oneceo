@@ -8,6 +8,13 @@ function toPositiveInt(value: string | undefined, fallback: number): number {
   return Math.floor(parsed);
 }
 
+function toBoolean(value: string | undefined, fallback = false): boolean {
+  if (value === undefined) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   return {};
@@ -64,212 +71,116 @@ type EnsureDebugResult = {
 };
 
 export async function ensureNekoDebug(orchestratorSessionId: string): Promise<EnsureDebugResult> {
-  const configVersion = 'neko-udpmux-v2';
+  const configVersion = 'neko-multiuser-epr-v2';
   const nekoPort = toPositiveInt(process.env.NEKO_PORT, 8081);
   const cdpPort = toPositiveInt(process.env.NEKO_CDP_PORT, 9222);
   const display = process.env.NEKO_DISPLAY || ':0';
-  const tcpMuxPort = toPositiveInt(process.env.NEKO_WEBRTC_TCPMUX, 0);
-  const udpMuxPort = toPositiveInt(process.env.NEKO_WEBRTC_UDPMUX, 59000);
-  const webrtcEpr = asText(process.env.NEKO_WEBRTC_EPR);
+  const webrtcEprRaw = asText(process.env.NEKO_WEBRTC_EPR);
+  const webrtcEprDisabled = ['0', 'off', 'false', 'disable', 'disabled'].includes(webrtcEprRaw.toLowerCase());
+  const webrtcEpr = webrtcEprDisabled ? '' : webrtcEprRaw || '51000-51100';
+  const forceMux = toBoolean(process.env.NEKO_WEBRTC_FORCE_MUX, false);
+  const tcpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_TCPMUX, 0);
+  const udpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_UDPMUX, 0);
+  const tcpMuxPort = forceMux || !webrtcEpr ? tcpMuxCandidate : 0;
+  const udpMuxPort = forceMux || !webrtcEpr ? udpMuxCandidate : 0;
+  const iceLite = toBoolean(process.env.NEKO_WEBRTC_ICELITE, false);
+  const autoNat = toBoolean(process.env.NEKO_AUTO_NAT1TO1, false);
+  const nat1to1Manual = asText(process.env.NEKO_NAT1TO1);
+  const nekoUsername = asText(process.env.NEKO_USER_NAME) || 'oneceo';
+  const nekoPassword = asText(process.env.NEKO_USER_PASSWORD) || 'oneceo';
+  const nekoAdminPassword = asText(process.env.NEKO_ADMIN_PASSWORD) || nekoPassword;
 
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   if (!environment) {
     throw new Error('sandbox environment not found');
   }
 
-  const hostForNat = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
-  const nat1To1 = await resolveHostIp(hostForNat);
+  let nat1To1: string | null = null;
+  if (nat1to1Manual) {
+    nat1To1 = nat1to1Manual;
+  } else if (autoNat) {
+    const natPort = tcpMuxPort > 0 ? tcpMuxPort : nekoPort;
+    const hostForNat = await e2bConnector.getSandboxHost(orchestratorSessionId, natPort);
+    nat1To1 = await resolveHostIp(hostForNat);
+  }
   const nat1To1Yaml = nat1To1 ? `  nat1to1:\n    - \"${nat1To1}\"\n` : '';
+  const eprYaml = webrtcEpr ? `  epr: \"${webrtcEpr}\"\n` : '';
+  const tcpMuxYaml = tcpMuxPort > 0 ? `  tcpmux: ${tcpMuxPort}\n` : '';
+  const udpMuxYaml = udpMuxPort > 0 ? `  udpmux: ${udpMuxPort}\n` : '';
+  const iceLiteYaml = iceLite ? '  icelite: true\n' : '';
 
   const metadata = toRecord(environment.metadata);
   const debugMeta = toRecord(metadata.debug);
   const nekoMeta = toRecord(debugMeta.neko);
   const existingUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
-  const setupCommand = `
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-
-APT="apt-get"
-ROOTCMD=""
-if [[ "$(id -u)" -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1; then
-    APT="sudo -n apt-get"
-    ROOTCMD="sudo -n"
-  fi
-fi
-
-wait_apt() {
-  local max=30
-  local count=0
-  while pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1; do
-    count=$((count + 1))
-    if [[ $count -ge $max ]]; then
-      break
-    fi
-    sleep 2
-  done
-}
-
-if ! command -v Xvfb >/dev/null 2>&1; then
-  wait_apt
-  $APT update
-  wait_apt
-  $APT install -y xvfb curl wget unzip ca-certificates gnupg gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
-fi
-
-if ! command -v chromium-browser >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1; then
-  wait_apt
-  $APT install -y chromium-browser || true
-  if ! command -v chromium-browser >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1; then
-    $APT install -y chromium || true
-  fi
-fi
-
-if ! command -v neko >/dev/null 2>&1; then
-  wait_apt
-  $APT install -y git make pkg-config \
-    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    libgtk-3-dev libx11-dev libxext-dev libxi-dev libxfixes-dev libxrandr-dev \
-    libxrender-dev libxkbfile-dev libxtst-dev libxcomposite-dev libxdamage-dev \
-    libxinerama-dev libxcvt-dev
-  GO_BIN=/usr/local/go/bin/go
-  if [[ ! -x "$GO_BIN" ]]; then
-    curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.24.5.linux-amd64.tar.gz
-    $ROOTCMD rm -rf /usr/local/go
-    $ROOTCMD tar -C /usr/local -xzf /tmp/go.tgz
-  fi
-  GO_BIN=/usr/local/go/bin/go
-  mkdir -p /tmp/neko-build
-  GOBIN=/tmp/neko-build GO111MODULE=on "$GO_BIN" install github.com/m1k1o/neko/server/cmd/neko@latest
-  if [[ -f /tmp/neko-build/neko ]]; then
-    $ROOTCMD mv /tmp/neko-build/neko /usr/local/bin/neko
-  fi
-fi
-
-if [ ! -d /tmp/neko-src ]; then
-  wait_apt
-  $APT install -y git
-  git clone --depth 1 https://github.com/m1k1o/neko.git /tmp/neko-src
-fi
-
-if [ ! -d /tmp/neko-src/client/dist ]; then
-  wait_apt
-  if ! command -v npm >/dev/null 2>&1; then
-    $APT install -y nodejs npm
-  fi
-  cd /tmp/neko-src/client
-  npm install
-  npm run build
-  cd /
-fi
-
-$ROOTCMD mkdir -p /opt/neko
-cat <<EOF | $ROOTCMD tee /opt/neko/neko.yml >/dev/null
-server:
-  bind: "0.0.0.0:${nekoPort}"
-  static: "/tmp/neko-src/client/dist"
-capture:
-  display: "${display}"
-  video_codec: "h264"
-  video_bitrate: 3000
-webrtc:
-  iceservers:
-    - urls: ["stun:stun.l.google.com:19302"]
-  tcpmux: ${tcpMuxPort}
-  udpmux: ${udpMuxPort}
-  epr: "${webrtcEpr}"
-${nat1To1Yaml}desktop:
-  input:
-    enabled: false
-member:
-  provider: "noauth"
-session:
-  cookie:
-    enabled: false
-    secure: false
-EOF
-
-if ! pgrep -x Xvfb >/dev/null 2>&1; then
-  nohup Xvfb ${display} -screen 0 1280x720x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
-fi
-
-export DISPLAY=${display}
-for i in $(seq 1 10); do
-  if [ -S /tmp/.X11-unix/X0 ]; then
-    break
-  fi
-  sleep 0.5
-done
-
-if ! pgrep -x chromium >/dev/null 2>&1 && ! pgrep -x chromium-browser >/dev/null 2>&1; then
-  if command -v chromium-browser >/dev/null 2>&1; then
-    CHROME_BIN=$(command -v chromium-browser)
-  else
-    CHROME_BIN=$(command -v chromium)
-  fi
-  nohup "$CHROME_BIN" \
-    --no-sandbox \
-    --disable-gpu \
-    --disable-dev-shm-usage \
-    --remote-debugging-port=${cdpPort} \
-    --user-data-dir=/tmp/chromium-profile \
-    --window-size=1280,720 \
-    about:blank \
-    > /tmp/chromium.log 2>&1 &
-fi
-
-if pgrep -x neko >/dev/null 2>&1; then
-  pkill -x neko || true
-  sleep 1
-fi
-nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
-`;
-
   const startCommand = `
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-ROOTCMD=""
-if [[ "$(id -u)" -ne 0 ]]; then
-  if command -v sudo >/dev/null 2>&1; then
-    ROOTCMD="sudo -n"
-  fi
+PLAYWRIGHT_BROWSERS_PATH="\${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
+NEKO_STATIC="/opt/neko/client/dist"
+NEKO_CONFIG="/tmp/oneceo/neko.yml"
+
+if ! command -v Xvfb >/dev/null 2>&1; then
+  echo "[neko] Xvfb missing"
+  exit 31
 fi
 
 if ! command -v neko >/dev/null 2>&1; then
-  echo "NEKO_MISSING"
-  exit 0
+  echo "[neko] neko binary missing"
+  exit 32
 fi
 
-if [ ! -d /tmp/neko-src/client/dist ]; then
-  echo "NEKO_CLIENT_MISSING"
-  exit 0
+if [ ! -d "$NEKO_STATIC" ]; then
+  echo "[neko] static assets missing at $NEKO_STATIC"
+  exit 33
 fi
 
-$ROOTCMD mkdir -p /opt/neko
-cat <<EOF | $ROOTCMD tee /opt/neko/neko.yml >/dev/null
+CHROME_BIN=""
+if command -v chromium-browser >/dev/null 2>&1; then
+  CHROME_BIN=$(command -v chromium-browser)
+elif command -v chromium >/dev/null 2>&1; then
+  CHROME_BIN=$(command -v chromium)
+else
+  for candidate in "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux*/chrome; do
+    if [ -x "$candidate" ]; then
+      CHROME_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$CHROME_BIN" ]; then
+  echo "[neko] chromium binary missing"
+  exit 34
+fi
+
+mkdir -p /tmp/oneceo
+cat <<EOF > "$NEKO_CONFIG"
 server:
   bind: "0.0.0.0:${nekoPort}"
-  static: "/tmp/neko-src/client/dist"
+  static: "\${NEKO_STATIC}"
 capture:
   display: "${display}"
-  video_codec: "h264"
+  video_codec: "vp8"
   video_bitrate: 3000
 webrtc:
   iceservers:
     - urls: ["stun:stun.l.google.com:19302"]
-  tcpmux: ${tcpMuxPort}
-  udpmux: ${udpMuxPort}
-  epr: "${webrtcEpr}"
-${nat1To1Yaml}desktop:
-  input:
-    enabled: false
-member:
-  provider: "noauth"
-session:
+${iceLiteYaml}${tcpMuxYaml}${udpMuxYaml}${eprYaml}${nat1To1Yaml}session:
+  merciful_reconnect: true
+  implicit_hosting: true
   cookie:
     enabled: false
     secure: false
+desktop:
+  input:
+    enabled: false
+member:
+  provider: "multiuser"
+  multiuser:
+    admin_password: "${nekoAdminPassword}"
+    user_password: "${nekoPassword}"
 EOF
 
 if ! pgrep -x Xvfb >/dev/null 2>&1; then
@@ -284,11 +195,16 @@ for i in $(seq 1 10); do
   sleep 0.5
 done
 
-if ! pgrep -x chromium >/dev/null 2>&1 && ! pgrep -x chromium-browser >/dev/null 2>&1; then
-  if command -v chromium-browser >/dev/null 2>&1; then
-    CHROME_BIN=$(command -v chromium-browser)
-  else
-    CHROME_BIN=$(command -v chromium)
+cdp_ready="false"
+if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null 2>&1; then
+  cdp_ready="true"
+fi
+
+if [[ "$cdp_ready" != "true" ]]; then
+  if pgrep -x chromium >/dev/null 2>&1 || pgrep -x chromium-browser >/dev/null 2>&1; then
+    pkill -x chromium || true
+    pkill -x chromium-browser || true
+    sleep 1
   fi
   nohup "$CHROME_BIN" \
     --no-sandbox \
@@ -296,17 +212,28 @@ if ! pgrep -x chromium >/dev/null 2>&1 && ! pgrep -x chromium-browser >/dev/null
     --disable-dev-shm-usage \
     --remote-debugging-port=${cdpPort} \
     --user-data-dir=/tmp/chromium-profile \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-features=TranslateUI \
     --window-size=1280,720 \
     about:blank \
     > /tmp/chromium.log 2>&1 &
+  for i in $(seq 1 20); do
+    if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
 fi
 
 if pgrep -x neko >/dev/null 2>&1; then
   pkill -x neko || true
   sleep 1
 fi
-nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
+nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
 `;
+
+  const setupCommand = startCommand;
 
   if (existingUrl) {
     const existingStatus = asText(nekoMeta.status) || environment.status;
@@ -314,16 +241,22 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
     const existingPort = Number(nekoMeta.port);
     const existingUdpMux = Number(nekoMeta.udpMuxPort);
     const existingNat = asText(nekoMeta.nat1To1);
+    const existingUser = asText(nekoMeta.username);
+    const existingPass = asText(nekoMeta.password);
+    const existingAdminPass = asText(nekoMeta.adminPassword);
     const shouldRefresh =
       existingVersion !== configVersion ||
       existingPort !== nekoPort ||
       existingUdpMux !== udpMuxPort ||
-      existingNat !== (nat1To1 || '');
+      existingNat !== (nat1To1 || '') ||
+      existingUser !== nekoUsername ||
+      existingPass !== nekoPassword ||
+      existingAdminPass !== nekoAdminPassword;
     let ready = await probeNeko(orchestratorSessionId, nekoPort);
     if (!ready || shouldRefresh) {
       const check = await e2bConnector.runCommand(
         orchestratorSessionId,
-        `command -v neko >/dev/null 2>&1 && test -d /tmp/neko-src/client/dist && echo "OK" || echo "MISSING"`,
+        `command -v neko >/dev/null 2>&1 && test -d /opt/neko/client/dist && echo "OK" || echo "MISSING"`,
         { timeoutMs: 20000 }
       );
       const installed = (check?.stdout || '').trim() === 'OK';
@@ -338,6 +271,7 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
     const nextStatus = ready ? 'running' : existingStatus || 'starting';
     const nextMessage = ready ? undefined : asText(nekoMeta.message) || '调试服务启动中，请稍后重试';
     const baseUrl = `https://${await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort)}`;
+    const clientUrl = `${baseUrl}?pwd=${encodeURIComponent(nekoPassword)}&usr=${encodeURIComponent(nekoUsername)}`;
     const nextMetadata = {
       ...metadata,
       debug: {
@@ -345,12 +279,16 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
         neko: {
           ...nekoMeta,
           baseUrl,
+          clientUrl,
           port: nekoPort,
           display,
           cdpPort,
           tcpMuxPort,
           udpMuxPort,
           nat1To1: nat1To1 || '',
+          username: nekoUsername,
+          password: nekoPassword,
+          adminPassword: nekoAdminPassword,
           configVersion,
           status: nextStatus,
           message: nextMessage,
@@ -362,7 +300,7 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
 
     return {
       ready,
-      url: baseUrl,
+      url: clientUrl,
       status: nextStatus,
       updatedAt: new Date(environment.updatedAt as any).toISOString(),
       sandboxId: orchestratorSessionId,
@@ -379,6 +317,7 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
 
   const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
   const baseUrl = `https://${host}`;
+  const clientUrl = `${baseUrl}?pwd=${encodeURIComponent(nekoPassword)}&usr=${encodeURIComponent(nekoUsername)}`;
   const status = ready ? 'running' : 'starting';
   const message = ready ? undefined : '调试服务启动中，请稍后重试';
 
@@ -388,12 +327,16 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
       ...(metadata as any)?.debug,
       neko: {
         baseUrl,
+        clientUrl,
         port: nekoPort,
         display,
         cdpPort,
         tcpMuxPort,
         udpMuxPort,
         nat1To1: nat1To1 || '',
+        username: nekoUsername,
+        password: nekoPassword,
+        adminPassword: nekoAdminPassword,
         configVersion,
         status,
         message,
@@ -406,7 +349,7 @@ nohup neko serve --config /opt/neko/neko.yml > /tmp/neko.log 2>&1 &
 
   return {
     ready,
-    url: baseUrl,
+    url: clientUrl,
     status,
     updatedAt: new Date().toISOString(),
     sandboxId: orchestratorSessionId,

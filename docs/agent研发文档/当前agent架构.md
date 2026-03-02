@@ -22,6 +22,47 @@
 |---|---|---|---|
 | `executionReviewAgent` | 审查执行输出、给出是否通过/修复建议 | `ReviewResult` | `oneceo/apps/api/src/agents/task-creation/layers/execution-review-agent.ts` |
 
+### 1.3 Layer 1 双路径（新增）
+
+Layer 1 在**新任务**与**已存在会话**两种场景下采用不同策略：
+
+1. **新任务（无历史意图）**  
+   - 进行意图识别（IntentRecognitionAgent）  
+   - 决定任务类型并引导到对应 Layer 2  
+
+2. **已存在会话（有历史意图）**  
+   - **跳过意图识别**，复用会话创建时的基础定义  
+   - 直接进入规划层（Layer 2），基于历史定义 + 用户补充更新任务描述  
+
+此策略避免在“续聊/补充”时反复识别任务类型导致的误判或重分流。
+
+### 1.4 Layer 2 子智能体拆解（新增）
+
+Layer 2 已拆解为**独立规划智能体类**，用于后续逐个细化：
+
+- 基类：`oneceo/apps/api/src/agents/task-creation/layers/planners/base-planner.ts`
+- 注册表：`oneceo/apps/api/src/agents/task-creation/layers/planners/persona-registry.ts`
+
+#### 当前已预置的领域规划智能体类（可直接细化）
+
+- 编程规划智能体：`software-planner.ts`
+- 财务/商业规划智能体：`finance-planner.ts`
+- 运营规划智能体：`ops-planner.ts`
+- 内容/文案规划智能体：`content-planner.ts`
+- 设计规划智能体：`design-planner.ts`
+- 研究/分析规划智能体：`research-planner.ts`
+- 通用规划智能体：`generic-planner.ts`
+
+每个类内置 `personaPrompt`（可直接替换/扩展），并由 `PlanningAgent` 通过注册表选择。
+
+#### 交付模板与澄清模板（新增）
+
+每个子智能体类包含两类可直接细化的模板字段：
+- `clarificationTemplate`: 建议优先使用的澄清问题清单
+- `deliverableTemplate`: 默认交付清单模板
+
+`PlanningAgent` 会将这两类模板注入提示词中，作为生成任务描述时的辅助约束。
+
 ---
 
 ## 2. 编排层核心服务
@@ -86,11 +127,21 @@ flowchart LR
 
 ## 4. 状态机（Stage + Phase）
 
-当前系统存在两套并行状态：
+当前系统存在两套并行状态，但**统一由 `updateSessionState` 管理并校验迁移合法性**：
 - **Stage（流程阶段）**：`collecting` / `clarifying` / `planning` / `executing` / `reviewing` / `completed` / `failed`
 - **Phase（业务阶段）**：`ideation` / `analysis` / `development` / `testing` / `repair` / `delivery`
 
-### 4.1 Stage 状态机（TaskCreationService 侧）
+状态更新入口：`taskCreationFileMemoryStore.updateSessionState`  
+位置：`oneceo/apps/api/src/agents/task-creation/file-memory-store.ts`
+
+### 4.0 统一状态更新规则（新增）
+
+- **单一更新入口**：所有 stage / phase / status 更新需走 `updateSessionState`（内部校验合法迁移）。  
+- **Stage 由 Phase 派生**：当 phase 更新时，会自动映射到对应 stage。  
+- **终态保护**：`completed` / `failed` 后禁止回滚。  
+- **Clarifying 保护**：等待用户输入时不允许 phase 覆盖 stage。  
+
+### 4.1 Stage 状态机（统一入口驱动）
 
 ```mermaid
 stateDiagram-v2
@@ -109,7 +160,7 @@ stateDiagram-v2
   reviewing --> failed
 ```
 
-### 4.2 Phase 状态机（OpencodeRemoteService 侧）
+### 4.2 Phase 状态机（统一入口驱动）
 
 当前由 OSAC / OpenCode 事件触发，驱动业务闭环：
 
@@ -131,6 +182,15 @@ stateDiagram-v2
 - **testing → repair**：Review Gate 返回 `retry`
 - **repair → testing**：基于修复反馈再次触发 Playwright 测试
 - **testing → delivery**：Review Gate 通过/跳过
+
+#### Phase → Stage 映射规则
+
+- ideation → collecting  
+- analysis → planning  
+- development → executing  
+- testing → reviewing  
+- repair → executing  
+- delivery → reviewing（最终完成时再转 `completed`）  
 
 ---
 
@@ -167,15 +227,28 @@ stateDiagram-v2
 - `opencode_event`：OSAC/OpenCode 事件
 - `opencode_status`：OpenCode session 状态
 - `opencode_error`：执行错误
+- `auto_plan`：用户主动选择“自主规划”（无需澄清）
 
 ---
 
 ## 8. 当前瓶颈与注意事项（供批注）
 
-- 状态机分散在 TaskCreationService 与 OpencodeRemoteService 两处，需保持同步一致性
+- 状态机已统一入口，但仍需评估是否需要合并 `stage`/`phase` 为单状态源
 - Playwright 及 n.eko 必须共享 CDP 9222，否则用户端画面为空
 - 若 OpenCode 执行未产生文件变更，会阻断自动测试
 - OSAC 执行模式存在 `command` 与 `opencode_remote` 两种，需要统一策略
+
+---
+
+## 11. 无澄清自动规划机制（新增）
+
+为面向新手用户，系统支持**无人澄清自动继续**：
+
+1. 当 Layer2 提出澄清问题时，系统进入 `waiting_user`。  
+2. 若超时（默认 45 秒，可由 `TASK_CREATION_CLARIFY_TIMEOUT_MS` 配置），自动生成“默认假设”回复并继续规划。  
+3. 用户可主动发送 `auto_plan` 指令跳过澄清，直接进入规划。  
+
+此机制保证无须用户补充也能端到端完成任务。  
 
 ---
 

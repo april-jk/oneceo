@@ -924,7 +924,11 @@ export class OpencodeRemoteService {
     const nextCycle =
       params.phase === 'development' ? 0 : params.phase === 'repair' ? currentCycle + 1 : currentCycle;
 
-    await taskCreationFileMemoryStore.updateSessionPhase(params.sessionId, params.phase, { cycle: nextCycle });
+    await taskCreationFileMemoryStore.updateSessionState(params.sessionId, {
+      phase: params.phase,
+      phaseCycle: nextCycle,
+      stage: params.stage as any,
+    });
 
     const content = formatPhaseStatus(params.phase, params.message);
     const metadata: Record<string, unknown> = {
@@ -1506,8 +1510,10 @@ export class OpencodeRemoteService {
           opencodeSessionId,
         });
 
-        await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
-        await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'in_progress',
+          stage: 'executing',
+        });
 
         const content = 'OpenCode 会话已建立，正在等待执行事件...';
         await taskCreationFileMemoryStore.addMessage(
@@ -1548,11 +1554,11 @@ export class OpencodeRemoteService {
         this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), { hasFileChange: false });
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
       }
-      await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
-      await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
-      if (!session.phase) {
-        await taskCreationFileMemoryStore.updateSessionPhase(session.id, 'development');
-      }
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: session.phase ? (session.phase as any) : 'development',
+      });
 
       const content = 'OpenCode 已接收指令，正在执行并回传实时事件...';
       await taskCreationFileMemoryStore.addMessage(
@@ -1785,8 +1791,10 @@ export class OpencodeRemoteService {
           });
           return;
         }
-        await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
-        await taskCreationFileMemoryStore.updateSessionStage(session.id, 'reviewing');
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'in_progress',
+          stage: 'reviewing',
+        });
 
         await this.emitPhaseStatus({
           sessionId: session.id,
@@ -1851,8 +1859,10 @@ export class OpencodeRemoteService {
               })
             : '';
 
-        await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'in_progress');
-        await taskCreationFileMemoryStore.updateSessionStage(session.id, 'executing');
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'in_progress',
+          stage: 'executing',
+        });
 
         await this.emitPhaseStatus({
           sessionId: session.id,
@@ -1921,8 +1931,11 @@ export class OpencodeRemoteService {
         });
       }
 
-      await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'completed');
-      await taskCreationFileMemoryStore.updateSessionStage(session.id, 'completed');
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'completed',
+        stage: 'completed',
+        phase: session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery',
+      });
       this.runArtifacts.delete(runKey);
       if (orchestratorSessionId) {
         try {
@@ -1969,8 +1982,10 @@ export class OpencodeRemoteService {
       }
 
       await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
-      await taskCreationFileMemoryStore.updateSessionStatus(session.id, 'failed');
-      await taskCreationFileMemoryStore.updateSessionStage(session.id, 'failed');
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'failed',
+        stage: 'failed',
+      });
       this.runArtifacts.delete(runKey);
       if (orchestratorSessionId) {
         try {

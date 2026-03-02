@@ -42,6 +42,60 @@ interface MemoryFileShape {
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'task-creation-memory.json');
 
+type TaskStage = NonNullable<FileSessionRecord['stage']>;
+type TaskPhase = NonNullable<FileSessionRecord['phase']>;
+type TaskStatus = FileSessionRecord['status'];
+
+const PHASE_TRANSITIONS: Record<TaskPhase, TaskPhase[]> = {
+  ideation: ['analysis'],
+  analysis: ['development'],
+  development: ['testing', 'delivery'],
+  testing: ['repair', 'delivery'],
+  repair: ['testing'],
+  delivery: [],
+};
+
+const STAGE_TRANSITIONS: Record<TaskStage, TaskStage[]> = {
+  collecting: ['planning', 'executing', 'reviewing', 'clarifying', 'completed', 'failed'],
+  planning: ['executing', 'reviewing', 'clarifying', 'completed', 'failed'],
+  executing: ['reviewing', 'clarifying', 'completed', 'failed'],
+  reviewing: ['executing', 'clarifying', 'completed', 'failed'],
+  clarifying: ['collecting', 'planning', 'executing', 'reviewing', 'completed', 'failed'],
+  completed: [],
+  failed: [],
+};
+
+function stageFromPhase(phase: TaskPhase): TaskStage {
+  switch (phase) {
+    case 'ideation':
+      return 'collecting';
+    case 'analysis':
+      return 'planning';
+    case 'development':
+      return 'executing';
+    case 'testing':
+      return 'reviewing';
+    case 'repair':
+      return 'executing';
+    case 'delivery':
+      return 'reviewing';
+  }
+}
+
+function canTransitionPhase(current: TaskPhase | undefined, next: TaskPhase, allowBackward: boolean): boolean {
+  if (!current || current === next) return true;
+  if (allowBackward) return true;
+  const allowed = PHASE_TRANSITIONS[current] || [];
+  return allowed.includes(next);
+}
+
+function canTransitionStage(current: TaskStage | undefined, next: TaskStage, allowBackward: boolean): boolean {
+  if (!current || current === next) return true;
+  if (allowBackward) return true;
+  const allowed = STAGE_TRANSITIONS[current] || [];
+  return allowed.includes(next);
+}
+
 class TaskCreationFileMemoryStore {
   private writeLock: Promise<void> = Promise.resolve();
   private maxMessagesPerSession = Number(process.env.TASK_CREATION_MAX_MESSAGES || 1200);
@@ -200,35 +254,14 @@ class TaskCreationFileMemoryStore {
   }
 
   async updateSessionStatus(sessionId: string, status: FileSessionRecord['status']): Promise<void> {
-    await this.withLock(async () => {
-      const memory = await this.readMemory();
-      const session = memory.sessions.find((s) => s.id === sessionId);
-      if (!session) return;
-      session.status = status;
-      if (status === 'waiting_user') {
-        session.stage = 'clarifying';
-      } else if (status === 'completed') {
-        session.stage = 'completed';
-      } else if (status === 'failed') {
-        session.stage = 'failed';
-      }
-      session.updatedAt = new Date().toISOString();
-      await this.writeMemory(memory);
-    });
+    await this.updateSessionState(sessionId, { status });
   }
 
   async updateSessionStage(
     sessionId: string,
     stage: NonNullable<FileSessionRecord['stage']>
   ): Promise<void> {
-    await this.withLock(async () => {
-      const memory = await this.readMemory();
-      const session = memory.sessions.find((s) => s.id === sessionId);
-      if (!session) return;
-      session.stage = stage;
-      session.updatedAt = new Date().toISOString();
-      await this.writeMemory(memory);
-    });
+    await this.updateSessionState(sessionId, { stage });
   }
 
   async updateSessionPhase(
@@ -236,13 +269,96 @@ class TaskCreationFileMemoryStore {
     phase: NonNullable<FileSessionRecord['phase']>,
     options?: { cycle?: number }
   ): Promise<void> {
+    await this.updateSessionState(sessionId, { phase, phaseCycle: options?.cycle });
+  }
+
+  async updateSessionState(
+    sessionId: string,
+    payload: {
+      status?: TaskStatus;
+      stage?: TaskStage;
+      phase?: TaskPhase;
+      phaseCycle?: number;
+      allowBackward?: boolean;
+      source?: string;
+    }
+  ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      session.phase = phase;
-      if (Number.isFinite(options?.cycle)) {
-        session.phaseCycle = options?.cycle as number;
+
+      const terminal = session.status === 'completed' || session.status === 'failed';
+      if (terminal && !payload.status) {
+        return;
+      }
+      if (terminal && payload.status && payload.status !== session.status) {
+        return;
+      }
+
+      const allowBackward = Boolean(payload.allowBackward);
+      let nextStatus: TaskStatus = payload.status || session.status;
+      let nextPhase: TaskPhase | undefined = payload.phase || session.phase;
+      let nextStage: TaskStage | undefined = payload.stage || session.stage;
+      const currentPhase = session.phase as TaskPhase | undefined;
+      const currentStage = session.stage as TaskStage | undefined;
+
+      if (nextStatus === 'waiting_user') {
+        nextStage = 'clarifying';
+      } else if (nextStatus === 'completed') {
+        nextStage = 'completed';
+        if (!nextPhase) {
+          nextPhase = 'delivery';
+        }
+      } else if (nextStatus === 'failed') {
+        nextStage = 'failed';
+      }
+
+      if (nextPhase && !canTransitionPhase(currentPhase, nextPhase, allowBackward)) {
+        return;
+      }
+
+      if (nextPhase) {
+        const mappedStage = stageFromPhase(nextPhase);
+        const blockOverride =
+          nextStage === 'clarifying' ||
+          nextStage === 'completed' ||
+          nextStage === 'failed' ||
+          nextStatus === 'waiting_user' ||
+          nextStatus === 'completed' ||
+          nextStatus === 'failed';
+        if (!blockOverride) {
+          if (!nextStage || nextStage === mappedStage) {
+            nextStage = mappedStage;
+          } else if (stageFromPhase(nextPhase) !== nextStage) {
+            nextStage = mappedStage;
+          }
+        }
+      }
+
+      if (nextStage && !canTransitionStage(currentStage, nextStage, allowBackward)) {
+        return;
+      }
+
+      const phaseChanged = nextPhase && nextPhase !== session.phase;
+      const stageChanged = nextStage && nextStage !== session.stage;
+      const statusChanged = nextStatus !== session.status;
+      const cycleChanged =
+        Number.isFinite(payload.phaseCycle) && payload.phaseCycle !== session.phaseCycle;
+
+      if (!phaseChanged && !stageChanged && !statusChanged && !cycleChanged) {
+        return;
+      }
+
+      session.status = nextStatus;
+      if (nextStage) {
+        session.stage = nextStage;
+      }
+      if (nextPhase) {
+        session.phase = nextPhase;
+      }
+      if (Number.isFinite(payload.phaseCycle)) {
+        session.phaseCycle = payload.phaseCycle as number;
       }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);

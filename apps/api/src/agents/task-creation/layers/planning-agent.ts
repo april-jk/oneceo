@@ -15,6 +15,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import type { IntentRecognitionResult, TaskDescription } from '../types/intent';
 import { isAwaitingUserInputError } from '../errors';
+import { getPlanningPersona } from './planners/persona-registry';
 
 export class PlanningAgent extends BaseAgent {
   private userCallback?: (question: string, options?: string[]) => Promise<string>;
@@ -89,7 +90,23 @@ export class PlanningAgent extends BaseAgent {
     intentResult: IntentRecognitionResult,
     userInput: string
   ): Promise<TaskDescription> {
-    let prompt = `意图识别结果：
+    const route = getPlanningPersona(intentResult.intent_type);
+    const clarificationBlock = Array.isArray(route.clarificationTemplate) && route.clarificationTemplate.length > 0
+      ? `澄清问题模板（如需补充信息时优先使用）：\n- ${route.clarificationTemplate.join('\n- ')}\n`
+      : '';
+    const deliverableBlock = Array.isArray(route.deliverableTemplate) && route.deliverableTemplate.length > 0
+      ? `默认交付模板（可根据场景调整）：\n- ${route.deliverableTemplate.join('\n- ')}\n`
+      : '';
+
+    const routePrompt = `当前规划路由：${route.intentType}
+规划身份：${route.roleName}
+身份提示（占位，可后续替换为具体领域规划智能体提示词）：
+${route.personaPrompt}
+${clarificationBlock}${deliverableBlock}
+`;
+
+    let prompt = `${routePrompt}
+意图识别结果：
 ${JSON.stringify(intentResult, null, 2)}
 
 原始用户输入：
@@ -98,11 +115,13 @@ ${userInput}
 请根据意图识别结果和用户输入，生成详细的任务描述。`;
 
     // 如果是研究或分析类任务，考虑调用搜索
-    const needsSearch = this.shouldSearch(intentResult.intent_type);
+    const needsSearch = route.allowSearch && this.shouldSearch(intentResult.intent_type);
     
     if (needsSearch && this.searchCallback) {
       try {
-        const searchQuery = this.buildSearchQuery(intentResult);
+        const searchQuery = route.buildSearchQuery
+          ? route.buildSearchQuery(intentResult.key_info || {})
+          : this.buildSearchQuery(intentResult);
         const searchResults = await this.searchCallback(searchQuery);
         
         if (searchResults && searchResults.length > 0) {

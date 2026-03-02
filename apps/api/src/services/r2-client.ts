@@ -1,4 +1,5 @@
 import { S3Client, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'stream';
 
@@ -57,6 +58,14 @@ export async function downloadFromR2(key: string): Promise<Buffer> {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: bucketName(),
+    Key: key,
+  });
+  return getSignedUrl(r2Client, command, { expiresIn: expiresInSeconds });
 }
 
 export async function existsInR2(key: string): Promise<boolean> {

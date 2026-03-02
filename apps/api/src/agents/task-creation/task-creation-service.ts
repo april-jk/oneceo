@@ -115,59 +115,113 @@ export class TaskCreationService {
           })
       );
 
+      const existingIntentRecord = this.sessionId
+        ? await this.runDbOperation(
+            'getIntentResult',
+            () => taskCreationSessionDAO.getIntentResult(this.sessionId!)
+          )
+        : null;
+      const existingTaskDescriptionRecord = this.sessionId
+        ? await this.runDbOperation(
+            'getTaskDescription',
+            () => taskCreationSessionDAO.getTaskDescription(this.sessionId!)
+          )
+        : null;
+
       // Step 1: 意图识别
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
       this.setStage('collecting');
-      this.sendPhaseStatus('ideation', '构思阶段：正在整理需求...', 'system');
-      this.sendPhaseStatus('analysis', '分析阶段：正在分析您的任务需求...', 'intent');
-
       let intentResult;
-      try {
-        intentResult = await this.layer1.recognizeIntent(userInput);
-      } catch (error: any) {
-        if (this.isRecoverableLlmError(error)) {
-          throw new RecoverableAgentError(error.message || '意图识别失败');
-        }
-        throw error;
-      }
-      console.log('[TaskCreationService] 意图识别完成:', intentResult);
-      const confidenceScore = this.normalizeConfidence(intentResult.confidence);
+      if (existingIntentRecord) {
+        intentResult = {
+          intent_type: existingIntentRecord.intentType,
+          confidence: existingIntentRecord.confidence,
+          key_info: existingIntentRecord.keyInfo,
+          clarification_needed: existingIntentRecord.clarificationNeeded,
+          clarification_questions: existingIntentRecord.clarificationQuestions,
+          next_agent: 'planning_agent',
+        } as any;
+        const confidenceScore = this.normalizeConfidence(intentResult.confidence);
 
-      // 保存意图识别结果
-      await this.runDbOperation(
-        'saveIntentResult',
-        () =>
-          taskCreationSessionDAO.saveIntentResult({
-            sessionId: this.sessionId!,
-            userInput,
-            intentType: intentResult.intent_type,
+        this.setStage('planning');
+        this.sendPhaseStatus('analysis', '分析阶段：沿用历史任务定义，更新任务规划...', 'planning');
+        this.sendMessage({
+          type: 'agent_message' as any,
+          agent: 'intent_recognition',
+          content: `沿用任务类型：${this.getIntentTypeName(intentResult.intent_type)}`,
+          metadata: {
+            intent_type: intentResult.intent_type,
             confidence: confidenceScore,
-            keyInfo: intentResult.key_info,
-            clarificationNeeded: intentResult.clarification_needed,
-            clarificationQuestions: intentResult.clarification_questions,
-          })
-      );
+            next_action: 'plan',
+            reused: true,
+          },
+        });
+      } else {
+        this.sendPhaseStatus('ideation', '构思阶段：正在整理需求...', 'system');
+        this.sendPhaseStatus('analysis', '分析阶段：正在分析您的任务需求...', 'intent');
 
-      this.sendMessage({
-        type: 'agent_message' as any,
-        agent: 'intent_recognition',
-        content: `已识别任务类型：${this.getIntentTypeName(intentResult.intent_type)}`,
-        metadata: {
-          intent_type: intentResult.intent_type,
-          confidence: confidenceScore,
-          next_action: intentResult.clarification_needed ? 'ask_user' : 'plan',
-        },
-      });
+        try {
+          intentResult = await this.layer1.recognizeIntent(userInput);
+        } catch (error: any) {
+          if (this.isRecoverableLlmError(error)) {
+            throw new RecoverableAgentError(error.message || '意图识别失败');
+          }
+          throw error;
+        }
+        console.log('[TaskCreationService] 意图识别完成:', intentResult);
+        const confidenceScore = this.normalizeConfidence(intentResult.confidence);
+
+        // 保存意图识别结果
+        await this.runDbOperation(
+          'saveIntentResult',
+          () =>
+            taskCreationSessionDAO.saveIntentResult({
+              sessionId: this.sessionId!,
+              userInput,
+              intentType: intentResult.intent_type,
+              confidence: confidenceScore,
+              keyInfo: intentResult.key_info,
+              clarificationNeeded: intentResult.clarification_needed,
+              clarificationQuestions: intentResult.clarification_questions,
+            })
+        );
+
+        this.sendMessage({
+          type: 'agent_message' as any,
+          agent: 'intent_recognition',
+          content: `已识别任务类型：${this.getIntentTypeName(intentResult.intent_type)}`,
+          metadata: {
+            intent_type: intentResult.intent_type,
+            confidence: confidenceScore,
+            next_action: intentResult.clarification_needed ? 'ask_user' : 'plan',
+          },
+        });
+      }
 
       // Step 2: 任务规划
       this.setStage('planning');
-      this.sendPhaseStatus('analysis', '分析阶段：正在规划任务详情...', 'planning');
+      if (!existingIntentRecord) {
+        this.sendPhaseStatus('analysis', '分析阶段：正在规划任务详情...', 'planning');
+      }
 
       let taskDescription;
       try {
+        const planningInput = this.buildPlanningInput(
+          userInput,
+          existingTaskDescriptionRecord
+            ? {
+                title: existingTaskDescriptionRecord.title,
+                objective: existingTaskDescriptionRecord.objective,
+                scope: existingTaskDescriptionRecord.scope,
+                deliverables: existingTaskDescriptionRecord.deliverables,
+                constraints: existingTaskDescriptionRecord.constraints,
+                additional_info: existingTaskDescriptionRecord.additionalInfo,
+              }
+            : null
+        );
         taskDescription = await this.layer2.generateTaskDescription(
           intentResult,
-          userInput
+          planningInput
         );
       } catch (error: any) {
         if (this.isRecoverableLlmError(error)) {
@@ -404,6 +458,9 @@ export class TaskCreationService {
     stage: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed'
   ): void {
     this.stage = stage;
+    if (this.sessionId) {
+      void taskCreationFileMemoryStore.updateSessionState(this.sessionId, { stage });
+    }
   }
 
   private setPhase(
@@ -411,7 +468,7 @@ export class TaskCreationService {
   ): void {
     this.phase = phase;
     if (this.sessionId) {
-      void taskCreationFileMemoryStore.updateSessionPhase(this.sessionId, phase);
+      void taskCreationFileMemoryStore.updateSessionState(this.sessionId, { phase });
     }
   }
 
@@ -421,6 +478,12 @@ export class TaskCreationService {
     tone: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error' = 'system'
   ): void {
     this.setPhase(phase);
+    if (this.sessionId) {
+      void taskCreationFileMemoryStore.updateSessionState(this.sessionId, {
+        phase,
+        stage: this.stage,
+      });
+    }
     this.sendMessage({
       type: 'status_update' as any,
       agent: 'system',
@@ -438,6 +501,9 @@ export class TaskCreationService {
     tone: 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error',
     content: string
   ): void {
+    if (this.sessionId) {
+      void taskCreationFileMemoryStore.updateSessionState(this.sessionId, { stage: this.stage });
+    }
     this.sendMessage({
       type: 'status_update' as any,
       agent:
@@ -824,6 +890,14 @@ export class TaskCreationService {
     };
 
     return nameMap[intentType] || intentType;
+  }
+
+  private buildPlanningInput(userInput: string, baseDescription?: Record<string, unknown> | null): string {
+    if (!baseDescription) {
+      return userInput;
+    }
+    const base = JSON.stringify(baseDescription);
+    return `历史任务定义：${base}\n\n用户补充：${userInput}`;
   }
 
   private isRecoverableLlmError(error: unknown): boolean {

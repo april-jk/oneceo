@@ -20,6 +20,8 @@ export class TaskCreationWebSocketService {
   private services: Map<string, TaskCreationService> = new Map();
   private sessionByClient: Map<string, string> = new Map();
   private sessionCleanupTimers: Map<string, NodeJS.Timeout> = new Map();
+  private clarificationTimers: Map<string, NodeJS.Timeout> = new Map();
+  private autoContinueCounts: Map<string, number> = new Map();
   private opencodeUnsubscribe: (() => void) | null = null;
 
   /**
@@ -132,9 +134,15 @@ export class TaskCreationWebSocketService {
         if (!message.content) {
           throw new Error('用户输入不能为空');
         }
+        if (message.sessionId) {
+          this.clearClarificationTimer(message.sessionId);
+        }
         console.log(`[WebSocket] 开始处理任务创建: ${message.content}`);
         await this.handleUserMessage(clientId, message, service);
         console.log(`[WebSocket] 任务创建完成`);
+        break;
+      case 'auto_plan' as any:
+        await this.handleAutoPlan(clientId, message);
         break;
       case 'opencode_input' as any:
         if (!message.content) {
@@ -153,24 +161,32 @@ export class TaskCreationWebSocketService {
     const stage = current?.stage;
 
     if (stage === 'completed') {
-      await taskCreationFileMemoryStore.updateSessionStatus(sessionId, 'completed');
-      await taskCreationFileMemoryStore.updateSessionStage(sessionId, 'completed');
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+        status: 'completed',
+        stage: 'completed',
+      });
       return;
     }
     if (stage === 'failed') {
-      await taskCreationFileMemoryStore.updateSessionStatus(sessionId, 'failed');
-      await taskCreationFileMemoryStore.updateSessionStage(sessionId, 'failed');
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+        status: 'failed',
+        stage: 'failed',
+      });
       return;
     }
     if (stage === 'clarifying') {
-      await taskCreationFileMemoryStore.updateSessionStatus(sessionId, 'waiting_user');
-      await taskCreationFileMemoryStore.updateSessionStage(sessionId, 'clarifying');
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+        status: 'waiting_user',
+        stage: 'clarifying',
+      });
       return;
     }
 
-    await taskCreationFileMemoryStore.updateSessionStatus(sessionId, 'in_progress');
+    await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+      status: 'in_progress',
+    });
     if (stage) {
-      await taskCreationFileMemoryStore.updateSessionStage(sessionId, stage as any);
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: stage as any });
     }
   }
 
@@ -186,14 +202,14 @@ export class TaskCreationWebSocketService {
     const sessionId = this.sessionByClient.get(clientId) || message.sessionId;
     if (sessionId && !options?.skipPersistence) {
       const content = message.content || message.message || message.question || '';
-      if (message.type === 'status_update' && message.stage) {
-        void taskCreationFileMemoryStore.updateSessionStage(sessionId, message.stage as any);
-      }
-      const phaseValue =
-        (message as any).phase ||
-        (message.metadata && (message.metadata as any).phase);
-      if (phaseValue) {
-        void taskCreationFileMemoryStore.updateSessionPhase(sessionId, phaseValue as any);
+      if (message.type === 'status_update') {
+        const phaseValue =
+          (message as any).phase ||
+          (message.metadata && (message.metadata as any).phase);
+        void taskCreationFileMemoryStore.updateSessionState(sessionId, {
+          stage: message.stage as any,
+          phase: phaseValue as any,
+        });
       }
       const metadata = {
         ...message.metadata,
@@ -277,7 +293,81 @@ export class TaskCreationWebSocketService {
       sessionId,
     });
 
+    if (sessionId) {
+      this.scheduleAutoContinue(sessionId, clientId, question);
+    }
+
     return Promise.reject(new AwaitingUserInputError());
+  }
+
+  private scheduleAutoContinue(sessionId: string, clientId: string, question: string) {
+    this.clearClarificationTimer(sessionId);
+    const timeoutMs = Number(process.env.TASK_CREATION_CLARIFY_TIMEOUT_MS || 45000);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
+    const timer = setTimeout(() => {
+      this.autoContinueClarification(sessionId, clientId, 'timeout');
+    }, timeoutMs);
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    this.clarificationTimers.set(sessionId, timer);
+  }
+
+  private clearClarificationTimer(sessionId: string) {
+    const existing = this.clarificationTimers.get(sessionId);
+    if (existing) {
+      clearTimeout(existing);
+      this.clarificationTimers.delete(sessionId);
+    }
+  }
+
+  private async handleAutoPlan(clientId: string, message: WebSocketMessage): Promise<void> {
+    const sessionId =
+      message.sessionId ||
+      this.sessionByClient.get(clientId) ||
+      (message.metadata as any)?.sessionId;
+    if (!sessionId) {
+      throw new Error('缺少 sessionId，无法自动规划');
+    }
+    await this.autoContinueClarification(sessionId, clientId, 'user_triggered');
+  }
+
+  private async autoContinueClarification(sessionId: string, clientId: string, reason: 'timeout' | 'user_triggered') {
+    const service = this.services.get(clientId);
+    if (!service) return;
+
+    const count = (this.autoContinueCounts.get(sessionId) || 0) + 1;
+    this.autoContinueCounts.set(sessionId, count);
+    this.clearClarificationTimer(sessionId);
+
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session || session.status !== 'waiting_user') {
+      return;
+    }
+
+    const fallbackResponse = [
+      '用户未补充，按默认假设继续。',
+      '请基于已有信息完成规划，不再追加澄清问题。',
+    ].join(' ');
+
+    this.sendToClient(clientId, {
+      type: 'status_update' as any,
+      sessionId,
+      stage: 'planning' as any,
+      tone: 'planning' as any,
+      content: reason === 'timeout' ? '超时未补充，系统自动继续规划...' : '已选择自主规划，系统继续执行...',
+    });
+
+    await this.handleUserMessage(
+      clientId,
+      {
+        type: 'user_response' as any,
+        sessionId,
+        content: fallbackResponse,
+        metadata: { autoContinue: true, reason, count },
+      } as WebSocketMessage,
+      service
+    );
   }
 
   private async handleUserMessage(
@@ -304,7 +394,7 @@ export class TaskCreationWebSocketService {
     const pendingResume = sessionId ? await this.getPendingResume(sessionId) : null;
     if (sessionId) {
       this.sessionByClient.set(clientId, sessionId);
-      await taskCreationFileMemoryStore.updateSessionStage(sessionId, 'collecting');
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: 'collecting' });
       await taskCreationFileMemoryStore.addMessage(
         sessionId,
         'user',
@@ -320,7 +410,10 @@ export class TaskCreationWebSocketService {
     if (sessionId && pendingResume) {
       try {
         await taskCreationFileMemoryStore.clearPendingResume(sessionId);
-        await taskCreationFileMemoryStore.updateSessionStage(sessionId, pendingResume.stage || 'executing');
+        await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+          stage: pendingResume.stage || 'executing',
+          allowBackward: true,
+        });
         await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput);
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
@@ -334,14 +427,10 @@ export class TaskCreationWebSocketService {
           });
           return;
         }
-        await taskCreationFileMemoryStore.updateSessionStatus(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'waiting_user' : 'failed'
-        );
-        await taskCreationFileMemoryStore.updateSessionStage(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'clarifying' : 'failed'
-        );
+        await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+          status: isAwaitingUserInputError(error) ? 'waiting_user' : 'failed',
+          stage: isAwaitingUserInputError(error) ? 'clarifying' : 'failed',
+        });
         throw error;
       }
     }
@@ -350,19 +439,15 @@ export class TaskCreationWebSocketService {
       try {
         const resumedInput = await this.buildResumedInput(sessionId, message.content!);
         await taskCreationFileMemoryStore.clearPendingClarification(sessionId);
-        await taskCreationFileMemoryStore.updateSessionStage(sessionId, 'planning');
+        await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: 'planning' });
         await service.createTask(resumedInput, undefined, sessionId, 'user_response');
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
       } catch (error) {
-        await taskCreationFileMemoryStore.updateSessionStatus(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'waiting_user' : 'failed'
-        );
-        await taskCreationFileMemoryStore.updateSessionStage(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'clarifying' : 'failed'
-        );
+        await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+          status: isAwaitingUserInputError(error) ? 'waiting_user' : 'failed',
+          stage: isAwaitingUserInputError(error) ? 'clarifying' : 'failed',
+        });
         throw error;
       }
     }
@@ -388,14 +473,10 @@ export class TaskCreationWebSocketService {
           });
           return;
         }
-        await taskCreationFileMemoryStore.updateSessionStatus(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'waiting_user' : 'failed'
-        );
-        await taskCreationFileMemoryStore.updateSessionStage(
-          sessionId,
-          isAwaitingUserInputError(error) ? 'clarifying' : 'failed'
-        );
+        await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+          status: isAwaitingUserInputError(error) ? 'waiting_user' : 'failed',
+          stage: isAwaitingUserInputError(error) ? 'clarifying' : 'failed',
+        });
       }
       throw error;
     }

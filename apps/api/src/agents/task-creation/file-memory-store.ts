@@ -296,10 +296,11 @@ class TaskCreationFileMemoryStore {
         return;
       }
 
-      const allowBackward = Boolean(payload.allowBackward);
       let nextStatus: TaskStatus = payload.status || session.status;
       let nextPhase: TaskPhase | undefined = payload.phase || session.phase;
       let nextStage: TaskStage | undefined = payload.stage || session.stage;
+      const forceTerminal = nextStatus === 'completed' || nextStatus === 'failed';
+      const allowBackward = forceTerminal || Boolean(payload.allowBackward);
       const currentPhase = session.phase as TaskPhase | undefined;
       const currentStage = session.stage as TaskStage | undefined;
 
@@ -307,7 +308,7 @@ class TaskCreationFileMemoryStore {
         nextStage = 'clarifying';
       } else if (nextStatus === 'completed') {
         nextStage = 'completed';
-        if (!nextPhase) {
+        if (!payload.phase) {
           nextPhase = 'delivery';
         }
       } else if (nextStatus === 'failed') {

@@ -1,0 +1,756 @@
+diff --git a/client/src/app.vue b/client/src/app.vue
+index e908ebd..b871ddd 100644
+--- a/client/src/app.vue
++++ b/client/src/app.vue
+@@ -1,13 +1,10 @@
+ <template>
+-  <div id="neko" :class="[!videoOnly && side ? 'expanded' : '']">
++  <div id="neko" class="minimal">
+     <template v-if="!$client.supported">
+       <neko-unsupported />
+     </template>
+     <template v-else>
+       <main class="neko-main">
+-        <div v-if="!videoOnly" class="header-container">
+-          <neko-header />
+-        </div>
+         <div class="video-container">
+           <neko-video
+             ref="video"
+@@ -16,31 +13,8 @@
+             @control-attempt="controlAttempt"
+           />
+         </div>
+-        <div v-if="!videoOnly" class="room-container">
+-          <neko-members />
+-          <div class="room-menu">
+-            <div class="settings">
+-              <neko-menu />
+-            </div>
+-            <div class="controls">
+-              <neko-controls :shakeKbd="shakeKbd" />
+-            </div>
+-            <div class="emotes">
+-              <neko-emotes />
+-            </div>
+-          </div>
+-        </div>
+       </main>
+-      <neko-side v-if="!videoOnly && side" />
+       <neko-connect v-if="!connected" />
+-      <neko-about v-if="about" />
+-      <notifications
+-        v-if="!videoOnly"
+-        group="neko"
+-        position="top left"
+-        style="top: 50px; pointer-events: none"
+-        :ignoreDuplicates="true"
+-      />
+     </template>
+   </div>
+ </template>
+@@ -65,57 +39,12 @@
+       display: flex;
+       overflow: auto;
+ 
+-      .header-container {
+-        background: $background-tertiary;
+-        height: $menu-height;
+-        flex-shrink: 0;
+-        display: flex;
+-      }
+-
+       .video-container {
+-        background: rgba($color: #000, $alpha: 0.4);
++        background: #000;
+         max-width: 100%;
+         flex-grow: 1;
+         display: flex;
+       }
+-
+-      .room-container {
+-        background: $background-tertiary;
+-        height: $controls-height;
+-        max-width: 100%;
+-        flex-shrink: 0;
+-        flex-direction: column;
+-        display: flex;
+-
+-        .room-menu {
+-          max-width: 100%;
+-          flex: 1;
+-          display: flex;
+-
+-          .settings {
+-            margin-left: 10px;
+-            flex: 1;
+-            justify-content: flex-start;
+-            align-items: center;
+-            display: flex;
+-          }
+-
+-          .controls {
+-            flex: 1;
+-            justify-content: center;
+-            align-items: center;
+-            display: flex;
+-          }
+-
+-          .emotes {
+-            margin-right: 10px;
+-            flex: 1;
+-            justify-content: flex-end;
+-            align-items: center;
+-            display: flex;
+-          }
+-        }
+-      }
+     }
+   }
+ 
+@@ -160,11 +89,6 @@
+     }
+   }
+ 
+-  @media only screen and (max-width: 768px) {
+-    #neko .neko-main .room-container {
+-      display: none;
+-    }
+-  }
+ </style>
+ 
+ <script lang="ts">
+@@ -172,13 +96,6 @@
+ 
+   import Connect from '~/components/connect.vue'
+   import Video from '~/components/video.vue'
+-  import Menu from '~/components/menu.vue'
+-  import Side from '~/components/side.vue'
+-  import Controls from '~/components/controls.vue'
+-  import Members from '~/components/members.vue'
+-  import Emotes from '~/components/emotes.vue'
+-  import About from '~/components/about.vue'
+-  import Header from '~/components/header.vue'
+   import Unsupported from '~/components/unsupported.vue'
+ 
+   @Component({
+@@ -186,13 +103,6 @@
+     components: {
+       'neko-connect': Connect,
+       'neko-video': Video,
+-      'neko-menu': Menu,
+-      'neko-side': Side,
+-      'neko-controls': Controls,
+-      'neko-members': Members,
+-      'neko-emotes': Emotes,
+-      'neko-about': About,
+-      'neko-header': Header,
+       'neko-unsupported': Unsupported,
+     },
+   })
+@@ -218,10 +128,6 @@
+       return this.isCastMode
+     }
+ 
+-    get videoOnly() {
+-      return this.isCastMode || this.isEmbedMode
+-    }
+-
+     @Watch('volume', { immediate: true })
+     onVolume(volume: number) {
+       if (new URL(location.href).searchParams.has('volume')) {
+@@ -237,20 +143,6 @@
+       }
+     }
+ 
+-    @Watch('side')
+-    onSide(side: boolean) {
+-      if (side) {
+-        console.log('side enabled')
+-        // scroll to the side
+-        this.$nextTick(() => {
+-          const side = document.querySelector('aside')
+-          if (side) {
+-            side.scrollIntoView({ behavior: 'smooth', block: 'start' })
+-          }
+-        })
+-      }
+-    }
+-
+     controlAttempt() {
+       if (this.shakeKbd || this.$accessor.remote.hosted) return
+ 
+@@ -258,14 +150,6 @@
+       window.setTimeout(() => (this.shakeKbd = false), 5000)
+     }
+ 
+-    get about() {
+-      return this.$accessor.client.about
+-    }
+-
+-    get side() {
+-      return this.$accessor.client.side
+-    }
+-
+     get connected() {
+       return this.$accessor.connected
+     }
+diff --git a/client/src/components/connect.vue b/client/src/components/connect.vue
+index fbe3564..46cc65d 100644
+--- a/client/src/components/connect.vue
++++ b/client/src/components/connect.vue
+@@ -1,10 +1,7 @@
+ <template>
+   <div class="connect">
+     <div class="window">
+-      <div class="logo" title="About n.eko" @click.stop.prevent="about">
+-        <img src="@/assets/images/logo.svg" alt="n.eko" />
+-        <span><b>n</b>.eko</span>
+-      </div>
++      <div class="status" v-if="connecting">连接中...</div>
+       <form class="message" v-if="!connecting" @submit.stop.prevent="connect">
+         <span v-if="!autoPassword">{{ $t('connect.login_title') }}</span>
+         <span v-else>{{ $t('connect.invitation_title') }}</span>
+@@ -14,10 +11,6 @@
+           {{ $t('connect.connect') }}
+         </button>
+       </form>
+-      <div class="loader" v-if="connecting">
+-        <div class="bounce1"></div>
+-        <div class="bounce2"></div>
+-      </div>
+     </div>
+   </div>
+ </template>
+@@ -29,40 +22,17 @@
+     left: 0;
+     right: 0;
+     bottom: 0;
+-    background: rgba($color: $background-floating, $alpha: 0.8);
++    background: rgba($color: #0f1115, $alpha: 0.8);
+ 
+     display: flex;
+     justify-content: center;
+     align-items: center;
+ 
+     .window {
+-      width: 300px;
+-      background: $background-secondary;
+-      border-radius: 5px;
+-      padding: 10px;
+-
+-      .logo {
+-        width: 100%;
+-        display: flex;
+-        flex-direction: row;
+-        justify-content: center;
+-        align-items: center;
+-        cursor: pointer;
+-
+-        img {
+-          height: 90px;
+-          margin-right: 10px;
+-        }
+-
+-        span {
+-          font-size: 30px;
+-          line-height: 56px;
+-
+-          b {
+-            font-weight: 900;
+-          }
+-        }
+-      }
++      width: 320px;
++      background: #161a22;
++      border-radius: 10px;
++      padding: 16px;
+ 
+       .message {
+         display: flex;
+@@ -71,17 +41,16 @@
+         span {
+           display: block;
+           text-align: center;
+-          text-transform: uppercase;
+           line-height: 30px;
+         }
+ 
+         input {
+           border: none;
+-          padding: 6px 8px;
++          padding: 8px 10px;
+           line-height: 20px;
+-          border-radius: 5px;
+-          margin: 5px 0;
+-          background: $background-tertiary;
++          border-radius: 8px;
++          margin: 6px 0;
++          background: #0f1115;
+           color: $text-normal;
+ 
+           &::selection {
+@@ -91,56 +60,23 @@
+ 
+         button {
+           cursor: pointer;
+-          border-radius: 5px;
+-          padding: 4px;
+-          background: $style-primary;
++          border-radius: 8px;
++          padding: 6px;
++          background: #2a65ff;
+           color: $text-normal;
+           text-align: center;
+-          text-transform: uppercase;
+           font-weight: bold;
+           line-height: 30px;
+-          margin: 5px 0;
++          margin: 8px 0 0;
+           border: none;
+         }
+       }
+ 
+-      .loader {
+-        width: 90px;
+-        height: 90px;
+-        position: relative;
+-        margin: 0 auto;
+-
+-        .bounce1,
+-        .bounce2 {
+-          width: 100%;
+-          height: 100%;
+-          border-radius: 50%;
+-          background-color: $style-primary;
+-          opacity: 0.6;
+-          position: absolute;
+-          top: 0;
+-          left: 0;
+-
+-          -webkit-animation: bounce 2s infinite ease-in-out;
+-          animation: bounce 2s infinite ease-in-out;
+-        }
+-
+-        .bounce2 {
+-          -webkit-animation-delay: -1s;
+-          animation-delay: -1s;
+-        }
+-      }
+-    }
+-
+-    @keyframes bounce {
+-      0%,
+-      100% {
+-        transform: scale(0);
+-        -webkit-transform: scale(0);
+-      }
+-      50% {
+-        transform: scale(1);
+-        -webkit-transform: scale(1);
++      .status {
++        color: $text-normal;
++        text-align: center;
++        font-size: 14px;
++        padding: 14px 0;
+       }
+     }
+   }
+@@ -222,8 +158,5 @@
+       this.autoPassword = null
+     }
+ 
+-    about() {
+-      this.$accessor.client.toggleAbout()
+-    }
+   }
+ </script>
+diff --git a/client/src/components/video.vue b/client/src/components/video.vue
+index 051493e..e63531d 100644
+--- a/client/src/components/video.vue
++++ b/client/src/components/video.vue
+@@ -1,23 +1,18 @@
+ <template>
+   <div ref="component" class="video">
+     <div ref="player" class="player">
+-      <div ref="container" class="player-container">
+-        <video ref="video" playsinline />
+-        <div class="emotes">
+-          <template v-for="(emote, index) in emotes">
+-            <neko-emote :id="index" :key="index" />
+-          </template>
+-        </div>
+-        <textarea
+-          ref="overlay"
+-          class="overlay"
+-          spellcheck="false"
+-          tabindex="0"
+-          data-gramm="false"
+-          :style="{ pointerEvents: hosting ? 'auto' : 'none' }"
+-          @click.stop.prevent
+-          @contextmenu.stop.prevent
+-          @wheel.stop.prevent="onWheel"
++        <div ref="container" class="player-container">
++          <video ref="video" playsinline />
++          <textarea
++            ref="overlay"
++            class="overlay"
++            spellcheck="false"
++            tabindex="0"
++            data-gramm="false"
++            :style="{ pointerEvents: hosting && !uiLocked ? 'auto' : 'none' }"
++            @click.stop.prevent
++            @contextmenu.stop.prevent
++            @wheel.stop.prevent="onWheel"
+           @mousemove.stop.prevent="onMouseMove"
+           @mousedown.stop.prevent="onMouseDown"
+           @mouseup.stop.prevent="onMouseUp"
+@@ -25,55 +20,22 @@
+           @mouseleave.stop.prevent="onMouseLeave"
+           @touchmove.stop.prevent="onTouchHandler"
+           @touchstart.stop.prevent="onTouchHandler"
+-          @touchend.stop.prevent="onTouchHandler"
+-          @compositionstart="onCompositionStartHandler"
+-          @compositionend="onCompositionEndHandler"
+-        />
+-        <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
+-          <i class="fas fa-play-circle" />
+-        </div>
+-        <div v-else-if="mutedOverlay && muted" class="player-overlay" @click.stop.prevent="unmute">
+-          <i class="fas fa-volume-up" />
++            @touchend.stop.prevent="onTouchHandler"
++            @compositionstart="onCompositionStartHandler"
++            @compositionend="onCompositionEndHandler"
++          />
++          <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute"></div>
++          <div v-else-if="mutedOverlay && muted" class="player-overlay" @click.stop.prevent="unmute"></div>
++          <div ref="aspect" class="player-aspect" />
+         </div>
+-        <div ref="aspect" class="player-aspect" />
++      <div v-if="!hideControls" class="video-min-controls">
++        <button class="min-btn" type="button" @click.stop.prevent="toggleUiLock">
++          {{ uiLocked ? '解锁' : '锁定' }}
++        </button>
++        <button class="min-btn" type="button" @click.stop.prevent="toggleFullscreen">
++          {{ fullscreen ? '退出全屏' : '全屏' }}
++        </button>
+       </div>
+-      <ul v-if="!fullscreen && !hideControls" class="video-menu top">
+-        <li><i @click.stop.prevent="requestFullscreen" class="fas fa-expand"></i></li>
+-        <li v-if="admin"><i @click.stop.prevent="openResolution" class="fas fa-desktop"></i></li>
+-        <li v-if="!controlLocked && !implicitHosting" :class="extraControls || 'extra-control'">
+-          <i
+-            :class="[
+-              hosted && !hosting ? 'disabled' : '',
+-              !hosted && !hosting ? 'faded' : '',
+-              'fas',
+-              'fa-computer-mouse',
+-            ]"
+-            @click.stop.prevent="toggleControl"
+-          />
+-        </li>
+-      </ul>
+-      <ul v-if="!fullscreen && !hideControls" class="video-menu bottom">
+-        <li v-if="hosting && (!clipboard_read_available || !clipboard_write_available)">
+-          <i @click.stop.prevent="openClipboard" class="fas fa-clipboard"></i>
+-        </li>
+-        <li>
+-          <i
+-            v-if="pip_available"
+-            @click.stop.prevent="requestPictureInPicture"
+-            v-tooltip="{ content: 'Picture-in-Picture', placement: 'left', offset: 5, boundariesElement: 'body' }"
+-            class="fas fa-external-link-alt"
+-          />
+-        </li>
+-        <li
+-          v-if="hosting && is_touch_device"
+-          :class="extraControls || 'extra-control'"
+-          @click.stop.prevent="openMobileKeyboard"
+-        >
+-          <i class="fas fa-keyboard" />
+-        </li>
+-      </ul>
+-      <neko-resolution ref="resolution" v-if="admin" />
+-      <neko-clipboard ref="clipboard" v-if="hosting && (!clipboard_read_available || !clipboard_write_available)" />
+     </div>
+   </div>
+ </template>
+@@ -90,54 +52,29 @@
+       align-items: center;
+       background: #000;
+ 
+-      .video-menu {
++      .video-min-controls {
+         position: absolute;
+-        right: 20px;
+-
+-        &.top {
+-          top: 15px;
++        top: 12px;
++        right: 12px;
++        display: flex;
++        flex-direction: column;
++        gap: 8px;
++        opacity: 0.6;
++        transition: opacity 0.2s ease;
++
++        &:hover {
++          opacity: 1;
+         }
+ 
+-        &.bottom {
+-          bottom: 15px;
+-        }
+-
+-        li {
+-          margin: 0 0 10px 0;
+-
+-          i {
+-            width: 30px;
+-            height: 30px;
+-            background: rgba($color: #fff, $alpha: 0.2);
+-            border-radius: 5px;
+-            line-height: 30px;
+-            font-size: 16px;
+-            text-align: center;
+-            color: rgba($color: #fff, $alpha: 0.6);
+-            cursor: pointer;
+-
+-            &.faded {
+-              color: rgba($color: $text-normal, $alpha: 0.4);
+-            }
+-
+-            &.disabled {
+-              color: rgba($color: $style-error, $alpha: 0.4);
+-            }
+-          }
+-
+-          /* usually extra controls are only shown on mobile */
+-          &.extra-control {
+-            display: none;
+-          }
+-          @media (max-width: 768px) {
+-            &.extra-control {
+-              display: block;
+-            }
+-          }
+-
+-          &:last-child {
+-            margin: 0;
+-          }
++        .min-btn {
++          cursor: pointer;
++          border: none;
++          border-radius: 8px;
++          padding: 6px 10px;
++          background: rgba(15, 17, 21, 0.65);
++          color: #f5f7ff;
++          font-size: 12px;
++          line-height: 16px;
+         }
+       }
+ 
+@@ -160,8 +97,7 @@
+           }
+         }
+ 
+-        .player-overlay,
+-        .emotes {
++        .player-overlay {
+           position: absolute;
+           top: 0;
+           bottom: 0;
+@@ -171,17 +107,12 @@
+         }
+ 
+         .player-overlay {
+-          background: rgba($color: #000, $alpha: 0.2);
++          background: transparent;
+           display: flex;
+           justify-content: center;
+           align-items: center;
+           cursor: pointer;
+ 
+-          i::before {
+-            font-size: 120px;
+-            text-align: center;
+-          }
+-
+           &.hidden {
+             display: none;
+           }
+@@ -215,10 +146,6 @@
+   import ResizeObserver from 'resize-observer-polyfill'
+   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
+ 
+-  import Emote from './emote.vue'
+-  import Resolution from './resolution.vue'
+-  import Clipboard from './clipboard.vue'
+-
+   // @ts-ignore
+   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
+ 
+@@ -227,9 +154,6 @@
+   @Component({
+     name: 'neko-video',
+     components: {
+-      'neko-emote': Emote,
+-      'neko-resolution': Resolution,
+-      'neko-clipboard': Clipboard,
+     },
+   })
+   export default class extends Vue {
+@@ -239,8 +163,6 @@
+     @Ref('aspect') readonly _aspect!: HTMLElement
+     @Ref('player') readonly _player!: HTMLElement
+     @Ref('video') readonly _video!: HTMLVideoElement
+-    @Ref('resolution') readonly _resolution!: Resolution
+-    @Ref('clipboard') readonly _clipboard!: Clipboard
+ 
+     // all controls are hidden (e.g. for cast mode)
+     @Prop(Boolean) readonly hideControls!: boolean
+@@ -251,6 +173,7 @@
+     private observer = new ResizeObserver(this.onResize.bind(this))
+     private focused = false
+     private fullscreen = false
++    private uiLocked = false
+     private mutedOverlay = true
+     private lastTextAreaValue = ''
+ 
+@@ -302,10 +225,6 @@
+       return this.$accessor.video.playable
+     }
+ 
+-    get emotes() {
+-      return this.$accessor.chat.emotes
+-    }
+-
+     get autoplay() {
+       return this.$accessor.settings.autoplay
+     }
+@@ -327,11 +246,6 @@
+       return this.$accessor.settings.scroll_invert
+     }
+ 
+-    get pip_available() {
+-      //@ts-ignore
+-      return typeof document.createElement('video').requestPictureInPicture === 'function'
+-    }
+-
+     get clipboard_read_available() {
+       return (
+         'clipboard' in navigator &&
+@@ -517,7 +431,7 @@
+ 
+       /* Initialize Guacamole Keyboard */
+       this.keyboard.onkeydown = (key: number) => {
+-        if (!this.hosting || this.locked) {
++        if (!this.hosting || this.locked || this.uiLocked) {
+           return true
+         }
+ 
+@@ -525,7 +439,7 @@
+         return false
+       }
+       this.keyboard.onkeyup = (key: number) => {
+-        if (!this.hosting || this.locked) {
++        if (!this.hosting || this.locked || this.uiLocked) {
+           return
+         }
+ 
+@@ -627,18 +541,6 @@
+       this.$accessor.video.setMuted(false)
+     }
+ 
+-    toggleControl() {
+-      if (!this.playable) {
+-        return
+-      }
+-
+-      this.$accessor.remote.toggle()
+-    }
+-
+-    requestControl() {
+-      this.$accessor.remote.request()
+-    }
+-
+     requestFullscreen() {
+       // try to fullscreen player element
+       if (elementRequestFullscreen(this._player)) {
+@@ -653,18 +555,21 @@
+       }
+     }
+ 
+-    requestPictureInPicture() {
+-      //@ts-ignore
+-      this._video.requestPictureInPicture()
+-      this.onResize()
+-    }
+-
+-    openResolution(event: MouseEvent) {
+-      this._resolution.open(event)
++    toggleFullscreen() {
++      if (this.fullscreen) {
++        if (document.exitFullscreen) {
++          document.exitFullscreen()
++        }
++        return
++      }
++      this.requestFullscreen()
+     }
+ 
+-    openClipboard() {
+-      this._clipboard.open()
++    toggleUiLock() {
++      this.uiLocked = !this.uiLocked
++      if (this.uiLocked) {
++        this._overlay.blur()
++      }
+     }
+ 
+     async syncClipboard() {
+@@ -693,7 +598,7 @@
+ 
+     wheelThrottle = false
+     onWheel(e: WheelEvent) {
+-      if (!this.hosting || this.locked) {
++      if (!this.hosting || this.locked || this.uiLocked) {
+         return
+       }
+ 
+@@ -772,7 +677,7 @@
+     onMouseDown(e: MouseEvent) {
+       this.isMouseDown = true
+ 
+-      if (this.locked) {
++      if (this.locked || this.uiLocked) {
+         return
+       }
+ 
+@@ -790,7 +695,7 @@
+       if (!this.isMouseDown) return
+       this.isMouseDown = false
+ 
+-      if (this.locked) {
++      if (this.locked || this.uiLocked) {
+         return
+       }
+ 
+@@ -838,7 +743,7 @@
+     }
+ 
+     onMouseMove(e: MouseEvent) {
+-      if (!this.hosting || this.locked) {
++      if (!this.hosting || this.locked || this.uiLocked) {
+         return
+       }
+ 
+@@ -890,7 +795,7 @@
+       }
+ 
+       // in order to capture key events, overlay must be focused
+-      if (this.focused && this.hosting && !this.locked) {
++      if (this.focused && this.hosting && !this.locked && !this.uiLocked) {
+         this._overlay.focus()
+       }
+     }

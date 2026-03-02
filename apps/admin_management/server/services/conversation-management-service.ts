@@ -378,8 +378,12 @@ export class ConversationManagementService {
       return null;
     });
 
+    const sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
+
     const [messages, intent, taskDescription, executionPlan, sandboxEnvironments] = await Promise.all([
-      this.oneceoApi.getTaskCreationMessages(sessionId).catch(() => []),
+      sessionMessages.length > 0
+        ? Promise.resolve(sessionMessages)
+        : this.oneceoApi.getTaskCreationMessages(sessionId).catch(() => []),
       this.oneceoApi.getTaskCreationIntent(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationTaskDescription(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationExecutionPlan(sessionId).catch(() => null),
@@ -395,11 +399,11 @@ export class ConversationManagementService {
         stage: 'unknown',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        pendingQuestion: null,
+        pendingQuestion: undefined,
         pendingOptions: [],
       } as TaskCreationSession);
 
-    const normalizedMessages = Array.isArray(messages) ? messages : [];
+    const normalizedMessages = Array.isArray(messages) ? messages : sessionMessages;
     const relatedEnvironments = (Array.isArray(sandboxEnvironments) ? sandboxEnvironments : []).filter((item) => {
       if (!item || typeof item !== 'object') return false;
       if (item.sessionId === sessionId) return true;

@@ -1,0 +1,75 @@
+import { Template } from 'e2b';
+
+const playwrightPath = '/opt/ms-playwright';
+
+export function buildTemplate(patchUrl?: string) {
+  const patchSteps = patchUrl
+    ? [
+        `curl -fsSL -o /tmp/neko-ui.patch "${patchUrl}"`,
+        'cd /opt/neko-src && git apply --ignore-space-change --ignore-whitespace /tmp/neko-ui.patch',
+      ]
+    : [];
+
+  return Template()
+    .fromTemplate('opencode')
+    .setUser('root')
+    .aptInstall([
+      'xvfb',
+      'curl',
+      'wget',
+      'unzip',
+      'ca-certificates',
+      'gnupg',
+      'git',
+      'make',
+      'pkg-config',
+      'build-essential',
+      'nodejs',
+      'npm',
+      'gstreamer1.0-plugins-base',
+      'gstreamer1.0-plugins-good',
+      'gstreamer1.0-plugins-bad',
+      'gstreamer1.0-plugins-ugly',
+      'gstreamer1.0-libav',
+      'libgstreamer1.0-dev',
+      'libgstreamer-plugins-base1.0-dev',
+      'libgtk-3-dev',
+      'libx11-dev',
+      'libxext-dev',
+      'libxi-dev',
+      'libxfixes-dev',
+      'libxrandr-dev',
+      'libxrender-dev',
+      'libxkbfile-dev',
+      'libxtst-dev',
+      'libxcomposite-dev',
+      'libxdamage-dev',
+      'libxinerama-dev',
+      'libxcvt-dev',
+    ])
+    .runCmd([
+      'curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.24.5.linux-amd64.tar.gz',
+      'rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz',
+      'mkdir -p /tmp/neko-build',
+      'GOBIN=/tmp/neko-build GO111MODULE=on /usr/local/go/bin/go install github.com/m1k1o/neko/server/cmd/neko@latest',
+      'mv /tmp/neko-build/neko /usr/local/bin/neko',
+      'rm -rf /opt/neko-src',
+      'git clone --depth 1 https://github.com/m1k1o/neko.git /opt/neko-src',
+      ...patchSteps,
+      'cd /opt/neko-src/client && npm install && npm run build',
+      'rm -rf /opt/neko && mkdir -p /opt/neko/client/dist',
+      'cp -R /opt/neko-src/client/dist/* /opt/neko/client/dist/',
+      'chmod -R 755 /opt/neko',
+      `mkdir -p ${playwrightPath}`,
+      'npm install -g playwright @playwright/mcp@latest',
+      `PLAYWRIGHT_BROWSERS_PATH=${playwrightPath} playwright install --with-deps chromium`,
+      `chmod -R 755 ${playwrightPath}`,
+      `chown -R 1000:1000 ${playwrightPath}`,
+    ])
+    .setUser('user')
+    .setEnvs({
+      PLAYWRIGHT_BROWSERS_PATH: playwrightPath,
+    });
+}
+
+export const template = buildTemplate();

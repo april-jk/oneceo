@@ -828,6 +828,7 @@ export default function App() {
                   (conversationDetail.trace?.timeline || []).map((event) => {
                     const badgeLabel = event.badge || event.level;
                     const hasDecision = Boolean(event.decision?.layer || event.decision?.source || event.decision?.type);
+                    const hasDecisionIO = Boolean(event.decisionInput || event.decisionOutput);
                     const hasContext = Boolean(event.context?.trigger || event.context?.previous);
                     const rawContent = event.rawContent || '';
                     const showRaw = rawContent && rawContent !== event.content;
@@ -848,6 +849,23 @@ export default function App() {
                           </p>
                         ) : null}
                         {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
+                        {hasDecisionIO ? (
+                          <details>
+                            <summary>查看决策输入/输出</summary>
+                            {event.decisionInput ? (
+                              <>
+                                <p className="kpi-title">输入</p>
+                                <pre className="json-block">{toJsonText(event.decisionInput)}</pre>
+                              </>
+                            ) : null}
+                            {event.decisionOutput ? (
+                              <>
+                                <p className="kpi-title">输出</p>
+                                <pre className="json-block">{toJsonText(event.decisionOutput)}</pre>
+                              </>
+                            ) : null}
+                          </details>
+                        ) : null}
                         {hasContext ? (
                           <div className="trace-meta">
                             {event.context?.trigger ? (

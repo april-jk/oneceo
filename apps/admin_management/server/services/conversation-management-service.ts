@@ -26,6 +26,8 @@ type TraceEvent = {
     source?: string;
     type?: string;
   };
+  decisionInput?: Record<string, unknown> | string;
+  decisionOutput?: Record<string, unknown> | string;
   context?: {
     trigger?: {
       id?: string;
@@ -247,14 +249,41 @@ function normalizeDecisionLayer(value: unknown): string | undefined {
   return undefined;
 }
 
+function mapAgentToDecisionLayer(input: {
+  agent?: string;
+  tone?: string;
+  messageType?: string;
+  metadata?: Record<string, unknown>;
+}): string | undefined {
+  const agent = (input.agent || '').toLowerCase();
+  const tone = (input.tone || '').toLowerCase();
+  const messageType = (input.messageType || '').toLowerCase();
+  const metadata = input.metadata || {};
+
+  if (agent.includes('intent')) return 'L1';
+  if (agent.includes('planning')) return 'L2';
+  if (agent.includes('execution_plan')) return 'L3';
+  if (agent.includes('execution_review')) return 'L5';
+
+  if (tone === 'intent') return 'L1';
+  if (tone === 'planning') return 'L2';
+  if (tone === 'execution') return 'L4';
+  if (tone === 'review') return 'L5';
+
+  if (messageType === 'plan_generated') return 'L3';
+  if (messageType.startsWith('opencode_') || metadata.osacCommand) return 'L4';
+
+  return undefined;
+}
+
 function inferDecisionLayer(agentLabel: string | undefined): string | undefined {
   if (!agentLabel) return undefined;
   const normalized = agentLabel.toLowerCase();
   if (normalized.includes('intent')) return 'L1';
   if (normalized.includes('planning')) return 'L2';
   if (normalized.includes('execution_plan')) return 'L3';
-  if (normalized.includes('execution')) return 'L4';
   if (normalized.includes('review')) return 'L5';
+  if (normalized.includes('execution')) return 'L4';
   return undefined;
 }
 
@@ -264,7 +293,15 @@ function extractDecisionInfo(message: TaskCreationMessage): TraceEvent['decision
     metadata.decisionLayer ?? metadata.layer ?? metadata.depth ?? metadata.agentDepth ?? metadata.managerDepth
   );
   const source = pickString(metadata.agent, metadata.manager, metadata.controller, metadata.owner);
-  const inferredLayer = layer || inferDecisionLayer(source);
+  const inferredLayer =
+    layer ||
+    mapAgentToDecisionLayer({
+      agent: source,
+      tone: pickString(metadata.tone),
+      messageType: message.messageType,
+      metadata,
+    }) ||
+    inferDecisionLayer(source);
   const decisionType = pickString(metadata.decisionType, metadata.policy, message.messageType);
 
   if (!inferredLayer && !source && !decisionType) {
@@ -276,6 +313,91 @@ function extractDecisionInfo(message: TaskCreationMessage): TraceEvent['decision
     source,
     type: decisionType,
   };
+}
+
+function decisionLayerForTrace(stage: LlmTrace['stage']): string {
+  switch (stage) {
+    case 'intent_recognition':
+      return 'L1';
+    case 'planning':
+      return 'L2';
+    case 'execution_plan':
+      return 'L3';
+    case 'opencode_command':
+      return 'L4';
+    case 'execution_review':
+      return 'L5';
+    default:
+      return 'L?';
+  }
+}
+
+function summarizeDecisionOutput(stage: LlmTrace['stage'], response: Record<string, unknown>): string | undefined {
+  if (stage === 'intent_recognition') {
+    const intent = pickString(response.intentType, response.intent_type) || 'unknown';
+    const confidence = response.confidence !== undefined ? `confidence=${response.confidence}` : '';
+    return `intent=${intent}${confidence ? ` ${confidence}` : ''}`;
+  }
+  if (stage === 'planning') {
+    const title = pickString(response.title);
+    const objective = pickString(response.objective);
+    return [title ? `title=${title}` : '', objective ? `objective=${summarizeText(objective, 80)}` : '']
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (stage === 'execution_plan') {
+    const project = toRecord(response.project);
+    const title = pickString(project.title);
+    const managers = Array.isArray(project.managers) ? project.managers.length : undefined;
+    const summary = [
+      title ? `project=${title}` : '',
+      managers !== undefined ? `managers=${managers}` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return summary || undefined;
+  }
+  if (stage === 'execution_review') {
+    const summary = pickString(response.summary);
+    const done = response.done !== undefined ? `done=${String(response.done)}` : '';
+    const issues = Array.isArray(response.issues) ? `issues=${response.issues.length}` : '';
+    return [done, issues, summary ? `summary=${summarizeText(summary, 120)}` : ''].filter(Boolean).join(' ');
+  }
+  if (stage === 'opencode_command') {
+    const accepted = response.accepted !== undefined ? `accepted=${String(response.accepted)}` : '';
+    const message = pickString(response.message);
+    return [accepted, message ? `message=${summarizeText(message, 120)}` : ''].filter(Boolean).join(' ') || undefined;
+  }
+  return undefined;
+}
+
+function summarizeDecisionInput(stage: LlmTrace['stage'], request: Record<string, unknown>): string | undefined {
+  if (stage === 'intent_recognition') {
+    const userInput = pickString(request.userInput);
+    return userInput ? `userInput=${summarizeText(userInput, 120)}` : undefined;
+  }
+  if (stage === 'planning') {
+    const userInput = pickString(request.userInput);
+    const intent = toRecord(request.intent);
+    const intentType = pickString(intent.intentType, intent.intent_type);
+    return [intentType ? `intent=${intentType}` : '', userInput ? `userInput=${summarizeText(userInput, 120)}` : '']
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (stage === 'execution_plan') {
+    const taskDescription = toRecord(request.taskDescription);
+    const title = pickString(taskDescription.title);
+    return title ? `task=${title}` : undefined;
+  }
+  if (stage === 'execution_review') {
+    const template = pickString(request.promptTemplate);
+    return template ? `prompt=${template}` : undefined;
+  }
+  if (stage === 'opencode_command') {
+    const command = pickString(request.command);
+    return command ? `command=${summarizeText(command, 120)}` : undefined;
+  }
+  return undefined;
 }
 
 type LocalMemoryStore = {
@@ -542,6 +664,7 @@ function buildTimeline(input: {
   osacMessages: OsacMessageRecord[];
   kvmSummary: Record<string, unknown>;
   transitions: StateTransition[];
+  llmTraces: LlmTrace[];
 }): TraceEvent[] {
   const events: Array<TraceEvent & { order: number; timeMs: number }> = [];
   let order = 0;
@@ -591,6 +714,45 @@ function buildTimeline(input: {
       level: getEventLevel({ category, content: message.content }),
       metadata,
       decision,
+      order: order++,
+      timeMs,
+    });
+  }
+
+  for (const trace of input.llmTraces) {
+    const layer = decisionLayerForTrace(trace.stage);
+    const summaryOutput = summarizeDecisionOutput(trace.stage, trace.response);
+    const summaryInput = summarizeDecisionInput(trace.stage, trace.request);
+    const timestamp = parseTimestamp(trace.createdAt);
+    const timeMs = timestamp ? Date.parse(timestamp) : Number.MAX_SAFE_INTEGER;
+    const contentParts = [
+      summaryInput ? `输入: ${summaryInput}` : '',
+      summaryOutput ? `输出: ${summaryOutput}` : '',
+    ].filter(Boolean);
+
+    events.push({
+      id: `llm-${trace.id}`,
+      timestamp,
+      source: trace.source === 'opencode' ? 'agent' : 'agent',
+      category: 'decision',
+      title: `决策 ${layer} · ${trace.stage}`,
+      content: contentParts.join(' | '),
+      badge: `决策 ${layer}`,
+      level: 'info',
+      metadata: {
+        request: trace.request,
+        response: trace.response,
+        inferred: trace.inferred,
+        stage: trace.stage,
+        source: trace.source,
+      },
+      decision: {
+        layer,
+        source: trace.source,
+        type: trace.stage,
+      },
+      decisionInput: trace.request,
+      decisionOutput: trace.response,
       order: order++,
       timeMs,
     });
@@ -1030,6 +1192,7 @@ export class ConversationManagementService {
       osacMessages,
       kvmSummary,
       transitions,
+      llmTraces,
     });
 
     const messageCounts = normalizedMessages.reduce(

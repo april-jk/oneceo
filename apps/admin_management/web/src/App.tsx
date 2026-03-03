@@ -121,11 +121,78 @@ function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase
   return `status=${status} stage=${stage} phase=${phase}`;
 }
 
+function uniqueSorted(values: Array<string | undefined | null>) {
+  const set = new Set<string>();
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      set.add(value.trim());
+    }
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function parseFilterTime(value: string): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return '-';
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
+}
+
+function buildTransitionSearchText(transition: {
+  from?: { status?: string; stage?: string; phase?: string };
+  to?: { status?: string; stage?: string; phase?: string };
+  trigger?: {
+    messageType?: string;
+    role?: string;
+    agent?: string;
+    tone?: string;
+    content?: string;
+  };
+}) {
+  const parts = [
+    transition.from?.status,
+    transition.from?.stage,
+    transition.from?.phase,
+    transition.to?.status,
+    transition.to?.stage,
+    transition.to?.phase,
+    transition.trigger?.messageType,
+    transition.trigger?.role,
+    transition.trigger?.agent,
+    transition.trigger?.tone,
+    transition.trigger?.content,
+  ];
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
 function traceLevelClass(level: string) {
   if (level === 'error') return 'trace-level error';
   if (level === 'warn') return 'trace-level warn';
   return 'trace-level info';
 }
+
+const DEFAULT_TRANSITION_FILTERS = {
+  fromStage: 'all',
+  toStage: 'all',
+  status: 'all',
+  phase: 'all',
+  role: 'all',
+  messageType: 'all',
+  agent: 'all',
+  tone: 'all',
+  fromTime: '',
+  toTime: '',
+};
 
 export default function App() {
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
@@ -140,6 +207,9 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
+  const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
+  const [transitionQuery, setTransitionQuery] = useState('');
+  const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -316,10 +386,107 @@ export default function App() {
     };
   }, [activeSection, selectedSessionId]);
 
+  useEffect(() => {
+    setTransitionView('timeline');
+    setTransitionQuery('');
+    setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+  }, [selectedSessionId]);
+
   const vmPieData = useMemo(
     () => (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0),
     [kvmOverview]
   );
+
+  const stateTransitions = useMemo(
+    () => conversationDetail?.trace?.stateTransitions || [],
+    [conversationDetail]
+  );
+  const sortedTransitions = useMemo(() => {
+    return [...stateTransitions].sort((a, b) => {
+      const aTime = a.at ? Date.parse(a.at) : Number.MAX_SAFE_INTEGER;
+      const bTime = b.at ? Date.parse(b.at) : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime;
+    });
+  }, [stateTransitions]);
+
+  const transitionOptions = useMemo(() => {
+    return {
+      fromStages: uniqueSorted(sortedTransitions.map((item) => item.from?.stage)),
+      toStages: uniqueSorted(sortedTransitions.map((item) => item.to?.stage)),
+      statuses: uniqueSorted(sortedTransitions.map((item) => item.to?.status)),
+      phases: uniqueSorted(sortedTransitions.map((item) => item.to?.phase)),
+      roles: uniqueSorted(sortedTransitions.map((item) => item.trigger?.role)),
+      messageTypes: uniqueSorted(sortedTransitions.map((item) => item.trigger?.messageType)),
+      agents: uniqueSorted(sortedTransitions.map((item) => item.trigger?.agent)),
+      tones: uniqueSorted(sortedTransitions.map((item) => item.trigger?.tone)),
+    };
+  }, [sortedTransitions]);
+
+  const filteredTransitions = useMemo(() => {
+    const query = transitionQuery.trim().toLowerCase();
+    const fromMs = parseFilterTime(transitionFilters.fromTime);
+    const toMs = parseFilterTime(transitionFilters.toTime);
+
+    return sortedTransitions.filter((transition) => {
+      if (fromMs !== null) {
+        if (!transition.at) return false;
+        const ts = Date.parse(transition.at);
+        if (Number.isNaN(ts) || ts < fromMs) return false;
+      }
+      if (toMs !== null) {
+        if (!transition.at) return false;
+        const ts = Date.parse(transition.at);
+        if (Number.isNaN(ts) || ts > toMs) return false;
+      }
+
+      if (transitionFilters.fromStage !== 'all' && transition.from?.stage !== transitionFilters.fromStage) {
+        return false;
+      }
+      if (transitionFilters.toStage !== 'all' && transition.to?.stage !== transitionFilters.toStage) {
+        return false;
+      }
+      if (transitionFilters.status !== 'all' && transition.to?.status !== transitionFilters.status) {
+        return false;
+      }
+      if (transitionFilters.phase !== 'all' && transition.to?.phase !== transitionFilters.phase) {
+        return false;
+      }
+      if (transitionFilters.role !== 'all' && transition.trigger?.role !== transitionFilters.role) {
+        return false;
+      }
+      if (transitionFilters.messageType !== 'all' && transition.trigger?.messageType !== transitionFilters.messageType) {
+        return false;
+      }
+      if (transitionFilters.agent !== 'all' && transition.trigger?.agent !== transitionFilters.agent) {
+        return false;
+      }
+      if (transitionFilters.tone !== 'all' && transition.trigger?.tone !== transitionFilters.tone) {
+        return false;
+      }
+
+      if (query) {
+        const haystack = buildTransitionSearchText(transition);
+        if (!haystack.includes(query)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [sortedTransitions, transitionFilters, transitionQuery]);
+
+  const transitionStats = useMemo(() => {
+    const stageSet = new Set(filteredTransitions.map((item) => item.to?.stage).filter(Boolean) as string[]);
+    const statusSet = new Set(filteredTransitions.map((item) => item.to?.status).filter(Boolean) as string[]);
+    const phaseSet = new Set(filteredTransitions.map((item) => item.to?.phase).filter(Boolean) as string[]);
+    return {
+      total: sortedTransitions.length,
+      filtered: filteredTransitions.length,
+      stages: Array.from(stageSet),
+      statuses: Array.from(statusSet),
+      phases: Array.from(phaseSet),
+    };
+  }, [sortedTransitions.length, filteredTransitions]);
 
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
   const activeServiceOnline =
@@ -674,14 +841,267 @@ export default function App() {
                 )}
               </div>
 
-              <div className="panel-subtitle">
-                状态机流转 ({conversationDetail.trace?.stateTransitions?.length ?? 0})
+              <div className="panel-subtitle panel-subtitle-row">
+                <span>状态机流转 ({stateTransitions.length})</span>
+                <div className="panel-subtitle-actions">
+                  <button
+                    type="button"
+                    className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`}
+                    onClick={() => setTransitionView('timeline')}
+                  >
+                    时间轴
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`}
+                    onClick={() => setTransitionView('list')}
+                  >
+                    列表
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => {
+                      setTransitionQuery('');
+                      setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+                    }}
+                  >
+                    重置筛选
+                  </button>
+                </div>
               </div>
-              <div className="trace-list">
-                {(conversationDetail.trace?.stateTransitions || []).length === 0 ? (
-                  <p className="empty">无状态流转记录</p>
-                ) : (
-                  (conversationDetail.trace?.stateTransitions || []).map((transition, index) => {
+
+              <div className="state-filter">
+                <div className="state-filter-row">
+                  <label className="state-filter-field">
+                    <span>搜索</span>
+                    <input
+                      type="search"
+                      placeholder="按阶段/状态/消息内容搜索"
+                      value={transitionQuery}
+                      onChange={(event) => setTransitionQuery(event.target.value)}
+                    />
+                  </label>
+                  <label className="state-filter-field">
+                    <span>开始时间</span>
+                    <input
+                      type="datetime-local"
+                      value={transitionFilters.fromTime}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label className="state-filter-field">
+                    <span>结束时间</span>
+                    <input
+                      type="datetime-local"
+                      value={transitionFilters.toTime}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="state-filter-grid">
+                  <label className="state-filter-field">
+                    <span>起始阶段</span>
+                    <select
+                      value={transitionFilters.fromStage}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))
+                      }
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.fromStages.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>目标阶段</span>
+                    <select
+                      value={transitionFilters.toStage}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))
+                      }
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.toStages.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>状态</span>
+                    <select
+                      value={transitionFilters.status}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))
+                      }
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.statuses.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>阶段(Phase)</span>
+                    <select
+                      value={transitionFilters.phase}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))
+                      }
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.phases.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>消息类型</span>
+                    <select
+                      value={transitionFilters.messageType}
+                      onChange={(event) =>
+                        setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))
+                      }
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.messageTypes.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>角色</span>
+                    <select
+                      value={transitionFilters.role}
+                      onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.roles.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>Agent</span>
+                    <select
+                      value={transitionFilters.agent}
+                      onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.agents.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>Tone</span>
+                    <select
+                      value={transitionFilters.tone}
+                      onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}
+                    >
+                      <option value="all">全部</option>
+                      {transitionOptions.tones.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="compact-list state-summary">
+                <div className="compact-item">
+                  <span>总流转</span>
+                  <strong className="mono">{transitionStats.total}</strong>
+                </div>
+                <div className="compact-item">
+                  <span>筛选后</span>
+                  <strong className="mono">{transitionStats.filtered}</strong>
+                </div>
+                <div className="compact-item">
+                  <span>涉及阶段</span>
+                  <strong className="mono">{transitionStats.stages.length}</strong>
+                </div>
+                <div className="compact-item">
+                  <span>涉及状态</span>
+                  <strong className="mono">{transitionStats.statuses.length}</strong>
+                </div>
+                <div className="compact-item">
+                  <span>涉及 Phase</span>
+                  <strong className="mono">{transitionStats.phases.length}</strong>
+                </div>
+              </div>
+
+              {filteredTransitions.length === 0 ? (
+                <p className="empty">无状态流转记录</p>
+              ) : transitionView === 'timeline' ? (
+                <div className="state-timeline">
+                  {filteredTransitions.map((transition, index) => {
+                    const trigger = transition.trigger || {};
+                    const triggerSummary = [
+                      trigger.messageType ? `type=${trigger.messageType}` : '',
+                      trigger.role ? `role=${trigger.role}` : '',
+                      trigger.agent ? `agent=${trigger.agent}` : '',
+                      trigger.tone ? `tone=${trigger.tone}` : '',
+                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' / ');
+                    const prev = index > 0 ? filteredTransitions[index - 1] : null;
+                    const gap =
+                      prev?.at && transition.at
+                        ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
+                        : '-';
+                    return (
+                      <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
+                        <div className="state-timeline-head">
+                          <span className={traceLevelClass('info')}>state</span>
+                          <strong>{`${transition.from?.stage || '-'} → ${transition.to?.stage || '-'}`}</strong>
+                          <span>{formatDateTime(transition.at)}</span>
+                          <span className="state-gap">间隔 {gap}</span>
+                        </div>
+                        <div className="state-timeline-meta">
+                          <span className="mono">{formatStateSnapshot(transition.from)}</span>
+                          <span className="mono">{formatStateSnapshot(transition.to)}</span>
+                        </div>
+                        <div className="state-transition-flow">
+                          <span className="state-chip from">{transition.from?.stage || '-'}</span>
+                          <span className="state-chip status">{transition.to?.status || '-'}</span>
+                          <span className="state-chip phase">{transition.to?.phase || '-'}</span>
+                          <span className="state-chip to">{transition.to?.stage || '-'}</span>
+                        </div>
+                        {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
+                        {trigger.content ? (
+                          <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="trace-list">
+                  {filteredTransitions.map((transition, index) => {
                     const trigger = transition.trigger || {};
                     const triggerSummary = [
                       trigger.messageType ? `type=${trigger.messageType}` : '',
@@ -708,9 +1128,9 @@ export default function App() {
                         ) : null}
                       </article>
                     );
-                  })
-                )}
-              </div>
+                  })}
+                </div>
+              )}
 
               <div className="panel-subtitle">对话消息 ({conversationDetail.messages.length})</div>
               <div className="message-list message-list-large">

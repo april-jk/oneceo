@@ -62,6 +62,26 @@ function parseTimestamp(value: unknown): string | undefined {
   return new Date(parsed).toISOString();
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promise;
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 function getEventLevel(input: { category?: string; content?: string }): 'info' | 'warn' | 'error' {
   const category = (input.category || '').toLowerCase();
   const content = (input.content || '').toLowerCase();
@@ -654,6 +674,18 @@ export class ConversationManagementService {
 
     const kvmErrors: string[] = [...sessionErrors];
     const osacErrors: string[] = [];
+    const rawKvmTimeoutMs = Number(process.env.ADMIN_MANAGEMENT_KVM_TIMEOUT_MS || 3000);
+    const kvmTimeoutMs =
+      Number.isFinite(rawKvmTimeoutMs) && rawKvmTimeoutMs > 0 ? Math.max(500, rawKvmTimeoutMs) : 3000;
+
+    const kvmSafe = async <T>(label: string, task: Promise<T>): Promise<T | null> => {
+      try {
+        return await withTimeout(task, kvmTimeoutMs, label);
+      } catch (error) {
+        kvmErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      }
+    };
 
     let osacMessages: OsacMessageRecord[] = [];
     if (binding.orchestratorSessionId) {
@@ -666,48 +698,30 @@ export class ConversationManagementService {
     }
 
     const kvmSession = binding.orchestratorSessionId
-      ? await this.kvmConnector
-          .getSession(binding.orchestratorSessionId)
-          .catch((error) => {
-            kvmErrors.push(`getSession: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          })
+      ? await kvmSafe('getSession', this.kvmConnector.getSession(binding.orchestratorSessionId))
       : null;
 
     const kvmSessionVm = binding.orchestratorSessionId
-      ? await this.kvmConnector
-          .getSessionVm(binding.orchestratorSessionId)
-          .catch((error) => {
-            kvmErrors.push(`getSessionVm: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          })
+      ? await kvmSafe('getSessionVm', this.kvmConnector.getSessionVm(binding.orchestratorSessionId))
       : null;
 
     const kvmSandbox = binding.orchestratorSessionId
-      ? await this.kvmConnector
-          .getSandbox(binding.orchestratorSessionId)
-          .catch((error) => {
-            kvmErrors.push(`getSandbox: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          })
+      ? await kvmSafe('getSandbox', this.kvmConnector.getSandbox(binding.orchestratorSessionId))
       : null;
 
     const kvmSandboxIp = binding.orchestratorSessionId
-      ? await this.kvmConnector
-          .getSandboxIp(binding.orchestratorSessionId, false)
-          .catch((error) => {
-            kvmErrors.push(`getSandboxIp: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          })
+      ? await kvmSafe('getSandboxIp', this.kvmConnector.getSandboxIp(binding.orchestratorSessionId, false))
       : null;
 
     const kvmSandboxPorts = binding.orchestratorSessionId
-      ? await this.kvmConnector
-          .listSandboxPortMappings(binding.orchestratorSessionId, { refresh: false, verify: false, waitSeconds: 0 })
-          .catch((error) => {
-            kvmErrors.push(`listSandboxPortMappings: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
+      ? await kvmSafe(
+          'listSandboxPortMappings',
+          this.kvmConnector.listSandboxPortMappings(binding.orchestratorSessionId, {
+            refresh: false,
+            verify: false,
+            waitSeconds: 0,
           })
+        )
       : null;
 
     const vmName = pickString(
@@ -720,23 +734,11 @@ export class ConversationManagementService {
 
     const [kvmVmDetail, kvmVmMetrics, kvmVmLogs, kvmQuota] = vmName
       ? await Promise.all([
-          this.kvmConnector.getVm(vmName).catch((error) => {
-            kvmErrors.push(`getVm: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          }),
-          this.kvmConnector.getVmMetrics(vmName).catch((error) => {
-            kvmErrors.push(`getVmMetrics: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          }),
-          this.kvmConnector.getVmLogs(vmName, 200).catch((error) => {
-            kvmErrors.push(`getVmLogs: ${error instanceof Error ? error.message : String(error)}`);
-            return null;
-          }),
+          kvmSafe('getVm', this.kvmConnector.getVm(vmName)),
+          kvmSafe('getVmMetrics', this.kvmConnector.getVmMetrics(vmName)),
+          kvmSafe('getVmLogs', this.kvmConnector.getVmLogs(vmName, 200)),
           binding.orchestratorSessionId
-            ? this.kvmConnector.getQuota(binding.orchestratorSessionId).catch((error) => {
-                kvmErrors.push(`getQuota: ${error instanceof Error ? error.message : String(error)}`);
-                return null;
-              })
+            ? kvmSafe('getQuota', this.kvmConnector.getQuota(binding.orchestratorSessionId))
             : Promise.resolve(null),
         ])
       : [null, null, null, null];

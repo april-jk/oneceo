@@ -1,6 +1,6 @@
 import { AppError } from '../utils/errors';
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
-import type { VmAction } from '../types';
+import type { KvmVmListItem, KvmVmState, VmAction } from '../types';
 import type { AuditService } from './audit-service';
 
 function normalizeActionForAudit(action: VmAction) {
@@ -10,6 +10,13 @@ function normalizeActionForAudit(action: VmAction) {
   return action;
 }
 
+type VmListResult = {
+  total: number;
+  limit: number;
+  offset: number;
+  vms: Array<KvmVmListItem & { stateInfo?: KvmVmState }>;
+};
+
 export class KvmService {
   constructor(private readonly connector: KvmOrchestratorConnector, private readonly auditService: AuditService) {}
 
@@ -17,20 +24,33 @@ export class KvmService {
     return this.connector.health();
   }
 
-  async listVms(options?: { state?: string; limit?: number; offset?: number; withState?: boolean }) {
-    const listResult = await this.connector.listVms({
-      state: options?.state,
-      limit: options?.limit ?? 200,
-      offset: options?.offset ?? 0,
-      withState: options?.withState,
-    });
+  async listVms(options?: { state?: string; limit?: number; offset?: number; withState?: boolean }): Promise<VmListResult> {
+    const limit = options?.limit ?? 200;
+    const offset = options?.offset ?? 0;
+    let listResult: VmListResult | null = null;
+    try {
+      listResult = await this.connector.listVms({
+        state: options?.state,
+        limit,
+        offset,
+        withState: options?.withState,
+      });
+    } catch (error) {
+      console.warn('[admin-management][kvm] listVms failed', error);
+      return {
+        total: 0,
+        limit,
+        offset,
+        vms: [],
+      };
+    }
 
     if (!options?.withState) {
       return listResult;
     }
 
     const vmsWithState = await Promise.all(
-      listResult.vms.map(async (vm) => {
+      listResult.vms.map(async (vm): Promise<KvmVmListItem & { stateInfo?: KvmVmState }> => {
         const detail = await this.connector.getVm(vm.vmId).catch(() => null);
         const stateInfo = await this.connector.getVmState(vm.vmId).catch(() => undefined);
         return {
@@ -138,10 +158,20 @@ export class KvmService {
   }
 
   async listSessions() {
-    return this.connector.listSessions({
-      limit: 300,
-      offset: 0,
-    });
+    try {
+      return await this.connector.listSessions({
+        limit: 300,
+        offset: 0,
+      });
+    } catch (error) {
+      console.warn('[admin-management][kvm] listSessions failed', error);
+      return {
+        total: 0,
+        offset: 0,
+        limit: 300,
+        sessions: [],
+      };
+    }
   }
 
   async createSession(body?: { metadata?: Record<string, unknown> }, idempotencyKey?: string) {
@@ -294,4 +324,3 @@ export class KvmService {
     };
   }
 }
-

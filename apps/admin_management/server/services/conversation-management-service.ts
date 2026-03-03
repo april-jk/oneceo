@@ -263,15 +263,15 @@ function mapAgentToDecisionLayer(input: {
   if (agent.includes('intent')) return 'L1';
   if (agent.includes('planning')) return 'L2';
   if (agent.includes('execution_plan')) return 'L3';
-  if (agent.includes('execution_review')) return 'L5';
+  if (agent.includes('execution_review')) return 'L3';
 
   if (tone === 'intent') return 'L1';
   if (tone === 'planning') return 'L2';
-  if (tone === 'execution') return 'L4';
-  if (tone === 'review') return 'L5';
+  if (tone === 'execution') return 'L3';
+  if (tone === 'review') return 'L3';
 
   if (messageType === 'plan_generated') return 'L3';
-  if (messageType.startsWith('opencode_') || metadata.osacCommand) return 'L4';
+  if (messageType.startsWith('opencode_') || metadata.osacCommand) return 'L3';
 
   return undefined;
 }
@@ -282,8 +282,8 @@ function inferDecisionLayer(agentLabel: string | undefined): string | undefined 
   if (normalized.includes('intent')) return 'L1';
   if (normalized.includes('planning')) return 'L2';
   if (normalized.includes('execution_plan')) return 'L3';
-  if (normalized.includes('review')) return 'L5';
-  if (normalized.includes('execution')) return 'L4';
+  if (normalized.includes('review')) return 'L3';
+  if (normalized.includes('execution')) return 'L3';
   return undefined;
 }
 
@@ -324,9 +324,9 @@ function decisionLayerForTrace(stage: LlmTrace['stage']): string {
     case 'execution_plan':
       return 'L3';
     case 'opencode_command':
-      return 'L4';
+      return 'L3';
     case 'execution_review':
-      return 'L5';
+      return 'L3';
     default:
       return 'L?';
   }

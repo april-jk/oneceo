@@ -757,7 +757,7 @@ export default function App() {
                   className={`session-item ${selectedSessionId === session.id ? 'active' : ''}`}
                   onClick={() => {
                     setSelectedSessionId(session.id);
-                    void loadConversationDetail(session.id);
+                    setConversationDetail(null);
                   }}
                 >
                   <div>

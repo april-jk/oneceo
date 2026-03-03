@@ -317,6 +317,11 @@ export interface ConversationTraceEvent {
   };
   decisionInput?: Record<string, unknown> | string;
   decisionOutput?: Record<string, unknown> | string;
+  execution?: {
+    component?: string;
+    action?: string;
+    detail?: string;
+  };
   context?: {
     trigger?: {
       id?: string;

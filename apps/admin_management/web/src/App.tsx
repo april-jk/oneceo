@@ -148,6 +148,11 @@ function formatDuration(ms: number) {
   return `${hours}h`;
 }
 
+function buildExportFilename(sessionId: string) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `conversation-${sessionId}-${stamp}.json`;
+}
+
 function buildTransitionSearchText(transition: {
   from?: { status?: string; stage?: string; phase?: string };
   to?: { status?: string; stage?: string; phase?: string };
@@ -286,6 +291,31 @@ export default function App() {
     const detail = await api.getConversationSessionDetail(sessionId);
     setConversationDetail(detail);
   }, []);
+
+  const exportConversationDetail = useCallback(() => {
+    if (!conversationDetail) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      session: conversationDetail.session,
+      runtime: conversationDetail.runtime,
+      intent: conversationDetail.intent,
+      taskDescription: conversationDetail.taskDescription,
+      executionPlan: conversationDetail.executionPlan,
+      messages: conversationDetail.messages,
+      trace: conversationDetail.trace,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = buildExportFilename(conversationDetail.session.id);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }, [conversationDetail]);
 
   const loadAgentSection = useCallback(async () => {
     const result = await api.getAgentManagementOverview();
@@ -774,6 +804,11 @@ export default function App() {
         <article className="panel">
           <div className="panel-header">
             <h2>会话详情</h2>
+            {conversationDetail ? (
+              <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
+                下载会话详情
+              </button>
+            ) : null}
           </div>
           {!conversationDetail ? (
             <p className="empty">请选择左侧会话查看详情。</p>

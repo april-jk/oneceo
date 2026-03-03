@@ -313,6 +313,7 @@ export interface ConversationTraceEvent {
     layer?: string;
     source?: string;
     type?: string;
+    name?: string;
   };
   decisionInput?: Record<string, unknown> | string;
   decisionOutput?: Record<string, unknown> | string;

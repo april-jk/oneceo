@@ -305,8 +305,31 @@ export interface ConversationTraceEvent {
   category: string;
   title: string;
   content?: string;
+  badge?: string;
+  rawContent?: string;
   level: 'info' | 'warn' | 'error';
   metadata?: Record<string, unknown>;
+  decision?: {
+    layer?: string;
+    source?: string;
+    type?: string;
+  };
+  context?: {
+    trigger?: {
+      id?: string;
+      role?: string;
+      messageType?: string;
+      content?: string;
+      createdAt?: string;
+    };
+    previous?: {
+      id?: string;
+      role?: string;
+      messageType?: string;
+      content?: string;
+      createdAt?: string;
+    };
+  };
 }
 
 export interface ConversationStateSnapshot {

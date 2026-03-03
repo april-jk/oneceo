@@ -844,8 +844,9 @@ export default function App() {
                         </p>
                         {hasDecision ? (
                           <p className="trace-meta">
-                            决策层级: {event.decision?.layer || '-'} · 来源: {event.decision?.source || '-'} · 类型:{' '}
-                            {event.decision?.type || '-'}
+                            决策层级: {event.decision?.layer || '-'}
+                            {event.decision?.name ? ` · 名称: ${event.decision.name}` : ''}
+                            · 来源: {event.decision?.source || '-'} · 类型: {event.decision?.type || '-'}
                           </p>
                         ) : null}
                         {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}

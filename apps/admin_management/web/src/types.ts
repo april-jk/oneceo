@@ -314,6 +314,8 @@ export interface ConversationTraceEvent {
     source?: string;
     type?: string;
   };
+  decisionInput?: Record<string, unknown> | string;
+  decisionOutput?: Record<string, unknown> | string;
   context?: {
     trigger?: {
       id?: string;

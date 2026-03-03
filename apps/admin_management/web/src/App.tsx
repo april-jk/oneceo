@@ -114,6 +114,13 @@ function summarizeText(value: string | undefined, max = 260) {
   return `${compact.slice(0, max)}...`;
 }
 
+function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
+  const status = snapshot?.status || '-';
+  const stage = snapshot?.stage || '-';
+  const phase = snapshot?.phase || '-';
+  return `status=${status} stage=${stage} phase=${phase}`;
+}
+
 function traceLevelClass(level: string) {
   if (level === 'error') return 'trace-level error';
   if (level === 'warn') return 'trace-level warn';
@@ -664,6 +671,44 @@ export default function App() {
                       {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
                     </article>
                   ))
+                )}
+              </div>
+
+              <div className="panel-subtitle">
+                状态机流转 ({conversationDetail.trace?.stateTransitions?.length ?? 0})
+              </div>
+              <div className="trace-list">
+                {(conversationDetail.trace?.stateTransitions || []).length === 0 ? (
+                  <p className="empty">无状态流转记录</p>
+                ) : (
+                  (conversationDetail.trace?.stateTransitions || []).map((transition, index) => {
+                    const trigger = transition.trigger || {};
+                    const triggerSummary = [
+                      trigger.messageType ? `type=${trigger.messageType}` : '',
+                      trigger.role ? `role=${trigger.role}` : '',
+                      trigger.agent ? `agent=${trigger.agent}` : '',
+                      trigger.tone ? `tone=${trigger.tone}` : '',
+                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' / ');
+                    return (
+                      <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
+                        <p className="trace-head">
+                          <span className={traceLevelClass('info')}>state</span>
+                          <strong>{`${transition.from?.stage || '-'} → ${transition.to?.stage || '-'}`}</strong>
+                          <span>{formatDateTime(transition.at)}</span>
+                        </p>
+                        <p className="trace-meta mono">
+                          {formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}
+                        </p>
+                        {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
+                        {trigger.content ? (
+                          <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p>
+                        ) : null}
+                      </article>
+                    );
+                  })
                 )}
               </div>
 

@@ -260,6 +260,7 @@ export interface ConversationSessionDetailResponse {
     llm: ConversationLlmTrace[];
     agentDecisions: ConversationMessage[];
     opencodeMessages: ConversationMessage[];
+    stateTransitions?: ConversationStateTransition[];
     sandbox: {
       primaryEnvironment: SandboxEnvironmentItem | null;
       relatedEnvironments: SandboxEnvironmentItem[];
@@ -306,6 +307,26 @@ export interface ConversationTraceEvent {
   content?: string;
   level: 'info' | 'warn' | 'error';
   metadata?: Record<string, unknown>;
+}
+
+export interface ConversationStateSnapshot {
+  status?: string;
+  stage?: string;
+  phase?: string;
+}
+
+export interface ConversationStateTransition {
+  from: ConversationStateSnapshot;
+  to: ConversationStateSnapshot;
+  at?: string;
+  trigger: {
+    messageId?: string;
+    messageType?: string;
+    role?: string;
+    agent?: string;
+    tone?: string;
+    content?: string;
+  };
 }
 
 export interface ConversationLlmTrace {

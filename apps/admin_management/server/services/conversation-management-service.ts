@@ -25,6 +25,7 @@ type TraceEvent = {
     layer?: string;
     source?: string;
     type?: string;
+    name?: string;
   };
   decisionInput?: Record<string, unknown> | string;
   decisionOutput?: Record<string, unknown> | string;
@@ -267,11 +268,10 @@ function mapAgentToDecisionLayer(input: {
 
   if (tone === 'intent') return 'L1';
   if (tone === 'planning') return 'L2';
-  if (tone === 'execution') return 'L3';
+  if (tone === 'execution' && agent.includes('execution_plan')) return 'L3';
   if (tone === 'review') return 'L3';
 
   if (messageType === 'plan_generated') return 'L3';
-  if (messageType.startsWith('opencode_') || metadata.osacCommand) return 'L3';
 
   return undefined;
 }
@@ -283,7 +283,29 @@ function inferDecisionLayer(agentLabel: string | undefined): string | undefined 
   if (normalized.includes('planning')) return 'L2';
   if (normalized.includes('execution_plan')) return 'L3';
   if (normalized.includes('review')) return 'L3';
-  if (normalized.includes('execution')) return 'L3';
+  return undefined;
+}
+
+function resolveDecisionName(input: {
+  agent?: string;
+  tone?: string;
+  messageType?: string;
+}): string | undefined {
+  const agent = (input.agent || '').toLowerCase();
+  const tone = (input.tone || '').toLowerCase();
+  const messageType = (input.messageType || '').toLowerCase();
+
+  if (agent.includes('intent')) return 'IntentRecognitionAgent';
+  if (agent.includes('planning')) return 'PlanningAgent';
+  if (agent.includes('execution_plan')) return 'ExecutionPlanAgent';
+  if (agent.includes('execution_review')) return 'executionReviewAgent';
+
+  if (tone === 'intent') return 'IntentRecognitionAgent';
+  if (tone === 'planning') return 'PlanningAgent';
+  if (tone === 'review') return 'executionReviewAgent';
+
+  if (messageType === 'plan_generated') return 'ExecutionPlanAgent';
+
   return undefined;
 }
 
@@ -303,8 +325,13 @@ function extractDecisionInfo(message: TaskCreationMessage): TraceEvent['decision
     }) ||
     inferDecisionLayer(source);
   const decisionType = pickString(metadata.decisionType, metadata.policy, message.messageType);
+  const name = resolveDecisionName({
+    agent: source,
+    tone: pickString(metadata.tone),
+    messageType: message.messageType,
+  });
 
-  if (!inferredLayer && !source && !decisionType) {
+  if (!inferredLayer && !source && !decisionType && !name) {
     return undefined;
   }
 
@@ -312,23 +339,24 @@ function extractDecisionInfo(message: TaskCreationMessage): TraceEvent['decision
     layer: inferredLayer,
     source,
     type: decisionType,
+    name,
   };
 }
 
-function decisionLayerForTrace(stage: LlmTrace['stage']): string {
+function decisionMetaForTrace(stage: LlmTrace['stage']): { layer: string; name: string; type: string } {
   switch (stage) {
     case 'intent_recognition':
-      return 'L1';
+      return { layer: 'L1', name: 'IntentRecognitionAgent', type: 'intent_recognition' };
     case 'planning':
-      return 'L2';
+      return { layer: 'L2', name: 'PlanningAgent', type: 'planning' };
     case 'execution_plan':
-      return 'L3';
+      return { layer: 'L3', name: 'ExecutionPlanAgent', type: 'execution_plan' };
     case 'opencode_command':
-      return 'L3';
+      return { layer: 'L3', name: 'OpencodeRemoteService', type: 'opencode_command' };
     case 'execution_review':
-      return 'L3';
+      return { layer: 'L3', name: 'executionReviewAgent', type: 'execution_review' };
     default:
-      return 'L?';
+      return { layer: 'L?', name: 'unknown', type: stage };
   }
 }
 
@@ -720,7 +748,7 @@ function buildTimeline(input: {
   }
 
   for (const trace of input.llmTraces) {
-    const layer = decisionLayerForTrace(trace.stage);
+    const meta = decisionMetaForTrace(trace.stage);
     const summaryOutput = summarizeDecisionOutput(trace.stage, trace.response);
     const summaryInput = summarizeDecisionInput(trace.stage, trace.request);
     const timestamp = parseTimestamp(trace.createdAt);
@@ -735,9 +763,9 @@ function buildTimeline(input: {
       timestamp,
       source: trace.source === 'opencode' ? 'agent' : 'agent',
       category: 'decision',
-      title: `决策 ${layer} · ${trace.stage}`,
+      title: `决策 ${meta.layer} · ${meta.name}`,
       content: contentParts.join(' | '),
-      badge: `决策 ${layer}`,
+      badge: `决策 ${meta.layer}`,
       level: 'info',
       metadata: {
         request: trace.request,
@@ -747,9 +775,10 @@ function buildTimeline(input: {
         source: trace.source,
       },
       decision: {
-        layer,
+        layer: meta.layer,
         source: trace.source,
-        type: trace.stage,
+        type: meta.type,
+        name: meta.name,
       },
       decisionInput: trace.request,
       decisionOutput: trace.response,

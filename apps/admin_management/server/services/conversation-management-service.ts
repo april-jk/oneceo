@@ -17,8 +17,31 @@ type TraceEvent = {
   category: string;
   title: string;
   content?: string;
+  badge?: string;
+  rawContent?: string;
   level: 'info' | 'warn' | 'error';
   metadata?: Record<string, unknown>;
+  decision?: {
+    layer?: string;
+    source?: string;
+    type?: string;
+  };
+  context?: {
+    trigger?: {
+      id?: string;
+      role?: string;
+      messageType?: string;
+      content?: string;
+      createdAt?: string;
+    };
+    previous?: {
+      id?: string;
+      role?: string;
+      messageType?: string;
+      content?: string;
+      createdAt?: string;
+    };
+  };
 };
 
 type LlmTrace = {
@@ -127,6 +150,132 @@ function summarizeText(value: string | undefined, max = 160) {
   const compact = value.replace(/\s+/g, ' ').trim();
   if (compact.length <= max) return compact;
   return `${compact.slice(0, max)}...`;
+}
+
+function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
+  const status = snapshot?.status || '-';
+  const stage = snapshot?.stage || '-';
+  const phase = snapshot?.phase || '-';
+  return `status=${status} stage=${stage} phase=${phase}`;
+}
+
+function parseBracketPrefix(content: string | undefined): { prefix?: string; detail?: string } {
+  if (!content) return {};
+  const matched = content.match(/^\[(.+?)\]\s*(.*)$/);
+  if (!matched) return {};
+  const prefix = matched[1]?.trim();
+  const detail = matched[2]?.trim();
+  return {
+    prefix: prefix || undefined,
+    detail: detail || undefined,
+  };
+}
+
+function summarizeDiff(diff: Array<Record<string, unknown>>): string {
+  if (!diff.length) {
+    return 'diff: 无变更';
+  }
+  const summaryItems = diff.slice(0, 4).map((item) => {
+    const status = pickString(item.status, item.changeType, item.type) || 'modified';
+    const file = pickString(item.file, item.path, item.name) || 'unknown';
+    const additions = typeof item.additions === 'number' ? item.additions : undefined;
+    const deletions = typeof item.deletions === 'number' ? item.deletions : undefined;
+    if (additions !== undefined || deletions !== undefined) {
+      return `${status} ${file} (+${additions ?? 0}/-${deletions ?? 0})`;
+    }
+    return `${status} ${file}`;
+  });
+  const more = diff.length > 4 ? `... 另有 ${diff.length - 4} 项` : '';
+  return `diff: ${diff.length} 项, ${summaryItems.join(' | ')}${more ? `, ${more}` : ''}`;
+}
+
+function summarizeOpencodeEvent(metadata: Record<string, unknown>, content: string | undefined): string | undefined {
+  const eventType = pickString(metadata.eventType, toRecord(metadata.event).type);
+  const properties = toRecord(toRecord(metadata.event).properties);
+  const prefix = parseBracketPrefix(content);
+
+  if (eventType === 'session.diff') {
+    const diff = Array.isArray(properties.diff) ? (properties.diff as Array<Record<string, unknown>>) : [];
+    return summarizeDiff(diff);
+  }
+
+  if (eventType === 'file.edited' || eventType === 'file.created' || eventType === 'file.deleted') {
+    const path = pickString(properties.path, properties.file, properties.name);
+    return path ? `文件: ${path}` : undefined;
+  }
+
+  if (eventType === 'message.part.updated') {
+    const part = toRecord(properties.part);
+    const partType = pickString(part.type);
+    if (partType === 'tool') {
+      const toolName = pickString(part.tool, prefix.detail) || 'tool';
+      const toolId = pickString(part.id);
+      return `Tool: ${toolName}${toolId ? ` (id=${toolId})` : ''}`;
+    }
+    if (partType === 'text') {
+      const text = pickString(part.text, part.content);
+      return text ? `Text: ${summarizeText(text, 160)}` : undefined;
+    }
+  }
+
+  if (eventType === 'todo.updated') {
+    const todoList = Array.isArray(properties.todos) ? properties.todos : null;
+    if (todoList) {
+      return `Todo 更新: ${todoList.length} 项`;
+    }
+  }
+
+  const fallback = pickString(prefix.detail, eventType);
+  if (fallback) {
+    return fallback;
+  }
+
+  return undefined;
+}
+
+function normalizeDecisionLayer(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `L${value}`;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const raw = value.trim();
+    if (/^L?\d+$/.test(raw)) {
+      return raw.startsWith('L') ? raw : `L${raw}`;
+    }
+    return raw;
+  }
+  return undefined;
+}
+
+function inferDecisionLayer(agentLabel: string | undefined): string | undefined {
+  if (!agentLabel) return undefined;
+  const normalized = agentLabel.toLowerCase();
+  if (normalized.includes('intent')) return 'L1';
+  if (normalized.includes('planning')) return 'L2';
+  if (normalized.includes('execution_plan')) return 'L3';
+  if (normalized.includes('execution')) return 'L4';
+  if (normalized.includes('review')) return 'L5';
+  return undefined;
+}
+
+function extractDecisionInfo(message: TaskCreationMessage): TraceEvent['decision'] | undefined {
+  const metadata = toRecord(message.metadata);
+  const layer = normalizeDecisionLayer(
+    metadata.decisionLayer ?? metadata.layer ?? metadata.depth ?? metadata.agentDepth ?? metadata.managerDepth
+  );
+  const source = pickString(metadata.agent, metadata.manager, metadata.controller, metadata.owner);
+  const inferredLayer = layer || inferDecisionLayer(source);
+  const decisionType = pickString(metadata.decisionType, metadata.policy, message.messageType);
+
+  if (!inferredLayer && !source && !decisionType) {
+    return undefined;
+  }
+
+  return {
+    layer: inferredLayer,
+    source,
+    type: decisionType,
+  };
 }
 
 type LocalMemoryStore = {
@@ -392,24 +541,56 @@ function buildTimeline(input: {
   messages: TaskCreationMessage[];
   osacMessages: OsacMessageRecord[];
   kvmSummary: Record<string, unknown>;
+  transitions: StateTransition[];
 }): TraceEvent[] {
   const events: Array<TraceEvent & { order: number; timeMs: number }> = [];
   let order = 0;
 
-  for (const message of input.messages) {
+  const sortedMessages = [...input.messages].sort((a, b) => {
+    const aTime = Date.parse(a.createdAt || '') || 0;
+    const bTime = Date.parse(b.createdAt || '') || 0;
+    return aTime - bTime;
+  });
+
+  const messageIndex = new Map<string, number>();
+  sortedMessages.forEach((message, index) => {
+    if (message.id) {
+      messageIndex.set(message.id, index);
+    }
+  });
+
+  for (const message of sortedMessages) {
     const metadata = toRecord(message.metadata);
     const category = message.messageType || 'message';
     const timestamp = parseTimestamp(message.createdAt);
     const timeMs = timestamp ? Date.parse(timestamp) : Number.MAX_SAFE_INTEGER;
+    const prefix = parseBracketPrefix(message.content);
+    const decision = extractDecisionInfo(message);
+    const opencodeDetail =
+      category.startsWith('opencode_') || category === 'opencode_event'
+        ? summarizeOpencodeEvent(metadata, message.content)
+        : undefined;
+    const contentDetail = opencodeDetail || summarizeText(message.content, 220) || undefined;
+    const badge =
+      prefix.prefix || prefix.detail
+        ? `${prefix.prefix || 'Info'}${prefix.detail ? `: ${prefix.detail}` : ''}`
+        : undefined;
     events.push({
       id: `msg-${message.id}`,
       timestamp,
       source: normalizeMessageSource(message.role),
       category,
-      title: `${message.role} · ${category}`,
-      content: message.content,
+      title: prefix.detail
+        ? `${prefix.detail}`
+        : prefix.prefix
+          ? `${prefix.prefix}`
+          : `${message.role} · ${category}`,
+      content: contentDetail,
+      badge,
+      rawContent: message.content,
       level: getEventLevel({ category, content: message.content }),
       metadata,
+      decision,
       order: order++,
       timeMs,
     });
@@ -432,6 +613,7 @@ function buildTimeline(input: {
       category: message.type || 'OSAC',
       title: `OSAC · ${message.type || 'UNKNOWN'}`,
       content: summary || undefined,
+      badge: `OSAC${message.type ? `: ${message.type}` : ''}`,
       level: getEventLevel({ category: message.type, content: summary }),
       metadata: payload,
       order: order++,
@@ -451,12 +633,72 @@ function buildTimeline(input: {
       category: 'kvm_session',
       title: 'KVM 会话状态',
       content: `session=${orchestratorSessionId} status=${toStringValue(toRecord(input.kvmSummary.session).status)}`,
+      badge: 'KVM',
       level: 'info',
       metadata: input.kvmSummary,
       order: order++,
       timeMs: parseTimestamp(toRecord(input.kvmSummary.session).updatedAt)
         ? Date.parse(String(toRecord(input.kvmSummary.session).updatedAt))
         : Number.MAX_SAFE_INTEGER,
+    });
+  }
+
+  for (const transition of input.transitions) {
+    const triggerIndex = transition.trigger?.messageId ? messageIndex.get(transition.trigger.messageId) : undefined;
+    const triggerMessage = typeof triggerIndex === 'number' ? sortedMessages[triggerIndex] : undefined;
+    const previousMessage = typeof triggerIndex === 'number' && triggerIndex > 0 ? sortedMessages[triggerIndex - 1] : undefined;
+    const transitionTimestamp =
+      transition.at ||
+      (triggerMessage?.createdAt ? parseTimestamp(triggerMessage.createdAt) : undefined) ||
+      (previousMessage?.createdAt ? parseTimestamp(previousMessage.createdAt) : undefined);
+    const level = (() => {
+      const status = (transition.to.status || '').toLowerCase();
+      if (status.includes('failed')) return 'error';
+      if (status.includes('waiting')) return 'warn';
+      return 'info';
+    })();
+    const triggerSummary = triggerMessage ? summarizeText(triggerMessage.content, 220) : undefined;
+    const previousSummary = previousMessage ? summarizeText(previousMessage.content, 220) : undefined;
+    const contentParts = [
+      `状态: ${formatStateSnapshot(transition.from)} → ${formatStateSnapshot(transition.to)}`,
+      triggerSummary ? `触发消息: ${triggerSummary}` : '',
+      previousSummary ? `前置消息: ${previousSummary}` : '',
+    ].filter(Boolean);
+
+    events.push({
+      id: `state-${transition.at || transition.trigger?.messageId || Math.random().toString(36).slice(2)}`,
+      timestamp: transitionTimestamp,
+      source: 'system',
+      category: 'state_transition',
+      title: `状态流转 ${transition.from.stage || '-'} → ${transition.to.stage || '-'}`,
+      content: contentParts.join(' | '),
+      badge: '状态机',
+      level,
+      context: {
+        trigger: triggerMessage
+          ? {
+              id: triggerMessage.id,
+              role: triggerMessage.role,
+              messageType: triggerMessage.messageType,
+              content: triggerMessage.content,
+              createdAt: triggerMessage.createdAt,
+            }
+          : undefined,
+        previous: previousMessage
+          ? {
+              id: previousMessage.id,
+              role: previousMessage.role,
+              messageType: previousMessage.messageType,
+              content: previousMessage.content,
+              createdAt: previousMessage.createdAt,
+            }
+          : undefined,
+      },
+      metadata: {
+        transition,
+      },
+      order: order++,
+      timeMs: transitionTimestamp ? Date.parse(transitionTimestamp) : Number.MAX_SAFE_INTEGER,
     });
   }
 
@@ -762,6 +1004,11 @@ export class ConversationManagementService {
       executionPlan,
     });
 
+    const transitions = buildStateTransitions({
+      session: safeSession,
+      messages: normalizedMessages,
+    });
+
     const kvmSummary: Record<string, unknown> = {
       orchestratorSessionId: binding.orchestratorSessionId || null,
       vmName: vmName || null,
@@ -782,11 +1029,7 @@ export class ConversationManagementService {
       messages: normalizedMessages,
       osacMessages,
       kvmSummary,
-    });
-
-    const transitions = buildStateTransitions({
-      session: safeSession,
-      messages: normalizedMessages,
+      transitions,
     });
 
     const messageCounts = normalizedMessages.reduce(

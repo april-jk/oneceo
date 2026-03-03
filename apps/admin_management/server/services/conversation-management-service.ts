@@ -697,32 +697,22 @@ export class ConversationManagementService {
       }
     }
 
-    const kvmSession = binding.orchestratorSessionId
-      ? await kvmSafe('getSession', this.kvmConnector.getSession(binding.orchestratorSessionId))
-      : null;
-
-    const kvmSessionVm = binding.orchestratorSessionId
-      ? await kvmSafe('getSessionVm', this.kvmConnector.getSessionVm(binding.orchestratorSessionId))
-      : null;
-
-    const kvmSandbox = binding.orchestratorSessionId
-      ? await kvmSafe('getSandbox', this.kvmConnector.getSandbox(binding.orchestratorSessionId))
-      : null;
-
-    const kvmSandboxIp = binding.orchestratorSessionId
-      ? await kvmSafe('getSandboxIp', this.kvmConnector.getSandboxIp(binding.orchestratorSessionId, false))
-      : null;
-
-    const kvmSandboxPorts = binding.orchestratorSessionId
-      ? await kvmSafe(
-          'listSandboxPortMappings',
-          this.kvmConnector.listSandboxPortMappings(binding.orchestratorSessionId, {
-            refresh: false,
-            verify: false,
-            waitSeconds: 0,
-          })
-        )
-      : null;
+    const [kvmSession, kvmSessionVm, kvmSandbox, kvmSandboxIp, kvmSandboxPorts] = binding.orchestratorSessionId
+      ? await Promise.all([
+          kvmSafe('getSession', this.kvmConnector.getSession(binding.orchestratorSessionId)),
+          kvmSafe('getSessionVm', this.kvmConnector.getSessionVm(binding.orchestratorSessionId)),
+          kvmSafe('getSandbox', this.kvmConnector.getSandbox(binding.orchestratorSessionId)),
+          kvmSafe('getSandboxIp', this.kvmConnector.getSandboxIp(binding.orchestratorSessionId, false)),
+          kvmSafe(
+            'listSandboxPortMappings',
+            this.kvmConnector.listSandboxPortMappings(binding.orchestratorSessionId, {
+              refresh: false,
+              verify: false,
+              waitSeconds: 0,
+            })
+          ),
+        ])
+      : [null, null, null, null, null];
 
     const vmName = pickString(
       binding.vmName,

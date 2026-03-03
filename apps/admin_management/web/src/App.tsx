@@ -825,19 +825,54 @@ export default function App() {
                 {(conversationDetail.trace?.timeline || []).length === 0 ? (
                   <p className="empty">无链路事件</p>
                 ) : (
-                  (conversationDetail.trace?.timeline || []).map((event) => (
-                    <article key={event.id} className="trace-item">
-                      <p className="trace-head">
-                        <span className={traceLevelClass(event.level)}>{event.level}</span>
-                        <strong>{event.title}</strong>
-                        <span>{formatDateTime(event.timestamp)}</span>
-                      </p>
-                      <p className="trace-meta mono">
-                        {event.source} / {event.category}
-                      </p>
-                      {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
-                    </article>
-                  ))
+                  (conversationDetail.trace?.timeline || []).map((event) => {
+                    const badgeLabel = event.badge || event.level;
+                    const hasDecision = Boolean(event.decision?.layer || event.decision?.source || event.decision?.type);
+                    const hasContext = Boolean(event.context?.trigger || event.context?.previous);
+                    const rawContent = event.rawContent || '';
+                    const showRaw = rawContent && rawContent !== event.content;
+                    return (
+                      <article key={event.id} className="trace-item">
+                        <p className="trace-head">
+                          <span className={traceLevelClass(event.level)}>{badgeLabel}</span>
+                          <strong>{event.title}</strong>
+                          <span>{formatDateTime(event.timestamp)}</span>
+                        </p>
+                        <p className="trace-meta mono">
+                          {event.source} / {event.category}
+                        </p>
+                        {hasDecision ? (
+                          <p className="trace-meta">
+                            决策层级: {event.decision?.layer || '-'} · 来源: {event.decision?.source || '-'} · 类型:{' '}
+                            {event.decision?.type || '-'}
+                          </p>
+                        ) : null}
+                        {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
+                        {hasContext ? (
+                          <div className="trace-meta">
+                            {event.context?.trigger ? (
+                              <p>
+                                触发消息: {event.context.trigger.messageType || '-'} ·{' '}
+                                {summarizeText(event.context.trigger.content, 180)}
+                              </p>
+                            ) : null}
+                            {event.context?.previous ? (
+                              <p>
+                                前置消息: {event.context.previous.messageType || '-'} ·{' '}
+                                {summarizeText(event.context.previous.content, 180)}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {showRaw ? (
+                          <details>
+                            <summary>查看原文</summary>
+                            <pre className="json-block">{rawContent}</pre>
+                          </details>
+                        ) : null}
+                      </article>
+                    );
+                  })
                 )}
               </div>
 

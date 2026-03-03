@@ -829,6 +829,7 @@ export default function App() {
                     const badgeLabel = event.badge || event.level;
                     const hasDecision = Boolean(event.decision?.layer || event.decision?.source || event.decision?.type);
                     const hasDecisionIO = Boolean(event.decisionInput || event.decisionOutput);
+                    const hasExecution = Boolean(event.execution?.component || event.execution?.action || event.execution?.detail);
                     const hasContext = Boolean(event.context?.trigger || event.context?.previous);
                     const rawContent = event.rawContent || '';
                     const showRaw = rawContent && rawContent !== event.content;
@@ -847,6 +848,13 @@ export default function App() {
                             决策层级: {event.decision?.layer || '-'}
                             {event.decision?.name ? ` · 名称: ${event.decision.name}` : ''}
                             · 来源: {event.decision?.source || '-'} · 类型: {event.decision?.type || '-'}
+                          </p>
+                        ) : null}
+                        {hasExecution ? (
+                          <p className="trace-meta">
+                            执行层: {event.execution?.component || '-'}
+                            {event.execution?.action ? ` · 动作: ${event.execution.action}` : ''}
+                            {event.execution?.detail ? ` · ${summarizeText(event.execution.detail, 180)}` : ''}
                           </p>
                         ) : null}
                         {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}

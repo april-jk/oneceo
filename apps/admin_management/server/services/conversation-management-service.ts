@@ -29,6 +29,11 @@ type TraceEvent = {
   };
   decisionInput?: Record<string, unknown> | string;
   decisionOutput?: Record<string, unknown> | string;
+  execution?: {
+    component?: string;
+    action?: string;
+    detail?: string;
+  };
   context?: {
     trigger?: {
       id?: string;
@@ -172,6 +177,108 @@ function parseBracketPrefix(content: string | undefined): { prefix?: string; det
     prefix: prefix || undefined,
     detail: detail || undefined,
   };
+}
+
+function extractToolName(metadata: Record<string, unknown>): string | undefined {
+  const event = toRecord(metadata.event);
+  const properties = toRecord(event.properties);
+  const part = toRecord(properties.part);
+  return pickString(part.tool);
+}
+
+function inferExecutionDetail(input: {
+  message: TaskCreationMessage;
+  metadata: Record<string, unknown>;
+  opencodeDetail?: string;
+  prefix?: { prefix?: string; detail?: string };
+}): TraceEvent['execution'] | undefined {
+  const content = input.message.content || '';
+  const contentLower = content.toLowerCase();
+  const messageType = (input.message.messageType || '').toLowerCase();
+  const eventType = pickString(input.metadata.eventType, toRecord(input.metadata.event).type);
+  const toolName = extractToolName(input.metadata);
+
+  if (toolName) {
+    if (toolName.toLowerCase().includes('playwright')) {
+      return {
+        component: 'Playwright-MCP',
+        action: toolName,
+        detail: input.opencodeDetail,
+      };
+    }
+    return {
+      component: 'OpenCode',
+      action: toolName,
+      detail: input.opencodeDetail,
+    };
+  }
+
+  if (messageType.startsWith('opencode_') || eventType) {
+    return {
+      component: 'OpenCode',
+      action: eventType || messageType,
+      detail: input.opencodeDetail,
+    };
+  }
+
+  if (input.metadata.osacCommand) {
+    return {
+      component: 'OSAC',
+      action: 'command',
+      detail: summarizeText(String(input.metadata.osacCommand), 160),
+    };
+  }
+
+  if (input.metadata.osacEndpoint || input.metadata.osacHost || input.metadata.osacConnectionMode) {
+    const mode = pickString(input.metadata.osacConnectionMode);
+    return {
+      component: 'Sandbox',
+      action: 'provision',
+      detail: mode ? `mode=${mode}` : undefined,
+    };
+  }
+
+  if (contentLower.includes('playwright')) {
+    return {
+      component: 'Playwright-MCP',
+      action: 'run',
+      detail: summarizeText(content, 160),
+    };
+  }
+
+  if (contentLower.includes('n.eko') || contentLower.includes('neko')) {
+    return {
+      component: 'n.eko',
+      action: 'debug',
+      detail: summarizeText(content, 160),
+    };
+  }
+
+  if (contentLower.includes('sandbox')) {
+    return {
+      component: 'Sandbox',
+      action: 'lifecycle',
+      detail: summarizeText(content, 160),
+    };
+  }
+
+  if (contentLower.includes('osac')) {
+    return {
+      component: 'OSAC',
+      action: 'execute',
+      detail: summarizeText(content, 160),
+    };
+  }
+
+  if (input.prefix?.prefix && ['tool', 'opencode'].includes(input.prefix.prefix.toLowerCase())) {
+    return {
+      component: 'OpenCode',
+      action: input.prefix.detail || input.prefix.prefix,
+      detail: summarizeText(content, 160),
+    };
+  }
+
+  return undefined;
 }
 
 function summarizeDiff(diff: Array<Record<string, unknown>>): string {
@@ -726,6 +833,12 @@ function buildTimeline(input: {
       prefix.prefix || prefix.detail
         ? `${prefix.prefix || 'Info'}${prefix.detail ? `: ${prefix.detail}` : ''}`
         : undefined;
+    const executionDetail = inferExecutionDetail({
+      message,
+      metadata,
+      opencodeDetail,
+      prefix,
+    });
     events.push({
       id: `msg-${message.id}`,
       timestamp,
@@ -737,11 +850,12 @@ function buildTimeline(input: {
           ? `${prefix.prefix}`
           : `${message.role} · ${category}`,
       content: contentDetail,
-      badge,
+      badge: executionDetail?.component ? `执行层: ${executionDetail.component}` : badge,
       rawContent: message.content,
       level: getEventLevel({ category, content: message.content }),
       metadata,
       decision,
+      execution: executionDetail,
       order: order++,
       timeMs,
     });
@@ -804,9 +918,14 @@ function buildTimeline(input: {
       category: message.type || 'OSAC',
       title: `OSAC · ${message.type || 'UNKNOWN'}`,
       content: summary || undefined,
-      badge: `OSAC${message.type ? `: ${message.type}` : ''}`,
+      badge: `执行层: OSAC`,
       level: getEventLevel({ category: message.type, content: summary }),
       metadata: payload,
+      execution: {
+        component: 'OSAC',
+        action: message.type,
+        detail: summary || undefined,
+      },
       order: order++,
       timeMs,
     });

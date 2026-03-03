@@ -387,6 +387,153 @@ button:disabled {
   overflow: auto;
 }
 
+.state-filter {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.state-filter-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.state-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.state-filter-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.state-filter-field input,
+.state-filter-field select {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.toggle-btn {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.toggle-btn.active {
+  background: #0ea5a5;
+  color: #ffffff;
+  border-color: #0ea5a5;
+}
+
+.state-summary {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.state-timeline {
+  display: grid;
+  gap: 10px;
+  position: relative;
+  padding-left: 16px;
+  border-left: 2px solid #cbd5e1;
+  max-height: 48vh;
+  overflow: auto;
+}
+
+.state-timeline-item {
+  position: relative;
+  border: 1px solid #dbe7f4;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.state-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 16px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #0ea5a5;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 2px #cbd5e1;
+}
+
+.state-timeline-head {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #475569;
+}
+
+.state-timeline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.state-transition-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.state-chip {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.state-chip.from {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.state-chip.to {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.state-chip.status {
+  background: #e0f2fe;
+  color: #0c4a6e;
+}
+
+.state-chip.phase {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.state-gap {
+  color: #64748b;
+}
+
 .trace-item {
   border: 1px solid #dbe7f4;
   border-radius: 10px;
@@ -915,6 +1062,10 @@ button:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .state-filter-row {
+    grid-template-columns: 1fr;
+  }
+
   .control-grid,
   .form-grid {
     grid-template-columns: 1fr;
@@ -964,6 +1115,10 @@ button:focus-visible {
   }
 
   .button-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .state-filter-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -36,6 +36,23 @@ app.use(
 );
 app.use(express.json({ limit: '2mb' }));
 
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - startedAt;
+    console.log(
+      '[admin-management][request]',
+      JSON.stringify({
+        method: req.method,
+        path: req.originalUrl || req.url,
+        status: res.statusCode,
+        durationMs: duration,
+      })
+    );
+  });
+  next();
+});
+
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',

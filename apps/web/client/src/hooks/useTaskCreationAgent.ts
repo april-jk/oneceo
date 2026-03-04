@@ -497,6 +497,15 @@ function mergeRealtimeMessage(
   }
 
   if ((message.type === 'status_update' || message.type === 'error') && isTerminalOpencodeMessage(message)) {
+    const hasFinal = prev.some((item) => {
+      if (item.type !== 'opencode_event') return false;
+      const itemMeta = toRecord(item.metadata);
+      const eventType = asText(itemMeta.eventType);
+      return eventType === 'message.final' || itemMeta.source === 'stream_aggregate';
+    });
+    if (!hasFinal) {
+      return [...prev, message];
+    }
     const filtered = prev.filter((item) => {
       if (item.type !== 'opencode_event') return true;
       const itemMeta = toRecord(item.metadata);
@@ -511,6 +520,13 @@ function mergeRealtimeMessage(
 function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreationHistoryMessage[] {
   const result: TaskCreationHistoryMessage[] = [];
   const streamIndexByKey = new Map<string, number>();
+  const hasFinalInResult = () =>
+    result.some((item) => {
+      if (asText(item?.messageType) !== 'opencode_event') return false;
+      const metadata = toRecord(item?.metadata);
+      const eventType = asText(metadata.eventType);
+      return eventType === 'message.final' || metadata.source === 'stream_aggregate';
+    });
 
   const isDeltaStream = (metadata: Record<string, unknown>) => {
     const eventType = asText(metadata.eventType).toLowerCase();
@@ -591,13 +607,15 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         content.includes('OpenCode 执行失败') ||
         content.includes('OpenCode 执行已结束')
       ) {
-        const filtered = result.filter((existing) => {
-          if (asText(existing?.messageType) !== 'opencode_event') return true;
-          return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
-        });
-        result.length = 0;
-        result.push(...filtered);
-        streamIndexByKey.clear();
+        if (hasFinalInResult()) {
+          const filtered = result.filter((existing) => {
+            if (asText(existing?.messageType) !== 'opencode_event') return true;
+            return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
+          });
+          result.length = 0;
+          result.push(...filtered);
+          streamIndexByKey.clear();
+        }
       }
     }
 
@@ -608,12 +626,14 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         content.includes('OpenCode 执行失败') ||
         content.includes('OpenCode 执行已结束')
       ) {
-        const filtered = result.filter((existing) => {
-          if (asText(existing?.messageType) !== 'opencode_event') return true;
-          return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
-        });
-        result.length = 0;
-        result.push(...filtered);
+        if (hasFinalInResult()) {
+          const filtered = result.filter((existing) => {
+            if (asText(existing?.messageType) !== 'opencode_event') return true;
+            return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
+          });
+          result.length = 0;
+          result.push(...filtered);
+        }
       }
       streamIndexByKey.clear();
     }

@@ -1,6 +1,6 @@
 # 当前 Agent 架构（oneceo.ai）
 
-日期：2026-03-02
+日期：2026-03-04
 
 本文档聚焦**当前代码实现**的基层智能体/编排链路与状态机（以 `oneceo/apps/api` 为主），用于研发协作与后续批注迭代。
 
@@ -86,6 +86,20 @@ Layer 2 已拆解为**独立规划智能体类**，用于后续逐个细化：
 - 触发 Playwright-MCP 测试与 n.eko 画面转发
 
 代码位置：`oneceo/apps/api/src/services/opencode-remote-service.ts`
+
+#### 2.2.1 SSE 文本流落库兜底（新增）
+
+为避免 OpenCode 仅产生流式文本而未发送 `message.final` 时历史内容丢失，系统引入**定期 checkpoint 落库**机制：
+
+- 内存中持续聚合文本流（`textStreams`）
+- 每隔一段时间将最新文本写入数据库（避免高频 IO）
+- 正常完成时仍会生成 `stream_aggregate` 作为最终输出
+
+可配置项：
+
+- `OPENCODE_STREAM_CHECKPOINT_INTERVAL_MS`  
+  默认：`8000`（8 秒）  
+  说明：文本流落库间隔；数值越小越及时，IO 越频繁。建议 5s~15s 之间权衡。
 
 ### 2.3 OSAC / Sandbox / Debug
 
@@ -178,9 +192,9 @@ stateDiagram-v2
 
 #### Phase 驱动逻辑（关键规则）
 
-- **development → testing**：OpenCode 执行完成，且检测到 workspace 产物
+- **development → testing**：OpenCode 执行完成，且检测到 workspace 新产物（revision 增长）
 - **testing → repair**：Review Gate 返回 `retry`
-- **repair → testing**：基于修复反馈再次触发 Playwright 测试
+- **repair → testing**：修复产生新产物（revision 增长），允许再次测试
 - **testing → delivery**：Review Gate 通过/跳过
 
 #### Phase → Stage 映射规则
@@ -191,6 +205,60 @@ stateDiagram-v2
 - testing → reviewing  
 - repair → executing  
 - delivery → reviewing（最终完成时再转 `completed`）  
+
+### 4.3 状态机 Guard 条件（新增）
+
+为避免流程“空转/摇摆”，当前 phase 转移增加明确的 guard 条件：
+
+- **产物基线（workspace baseline）**  
+  - 启动时记录 workspace 初始文件列表，后续只有**新增文件**才被视为产物。  
+  - 避免默认文件导致误触发 testing。
+
+- **产物版本（artifact revision）**  
+  - 每次检测到真实文件变更时 `revision++`  
+  - **只有 `revision > testedRevision` 才允许再次测试**  
+  - 支持多轮“修复 → 测试 → 修复 → 测试”循环
+
+- **测试证据判定**  
+  - Playwright 工具事件或测试日志明确执行 → 视为测试完成  
+  - 流式文本提到“Playwright/自动化测试”时，触发 LLM 判定兜底，避免误判  
+  - 无测试证据时不进入 testing-review 分支，避免卡住
+
+### 4.4 状态机转移图（含 guard）
+
+```mermaid
+flowchart TD
+  IDEATION --> ANALYSIS --> DEV
+  DEV -->|新产物 revision+1| TEST
+  DEV -->|无产物| DEV
+  TEST -->|测试通过| DELIVERY
+  TEST -->|测试失败| REPAIR
+  REPAIR -->|新产物 revision+1| TEST
+  REPAIR -->|无新产物| REPAIR
+  DELIVERY --> COMPLETED
+```
+
+### 4.5 状态迁移条件表（详细版）
+
+| 当前 Phase | 目标 Phase | 触发来源 | 必要条件（Guard） | 结果 |
+|---|---|---|---|---|
+| ideation | analysis | TaskCreationService | 意图识别完成 | 进入任务规划 |
+| analysis | development | TaskCreationService | 执行计划已生成 | 启动执行环境 |
+| development | testing | OpencodeRemoteService | OpenCode `session.idle` 且检测到**新产物**（revision 增长）且尚未测试 | 下发 Playwright 测试 |
+| development | development | OpencodeRemoteService | OpenCode `session.idle` 但未检测到产物 | 继续等待或发出“补产物”提示 |
+| testing | repair | Review Gate | Review 返回 `retry` | 进入修复 |
+| testing | delivery | Review Gate | Review 返回 `pass` 或 `skipped` | 进入交付 |
+| repair | testing | OpencodeRemoteService | 修复后检测到**新产物**（revision 增长） | 重新下发测试 |
+| repair | repair | OpencodeRemoteService | 修复后无新产物 | 继续修复 |
+| delivery | completed | OpencodeRemoteService | 交付说明生成 | 标记完成 |
+
+#### Guard 说明细化
+
+- **新产物判定**：workspace baseline 记录 + 新文件出现  
+- **测试完成判定**：Playwright 工具事件 或 LLM 流式文本判定（可信度≥0.6）  
+- **重复测试阻断**：`revision > testedRevision` 才允许再次测试  
+- **终态保护**：completed/failed 后禁止回滚
+
 
 ---
 

@@ -558,6 +558,7 @@ export class TaskCreationService {
           : '当前处于【开发阶段】';
     const playwrightRequirement = [
       '必须使用 playwright-mcp 进行浏览器自动化验证（在开发/测试/修复阶段均需使用）。',
+      'playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
       '必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
       '连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
       '要求 Playwright 以可视模式运行（headless=false），保证画面在调试窗口可见。',
@@ -616,8 +617,9 @@ export class TaskCreationService {
       '2) 补齐缺口并输出更新后的交付物说明。',
       '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
       '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
-      '5) 必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
-      '6) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
+      '5) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
+      '6) 必须连接到与 n.eko 同一实例的 Chromium（CDP 9222，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
+      '7) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；若无页面，仅在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
     ].join('\n');
 
     const flattened = prompt

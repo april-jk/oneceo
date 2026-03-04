@@ -9,6 +9,7 @@ import { ensureDatabaseConnection } from '../config/database';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
+import { playwrightTestDetectionAgent } from '../agents/task-creation/layers/playwright-test-detection-agent';
 import { touchSandbox } from './sandbox-activity-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
@@ -40,6 +41,26 @@ type OpencodeTextStreamEntry = {
   text: string;
   updatedAt: number;
   truncated?: boolean;
+};
+
+type RunArtifact = {
+  hasFileChange: boolean;
+  missingArtifactNudges: number;
+  startedAt: number;
+  promptedAt: number;
+  completionInProgress: boolean;
+  phaseAtStart?: FlowPhase;
+  cycleAtStart?: number;
+  hasPlaywrightUsage?: boolean;
+  testDetectionAttempted?: boolean;
+  toolEvents: number;
+  commandEvents: number;
+  diffEvents: number;
+  todoEvents: number;
+  fileEvents: number;
+  textEvents: number;
+  lastText?: string;
+  toolsUsed: Set<string>;
 };
 
 function asString(value: unknown): string {
@@ -149,6 +170,159 @@ function normalizePath(value: unknown): string {
     }
   }
   return text.replace(/\\/g, '/').replace(/\/+/g, '/');
+}
+
+type OpencodeFileNode = {
+  path: string;
+  type: 'file' | 'directory';
+  ignored?: boolean;
+};
+
+async function listWorkspaceFiles(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  options?: { maxDepth?: number; maxEntries?: number }
+): Promise<string[]> {
+  const maxDepth = options?.maxDepth ?? 4;
+  const maxEntries = options?.maxEntries ?? 2000;
+  const ignoredRoots = new Set([
+    '.git',
+    'node_modules',
+    '.opencode',
+    '.cache',
+    '.pnpm-store',
+    '.vscode',
+    '.idea',
+  ]);
+  const queue: Array<{ path: string; depth: number }> = [{ path: '', depth: 0 }];
+  const seenDirs = new Set<string>();
+  const files = new Set<string>();
+  let visited = 0;
+
+  while (queue.length > 0 && visited < maxEntries) {
+    const current = queue.shift()!;
+    const nodes = await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, current.path);
+    for (const node of nodes) {
+      if (node.ignored) continue;
+      const normalized = normalizeWorkspacePath(node.path || '');
+      if (!normalized) continue;
+      const rootName = normalized.split('/')[0];
+      if (rootName && ignoredRoots.has(rootName)) continue;
+      const type = node.type === 'directory' ? 'dir' : 'file';
+      if (type === 'file') {
+        files.add(normalized);
+      }
+      if (type === 'dir' && current.depth < maxDepth && !seenDirs.has(normalized)) {
+        seenDirs.add(normalized);
+        queue.push({ path: normalized, depth: current.depth + 1 });
+      }
+      visited += 1;
+      if (visited >= maxEntries) break;
+    }
+  }
+
+  return Array.from(files);
+}
+
+async function fetchOpencodeJsonViaOsac<T>(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  path: string,
+  query: Record<string, string>
+): Promise<T> {
+  const response = await osacAgentService.opencodeHttpRequest(orchestratorSessionId, {
+    method: 'GET',
+    path,
+    query: {
+      ...query,
+      directory: workspaceRoot,
+    },
+    workspacePath: workspaceRoot,
+  });
+
+  const status = Number(response.status || 0);
+  const body = typeof response.body === 'string' ? response.body : '';
+  if (!Number.isFinite(status) || status <= 0) {
+    throw new Error('opencode response invalid');
+  }
+  if (status < 200 || status >= 300) {
+    throw new Error(`opencode request failed: ${status} ${body || 'unknown error'}`);
+  }
+  if (!body) {
+    throw new Error('opencode response empty');
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch (error: any) {
+    throw new Error(`opencode response parse error: ${error?.message || error}`);
+  }
+}
+
+async function listOpencodeDirectory(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  dir: string
+): Promise<OpencodeFileNode[]> {
+  const data = await fetchOpencodeJsonViaOsac<OpencodeFileNode[]>(
+    orchestratorSessionId,
+    workspaceRoot,
+    '/file',
+    {
+      path: dir,
+    }
+  );
+  if (!Array.isArray(data)) {
+    throw new Error('opencode file list invalid');
+  }
+  return data;
+}
+
+function normalizeWorkspacePath(input: string): string {
+  return input.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+async function hasWorkspaceArtifacts(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  options?: { maxDepth?: number; maxEntries?: number }
+): Promise<boolean> {
+  const maxDepth = options?.maxDepth ?? 4;
+  const maxEntries = options?.maxEntries ?? 2000;
+  const ignoredRoots = new Set([
+    '.git',
+    'node_modules',
+    '.opencode',
+    '.cache',
+    '.pnpm-store',
+    '.vscode',
+    '.idea',
+  ]);
+  const queue: Array<{ path: string; depth: number }> = [{ path: '', depth: 0 }];
+  const seenDirs = new Set<string>();
+  let visited = 0;
+
+  while (queue.length > 0 && visited < maxEntries) {
+    const current = queue.shift()!;
+    const nodes = await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, current.path);
+    for (const node of nodes) {
+      if (node.ignored) continue;
+      const normalized = normalizeWorkspacePath(node.path || '');
+      if (!normalized) continue;
+      const rootName = normalized.split('/')[0];
+      if (rootName && ignoredRoots.has(rootName)) continue;
+      const type = node.type === 'directory' ? 'dir' : 'file';
+      if (type === 'file') {
+        return true;
+      }
+      if (type === 'dir' && current.depth < maxDepth && !seenDirs.has(normalized)) {
+        seenDirs.add(normalized);
+        queue.push({ path: normalized, depth: current.depth + 1 });
+      }
+      visited += 1;
+      if (visited >= maxEntries) break;
+    }
+  }
+  return false;
 }
 
 function isWorkspaceFilePath(path: string, workspaceRoot: string): boolean {
@@ -506,6 +680,7 @@ function buildReviewFeedbackPrompt(payload: {
   executionPlan: ExecutionPlan;
   lastOutput: string;
   feedback: string;
+  runSummary?: string;
 }): string {
   return [
     '当前处于【修复阶段】',
@@ -514,12 +689,14 @@ function buildReviewFeedbackPrompt(payload: {
     `任务描述: ${JSON.stringify(payload.taskDescription)}`,
     `执行计划摘要: ${JSON.stringify(buildExecutionSummary(payload.executionPlan))}`,
     `上一轮输出: ${payload.lastOutput}`,
+    payload.runSummary ? `上一轮执行摘要: ${payload.runSummary}` : '',
     `改进要求: ${payload.feedback}`,
     '要求：',
     '1) 继续命令行模式执行（不要进入交互式界面）。',
     '2) 补齐缺口并输出更新后的交付物说明。',
     '3) 如需生成/修改文件，请直接写入当前工作区并在输出中说明文件路径。',
     '4) 必须使用 playwright-mcp 进行浏览器自动化验证（headless=false），输出测试步骤与结果。',
+    '5) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
   ].join('\n');
 }
 
@@ -528,6 +705,7 @@ function buildPlaywrightTestPrompt(payload: {
   taskDescription: TaskDescription;
   executionPlan: ExecutionPlan;
   lastOutput?: string;
+  runSummary?: string;
 }): string {
   return [
     '当前处于【测试阶段】',
@@ -536,8 +714,10 @@ function buildPlaywrightTestPrompt(payload: {
     `任务描述: ${JSON.stringify(payload.taskDescription)}`,
     `执行计划摘要: ${JSON.stringify(buildExecutionSummary(payload.executionPlan))}`,
     payload.lastOutput ? `当前交付物摘要: ${payload.lastOutput}` : '',
+    payload.runSummary ? `上一轮执行摘要: ${payload.runSummary}` : '',
     '要求：',
     '1) 必须使用 playwright-mcp 执行浏览器自动化测试。',
+    '1.1) playwright-mcp 已预置，无需安装任何 Playwright 依赖，也不要修改 package.json 或执行 npm/pnpm 安装。',
     '2) 必须连接到与 n.eko 同一实例的 Chromium（使用 CDP 9222 端口，例如 http://127.0.0.1:9222），不要启动新的独立浏览器实例。',
     '3) 连接后复用现有浏览器上下文与首个页面（contexts[0] 与 pages[0]）；如果没有页面，只能在该上下文中创建一个新页面，确保同一个窗口可被 n.eko 捕获。',
     '4) 测试请以可视模式运行（headless=false），确保调试画面可在 n.eko 中查看。',
@@ -762,7 +942,7 @@ export class OpencodeRemoteService {
   private listeners = new Set<OpencodeEventListener>();
   private textStreams = new Map<string, OpencodeTextStreamEntry>();
   private finalizedRuns = new Set<string>();
-  private runArtifacts = new Map<string, { hasFileChange: boolean }>();
+  private runArtifacts = new Map<string, RunArtifact>();
   private opencodeLocks = new Map<string, Promise<void>>();
   private workspaceGitInit = new Set<string>();
   private streamIdleTimers = new Map<string, NodeJS.Timeout>();
@@ -774,6 +954,19 @@ export class OpencodeRemoteService {
   private streamBroadcastAt = new Map<string, number>();
   private streamBroadcastMeta = new Map<string, Record<string, unknown>>();
   private streamBroadcastIntervalMs = toNonNegativeInt(process.env.OPENCODE_STREAM_BROADCAST_INTERVAL_MS) ?? 250;
+  private streamCheckpointTimers = new Map<string, NodeJS.Timeout>();
+  private streamCheckpointAt = new Map<string, number>();
+  private streamCheckpointSavedAt = new Map<string, number>();
+  private streamCheckpointContent = new Map<string, string>();
+  private streamCheckpointIntervalMs =
+    toNonNegativeInt(process.env.OPENCODE_STREAM_CHECKPOINT_INTERVAL_MS) ?? 8000;
+  private sessionArtifactsSeen = new Set<string>();
+  private sessionArtifactRevision = new Map<string, number>();
+  private sessionTestedRevision = new Map<string, number>();
+  private sessionTestDispatchedRevision = new Map<string, number>();
+  private sessionNoArtifactNudges = new Map<string, number>();
+  private sessionTestDispatchedCycle = new Map<string, number>();
+  private workspaceBaselines = new Map<string, Set<string>>();
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -782,7 +975,23 @@ export class OpencodeRemoteService {
   private getRunArtifact(runKey: string) {
     let record = this.runArtifacts.get(runKey);
     if (!record) {
-      record = { hasFileChange: false };
+      const now = Date.now();
+      record = {
+        hasFileChange: false,
+        missingArtifactNudges: 0,
+        startedAt: now,
+        promptedAt: now,
+        completionInProgress: false,
+        hasPlaywrightUsage: false,
+        testDetectionAttempted: false,
+        toolEvents: 0,
+        commandEvents: 0,
+        diffEvents: 0,
+        todoEvents: 0,
+        fileEvents: 0,
+        textEvents: 0,
+        toolsUsed: new Set<string>(),
+      };
       this.runArtifacts.set(runKey, record);
     }
     return record;
@@ -807,6 +1016,126 @@ export class OpencodeRemoteService {
       this.streamIdleTimers.delete(key);
     }
     this.streamIdleAt.delete(key);
+  }
+
+  private clearStreamCheckpoint(key: string) {
+    const timer = this.streamCheckpointTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.streamCheckpointTimers.delete(key);
+    }
+    this.streamCheckpointAt.delete(key);
+    this.streamCheckpointSavedAt.delete(key);
+  }
+
+  private async detectWorkspaceArtifactsAfterBaseline(
+    sessionId: string,
+    orchestratorSessionId: string,
+    workspaceRoot: string
+  ): Promise<boolean> {
+    const files = await listWorkspaceFiles(orchestratorSessionId, workspaceRoot);
+    if (files.length === 0) {
+      return false;
+    }
+    const baseline = this.workspaceBaselines.get(sessionId);
+    if (!baseline) {
+      this.workspaceBaselines.set(sessionId, new Set(files));
+      return false;
+    }
+    let hasNew = false;
+    for (const file of files) {
+      if (!baseline.has(file)) {
+        hasNew = true;
+        break;
+      }
+    }
+    if (hasNew) {
+      this.workspaceBaselines.set(sessionId, new Set(files));
+    }
+    return hasNew;
+  }
+
+  private async ensureWorkspaceBaseline(
+    sessionId: string,
+    orchestratorSessionId: string,
+    workspaceRoot: string
+  ) {
+    if (this.workspaceBaselines.has(sessionId)) return;
+    try {
+      const files = await listWorkspaceFiles(orchestratorSessionId, workspaceRoot);
+      this.workspaceBaselines.set(sessionId, new Set(files));
+    } catch (error) {
+      console.warn('[OPENCODE_WORKSPACE_BASELINE_FAILED]', error);
+    }
+  }
+
+  private scheduleStreamCheckpoint(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string,
+    streamKey: string
+  ) {
+    if (this.streamCheckpointIntervalMs <= 0) return;
+    const now = Date.now();
+    this.streamCheckpointAt.set(streamKey, now);
+    const lastSaved = this.streamCheckpointSavedAt.get(streamKey) ?? 0;
+    const nextDue = lastSaved + this.streamCheckpointIntervalMs;
+    if (now >= nextDue) {
+      void this.persistStreamCheckpoint(taskSessionId, orchestratorSessionId, opencodeSessionId, streamKey);
+      return;
+    }
+    if (this.streamCheckpointTimers.has(streamKey)) return;
+
+    const delay = Math.max(0, nextDue - now);
+    const timer = setTimeout(async () => {
+      this.streamCheckpointTimers.delete(streamKey);
+      await this.persistStreamCheckpoint(taskSessionId, orchestratorSessionId, opencodeSessionId, streamKey);
+    }, delay);
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    this.streamCheckpointTimers.set(streamKey, timer);
+  }
+
+  private async persistStreamCheckpoint(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string,
+    streamKey: string
+  ) {
+    const entry = this.textStreams.get(streamKey);
+    if (!entry) return;
+    if (entry.taskSessionId !== taskSessionId) return;
+    if (opencodeSessionId && entry.opencodeSessionId !== opencodeSessionId) return;
+    const content = (entry.text || '').trim();
+    if (!content) return;
+    const lastPersisted = this.streamCheckpointContent.get(streamKey) || '';
+    if (lastPersisted === content) return;
+
+    this.streamCheckpointContent.set(streamKey, content);
+    this.streamCheckpointSavedAt.set(streamKey, Date.now());
+    const metadata: Record<string, unknown> = {
+      orchestratorSessionId,
+      opencodeSessionId: entry.opencodeSessionId || opencodeSessionId,
+      eventType: 'message.part.updated',
+      stream: true,
+      streamDelta: false,
+      streamKey,
+      source: 'stream_checkpoint',
+      rawPayload: {
+        eventType: 'message.part.updated',
+        text: content,
+        source: 'stream_checkpoint',
+      },
+    };
+
+    await taskCreationFileMemoryStore.addMessage(
+      taskSessionId,
+      'agent',
+      'opencode_event',
+      content,
+      metadata
+    );
   }
 
   private touchStreamIdle(taskSessionId: string, orchestratorSessionId: string, opencodeSessionId: string) {
@@ -1084,6 +1413,8 @@ export class OpencodeRemoteService {
       if (opencodeSessionId && entry.opencodeSessionId !== opencodeSessionId) continue;
       this.textStreams.delete(key);
       this.clearStreamBroadcast(key);
+      this.clearStreamCheckpoint(key);
+      this.streamCheckpointContent.delete(key);
     }
   }
 
@@ -1150,6 +1481,8 @@ export class OpencodeRemoteService {
       matched.push(entry);
       this.textStreams.delete(key);
       this.clearStreamBroadcast(key);
+      this.clearStreamCheckpoint(key);
+      this.streamCheckpointContent.delete(key);
     }
     if (matched.length === 0) {
       return null;
@@ -1192,6 +1525,21 @@ export class OpencodeRemoteService {
       },
     });
     return content;
+  }
+
+  private formatRunSummary(artifact: RunArtifact, executionOutput: string): string {
+    const tools = Array.from(artifact.toolsUsed || []);
+    const toolSnippet = tools.length ? `工具: ${tools.slice(0, 6).join(', ')}${tools.length > 6 ? '…' : ''}` : '工具: 无';
+    const outputSnippet = executionOutput ? compact(executionOutput, 260) : '输出摘要: 无';
+    return [
+      `文件变更: ${artifact.fileEvents > 0 ? '有' : '无'}`,
+      `Playwright: ${artifact.hasPlaywrightUsage ? '已执行' : '未执行'}`,
+      `工具事件: ${artifact.toolEvents}`,
+      `命令事件: ${artifact.commandEvents}`,
+      `Diff事件: ${artifact.diffEvents}`,
+      toolSnippet,
+      `输出摘要: ${outputSnippet}`,
+    ].join(' | ');
   }
 
   private async resolveTargetSession(
@@ -1285,6 +1633,20 @@ export class OpencodeRemoteService {
     return String(last?.content || '').trim();
   }
 
+  private async resolveLatestRunSummary(taskSessionId: string): Promise<string> {
+    const messages = await taskCreationFileMemoryStore.getMessages(taskSessionId);
+    if (!messages.length) return '';
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.messageType !== 'agent_message') continue;
+      const metadata = toRecord(message.metadata);
+      if (metadata.summaryType === 'run_summary') {
+        return String(message.content || '').trim();
+      }
+    }
+    return '';
+  }
+
   private async runReviewGate(params: {
     session: FileSessionRecord;
     orchestratorSessionId: string;
@@ -1302,11 +1664,27 @@ export class OpencodeRemoteService {
         return { status: 'skipped', reason: '缺少任务描述或执行计划，跳过自动审查' };
       }
 
+      let workspaceHint = '';
+      try {
+        const workspaceRoot = resolveOpencodeWorkspacePath(params.session.id);
+        if (workspaceRoot) {
+          const files = await listWorkspaceFiles(params.orchestratorSessionId, workspaceRoot, {
+            maxDepth: 3,
+            maxEntries: 200,
+          });
+          if (files.length) {
+            workspaceHint = `\n\n已检测到工作区文件:\n${files.slice(0, 30).join('\n')}`;
+          }
+        }
+      } catch (error) {
+        console.warn('[OPENCODE_REVIEW_WORKSPACE_SCAN_FAILED]', error);
+      }
+
       const review = await executionReviewAgent.review({
         userInput: context.userInput || '（未提供用户输入）',
         taskDescription: context.taskDescription,
         executionPlan: context.executionPlan,
-        executionOutput: params.executionOutput || '（无输出）',
+        executionOutput: `${params.executionOutput || '（无输出）'}${workspaceHint}`,
       });
 
       if (review.done || !review.next_instructions) {
@@ -1414,6 +1792,7 @@ export class OpencodeRemoteService {
             host: opencodeHost,
             port: opencodePort,
           });
+          await this.ensureWorkspaceBaseline(taskSessionId, orchestratorSessionId, workspacePath || '');
 
           let opencodeSessionId = runtime?.opencodeSessionId;
           if (!opencodeSessionId) {
@@ -1551,7 +1930,25 @@ export class OpencodeRemoteService {
         });
         this.clearTextStreams(session.id, opencodeSessionId);
         this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
-        this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), { hasFileChange: false });
+        const now = Date.now();
+        const phaseAtStart = (session.phase as FlowPhase) || 'development';
+        this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
+          hasFileChange: false,
+          missingArtifactNudges: 0,
+          startedAt: now,
+          promptedAt: now,
+          completionInProgress: false,
+          hasPlaywrightUsage: false,
+          toolEvents: 0,
+          commandEvents: 0,
+          diffEvents: 0,
+          todoEvents: 0,
+          fileEvents: 0,
+          textEvents: 0,
+          toolsUsed: new Set<string>(),
+          phaseAtStart,
+          cycleAtStart: session.phaseCycle ?? 0,
+        });
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
       }
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
@@ -1666,6 +2063,15 @@ export class OpencodeRemoteService {
         updatedAt: Number(payload.timestamp) || Date.now(),
       });
 
+      if (textStream.opencodeSessionId) {
+        const runKey = this.buildRunKey(session.id, textStream.opencodeSessionId);
+        const artifact = this.getRunArtifact(runKey);
+        artifact.textEvents += 1;
+        if (stream.text) {
+          artifact.lastText = stream.text.slice(-800);
+        }
+      }
+
       const eventPreview = buildEventPreview(event);
       const metadata: Record<string, unknown> = {
         orchestratorSessionId,
@@ -1682,6 +2088,7 @@ export class OpencodeRemoteService {
 
       this.streamBroadcastMeta.set(stream.streamKey, metadata);
       this.scheduleStreamBroadcast(session.id, stream.streamKey);
+      this.scheduleStreamCheckpoint(session.id, orchestratorSessionId, textStream.opencodeSessionId, stream.streamKey);
       return;
     }
 
@@ -1729,15 +2136,59 @@ export class OpencodeRemoteService {
       const runKey = this.buildRunKey(session.id, opencodeSessionId);
       const artifact = this.getRunArtifact(runKey);
       const workspaceRoot = resolveOpencodeWorkspacePath(session.id) || '';
+      const summaryLower = summary.toLowerCase();
+      const eventLower = eventType.toLowerCase();
+      const isPlaywrightTool =
+        toolName.startsWith('playwright') ||
+        eventLower.startsWith('playwright_') ||
+        eventLower.startsWith('playwright.') ||
+        summaryLower.includes('playwright_browser_') ||
+        summaryLower.includes('[tool] playwright_') ||
+        summaryLower.includes('[tool] playwright ');
+      if (isPlaywrightTool) {
+        artifact.hasPlaywrightUsage = true;
+      }
+      if (toolName) {
+        artifact.toolsUsed.add(toolName);
+        artifact.toolEvents += 1;
+      }
+      if (eventType === 'command.executed' || eventType.startsWith('pty.')) {
+        artifact.commandEvents += 1;
+      }
+      if (eventType === 'session.diff') {
+        artifact.diffEvents += 1;
+      }
+      if (eventType === 'todo.updated') {
+        artifact.todoEvents += 1;
+      }
       let hasWorkspaceChange = false;
-      if (eventType === 'file.edited' || eventType === 'file.watcher.updated') {
+      const isFileEvent = eventType.startsWith('file.');
+      if (isFileEvent) {
+        hasWorkspaceChange = true;
+        artifact.fileEvents += 1;
+      } else if (eventType === 'file.edited' || eventType === 'file.watcher.updated') {
         const paths = extractFilePathsFromEvent(eventProps, event);
         hasWorkspaceChange = paths.some((path) => isWorkspaceFilePath(path, workspaceRoot));
       } else if (eventType === 'session.diff') {
         hasWorkspaceChange = diffHasWorkspaceChange(eventProps.diff, workspaceRoot);
       }
+      if (!hasWorkspaceChange && isPartUpdate && partType === 'tool') {
+        const toolLower = toolName.toLowerCase();
+        if (toolLower === 'write' || toolLower === 'apply_patch') {
+          hasWorkspaceChange = true;
+        }
+      }
+      if (!hasWorkspaceChange) {
+        const summaryLower = summary.toLowerCase();
+        if (summaryLower.includes('[file]') || summaryLower.includes('写入文件')) {
+          hasWorkspaceChange = true;
+        }
+      }
       if (hasWorkspaceChange) {
         artifact.hasFileChange = true;
+        this.sessionArtifactsSeen.add(session.id);
+        const nextRevision = (this.sessionArtifactRevision.get(session.id) || 0) + 1;
+        this.sessionArtifactRevision.set(session.id, nextRevision);
       }
     }
 
@@ -1766,20 +2217,128 @@ export class OpencodeRemoteService {
       if (this.finalizedRuns.has(runKey)) {
         return;
       }
-      this.finalizedRuns.add(runKey);
-      if (runOpencodeSessionId) {
-        this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
-      }
 
       const aggregated = await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
       const currentPhase = (session.phase as FlowPhase) || 'development';
-      const artifact = this.runArtifacts.get(runKey);
+      let phaseForReview: FlowPhase = currentPhase;
+      const artifact = this.getRunArtifact(runKey);
+      if (!artifact.hasPlaywrightUsage && aggregated) {
+        const lower = aggregated.toLowerCase();
+        if (lower.includes('playwright') || lower.includes('自动化测试')) {
+          artifact.hasPlaywrightUsage = true;
+        }
+      }
+      const enableLlmTestDetection =
+        String(process.env.OPENCODE_TEST_DETECTION_LLM || 'true').trim().toLowerCase() !== 'false';
+      if (!artifact.hasPlaywrightUsage && enableLlmTestDetection && !artifact.testDetectionAttempted) {
+        const combined = [aggregated || '', artifact.lastText || ''].join('\n').trim();
+        const lower = combined.toLowerCase();
+        if (lower.includes('playwright') || lower.includes('自动化测试') || lower.includes('测试脚本')) {
+          artifact.testDetectionAttempted = true;
+          try {
+            const snippet = combined.length > 4000 ? combined.slice(-4000) : combined;
+            const detection = await playwrightTestDetectionAgent.detect(snippet);
+            if (detection.tested && detection.confidence >= 0.6) {
+              artifact.hasPlaywrightUsage = true;
+            }
+          } catch (error) {
+            console.warn('[OPENCODE_TEST_DETECTION_FAILED]', error);
+          }
+        }
+      }
+      if (artifact.completionInProgress) {
+        return;
+      }
+      artifact.completionInProgress = true;
+      if (payload.timestamp && Number(payload.timestamp) < artifact.promptedAt) {
+        artifact.completionInProgress = false;
+        return;
+      }
+      if (artifact.phaseAtStart && artifact.phaseAtStart !== currentPhase) {
+        artifact.completionInProgress = false;
+        return;
+      }
+      const workspaceRoot = resolveOpencodeWorkspacePath(session.id) || '';
+
+      if ((currentPhase === 'development' || currentPhase === 'repair') && artifact && !artifact.hasFileChange) {
+        if (orchestratorSessionId && workspaceRoot) {
+          try {
+            if (await this.detectWorkspaceArtifactsAfterBaseline(session.id, orchestratorSessionId, workspaceRoot)) {
+              artifact.hasFileChange = true;
+              this.sessionArtifactsSeen.add(session.id);
+            }
+          } catch (error) {
+            console.warn('[OPENCODE_ARTIFACT_SCAN_FAILED]', error);
+          }
+        }
+      }
+
+      const sessionHasArtifacts = this.sessionArtifactsSeen.has(session.id);
+      let hasArtifacts = artifact.hasFileChange || sessionHasArtifacts;
+      const revision = this.sessionArtifactRevision.get(session.id) || 0;
+      if (artifact.hasPlaywrightUsage) {
+        this.sessionTestedRevision.set(session.id, revision);
+      }
+      const testedRevision = this.sessionTestedRevision.get(session.id) || 0;
+
+      const hasAnyActivity =
+        artifact.fileEvents > 0 ||
+        artifact.toolEvents > 0 ||
+        artifact.commandEvents > 0 ||
+        artifact.todoEvents > 0 ||
+        artifact.diffEvents > 0 ||
+        artifact.textEvents > 0 ||
+        Boolean(aggregated);
 
       if (currentPhase === 'development' || currentPhase === 'repair') {
-        if (!artifact?.hasFileChange) {
+        if (sessionHasArtifacts && !artifact.hasFileChange) {
+          artifact.hasFileChange = true;
+          hasArtifacts = true;
+        }
+        if (!hasArtifacts) {
+          const nudged = this.sessionNoArtifactNudges.get(session.id) || 0;
+          const shouldNudge = artifact.missingArtifactNudges < 1 && nudged < 1;
+          if (shouldNudge) {
+            artifact.missingArtifactNudges += 1;
+            this.sessionNoArtifactNudges.set(session.id, nudged + 1);
+            await this.emitPhaseStatus({
+              sessionId: session.id,
+              phase: currentPhase,
+              message: '未检测到交付物产出，已尝试重新唤醒执行，请稍候。',
+              stage: 'executing',
+              tone: 'execution',
+              metadata: {
+                ...metadata,
+                outcome,
+                reason: 'no_artifacts_retry',
+              },
+            });
+            const followUp = [
+              '当前未检测到任何文件产出，请继续完成交付物。',
+              '请直接在当前工作区生成单 HTML 文件（包含 HTML/CSS/JS）。',
+              '完成后再执行 Playwright 测试（连接 CDP 9222，同一浏览器窗口）。',
+            ].join('\n');
+            await this.sendUserInput({
+              taskSessionId: session.id,
+              content: followUp,
+              orchestratorSessionId,
+              workspacePath: workspaceRoot || undefined,
+              source: 'agent',
+            });
+            if (runOpencodeSessionId) {
+              this.touchStreamIdle(session.id, orchestratorSessionId, runOpencodeSessionId);
+            }
+            artifact.completionInProgress = false;
+            return;
+          }
+
+          this.finalizedRuns.add(runKey);
+          if (runOpencodeSessionId) {
+            this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
+          }
           await this.emitPhaseStatus({
             sessionId: session.id,
-            phase: 'analysis',
+            phase: currentPhase,
             message: '未检测到交付物产出，已暂停自动测试，请检查需求或继续开发。',
             stage: 'reviewing',
             tone: 'review',
@@ -1789,56 +2348,107 @@ export class OpencodeRemoteService {
               reason: 'no_artifacts',
             },
           });
+          artifact.completionInProgress = false;
           return;
         }
-        await taskCreationFileMemoryStore.updateSessionState(session.id, {
-          status: 'in_progress',
-          stage: 'reviewing',
-        });
 
-        await this.emitPhaseStatus({
-          sessionId: session.id,
-          phase: 'testing',
-          message: '正在执行自动化测试...',
-          stage: 'reviewing',
-          tone: 'review',
-          metadata: {
-            ...metadata,
-            outcome,
-          },
-        });
-
-        await osacAgentService.ensurePlaywrightMcp(orchestratorSessionId);
-        try {
-          await ensureNekoDebug(orchestratorSessionId);
-        } catch (error) {
-          if (isSandboxNotFoundError(error)) {
-            await markSandboxClosed(orchestratorSessionId);
-            return;
+        const lastDispatchedRevision = this.sessionTestDispatchedRevision.get(session.id) ?? -1;
+        if (!artifact.hasPlaywrightUsage && hasArtifacts && revision > testedRevision && lastDispatchedRevision !== revision) {
+          this.finalizedRuns.add(runKey);
+          if (runOpencodeSessionId) {
+            this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
           }
-          console.warn('[OPENCODE_NEKO_START_FAILED]', error);
+          await taskCreationFileMemoryStore.updateSessionState(session.id, {
+            status: 'in_progress',
+            stage: 'reviewing',
+          });
+
+          await this.emitPhaseStatus({
+            sessionId: session.id,
+            phase: 'testing',
+            message: '正在执行自动化测试...',
+            stage: 'reviewing',
+            tone: 'review',
+            metadata: {
+              ...metadata,
+              outcome,
+            },
+          });
+          this.sessionTestDispatchedRevision.set(session.id, revision);
+
+          await osacAgentService.ensurePlaywrightMcp(orchestratorSessionId);
+          try {
+            await ensureNekoDebug(orchestratorSessionId);
+          } catch (error) {
+            if (isSandboxNotFoundError(error)) {
+              await markSandboxClosed(orchestratorSessionId);
+              return;
+            }
+            console.warn('[OPENCODE_NEKO_START_FAILED]', error);
+          }
+
+          const context = await this.resolveReviewContext(session.id);
+          const runSummary = await this.resolveLatestRunSummary(session.id);
+          if (context) {
+            const testPrompt = buildPlaywrightTestPrompt({
+              userInput: context.userInput || '（未提供用户输入）',
+              taskDescription: context.taskDescription,
+              executionPlan: context.executionPlan,
+              lastOutput: aggregated || undefined,
+              runSummary: runSummary || undefined,
+            });
+            await this.sendUserInput({
+              taskSessionId: session.id,
+              content: testPrompt,
+              orchestratorSessionId,
+              workspacePath: resolveOpencodeWorkspacePath(session.id) || undefined,
+              source: 'agent',
+            });
+          }
+          artifact.completionInProgress = false;
+          return;
         }
 
-        const context = await this.resolveReviewContext(session.id);
-        if (context) {
-          const testPrompt = buildPlaywrightTestPrompt({
-            userInput: context.userInput || '（未提供用户输入）',
-            taskDescription: context.taskDescription,
-            executionPlan: context.executionPlan,
-            lastOutput: aggregated || undefined,
+        if (artifact.hasPlaywrightUsage || (hasArtifacts && testedRevision >= revision && revision > 0)) {
+          await this.emitPhaseStatus({
+            sessionId: session.id,
+            phase: 'testing',
+            message: '检测到开发阶段已执行自动化测试，正在审查测试结果...',
+            stage: 'reviewing',
+            tone: 'review',
+            metadata: {
+              ...metadata,
+              outcome,
+              embeddedTesting: true,
+            },
           });
-          await this.sendUserInput({
-            taskSessionId: session.id,
-            content: testPrompt,
-            orchestratorSessionId,
-            workspacePath: resolveOpencodeWorkspacePath(session.id) || undefined,
-            source: 'agent',
-          });
+          phaseForReview = 'testing';
         }
-        return;
+      }
+
+      this.finalizedRuns.add(runKey);
+      if (runOpencodeSessionId) {
+        this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
       }
 
       const lastOutput = aggregated || (await this.resolveLatestOutput(session.id));
+      const runSummary = this.formatRunSummary(artifact, lastOutput || '');
+      await taskCreationFileMemoryStore.addMessage(
+        session.id,
+        'agent',
+        'agent_message',
+        runSummary,
+        {
+          summaryType: 'run_summary',
+          phase: currentPhase,
+          phaseCycle: session.phaseCycle ?? 0,
+          orchestratorSessionId,
+          opencodeSessionId: opencodeSessionId || undefined,
+          runKey,
+          hasPlaywrightUsage: artifact.hasPlaywrightUsage,
+          hasFileChange: artifact.hasFileChange,
+        }
+      );
       const reviewResult = await this.runReviewGate({
         session,
         orchestratorSessionId,
@@ -1846,8 +2456,9 @@ export class OpencodeRemoteService {
         executionOutput: lastOutput || '（无输出）',
       });
 
-      if (currentPhase === 'testing' && reviewResult.status === 'retry') {
+      if (phaseForReview === 'testing' && reviewResult.status === 'retry') {
         const context = await this.resolveReviewContext(session.id);
+        const runSummary = await this.resolveLatestRunSummary(session.id);
         const feedbackPrompt =
           context && reviewResult.nextInstructions
             ? buildReviewFeedbackPrompt({
@@ -1856,6 +2467,7 @@ export class OpencodeRemoteService {
                 executionPlan: context.executionPlan,
                 lastOutput: lastOutput || '（无输出）',
                 feedback: reviewResult.nextInstructions,
+                runSummary: runSummary || undefined,
               })
             : '';
 
@@ -1885,6 +2497,7 @@ export class OpencodeRemoteService {
             source: 'agent',
           });
         }
+        artifact.completionInProgress = false;
         return;
       }
 
@@ -1917,7 +2530,7 @@ export class OpencodeRemoteService {
         );
       }
 
-      if (currentPhase === 'testing') {
+      if (phaseForReview === 'testing') {
         await this.emitPhaseStatus({
           sessionId: session.id,
           phase: 'delivery',

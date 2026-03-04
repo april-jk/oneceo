@@ -437,7 +437,10 @@ export class TaskCreationWebSocketService {
 
     if (sessionId && wasWaitingForUser) {
       try {
-        const resumedInput = await this.buildResumedInput(sessionId, message.content!);
+        const includePendingQuestion = Boolean((message.metadata as any)?.autoContinue);
+        const resumedInput = await this.buildResumedInput(sessionId, message.content!, {
+          includePendingQuestion,
+        });
         await taskCreationFileMemoryStore.clearPendingClarification(sessionId);
         await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: 'planning' });
         await service.createTask(resumedInput, undefined, sessionId, 'user_response');
@@ -548,18 +551,25 @@ export class TaskCreationWebSocketService {
     return session?.pendingResume || null;
   }
 
-  private async buildResumedInput(sessionId: string, latestResponse: string): Promise<string> {
+  private async buildResumedInput(
+    sessionId: string,
+    latestResponse: string,
+    options?: { includePendingQuestion?: boolean }
+  ): Promise<string> {
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const messages = await taskCreationFileMemoryStore.getMessages(sessionId);
     const firstUserInput = messages.find((m) => m.messageType === 'user_input')?.content || '';
     const previousResponses = messages
       .filter((m) => m.messageType === 'user_response')
       .map((m) => m.content);
-    const allResponses = [...previousResponses, latestResponse]
-      .map((text, index) => `补充${index + 1}: ${text}`)
-      .join('\n');
+    const mergedResponses =
+      previousResponses.length > 0 && previousResponses[previousResponses.length - 1] === latestResponse
+        ? previousResponses
+        : [...previousResponses, latestResponse];
+    const allResponses = mergedResponses.map((text, index) => `补充${index + 1}: ${text}`).join('\n');
 
-    const pendingQ = session?.pendingQuestion ? `\n\n待补充问题：${session.pendingQuestion}` : '';
+    const includeQuestion = Boolean(options?.includePendingQuestion);
+    const pendingQ = includeQuestion && session?.pendingQuestion ? `\n\n待补充问题：${session.pendingQuestion}` : '';
     return `${firstUserInput}${pendingQ}\n\n用户补充信息：\n${allResponses}`;
   }
 

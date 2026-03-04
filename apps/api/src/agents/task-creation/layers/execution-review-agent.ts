@@ -28,7 +28,8 @@ export class ExecutionReviewAgent extends BaseAgent {
 
 注意：
 - 如果输出已经满足要求，done=true，issues 可以为空。
-- next_instructions 要具体、可执行、可检验。`,
+- next_instructions 要具体、可执行、可检验。
+- Playwright 仅用于测试，playwright-mcp 已预置；提及安装/使用 Playwright 进行测试不应视为违反“无外部依赖”的交付要求，除非其被加入最终交付物或改变运行依赖。`,
       tools: [],
       modelName: process.env.AGENT_OPENAI_MODEL || 'claude-haiku-4-5-20251001',
       temperature: 0.3,

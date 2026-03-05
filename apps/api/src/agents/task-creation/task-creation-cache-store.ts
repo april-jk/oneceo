@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 type WorkspaceTreeData = {
   root?: string;
@@ -36,8 +37,11 @@ type CacheFileShape = {
   tenants: Record<string, { sessions: Record<string, SessionCache> }>;
 };
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const CACHE_FILE = path.join(DATA_DIR, 'task-creation-cache.json');
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const API_ROOT_DIR = path.resolve(MODULE_DIR, '..', '..', '..');
+const RUNTIME_CACHE_DIR = path.join(API_ROOT_DIR, '.runtime-cache', 'task-creation');
+const CACHE_FILE = path.join(RUNTIME_CACHE_DIR, 'task-creation-cache.json');
+const LEGACY_CACHE_FILE = path.join(API_ROOT_DIR, 'data', 'task-creation-cache.json');
 
 function nowIso() {
   return new Date().toISOString();
@@ -75,19 +79,7 @@ function markInvalidated(entry: CacheEntry<any> | undefined, at: string) {
 class TaskCreationCacheStore {
   private writeLock: Promise<void> = Promise.resolve();
 
-  private async ensureFile(): Promise<void> {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    try {
-      await fs.access(CACHE_FILE);
-    } catch {
-      const initial: CacheFileShape = { tenants: {} };
-      await fs.writeFile(CACHE_FILE, JSON.stringify(initial, null, 2), 'utf-8');
-    }
-  }
-
-  private async readCache(): Promise<CacheFileShape> {
-    await this.ensureFile();
-    const raw = await fs.readFile(CACHE_FILE, 'utf-8');
+  private tryNormalizeCacheShape(raw: string): CacheFileShape | null {
     try {
       const parsed = JSON.parse(raw) as any;
       if (parsed && parsed.tenants && typeof parsed.tenants === 'object') {
@@ -96,10 +88,37 @@ class TaskCreationCacheStore {
       if (parsed && parsed.sessions && typeof parsed.sessions === 'object') {
         return { tenants: { default: { sessions: parsed.sessions } } };
       }
-      return { tenants: {} };
     } catch {
-      return { tenants: {} };
+      // ignore invalid json
     }
+    return null;
+  }
+
+  private async ensureFile(): Promise<void> {
+    await fs.mkdir(RUNTIME_CACHE_DIR, { recursive: true });
+    try {
+      await fs.access(CACHE_FILE);
+    } catch {
+      const initial: CacheFileShape = { tenants: {} };
+      let seed: CacheFileShape = initial;
+      try {
+        const legacyRaw = await fs.readFile(LEGACY_CACHE_FILE, 'utf-8');
+        const normalized = this.tryNormalizeCacheShape(legacyRaw);
+        if (normalized) {
+          seed = normalized;
+          console.log('[TASK_CREATION_CACHE] seeded from legacy cache file');
+        }
+      } catch {
+        // no legacy cache to seed from
+      }
+      await fs.writeFile(CACHE_FILE, JSON.stringify(seed, null, 2), 'utf-8');
+    }
+  }
+
+  private async readCache(): Promise<CacheFileShape> {
+    await this.ensureFile();
+    const raw = await fs.readFile(CACHE_FILE, 'utf-8');
+    return this.tryNormalizeCacheShape(raw) || { tenants: {} };
   }
 
   private async writeCache(data: CacheFileShape): Promise<void> {

@@ -34,4 +34,4 @@
 - `TASK_CREATION_CACHE_MAX_FILES`（默认 200）
 
 ## 持久化位置
-- `oneceo/apps/api/data/task-creation-cache.json`
+- `oneceo/apps/api/.runtime-cache/task-creation/task-creation-cache.json`

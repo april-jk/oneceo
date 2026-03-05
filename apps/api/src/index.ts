@@ -28,9 +28,14 @@ function mergeNoProxy(entries: string[], current?: string): string {
   return Array.from(set).join(',');
 }
 
+const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
+  .trim()
+  .toLowerCase();
+const proxyToggleEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
 const proxyEnabled =
-  Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
-  Boolean(process.env.HTTPS_PROXY || process.env.https_proxy);
+  proxyToggleEnabled &&
+  (Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
+    Boolean(process.env.HTTPS_PROXY || process.env.https_proxy));
 
 if (proxyEnabled) {
   const bypass = [

@@ -13,6 +13,7 @@ import { AwaitingUserInputError, isAwaitingUserInputError, isRecoverableAgentErr
 import { randomUUID } from 'crypto';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
+import { taskCreationSessionDAO } from '../../db/dao';
 
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
@@ -128,6 +129,17 @@ export class TaskCreationWebSocketService {
       throw new Error('服务未找到');
     }
 
+    const altusMode = String((message.metadata as any)?.altusMode || '').trim();
+    const executor = String((message.metadata as any)?.executor || '').trim();
+    const sessionId = message.sessionId || this.sessionByClient.get(clientId);
+
+    if (sessionId && altusMode === 'managed') {
+      void taskCreationFileMemoryStore.updateSessionMode(sessionId, 'altus');
+    }
+    if (sessionId && executor) {
+      void taskCreationFileMemoryStore.updateSessionExecutor(sessionId, executor);
+    }
+
     switch (message.type) {
       case 'user_input' as any:
       case 'user_response' as any:
@@ -145,6 +157,9 @@ export class TaskCreationWebSocketService {
         await this.handleAutoPlan(clientId, message);
         break;
       case 'opencode_input' as any:
+        // 直通模式入口：来自前端的“sandbox 直通”对话。
+        // 该路径只做桥接 + 落盘 + 运行时绑定，不进入 Altus 三层编排。
+        // 后续 claudecode/codex 直通也应复用此语义，避免误触 Altus 接管流程。
         if (!message.content) {
           throw new Error('用户输入不能为空');
         }
@@ -501,13 +516,17 @@ export class TaskCreationWebSocketService {
   }
 
   private async handleOpencodeInput(clientId: string, message: WebSocketMessage): Promise<void> {
-    const taskSessionId =
+    // 直通模式处理：为 OpenCode（未来可扩展 ClaudeCode/Codex）建立会话并转发。
+    // 注意：此处不应写入 Altus 的澄清/规划阶段状态，避免干扰接管模式。
+    let taskSessionId =
       message.sessionId ||
       this.sessionByClient.get(clientId) ||
       (message.metadata as any)?.sessionId;
 
+    let createdSession = false;
     if (!taskSessionId) {
-      throw new Error('缺少 task sessionId，无法发送到 OpenCode');
+      taskSessionId = randomUUID();
+      createdSession = true;
     }
 
     this.sessionByClient.set(clientId, taskSessionId);
@@ -516,6 +535,66 @@ export class TaskCreationWebSocketService {
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
 
     try {
+      if (createdSession) {
+        await taskCreationFileMemoryStore.createSession(message.content || '新建任务', taskSessionId);
+        await taskCreationFileMemoryStore.addMessage(
+          taskSessionId,
+          'system',
+          'session_started',
+          '会话已创建'
+        );
+        await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
+        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
+        await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
+        await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+          stage: 'executing',
+          phase: 'development',
+        });
+        try {
+          const existing = await taskCreationSessionDAO.getSession(taskSessionId);
+          if (!existing) {
+            await taskCreationSessionDAO.createSession({ id: taskSessionId, status: 'in_progress' });
+          }
+          await taskCreationSessionDAO.addMessage({
+            sessionId: taskSessionId,
+            role: 'system',
+            messageType: 'session_started',
+            content: '会话已创建',
+          });
+        } catch (error) {
+          console.warn('[OPENCODE_INPUT_SESSION_DB_FAILED]', error);
+        }
+        // 直通模式需要尽早返回 sessionId 给前端，以便 SSE 订阅实时事件流。
+        // 该消息不进入 Altus 编排流程，仅用于前端建立会话上下文。
+        this.sendToClient(
+          clientId,
+          {
+            type: 'agent_message' as any,
+            agent: 'system',
+            content: '会话已创建',
+            sessionId: taskSessionId,
+          },
+          { skipPersistence: true }
+        );
+      }
+      if (!createdSession) {
+        await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
+        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
+        await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
+      }
+
+      await taskCreationFileMemoryStore.addMessage(taskSessionId, 'user', 'user_input', message.content || '');
+      try {
+        await taskCreationSessionDAO.addMessage({
+          sessionId: taskSessionId,
+          role: 'user',
+          messageType: 'user_input',
+          content: message.content || '',
+        });
+      } catch (error) {
+        console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
+      }
+
       await opencodeRemoteService.sendUserInput({
         taskSessionId,
         content: message.content || '',
@@ -523,13 +602,7 @@ export class TaskCreationWebSocketService {
         workspacePath: workspacePath || undefined,
       });
 
-      this.sendToClient(clientId, {
-        type: 'status_update' as any,
-        sessionId: taskSessionId,
-        stage: 'executing' as any,
-        tone: 'execution' as any,
-        content: '{OpenCode} 已接收输入，正在执行...',
-      });
+      // 直通模式不注入额外状态消息，避免污染 OpenCode 原始对话流。
     } catch (error) {
       const errText = error instanceof Error ? error.message : 'OpenCode 执行失败';
       this.sendToClient(clientId, {

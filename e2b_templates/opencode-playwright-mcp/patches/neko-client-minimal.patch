@@ -391,7 +391,7 @@ index 051493e..e63531d 100644
 -          @contextmenu.stop.prevent
 -          @wheel.stop.prevent="onWheel"
 +        <div ref="container" class="player-container">
-+          <video ref="video" playsinline />
++          <video ref="video" playsinline autoplay muted />
 +          <textarea
 +            ref="overlay"
 +            class="overlay"
@@ -405,7 +405,7 @@ index 051493e..e63531d 100644
            @mousemove.stop.prevent="onMouseMove"
            @mousedown.stop.prevent="onMouseDown"
            @mouseup.stop.prevent="onMouseUp"
-@@ -25,55 +20,22 @@
+@@ -25,55 +20,26 @@
            @mouseleave.stop.prevent="onMouseLeave"
            @touchmove.stop.prevent="onTouchHandler"
            @touchstart.stop.prevent="onTouchHandler"
@@ -422,7 +422,11 @@ index 051493e..e63531d 100644
 +            @compositionstart="onCompositionStartHandler"
 +            @compositionend="onCompositionEndHandler"
 +          />
-+          <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute"></div>
++          <div v-if="uiLocked" class="lock-overlay" @click.stop.prevent="toggleUiLock">
++            <div class="lock-watermark">锁</div>
++            <div class="lock-text">当前为锁定模式，点击解锁以进行交互</div>
++            <div class="lock-action">点击解锁</div>
++          </div>+          <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute"></div>
 +          <div v-else-if="mutedOverlay && muted" class="player-overlay" @click.stop.prevent="unmute"></div>
 +          <div ref="aspect" class="player-aspect" />
          </div>
@@ -613,7 +617,7 @@ index 051493e..e63531d 100644
      private observer = new ResizeObserver(this.onResize.bind(this))
      private focused = false
      private fullscreen = false
-+    private uiLocked = false
++    private uiLocked = true
      private mutedOverlay = true
      private lastTextAreaValue = ''
  

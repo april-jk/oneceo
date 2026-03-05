@@ -1,33 +1,52 @@
 # AGENTS.md
 
-请先阅读 `CODEX_PROMPT.md` 并按其中约定执行。
-## git相关
-- 当一个阶段或者测试成功，你需要将当前阶段的代码保存，并提交git仓库。
+> 本文件是 `oneceo/` 内的协作入口。新成员请先阅读本文，再按引用文档进行深入理解。
 
-## Sandbox / KVM 集成规则（强制）
+## 必读
 
-- `apps/api` 必须通过统一连接器调用 KVM 管理模块，禁止在业务路由或服务中直接请求 KVM 服务。
-- 统一连接器位置：`apps/api/src/connectors/kvm-connector.ts`。
-- KVM 模块的所有接口都必须经过连接器做参数与响应转换（包括命名风格转换与结构规整）。
+- `CODEX_PROMPT.md`
+- 仓库根目录 `AGENTS.md`
 
-## Sandbox / VM 内部连接模块规则（强制）
+## 架构导览（分段文档）
 
-- `apps/api` 必须通过统一连接器访问 Sandbox 内机器（SSH/RDP/HTTP/WS 等），禁止业务路由或服务直连。
-- 统一连接器位置：`apps/api/src/connectors/osac-connector.ts`。
-- OSAC WebSocket 客户端位置：`apps/api/src/clients/osac-client.ts`。
-- 连接器必须封装：连接建立、鉴权、超时、重试、资源释放，输出统一的响应结构。
-- 连接器只接受“执行层环境 sessionId”作为入口参数，通过环境映射获取目标 VM 信息。
-- 所有对 Sandbox 内机器的调用必须记录审计元数据（sessionId、目标 VM、操作类型、时间）。
-- 模块设计需与 KVM 管理模块一致：`client -> connector -> service -> route` 分层，最小耦合，可替换底层实现。
+- `docs/AGENTS_GUIDE/01_overview.md`
+- `docs/AGENTS_GUIDE/02_services.md`
+- `docs/AGENTS_GUIDE/03_sandbox_e2b.md`
+- `docs/AGENTS_GUIDE/04_agent_flow.md`
 
-## LLM API 代理模块规则（强制）
+## 反馈机制（oneceo 内）
 
-- `apps/api` 必须通过独立连接器实现 LLM API 代理转发，禁止在业务路由或服务中直接请求上游模型服务。
-- 连接器位置：`apps/api/src/connectors/llm-proxy-connector.ts`。
-- 路由位置：`apps/api/src/routes/llm-proxy-routes.ts`，统一挂载在 `/api/llm-proxy`。
-- 代理仅做转发与超时/错误映射，不做业务逻辑耦合，便于后续拆分为独立服务。
+- 目录：`agent自动工作汇报`
+- 文件命名：
+  - `auto_report_yyyymmdd.md`
+  - `递归过程记录_yyyymmdd.md`
+- 内容要求：简短记录“做了什么、遇到什么、计划如何解决”。
 
-## 暂停封存记忆（KVM 热/冷启动）
+## 代码与服务边界
 
-- 封存文件：`project_memory/2026-02-20_kvm_warm_cold_pause_snapshot.md`
-- 用途：当用户后续提到“继续 KVM 热启动池 / 冷启动回退 / fix16-fix17 联调”时，优先读取该文件恢复上下文。
+- 主平台代码：`apps/`
+  - Web：`apps/web`
+  - API：`apps/api`
+  - 管理后台：`apps/admin_management`
+- Sandbox 模板：`e2b_templates/`
+- 旧 KVM 编排已停用，仅保留文档作为历史参考。
+
+## E2B Sandbox 规则（强制）
+
+- 所有 Sandbox 调用必须通过 `apps/api/src/connectors/e2b-connector.ts`。
+- `kvm-orchestrator` 暂停使用，不在本分支修改或部署。
+
+## OSAC / OpenCode 规则（强制）
+
+- 与 Sandbox 内服务通信必须经由 OSAC 链路与编排服务，禁止在业务路由直连。
+- 相关服务代码集中在 `apps/api/src/services/` 与 `apps/api/src/clients/`。
+
+## LLM 代理规则（强制）
+
+- 统一通过 `apps/api/src/connectors/llm-proxy-connector.ts` 访问上游模型。
+- 路由：`apps/api/src/routes/llm-proxy-routes.ts`。
+
+## 变更记录要求
+
+- 任何影响主流程的变更需保留说明性文档（提交记录或 docs 说明）。
+- 避免跨系统误改，优先在所属子目录内闭环验证。

@@ -155,11 +155,18 @@ export async function listOsacMessages(orchestratorSessionId: string, limit: num
   return Array.isArray(result?.data) ? result.data : [];
 }
 
-export function getOpencodeEventStreamUrl(sessionId: string, opencodeSessionId?: string): string {
+export function getOpencodeEventStreamUrl(
+  sessionId: string,
+  opencodeSessionId?: string,
+  since?: number
+): string {
   const safeSessionId = encodeURIComponent(sessionId);
   const params = new URLSearchParams();
   if (opencodeSessionId) {
     params.set('opencodeSessionId', opencodeSessionId);
+  }
+  if (since && Number.isFinite(since) && since > 0) {
+    params.set('since', String(since));
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : '';

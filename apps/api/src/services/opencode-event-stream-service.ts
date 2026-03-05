@@ -1,7 +1,9 @@
 import type { OsacMessage } from '../clients/osac-client';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { osacConnectionManager } from './osac-connection-manager';
-import { sandboxExecutionEnvironmentDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
+import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
+import { ensureDatabaseConnection } from '../config/database';
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
@@ -63,8 +65,29 @@ type StreamEntry = {
   seq: number;
 };
 
+type PersistEntry = {
+  sessionId: string;
+  role: 'agent';
+  messageType: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+type SessionBinding = {
+  sessionId: string;
+  mode?: string;
+  updatedAt: number;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  return String(value);
 }
 
 function shouldFilterByWorkspace(): boolean {
@@ -126,9 +149,525 @@ function toEventMessage(
   };
 }
 
+type FastEventListener = (payload: {
+  orchestratorSessionId: string;
+  opencodeSessionId?: string;
+  eventType: string;
+  event: Record<string, unknown>;
+  seq: number;
+  timestamp: number;
+}) => void;
+
 export class OpencodeEventStreamService {
   private streams = new Map<string, StreamEntry>();
+  private listeners = new Map<string, Set<FastEventListener>>();
   private retryIntervalMs = Number(process.env.OPENCODE_EVENT_RETRY_INTERVAL_MS || 1500);
+  private streamTextState = new Map<string, { text: string; updatedAt: number }>();
+  private streamTextMaxEntries = Number(process.env.OPENCODE_EVENT_STREAM_STATE_MAX || 1000);
+  private sessionBindings = new Map<string, SessionBinding>();
+  private sessionBindingTtlMs = Number(process.env.OPENCODE_EVENT_BINDING_TTL_MS || 15000);
+  private persistQueue: PersistEntry[] = [];
+  private persistTimer: NodeJS.Timeout | null = null;
+  private persistIntervalMs = Number(process.env.OPENCODE_EVENT_PERSIST_INTERVAL_MS || 1000);
+
+  subscribe(orchestratorSessionId: string, listener: FastEventListener): () => void {
+    if (!orchestratorSessionId) {
+      return () => undefined;
+    }
+    const set = this.listeners.get(orchestratorSessionId) || new Set<FastEventListener>();
+    set.add(listener);
+    this.listeners.set(orchestratorSessionId, set);
+    return () => {
+      const next = this.listeners.get(orchestratorSessionId);
+      if (!next) return;
+      next.delete(listener);
+      if (next.size === 0) {
+        this.listeners.delete(orchestratorSessionId);
+      }
+    };
+  }
+
+  bindSession(orchestratorSessionId: string, sessionId: string, mode?: string) {
+    if (!orchestratorSessionId || !sessionId) return;
+    this.sessionBindings.set(orchestratorSessionId, {
+      sessionId,
+      mode,
+      updatedAt: Date.now(),
+    });
+  }
+
+  private emitFast(orchestratorSessionId: string, payload: {
+    opencodeSessionId?: string;
+    eventType: string;
+    event: Record<string, unknown>;
+    seq: number;
+    timestamp: number;
+  }) {
+    const listeners = this.listeners.get(orchestratorSessionId);
+    if (!listeners || listeners.size === 0) return;
+    for (const listener of listeners) {
+      try {
+        listener({
+          orchestratorSessionId,
+          opencodeSessionId: payload.opencodeSessionId,
+          eventType: payload.eventType,
+          event: payload.event,
+          seq: payload.seq,
+          timestamp: payload.timestamp,
+        });
+      } catch (error) {
+        console.warn('[OPENCODE_EVENT_FAST_LISTENER_ERROR]', error);
+      }
+    }
+  }
+
+  private buildStreamKey(orchestratorSessionId: string, opencodeSessionId: string | undefined, partId: string) {
+    return `${orchestratorSessionId}::${opencodeSessionId || ''}::${partId || 'text'}`;
+  }
+
+  private extractEventInfo(event: Record<string, unknown>) {
+    const eventType = typeof event.type === 'string' ? event.type : '';
+    const properties = (event.properties && typeof event.properties === 'object')
+      ? event.properties as Record<string, unknown>
+      : {};
+    const part = (properties.part && typeof properties.part === 'object')
+      ? properties.part as Record<string, unknown>
+      : {};
+    const message = (properties.message && typeof properties.message === 'object')
+      ? properties.message as Record<string, unknown>
+      : {};
+    const partType = ((part.type as string) || (properties.type as string) || '').toLowerCase();
+    const toolName =
+      ((part.tool as string) || (part.name as string) || (properties.tool as string) || (properties.name as string) || '')
+        .toLowerCase();
+    const partId = (part.id as string) || (part.callID as string) || (properties.partId as string) || '';
+    const role =
+      (message.role as string) ||
+      (properties.role as string) ||
+      (part.role as string) ||
+      '';
+    return { eventType, properties, part, partType, toolName, partId, role: role.toLowerCase() };
+  }
+
+  private isBlockedText(text: string): boolean {
+    if (!text) return true;
+    const normalized = text.replace(/\s+/g, ' ');
+    const blockedPhrases = [
+      '你是执行智能体',
+      '用户需求',
+      '任务描述',
+      '执行计划摘要',
+      '要求：',
+      '要求:',
+    ];
+    return blockedPhrases.some((phrase) => normalized.includes(phrase));
+  }
+
+  private shouldPersistCommandEvent(properties: Record<string, unknown>): boolean {
+    const command = (properties.command as string) || (properties.cmd as string) || '';
+    const output =
+      (properties.stdout as string) ||
+      (properties.output as string) ||
+      (properties.text as string) ||
+      '';
+    const error = (properties.error as string) || '';
+    return Boolean(command || output || error);
+  }
+
+  private shouldPersistToolEvent(info: { toolName: string; part: Record<string, unknown>; properties: Record<string, unknown> }): boolean {
+    if (!info.toolName) return false;
+    if (info.toolName === 'todoread') return false;
+    const state = (info.part.state && typeof info.part.state === 'object') ? info.part.state as Record<string, unknown> : {};
+    const rawInput =
+      (state.input as string) ||
+      (info.part.input as string) ||
+      (info.properties.input as string) ||
+      (info.properties.command as string) ||
+      '';
+    const rawOutput =
+      (state.output as string) ||
+      (info.properties.output as string) ||
+      (info.properties.stdout as string) ||
+      '';
+    const error = (state.error as string) || (info.properties.error as string) || '';
+    const status = (state.status as string) || (info.properties.status as string) || '';
+    if (['bash', 'shell', 'cmd'].includes(info.toolName)) {
+      return Boolean(rawInput || rawOutput || error || status);
+    }
+    return true;
+  }
+
+  private pruneStreamState() {
+    const maxEntries = Number.isFinite(this.streamTextMaxEntries)
+      ? Math.max(200, this.streamTextMaxEntries)
+      : 1000;
+    if (this.streamTextState.size <= maxEntries) return;
+    const entries = Array.from(this.streamTextState.entries());
+    entries.sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+    const removeCount = entries.length - maxEntries;
+    for (let i = 0; i < removeCount; i += 1) {
+      this.streamTextState.delete(entries[i][0]);
+    }
+  }
+
+  private applyStreamDelta(
+    orchestratorSessionId: string,
+    opencodeSessionId: string | undefined,
+    event: Record<string, unknown>
+  ): Record<string, unknown> {
+    const eventType = typeof event.type === 'string' ? event.type : '';
+    if (eventType !== 'message.part.updated' && eventType !== 'message.part.delta') {
+      return event;
+    }
+    const properties = (event.properties && typeof event.properties === 'object')
+      ? { ...(event.properties as Record<string, unknown>) }
+      : {};
+    const part = (properties.part && typeof properties.part === 'object')
+      ? { ...(properties.part as Record<string, unknown>) }
+      : {};
+    const partType = typeof part.type === 'string'
+      ? part.type
+      : typeof properties.type === 'string'
+        ? properties.type
+        : '';
+    if (partType && partType.toLowerCase() !== 'text') {
+      return event;
+    }
+    const partId =
+      (typeof part.id === 'string' && part.id) ||
+      (typeof properties.partId === 'string' && properties.partId) ||
+      'text';
+    const delta =
+      (typeof properties.delta === 'string' && properties.delta) ||
+      '';
+    const fullText =
+      (typeof part.text === 'string' && part.text) ||
+      (typeof part.content === 'string' && part.content) ||
+      (typeof properties.text === 'string' && properties.text) ||
+      '';
+    if (!delta && !fullText) {
+      return event;
+    }
+
+    const key = this.buildStreamKey(orchestratorSessionId, opencodeSessionId, partId);
+    const prev = this.streamTextState.get(key)?.text || '';
+    let nextText = fullText || prev;
+    let nextDelta = delta;
+
+    if (!nextDelta && fullText) {
+      if (prev && fullText.startsWith(prev)) {
+        nextDelta = fullText.slice(prev.length);
+      } else {
+        nextDelta = fullText;
+      }
+    }
+    if (!nextText && nextDelta) {
+      nextText = `${prev}${nextDelta}`;
+    } else if (nextDelta && fullText) {
+      nextText = fullText;
+    }
+
+    if (nextText) {
+      this.streamTextState.set(key, { text: nextText, updatedAt: Date.now() });
+      this.pruneStreamState();
+    }
+
+    if (!nextDelta) {
+      return event;
+    }
+
+    return {
+      ...event,
+      properties: {
+        ...properties,
+        delta: nextDelta,
+        part: part,
+      },
+    };
+  }
+
+  private async resolveBoundSession(orchestratorSessionId: string): Promise<SessionBinding | null> {
+    const cached = this.sessionBindings.get(orchestratorSessionId);
+    if (cached && Date.now() - cached.updatedAt < this.sessionBindingTtlMs) {
+      return cached;
+    }
+    const session = await taskCreationFileMemoryStore.findSessionByOrchestratorSessionId(orchestratorSessionId);
+    if (!session) {
+      return null;
+    }
+    const binding: SessionBinding = {
+      sessionId: session.id,
+      mode: session.mode,
+      updatedAt: Date.now(),
+    };
+    this.sessionBindings.set(orchestratorSessionId, binding);
+    return binding;
+  }
+
+  private schedulePersistFlush() {
+    if (this.persistIntervalMs <= 0) return;
+    if (this.persistTimer) return;
+    this.persistTimer = setInterval(() => {
+      void this.flushPersistQueue();
+    }, this.persistIntervalMs);
+    if (this.persistTimer && typeof this.persistTimer.unref === 'function') {
+      this.persistTimer.unref();
+    }
+  }
+
+  private async flushPersistQueue() {
+    if (this.persistQueue.length === 0) return;
+    const batch = this.persistQueue.splice(0, this.persistQueue.length);
+    const grouped = new Map<string, PersistEntry[]>();
+    for (const item of batch) {
+      const list = grouped.get(item.sessionId) || [];
+      list.push(item);
+      grouped.set(item.sessionId, list);
+    }
+    try {
+      await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+      const dbBatch = batch.map((item) => {
+        const createdAt = (() => {
+          if (item.createdAt instanceof Date) return item.createdAt;
+          if (typeof item.createdAt === 'string') {
+            const parsed = new Date(item.createdAt);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+          }
+          return new Date();
+        })();
+        return {
+          sessionId: item.sessionId,
+          role: item.role,
+          messageType: item.messageType,
+          content: item.content,
+          metadata: item.metadata,
+          createdAt,
+        };
+      });
+      await taskCreationSessionDAO.addMessages(dbBatch);
+    } catch (error) {
+      console.warn('[OPENCODE_EVENT_PERSIST_DB_FAILED]', error);
+      this.persistQueue.unshift(...batch);
+      return;
+    }
+    for (const [sessionId, list] of grouped.entries()) {
+      try {
+        await taskCreationFileMemoryStore.addMessagesBatch(
+          sessionId,
+          list.map((item) => ({
+            role: item.role,
+            messageType: item.messageType,
+            content: item.content,
+            metadata: item.metadata,
+            createdAt: item.createdAt,
+          }))
+        );
+      } catch (error) {
+        console.warn('[OPENCODE_EVENT_PERSIST_MEMORY_FAILED]', sessionId, error);
+      }
+    }
+  }
+
+  private summarizeEventForHistory(eventType: string, event: Record<string, unknown>): string {
+    const properties = (event.properties && typeof event.properties === 'object') ? event.properties as Record<string, unknown> : {};
+    const part = (properties.part && typeof properties.part === 'object') ? properties.part as Record<string, unknown> : {};
+    const partType = ((part.type as string) || (properties.type as string) || '').toLowerCase();
+    const toolName = (part.tool as string) || (part.name as string) || (properties.tool as string) || (properties.name as string) || '';
+    if (eventType === 'message.part.updated' || eventType === 'message.part.delta') {
+      if (partType === 'tool') {
+        return toolName ? `${toolName}` : '';
+      }
+      if (partType === 'file') {
+        const filePath = (part.path as string) || (properties.path as string) || '';
+        return filePath ? `${filePath}` : '';
+      }
+      const text = (part.text as string) || (part.content as string) || (properties.text as string) || '';
+      if (text) return text;
+    }
+    if (eventType === 'command.executed') {
+      const cmd = (properties.command as string) || (properties.name as string) || '';
+      return cmd || '';
+    }
+    if (eventType.startsWith('file.')) {
+      const path = (properties.file as string) || (properties.path as string) || '';
+      return path || '';
+    }
+    if (eventType === 'session.diff') {
+      return '';
+    }
+    return '';
+  }
+
+  private buildEventPreviewForHistory(event: Record<string, unknown>): Record<string, unknown> {
+    const properties = (event.properties && typeof event.properties === 'object') ? event.properties as Record<string, unknown> : {};
+    const part = (properties.part && typeof properties.part === 'object') ? properties.part as Record<string, unknown> : {};
+    const partType = (part.type as string) || (properties.type as string) || '';
+    const previewPart: Record<string, unknown> = {};
+    if (partType) previewPart.type = partType;
+    if (part.id) previewPart.id = part.id;
+    if (part.callID) previewPart.callID = part.callID;
+    if (part.tool || part.name) previewPart.tool = part.tool || part.name;
+    if (part.state && typeof part.state === 'object') {
+      const state = part.state as Record<string, unknown>;
+      previewPart.state = {
+        input: state.input,
+        output: state.output,
+        error: state.error,
+        status: state.status,
+      };
+    }
+    if (part.input) previewPart.input = part.input;
+    const previewProps: Record<string, unknown> = {};
+    if (Object.keys(previewPart).length > 0) previewProps.part = previewPart;
+    if (properties.command) previewProps.command = properties.command;
+    if (properties.partId) previewProps.partId = properties.partId;
+    if (properties.cwd) previewProps.cwd = properties.cwd;
+    if (properties.path || properties.file) previewProps.path = properties.path || properties.file;
+    if (properties.diff) previewProps.diff = properties.diff;
+    return {
+      type: event.type,
+      properties: previewProps,
+      directory: (event as Record<string, unknown>).directory,
+    };
+  }
+
+  private enqueuePersist(orchestratorSessionId: string, payload: {
+    opencodeSessionId?: string;
+    eventType: string;
+    event: Record<string, unknown>;
+    seq: number;
+    timestamp: number;
+  }) {
+    void (async () => {
+      const binding = await this.resolveBoundSession(orchestratorSessionId);
+      if (!binding || binding.mode !== 'sandbox') return;
+      const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
+      const eventPreview = this.buildEventPreviewForHistory(payload.event);
+      const metadata: Record<string, unknown> = {
+        orchestratorSessionId,
+        opencodeSessionId: payload.opencodeSessionId || undefined,
+        eventType: payload.eventType,
+        seq: payload.seq,
+        timestamp: payload.timestamp,
+        event: eventPreview,
+        rawPayload: { eventType: payload.eventType, event: eventPreview },
+      };
+
+      const eventType = payload.eventType;
+      const info = this.extractEventInfo(payload.event);
+      if (info.role === 'user') {
+        return;
+      }
+
+      if (eventType === 'command.executed' && !this.shouldPersistCommandEvent(info.properties)) {
+        return;
+      }
+      if (eventType.startsWith('pty.') && !asText(info.properties.data) && !asText(info.properties.text)) {
+        return;
+      }
+      if (eventType.startsWith('file.') || eventType === 'session.diff') {
+        // always persist
+      } else if (
+        eventType !== 'message.final' &&
+        eventType !== 'message.part.updated' &&
+        eventType !== 'message.part.delta' &&
+        eventType !== 'command.executed'
+      ) {
+        return;
+      }
+
+      if ((eventType === 'message.part.updated' || eventType === 'message.part.delta') && info.partType === 'tool') {
+        if (!this.shouldPersistToolEvent(info)) {
+          return;
+        }
+      }
+
+      // 处理文本流：计算 delta 并在重置时追加上一段文本，避免刷新丢失。
+      if (eventType === 'message.part.updated' || eventType === 'message.part.delta') {
+        const properties = (payload.event.properties && typeof payload.event.properties === 'object')
+          ? payload.event.properties as Record<string, unknown>
+          : {};
+        const part = (properties.part && typeof properties.part === 'object')
+          ? properties.part as Record<string, unknown>
+          : {};
+        const partType = ((part.type as string) || (properties.type as string) || '').toLowerCase();
+        if (!partType || partType === 'text') {
+          const partId = (part.id as string) || (properties.partId as string) || 'text';
+          const fullText = (part.text as string) || (part.content as string) || (properties.text as string) || '';
+          const delta = (properties.delta as string) || '';
+          const textCandidate = delta || fullText;
+          if (!textCandidate || this.isBlockedText(textCandidate)) {
+            return;
+          }
+          const key = this.buildStreamKey(orchestratorSessionId, payload.opencodeSessionId, partId);
+          const prev = this.streamTextState.get(key)?.text || '';
+          const isReset =
+            prev &&
+            fullText &&
+            !fullText.startsWith(prev) &&
+            !prev.startsWith(fullText);
+          if (isReset && prev) {
+            this.persistQueue.push({
+              sessionId: binding.sessionId,
+              role: 'agent',
+              messageType: 'opencode_event',
+              content: prev,
+              metadata: {
+                ...metadata,
+                stream: false,
+                source: 'stream_segment',
+                streamKey: key,
+                partId,
+              },
+              createdAt,
+            });
+          }
+          if (fullText || delta) {
+            this.persistQueue.push({
+              sessionId: binding.sessionId,
+              role: 'agent',
+              messageType: 'opencode_event',
+              content: delta || fullText,
+              metadata: {
+                ...metadata,
+                stream: true,
+                streamDelta: Boolean(delta),
+                streamKey: key,
+                partId,
+              },
+              createdAt,
+            });
+            this.schedulePersistFlush();
+            return;
+          }
+          return;
+        }
+      }
+
+      const content = this.summarizeEventForHistory(payload.eventType, payload.event);
+      if (!content) {
+        const stillPersist =
+          eventType === 'session.diff' ||
+          eventType.startsWith('file.') ||
+          eventType.startsWith('pty.') ||
+          eventType === 'command.executed';
+        if (!stillPersist) {
+          return;
+        }
+      }
+      this.persistQueue.push({
+        sessionId: binding.sessionId,
+        role: 'agent',
+        messageType: 'opencode_event',
+        content,
+        metadata,
+        createdAt,
+      });
+      this.schedulePersistFlush();
+    })().catch((error) => {
+      console.warn('[OPENCODE_EVENT_PERSIST_ENQUEUE_FAILED]', error);
+    });
+  }
 
   async ensureStream(input: {
     orchestratorSessionId: string;
@@ -166,6 +705,20 @@ export class OpencodeEventStreamService {
                   normalized.directory = input.workspaceRoot;
                 }
                 const message = toEventMessage(input.orchestratorSessionId, entry, normalized);
+                const fastEvent = this.applyStreamDelta(
+                  input.orchestratorSessionId,
+                  message.payload.opencodeSessionId,
+                  message.payload.event as Record<string, unknown>
+                );
+                const fastPayload = {
+                  opencodeSessionId: message.payload.opencodeSessionId,
+                  eventType: String(message.payload.eventType || 'unknown'),
+                  event: fastEvent,
+                  seq: Number(message.payload.seq || 0),
+                  timestamp: Number(message.payload.timestamp || Date.now()),
+                };
+                this.emitFast(input.orchestratorSessionId, fastPayload);
+                this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 osacConnectionManager.emitExternalMessage(input.orchestratorSessionId, message);
               },
             },

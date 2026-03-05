@@ -49,7 +49,8 @@ class DatabaseManager {
   private isClosed = false;
   private lastErrorMessage: string | null = null;
   private checkingPromise: Promise<boolean> | null = null;
-  private readonly minCheckIntervalMs = 15000;
+  private readonly minCheckIntervalMs =
+    Number(process.env.DATABASE_HEALTHCHECK_INTERVAL_MS) || 60000;
 
   constructor() {
     const sslDisabled = (
@@ -123,7 +124,9 @@ class DatabaseManager {
           this.lastHealthy = true;
           this.lastCheckAt = Date.now();
           this.lastErrorMessage = null;
-          console.log('✅ 数据库连接成功');
+          if (!this.lastHealthy || force) {
+            console.log('✅ 数据库连接成功');
+          }
           return true;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

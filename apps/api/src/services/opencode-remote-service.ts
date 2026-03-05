@@ -7,6 +7,7 @@ import { auditOsacAction } from '../utils/osac-audit';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { ensureDatabaseConnection } from '../config/database';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
+import type { NewConversationMessage } from '../db/schema';
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
 import { playwrightTestDetectionAgent } from '../agents/task-creation/layers/playwright-test-detection-agent';
@@ -488,6 +489,22 @@ function truncateText(value: unknown, maxLen: number): string | undefined {
   return `${trimmed.slice(0, maxLen)}...`;
 }
 
+function truncateValue(value: unknown, maxLen: number): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    if (value.length <= maxLen) return value;
+    return `${value.slice(0, maxLen)}...`;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  try {
+    const text = JSON.stringify(value);
+    if (text.length <= maxLen) return value;
+    return `${text.slice(0, maxLen)}...`;
+  } catch {
+    return '[unserializable]';
+  }
+}
+
 function buildDiffPreview(diff: unknown, maxLen: number = 8000) {
   if (!diff) return undefined;
   if (typeof diff === 'string') {
@@ -535,6 +552,24 @@ function buildEventPreview(event: Record<string, unknown>): Record<string, unkno
     if (state) partPreview.status = state;
     const summary = compact(asString(part.summary) || asString(properties.summary), 160);
     if (summary) partPreview.summary = summary;
+    // 保留工具输入/输出摘要，便于刷新后还原 Shell/工具细节。
+    const partState = normalizeRecord(part.state);
+    if (toolName && Object.keys(partState).length > 0) {
+      const input = truncateValue(partState.input, 1200);
+      const output = truncateValue(partState.output, 1200);
+      const error = truncateValue(partState.error, 800);
+      const status = truncateValue(partState.status, 200);
+      partPreview.state = {
+        ...(input !== undefined ? { input } : {}),
+        ...(output !== undefined ? { output } : {}),
+        ...(error !== undefined ? { error } : {}),
+        ...(status !== undefined ? { status } : {}),
+      };
+    }
+    const partInput = truncateValue(part.input ?? (properties as any).input, 1200);
+    if (partInput !== undefined) {
+      partPreview.input = partInput;
+    }
     previewProps.part = partPreview;
   }
 
@@ -967,6 +1002,15 @@ export class OpencodeRemoteService {
   private sessionNoArtifactNudges = new Map<string, number>();
   private sessionTestDispatchedCycle = new Map<string, number>();
   private workspaceBaselines = new Map<string, Set<string>>();
+  private messageQueue: NewConversationMessage[] = [];
+  private messageFlushTimer: NodeJS.Timeout | null = null;
+  private messageFlushInProgress: Promise<void> = Promise.resolve();
+  private messageFlushIntervalMs =
+    toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_INTERVAL_MS) ?? 2000;
+  private messageFlushMaxBatch =
+    toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_MAX_BATCH) ?? 50;
+  private messageFlushMaxQueue =
+    toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_MAX_QUEUE) ?? 300;
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -1028,6 +1072,66 @@ export class OpencodeRemoteService {
     this.streamCheckpointSavedAt.delete(key);
   }
 
+  private scheduleMessageFlush() {
+    if (this.messageFlushIntervalMs <= 0) return;
+    if (this.messageFlushTimer) return;
+    this.messageFlushTimer = setTimeout(() => {
+      this.messageFlushTimer = null;
+      void this.flushMessageQueue();
+    }, this.messageFlushIntervalMs);
+    if (this.messageFlushTimer && typeof this.messageFlushTimer.unref === 'function') {
+      this.messageFlushTimer.unref();
+    }
+  }
+
+  private enqueueDbMessage(message: NewConversationMessage) {
+    this.messageQueue.push(message);
+    const maxBatch = this.messageFlushMaxBatch > 0 ? this.messageFlushMaxBatch : 0;
+    const maxQueue = this.messageFlushMaxQueue > 0 ? this.messageFlushMaxQueue : 0;
+    if ((maxQueue > 0 && this.messageQueue.length >= maxQueue) || (maxBatch > 0 && this.messageQueue.length >= maxBatch)) {
+      void this.flushMessageQueue(true);
+      return;
+    }
+    this.scheduleMessageFlush();
+  }
+
+  private async flushMessageQueue(force: boolean = false) {
+    if (this.messageQueue.length === 0) return;
+    const batchSize = this.messageFlushMaxBatch > 0 ? this.messageFlushMaxBatch : this.messageQueue.length;
+    const batch = this.messageQueue.splice(0, batchSize);
+    const run = async () => {
+      try {
+        await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+        await taskCreationSessionDAO.addMessages(batch);
+      } catch (error) {
+        console.warn('[TASK_CREATION_MESSAGE_FLUSH_FAILED]', error);
+        this.messageQueue.unshift(...batch);
+      }
+    };
+    this.messageFlushInProgress = this.messageFlushInProgress.then(run, run);
+    await this.messageFlushInProgress;
+    if (force && this.messageQueue.length > 0) {
+      await this.flushMessageQueue(force);
+    }
+  }
+
+  private async persistMessage(
+    taskSessionId: string,
+    role: 'user' | 'agent' | 'system',
+    messageType: string,
+    content: string,
+    metadata?: Record<string, unknown>
+  ) {
+    await taskCreationFileMemoryStore.addMessage(taskSessionId, role, messageType, content, metadata);
+    this.enqueueDbMessage({
+      sessionId: taskSessionId,
+      role,
+      content,
+      messageType,
+      metadata,
+    });
+  }
+
   private async detectWorkspaceArtifactsAfterBaseline(
     sessionId: string,
     orchestratorSessionId: string,
@@ -1079,6 +1183,11 @@ export class OpencodeRemoteService {
     const now = Date.now();
     this.streamCheckpointAt.set(streamKey, now);
     const lastSaved = this.streamCheckpointSavedAt.get(streamKey) ?? 0;
+    // 首次流式内容尽快落盘，避免短响应在刷新后丢失
+    if (lastSaved === 0) {
+      void this.persistStreamCheckpoint(taskSessionId, orchestratorSessionId, opencodeSessionId, streamKey);
+      return;
+    }
     const nextDue = lastSaved + this.streamCheckpointIntervalMs;
     if (now >= nextDue) {
       void this.persistStreamCheckpoint(taskSessionId, orchestratorSessionId, opencodeSessionId, streamKey);
@@ -1121,6 +1230,7 @@ export class OpencodeRemoteService {
       stream: true,
       streamDelta: false,
       streamKey,
+      timestamp: Date.now(),
       source: 'stream_checkpoint',
       rawPayload: {
         eventType: 'message.part.updated',
@@ -1129,13 +1239,23 @@ export class OpencodeRemoteService {
       },
     };
 
-    await taskCreationFileMemoryStore.addMessage(
+    await this.persistMessage(
       taskSessionId,
       'agent',
       'opencode_event',
       content,
       metadata
     );
+
+    // 立刻广播 checkpoint，确保 SSE 实时可见（避免仅落盘但前端无更新）。
+    await this.notify({
+      taskSessionId,
+      message: {
+        type: 'opencode_event',
+        content,
+        metadata,
+      },
+    });
   }
 
   private touchStreamIdle(taskSessionId: string, orchestratorSessionId: string, opencodeSessionId: string) {
@@ -1266,7 +1386,7 @@ export class OpencodeRemoteService {
       phaseCycle: nextCycle,
     };
 
-    await taskCreationFileMemoryStore.addMessage(
+    await this.persistMessage(
       params.sessionId,
       'agent',
       'status_update',
@@ -1359,7 +1479,7 @@ export class OpencodeRemoteService {
     text: string;
     delta: string;
     updatedAt: number;
-  }): { streamKey: string; text: string } {
+  }): { streamKey: string; text: string; resetFrom?: string } {
     const streamKey = this.buildTextStreamKey(input.taskSessionId, input.opencodeSessionId, input.partId);
     const previous = this.textStreams.get(streamKey);
     if (previous?.truncated) {
@@ -1375,6 +1495,13 @@ export class OpencodeRemoteService {
     if (!nextText && input.delta) {
       nextText = previous ? `${previous.text}${input.delta}` : input.delta;
     }
+
+    const previousText = previous?.text || '';
+    const isReset =
+      previousText &&
+      nextText &&
+      !nextText.startsWith(previousText) &&
+      !previousText.startsWith(nextText);
 
     let truncated = false;
     if (this.streamMaxChars > 0 && nextText.length > this.streamMaxChars) {
@@ -1404,6 +1531,7 @@ export class OpencodeRemoteService {
     return {
       streamKey,
       text: entry.text,
+      resetFrom: isReset ? previousText : undefined,
     };
   }
 
@@ -1490,12 +1618,45 @@ export class OpencodeRemoteService {
 
     matched.sort((a, b) => a.updatedAt - b.updatedAt);
     const latest = matched[matched.length - 1];
-    const content = latest.text.trim();
-    if (!content) {
+    const latestContent = latest.text.trim();
+    if (!latestContent) {
       return null;
     }
 
-    const metadata: Record<string, unknown> = {
+    // 保留每个流(part)的最终文本，避免刷新后丢失中间阶段的说明文字。
+    const latestByKey = new Map<string, OpencodeTextStreamEntry>();
+    for (const entry of matched) {
+      const key = this.buildTextStreamKey(entry.taskSessionId, entry.opencodeSessionId, entry.partId);
+      latestByKey.set(key, entry);
+    }
+    const persisted = Array.from(latestByKey.values()).sort((a, b) => a.updatedAt - b.updatedAt);
+    for (const entry of persisted) {
+      const content = entry.text.trim();
+      if (!content) continue;
+      const metadata: Record<string, unknown> = {
+        orchestratorSessionId,
+        opencodeSessionId: entry.opencodeSessionId || opencodeSessionId || undefined,
+        eventType: 'message.final',
+        stream: false,
+        source: 'stream_aggregate',
+        streamKey: this.buildTextStreamKey(entry.taskSessionId, entry.opencodeSessionId, entry.partId),
+        partId: entry.partId,
+        rawPayload: {
+          eventType: 'message.final',
+          text: content,
+          source: 'stream_aggregate',
+        },
+      };
+      await this.persistMessage(
+        taskSessionId,
+        'agent',
+        'opencode_event',
+        content,
+        metadata
+      );
+    }
+
+    const notifyMetadata: Record<string, unknown> = {
       orchestratorSessionId,
       opencodeSessionId: latest.opencodeSessionId || opencodeSessionId || undefined,
       eventType: 'message.final',
@@ -1503,28 +1664,20 @@ export class OpencodeRemoteService {
       source: 'stream_aggregate',
       rawPayload: {
         eventType: 'message.final',
-        text: content,
+        text: latestContent,
         source: 'stream_aggregate',
       },
     };
-
-    await taskCreationFileMemoryStore.addMessage(
-      taskSessionId,
-      'agent',
-      'opencode_event',
-      content,
-      metadata
-    );
 
     await this.notify({
       taskSessionId,
       message: {
         type: 'opencode_event',
-        content,
-        metadata,
+        content: latestContent,
+        metadata: notifyMetadata,
       },
     });
-    return content;
+    return latestContent;
   }
 
   private formatRunSummary(artifact: RunArtifact, executionOutput: string): string {
@@ -1645,6 +1798,10 @@ export class OpencodeRemoteService {
       }
     }
     return '';
+  }
+
+  private isDirectSession(session: FileSessionRecord | null): boolean {
+    return Boolean(session && session.mode === 'sandbox');
   }
 
   private async runReviewGate(params: {
@@ -1818,10 +1975,11 @@ export class OpencodeRemoteService {
             workspacePath: workspacePath || undefined,
             parts: [{ type: 'text', text: content }],
           });
+          await this.initRunArtifactsForPrompt(taskSessionId, orchestratorSessionId, opencodeSessionId);
 
           const role = input.source === 'agent' ? 'agent' : 'user';
           const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
-          await taskCreationFileMemoryStore.addMessage(
+          await this.persistMessage(
             taskSessionId,
             role,
             messageType,
@@ -1860,6 +2018,38 @@ export class OpencodeRemoteService {
     throw new Error('无法发送 OpenCode 指令');
   }
 
+  private async initRunArtifactsForPrompt(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string
+  ) {
+    if (!taskSessionId || !opencodeSessionId) return;
+    const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    if (!session) return;
+    this.clearTextStreams(session.id, opencodeSessionId);
+    this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
+    const now = Date.now();
+    const phaseAtStart = (session.phase as FlowPhase) || 'development';
+    this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
+      hasFileChange: false,
+      missingArtifactNudges: 0,
+      startedAt: now,
+      promptedAt: now,
+      completionInProgress: false,
+      hasPlaywrightUsage: false,
+      toolEvents: 0,
+      commandEvents: 0,
+      diffEvents: 0,
+      todoEvents: 0,
+      fileEvents: 0,
+      textEvents: 0,
+      toolsUsed: new Set<string>(),
+      phaseAtStart,
+      cycleAtStart: session.phaseCycle ?? 0,
+    });
+    this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
+  }
+
   private async handleOsacMessage(orchestratorSessionId: string, message: OsacMessage) {
     if (
       message.type !== 'OPENCODE_EVENT' &&
@@ -1894,29 +2084,31 @@ export class OpencodeRemoteService {
           stage: 'executing',
         });
 
-        const content = 'OpenCode 会话已建立，正在等待执行事件...';
-        await taskCreationFileMemoryStore.addMessage(
-          session.id,
-          'agent',
-          'opencode_status',
-          content,
-          {
-            orchestratorSessionId,
-            opencodeSessionId,
-          }
-        );
-
-        await this.notify({
-          taskSessionId: session.id,
-          message: {
-            type: 'status_update',
+        if (!this.isDirectSession(session)) {
+          const content = 'OpenCode 会话已建立，正在等待执行事件...';
+          await this.persistMessage(
+            session.id,
+            'agent',
+            'opencode_status',
             content,
-            metadata: {
+            {
               orchestratorSessionId,
               opencodeSessionId,
+            }
+          );
+
+          await this.notify({
+            taskSessionId: session.id,
+            message: {
+              type: 'status_update',
+              content,
+              metadata: {
+                orchestratorSessionId,
+                opencodeSessionId,
+              },
             },
-          },
-        });
+          });
+        }
       }
       return;
     }
@@ -1957,31 +2149,33 @@ export class OpencodeRemoteService {
         phase: session.phase ? (session.phase as any) : 'development',
       });
 
-      const content = 'OpenCode 已接收指令，正在执行并回传实时事件...';
-      await taskCreationFileMemoryStore.addMessage(
-        session.id,
-        'agent',
-        'opencode_status',
-        content,
-        {
-          ...payload,
-          orchestratorSessionId,
-          opencodeSessionId: opencodeSessionId || undefined,
-        }
-      );
-
-      await this.notify({
-        taskSessionId: session.id,
-        message: {
-          type: 'status_update',
+      if (!this.isDirectSession(session)) {
+        const content = 'OpenCode 已接收指令，正在执行并回传实时事件...';
+        await this.persistMessage(
+          session.id,
+          'agent',
+          'opencode_status',
           content,
-          metadata: {
+          {
             ...payload,
             orchestratorSessionId,
             opencodeSessionId: opencodeSessionId || undefined,
+          }
+        );
+
+        await this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'status_update',
+            content,
+            metadata: {
+              ...payload,
+              orchestratorSessionId,
+              opencodeSessionId: opencodeSessionId || undefined,
+            },
           },
-        },
-      });
+        });
+      }
       return;
     }
 
@@ -1999,7 +2193,7 @@ export class OpencodeRemoteService {
       }
       await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
 
-      await taskCreationFileMemoryStore.addMessage(
+      await this.persistMessage(
         session.id,
         'agent',
         'opencode_error',
@@ -2063,6 +2257,26 @@ export class OpencodeRemoteService {
         updatedAt: Number(payload.timestamp) || Date.now(),
       });
 
+      if (stream.resetFrom && !this.isDirectSession(session)) {
+        const resetMetadata: Record<string, unknown> = {
+          orchestratorSessionId,
+          opencodeSessionId: textStream.opencodeSessionId,
+          eventType: 'message.final',
+          stream: false,
+          source: 'stream_segment',
+          streamKey: stream.streamKey,
+          partId: textStream.partId,
+        };
+        // 仅落盘，不广播，避免实时界面重复刷新，但保证刷新后可回放。
+        await this.persistMessage(
+          session.id,
+          'agent',
+          'opencode_event',
+          stream.resetFrom,
+          resetMetadata
+        );
+      }
+
       if (textStream.opencodeSessionId) {
         const runKey = this.buildRunKey(session.id, textStream.opencodeSessionId);
         const artifact = this.getRunArtifact(runKey);
@@ -2087,6 +2301,26 @@ export class OpencodeRemoteService {
       };
 
       this.streamBroadcastMeta.set(stream.streamKey, metadata);
+      // 直通/实时增量：优先推送当前片段，避免等待广播节流。
+      const immediateContent = textStream.delta || stream.text;
+      if (immediateContent) {
+        const immediateMeta = {
+          ...metadata,
+          streamDelta: Boolean(textStream.delta),
+          source: textStream.delta ? 'stream_delta' : metadata.source,
+        };
+        void this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'opencode_event',
+            content: immediateContent,
+            metadata: immediateMeta,
+          },
+        });
+      }
+      if (this.isDirectSession(session)) {
+        return;
+      }
       this.scheduleStreamBroadcast(session.id, stream.streamKey);
       this.scheduleStreamCheckpoint(session.id, orchestratorSessionId, textStream.opencodeSessionId, stream.streamKey);
       return;
@@ -2192,8 +2426,8 @@ export class OpencodeRemoteService {
       }
     }
 
-    if (shouldPersist) {
-      await taskCreationFileMemoryStore.addMessage(
+    if (shouldPersist && !this.isDirectSession(session)) {
+      await this.persistMessage(
         session.id,
         'agent',
         'opencode_event',
@@ -2219,6 +2453,16 @@ export class OpencodeRemoteService {
       }
 
       const aggregated = await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+      if (this.isDirectSession(session)) {
+        const artifact = this.getRunArtifact(runKey);
+        this.finalizedRuns.add(runKey);
+        if (runOpencodeSessionId) {
+          this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
+        }
+        artifact.completionInProgress = false;
+        this.runArtifacts.delete(runKey);
+        return;
+      }
       const currentPhase = (session.phase as FlowPhase) || 'development';
       let phaseForReview: FlowPhase = currentPhase;
       const artifact = this.getRunArtifact(runKey);
@@ -2433,7 +2677,7 @@ export class OpencodeRemoteService {
 
       const lastOutput = aggregated || (await this.resolveLatestOutput(session.id));
       const runSummary = this.formatRunSummary(artifact, lastOutput || '');
-      await taskCreationFileMemoryStore.addMessage(
+      await this.persistMessage(
         session.id,
         'agent',
         'agent_message',
@@ -2502,12 +2746,12 @@ export class OpencodeRemoteService {
       }
 
       if (reviewResult.status === 'pass') {
-        await taskCreationFileMemoryStore.addMessage(session.id, 'agent', 'agent_message', reviewResult.summary, {
+        await this.persistMessage(session.id, 'agent', 'agent_message', reviewResult.summary, {
           reviewDone: true,
           reviewIssues: reviewResult.issues,
         });
       } else if (reviewResult.status === 'skipped') {
-        await taskCreationFileMemoryStore.addMessage(
+        await this.persistMessage(
           session.id,
           'agent',
           'agent_message',
@@ -2518,7 +2762,7 @@ export class OpencodeRemoteService {
           }
         );
       } else if (reviewResult.status === 'error') {
-        await taskCreationFileMemoryStore.addMessage(
+        await this.persistMessage(
           session.id,
           'agent',
           'agent_message',
@@ -2559,7 +2803,7 @@ export class OpencodeRemoteService {
       }
 
       const content = 'OpenCode 执行完成';
-      await taskCreationFileMemoryStore.addMessage(
+      await this.persistMessage(
         session.id,
         'agent',
         'opencode_status',
@@ -2589,6 +2833,15 @@ export class OpencodeRemoteService {
       if (this.finalizedRuns.has(runKey)) {
         return;
       }
+      if (this.isDirectSession(session)) {
+        this.finalizedRuns.add(runKey);
+        if (runOpencodeSessionId) {
+          this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
+        }
+        await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+        this.runArtifacts.delete(runKey);
+        return;
+      }
       this.finalizedRuns.add(runKey);
       if (runOpencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
@@ -2609,7 +2862,7 @@ export class OpencodeRemoteService {
       }
 
       const errorContent = 'OpenCode 执行失败';
-      await taskCreationFileMemoryStore.addMessage(
+      await this.persistMessage(
         session.id,
         'agent',
         'opencode_error',
@@ -2621,7 +2874,7 @@ export class OpencodeRemoteService {
       );
 
       const content = 'OpenCode 执行已结束';
-      await taskCreationFileMemoryStore.addMessage(
+      await this.persistMessage(
         session.id,
         'agent',
         'status_update',

@@ -94,6 +94,24 @@ export class TaskCreationSessionDAO {
   }
 
   /**
+   * 批量添加对话消息
+   */
+  async addMessages(data: NewConversationMessage[]) {
+    if (!Array.isArray(data) || data.length === 0) {
+      return [];
+    }
+    const payload = data.map((item) => ({
+      ...item,
+      id: this.createId(item.id),
+    }));
+    const messages = await db
+      .insert(conversationMessages)
+      .values(payload)
+      .returning();
+    return messages;
+  }
+
+  /**
    * 获取会话的所有消息
    */
   async getMessages(sessionId: string) {

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
+import { Streamdown } from "streamdown";
 import {
   getTaskCreationDebugInfo,
   startTaskCreationDebug,
   getWorkspaceFile,
   getWorkspaceTree,
   type TaskCreationDebugInfo,
+  type WorkspaceFile,
   type WorkspaceTree,
   type WorkspaceTreeItem,
 } from "@/lib/task-creation-client";
@@ -53,7 +55,7 @@ export default function OpencodePreviewPanel({
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeLoading, setTreeLoading] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [fileContent, setFileContent] = useState<string>("");
+  const [fileData, setFileData] = useState<WorkspaceFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -114,8 +116,10 @@ export default function OpencodePreviewPanel({
     setFileError(null);
     try {
       const file = await getWorkspaceFile(sessionId, path);
-      setFileContent(file.content || "");
-      if (file.truncated) {
+      setFileData(file);
+      if (file.binaryTooLarge) {
+        setFileError("二进制文件过大，暂不支持预览");
+      } else if (file.truncated) {
         setFileError("内容较大，已截断显示");
       }
     } catch (error) {
@@ -125,7 +129,7 @@ export default function OpencodePreviewPanel({
       } else {
         setFileError(message);
       }
-      setFileContent("");
+      setFileData(null);
     } finally {
       setFileLoading(false);
     }
@@ -362,7 +366,7 @@ export default function OpencodePreviewPanel({
             loading={treeLoading}
             error={treeError}
             selectedPath={selectedPath}
-            content={fileContent}
+            file={fileData}
             contentError={fileError}
             contentLoading={fileLoading}
             expandedPaths={expandedPaths}
@@ -537,7 +541,7 @@ function FilePreview({
   loading,
   error,
   selectedPath,
-  content,
+  file,
   contentError,
   contentLoading,
   expandedPaths,
@@ -551,7 +555,7 @@ function FilePreview({
   loading: boolean;
   error: string | null;
   selectedPath: string | null;
-  content: string;
+  file: WorkspaceFile | null;
   contentError: string | null;
   contentLoading: boolean;
   expandedPaths: Set<string>;
@@ -589,11 +593,19 @@ function FilePreview({
   }
 
   const nodes = buildTree(tree.items);
+  const lineCount = file?.content ? file.content.split("\n").length : 0;
+  const previewType = file?.previewType || "text";
+  const mimeType = file?.mimeType || "application/octet-stream";
+  const isBinary = Boolean(file?.isBinary);
+  const binaryDataUrl =
+    file && file.encoding === "base64" && file.content
+      ? `data:${mimeType};base64,${file.content}`
+      : null;
 
   return (
     <div className="flex h-full flex-col md:flex-row">
-      <div className="md:w-[40%] border-b md:border-b-0 md:border-r border-border overflow-auto px-3 py-3">
-        <div className="text-[11px] text-muted-foreground mb-2 break-all">
+      <div className="md:basis-[30%] md:max-w-[30%] border-b md:border-b-0 md:border-r border-border overflow-auto px-3 py-3 bg-slate-50/60">
+        <div className="text-[11px] text-muted-foreground mb-2 break-all font-mono">
           根目录: {tree.root}
         </div>
         <TreeList
@@ -604,17 +616,54 @@ function FilePreview({
           onTogglePath={onTogglePath}
         />
       </div>
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
+      <div className="min-h-0 md:basis-[70%] md:max-w-[70%] overflow-hidden px-4 py-3">
         {selectedPath ? (
-          <div className="space-y-2">
-            <div className="text-xs text-muted-foreground">{selectedPath}</div>
-            {contentLoading ? (
-              <div className="text-xs text-muted-foreground">加载中...</div>
-            ) : (
-              <pre className="whitespace-pre-wrap break-words rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-100">
-                {content || ""}
-              </pre>
-            )}
+          <div className="h-full min-h-0 flex flex-col gap-2">
+            <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50 text-[11px] text-slate-500">
+                <span className="truncate">文件: {selectedPath}</span>
+                <span>
+                  {isBinary
+                    ? `${mimeType}${typeof file?.size === "number" ? ` · ${Math.ceil(file.size / 1024)} KB` : ""}`
+                    : `${lineCount} 行`}
+                </span>
+              </div>
+              {contentLoading ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">加载中...</div>
+              ) : previewType === "markdown" && !isBinary ? (
+                <div className="min-h-0 flex-1 overflow-auto px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
+                  <Streamdown>{file?.content || ""}</Streamdown>
+                </div>
+              ) : previewType === "image" && binaryDataUrl ? (
+                <div className="min-h-0 flex-1 overflow-auto p-3">
+                  <img src={binaryDataUrl} alt={selectedPath} className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50" />
+                </div>
+              ) : previewType === "video" && binaryDataUrl ? (
+                <div className="min-h-0 flex-1 overflow-auto p-3">
+                  <video src={binaryDataUrl} controls className="max-h-full w-full rounded-md border border-slate-200 bg-black" />
+                </div>
+              ) : previewType === "audio" && binaryDataUrl ? (
+                <div className="min-h-0 flex-1 overflow-auto p-3">
+                  <audio src={binaryDataUrl} controls className="w-full" />
+                </div>
+              ) : previewType === "pdf" && binaryDataUrl ? (
+                <div className="min-h-0 flex-1 overflow-auto p-3">
+                  <iframe title={`preview-${selectedPath}`} src={binaryDataUrl} className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white" />
+                </div>
+              ) : isBinary ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  {file?.binaryTooLarge
+                    ? "该二进制文件过大，无法在预览区直接加载。"
+                    : "该二进制文件类型暂不支持内嵌预览。"}
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <pre className="px-3 py-3 text-xs leading-5 whitespace-pre text-slate-700">
+                    <code>{file?.content || ""}</code>
+                  </pre>
+                </div>
+              )}
+            </div>
             {contentError ? (
               <div className="text-[11px] text-amber-600">{contentError}</div>
             ) : null}
@@ -659,8 +708,10 @@ function TreeList({
                   onSelectFile(node.path);
                 }
               }}
-              className={`w-full flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-muted transition-colors ${
-                selectedPath === node.path ? "bg-muted text-foreground" : "text-muted-foreground"
+              className={`w-full flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs font-mono transition-colors border ${
+                selectedPath === node.path
+                  ? "bg-white border-slate-200 text-foreground shadow-sm"
+                  : "text-muted-foreground border-transparent hover:bg-white/80 hover:border-slate-200"
               }`}
               style={{ paddingLeft: `${indent + 8}px` }}
             >
@@ -1206,7 +1257,7 @@ function resolveDiffDisplayMode(stats: { additions: number; deletions: number })
 }
 
 function isDisplayFile(value: DisplayFile | null): value is DisplayFile {
-  return Boolean(value) && value.hunks.length > 0;
+  return value !== null && value.hunks.length > 0;
 }
 
 function filterLinesForMode(lines: DiffLine[], mode: DiffDisplayMode): DiffLine[] {

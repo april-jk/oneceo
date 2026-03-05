@@ -13,6 +13,12 @@ type WorkspaceFileData = {
   content: string;
   truncated?: boolean;
   size?: number;
+  isBinary?: boolean;
+  encoding?: string;
+  mimeType?: string;
+  previewType?: 'text' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+  previewAvailable?: boolean;
+  binaryTooLarge?: boolean;
 };
 
 type CacheEntry<T> = {

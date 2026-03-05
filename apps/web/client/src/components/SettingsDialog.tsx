@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
-import { Settings2, UserRound, X } from 'lucide-react';
+import { Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -19,10 +19,45 @@ export function SettingsPanel() {
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
   const [theme, setTheme] = useState('light');
+  const [executor, setExecutor] = useState('opencode');
+  // Altus 控制模式：
+  // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
+  // - managed: Altus 接管模式，走三层智能体编排。
+  // 预留后续 claudecode/codex 直通模式扩展，保持此枚举语义稳定。
+  const [altusMode, setAltusMode] = useState('sandbox');
+  const EXECUTOR_STORAGE_KEY = 'altus_executor';
+  const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
 
   const handleLanguageChange = (lang: string) => {
     i18n.changeLanguage(lang);
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const storedExecutor = window.localStorage.getItem(EXECUTOR_STORAGE_KEY);
+    const storedAltusMode = window.localStorage.getItem(ALTUS_MODE_STORAGE_KEY);
+    if (storedExecutor) {
+      setExecutor(storedExecutor);
+    } else {
+      window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
+    }
+    if (storedAltusMode) {
+      setAltusMode(storedAltusMode);
+    } else {
+      window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
+    window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
+    window.dispatchEvent(
+      new CustomEvent('altus-settings-changed', {
+        detail: { executor, altusMode },
+      })
+    );
+  }, [executor, altusMode]);
 
   return (
     <div className="h-full">
@@ -43,6 +78,15 @@ export function SettingsPanel() {
                       <UserRound className="h-4 w-4" />
                     </span>
                     <span className="truncate">{t('settings.accountTab')}</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="model"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <SlidersHorizontal className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">{t('settings.modelTab')}</span>
                   </TabsTrigger>
                   <TabsTrigger
                     value="settings"
@@ -127,6 +171,52 @@ export function SettingsPanel() {
                       onCheckedChange={setPushNotifications}
                     />
                   </div>
+                </div>
+              </TabsContent>
+
+              {/* Model Tab */}
+              <TabsContent value="model" className="space-y-8 mt-0">
+                <div className="space-y-4 pb-6 border-b border-border/60">
+                  <div>
+                    <Label className="text-sm font-medium">{t('settings.executorLabel')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.executorDescription')}</p>
+                  </div>
+                  <Select value={executor} onValueChange={setExecutor}>
+                    <SelectTrigger className="w-full max-w-xs rounded-xl">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl">
+                      <SelectItem value="opencode" className="rounded-md">
+                        {t('settings.executorOpencode')}
+                      </SelectItem>
+                      <SelectItem value="claudecode" className="rounded-md">
+                        {t('settings.executorClaudecode')}
+                      </SelectItem>
+                      <SelectItem value="codex" className="rounded-md">
+                        {t('settings.executorCodex')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-sm font-medium">{t('settings.altusControlLabel')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.altusControlDescription')}</p>
+                  </div>
+                  <Select value={altusMode} onValueChange={setAltusMode}>
+                    <SelectTrigger className="w-full max-w-xs rounded-xl">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl">
+                      <SelectItem value="sandbox" className="rounded-md">
+                        {t('settings.altusSandboxDirect')}
+                      </SelectItem>
+                      <SelectItem value="managed" className="rounded-md">
+                        {t('settings.altusManaged')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </TabsContent>
 

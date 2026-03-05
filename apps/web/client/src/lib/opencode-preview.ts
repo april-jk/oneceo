@@ -298,8 +298,67 @@ function buildDiffTitle(
   return `Diff ${index + 1}`;
 }
 
+type DiffPayload =
+  | { kind: "structured"; files: StructuredFileDiff[] }
+  | { kind: "text"; text: string }
+  | { kind: "none" };
+
+function buildDiffSignature(payload: DiffPayload): string | null {
+  if (payload.kind === "structured") {
+    if (payload.files.length === 0) return null;
+    try {
+      return `structured:${JSON.stringify(payload.files)}`;
+    } catch {
+      return `structured:${payload.files.map((file) => file.file).join("|")}`;
+    }
+  }
+  if (payload.kind === "text") {
+    const trimmed = payload.text.trim();
+    if (!trimmed) return null;
+    return `text:${trimmed}`;
+  }
+  return null;
+}
+
+export function extractDiffPayload(metadata: Record<string, unknown>): DiffPayload {
+  const info = getOpencodeEventInfo(metadata);
+  const { toolName, eventType, properties, event, part } = info;
+  const { rawInput, input } = extractToolPayload(part);
+  const toolOutput = asText(toRecord(part.state).output) || asText(properties.output);
+  const output = resolveDiffOutput(toolName, rawInput, input, toolOutput);
+  const lower = toolName.toLowerCase();
+
+  if (lower === "apply_patch" && output && !isEmptyDiffText(output)) {
+    return { kind: "text", text: output };
+  }
+
+  if (eventType === "session.diff") {
+    const diffPayload = extractSessionDiff(metadata, info);
+    if (Array.isArray(diffPayload)) {
+      return diffPayload.length > 0
+        ? { kind: "structured", files: diffPayload }
+        : { kind: "none" };
+    }
+    const diffText =
+      typeof diffPayload === "string"
+        ? diffPayload
+        : asText(properties.diff) || stringifySafe(properties.diff);
+    if (
+      diffText &&
+      !isEmptyDiffText(diffText) &&
+      !diffText.startsWith("[OpenCode]") &&
+      !diffText.startsWith("[Tool]")
+    ) {
+      return { kind: "text", text: diffText };
+    }
+  }
+
+  return { kind: "none" };
+}
+
 export function buildPreviewItems(messages: AgentMessage[]) {
   const diffItems: PreviewDiffItem[] = [];
+  const seenDiffs = new Set<string>();
 
   messages.forEach((message, index) => {
     if (message.type !== "opencode_event") return;
@@ -315,7 +374,18 @@ export function buildPreviewItems(messages: AgentMessage[]) {
 
     if (toolName) {
       const lower = toolName.toLowerCase();
-    if (lower === "apply_patch" && output) {
+      if (lower === "apply_patch" && output) {
+        const payload = extractDiffPayload(metadata);
+        if (payload.kind === "none") {
+          return;
+        }
+        const signature = buildDiffSignature(payload);
+        if (signature && seenDiffs.has(signature)) {
+          return;
+        }
+        if (signature) {
+          seenDiffs.add(signature);
+        }
         const blocks = splitApplyPatchText(output);
         if (blocks.length > 1) {
           blocks.forEach((block, blockIndex) => {
@@ -342,29 +412,29 @@ export function buildPreviewItems(messages: AgentMessage[]) {
     }
 
     if (eventType === "session.diff") {
-      const diffPayload = extractSessionDiff(metadata, info);
-      if (Array.isArray(diffPayload)) {
-        if (diffPayload.length > 0) {
-          diffPayload.forEach((file, fileIndex) => {
-            const title = buildDiffTitle([file], "session.diff", diffItems.length);
-            diffItems.push({
-              id: `diff-${idBase}-${fileIndex}`,
-              title,
-              files: [file],
-              source: "session.diff",
-              createdAt,
-            });
-          });
-        }
+      const payload = extractDiffPayload(metadata);
+      const signature = buildDiffSignature(payload);
+      if (signature && seenDiffs.has(signature)) {
         return;
       }
-      const diffText = typeof diffPayload === "string" ? diffPayload : asText(properties.diff) || stringifySafe(properties.diff);
-      if (
-        diffText &&
-        !isEmptyDiffText(diffText) &&
-        !diffText.startsWith("[OpenCode]") &&
-        !diffText.startsWith("[Tool]")
-      ) {
+      if (signature) {
+        seenDiffs.add(signature);
+      }
+      if (payload.kind === "structured") {
+        payload.files.forEach((file, fileIndex) => {
+          const title = buildDiffTitle([file], "session.diff", diffItems.length);
+          diffItems.push({
+            id: `diff-${idBase}-${fileIndex}`,
+            title,
+            files: [file],
+            source: "session.diff",
+            createdAt,
+          });
+        });
+        return;
+      }
+      if (payload.kind === "text") {
+        const diffText = payload.text;
         const blocks = splitUnifiedDiffText(diffText);
         if (blocks.length > 1) {
           blocks.forEach((block, blockIndex) => {

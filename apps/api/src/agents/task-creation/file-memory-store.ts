@@ -17,6 +17,8 @@ export interface FileSessionRecord {
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed';
   phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
   phaseCycle?: number;
+  mode?: 'altus' | 'sandbox';
+  executor?: 'opencode' | 'claudecode' | 'codex' | string;
   runtime?: {
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
@@ -100,6 +102,7 @@ class TaskCreationFileMemoryStore {
   private writeLock: Promise<void> = Promise.resolve();
   private maxMessagesPerSession = Number(process.env.TASK_CREATION_MAX_MESSAGES || 1200);
   private maxMessageLength = Number(process.env.TASK_CREATION_MAX_MESSAGE_LENGTH || 20000);
+  private sandboxMaxMessageLength = Number(process.env.TASK_CREATION_SANDBOX_MAX_MESSAGE_LENGTH || 200000);
   private maxMetadataLength = Number(process.env.TASK_CREATION_MAX_METADATA_LENGTH || 20000);
 
   private clampMax(value: number, fallback: number) {
@@ -107,8 +110,8 @@ class TaskCreationFileMemoryStore {
     return Math.floor(value);
   }
 
-  private sanitizeText(text: string): { text: string; truncated: boolean } {
-    const maxLen = this.clampMax(this.maxMessageLength, 20000);
+  private sanitizeText(text: string, maxLenOverride?: number): { text: string; truncated: boolean } {
+    const maxLen = this.clampMax(maxLenOverride ?? this.maxMessageLength, 20000);
     if (!text || text.length <= maxLen) {
       return { text, truncated: false };
     }
@@ -231,6 +234,7 @@ class TaskCreationFileMemoryStore {
         stage: 'collecting',
         phase: 'ideation',
         phaseCycle: 0,
+        mode: 'altus',
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -366,6 +370,32 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async updateSessionMode(sessionId: string, mode: FileSessionRecord['mode']): Promise<void> {
+    if (!mode) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.mode === mode) return;
+      session.mode = mode;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionExecutor(sessionId: string, executor: FileSessionRecord['executor']): Promise<void> {
+    if (!executor) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.executor === executor) return;
+      session.executor = executor;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
   async updateRuntimeBinding(
     sessionId: string,
     runtime: { orchestratorSessionId?: string; opencodeSessionId?: string }
@@ -462,12 +492,14 @@ class TaskCreationFileMemoryStore {
     content: string,
     metadata?: any
   ): Promise<void> {
-    const sanitized = this.sanitizeText(String(content || ''));
     const meta = this.sanitizeMetadata(metadata);
     await this.withLock(async () => {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
+      const maxLen =
+        session.mode === 'sandbox' ? this.sandboxMaxMessageLength : this.maxMessageLength;
+      const sanitized = this.sanitizeText(String(content || ''), maxLen);
       session.messages.push({
         id: this.createId('msg'),
         role,
@@ -485,6 +517,50 @@ class TaskCreationFileMemoryStore {
         session.messages.splice(0, session.messages.length - maxMessages);
       }
       session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async addMessagesBatch(
+    sessionId: string,
+    items: Array<{
+      role: FileSessionMessage['role'];
+      messageType: string;
+      content: string;
+      metadata?: any;
+      createdAt?: string;
+    }>
+  ): Promise<void> {
+    if (!items || items.length === 0) return;
+    const metaList = items.map((item) => this.sanitizeMetadata(item.metadata));
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const maxLen =
+        session.mode === 'sandbox' ? this.sandboxMaxMessageLength : this.maxMessageLength;
+      const now = new Date().toISOString();
+      items.forEach((item, idx) => {
+        const meta = metaList[idx];
+        const sanitized = this.sanitizeText(String(item.content || ''), maxLen);
+        session.messages.push({
+          id: this.createId('msg'),
+          role: item.role,
+          messageType: item.messageType,
+          content: sanitized.text,
+          metadata: meta.metadata
+            ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
+            : sanitized.truncated
+              ? { contentTruncated: true }
+              : meta.metadata,
+          createdAt: item.createdAt || now,
+        });
+      });
+      const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
+      if (maxMessages > 0 && session.messages.length > maxMessages) {
+        session.messages.splice(0, session.messages.length - maxMessages);
+      }
+      session.updatedAt = now;
       await this.writeMemory(memory);
     });
   }

@@ -4,7 +4,7 @@
 
 ## 必读
 
-- `CODEX_PROMPT.md`
+- `docs/AGENTS_GUIDE/CODEX_PROMPT.md`
 - 仓库根目录 `AGENTS.md`
 
 ## 架构导览（分段文档）
@@ -13,6 +13,10 @@
 - `docs/AGENTS_GUIDE/02_services.md`
 - `docs/AGENTS_GUIDE/03_sandbox_e2b.md`
 - `docs/AGENTS_GUIDE/04_agent_flow.md`
+- `docs/AGENTS_GUIDE/AGENTS_git协作开发指南.md`
+- `docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md`
+- `docs/AGENTS_GUIDE/AGENT_USAGE_EXAMPLES.md`
+- `docs/AGENTS_GUIDE/agent-code-locations.md`
 
 ## 反馈机制（oneceo 内）
 
@@ -29,7 +33,7 @@
   - API：`apps/api`
   - 管理后台：`apps/admin_management`
 - Sandbox 模板：`e2b_templates/`
-- 旧 KVM 编排已停用，仅保留文档作为历史参考。
+- 旧 KVM 编排已停用，仅保留文档作为历史参考（见 `docs/legacy/kvm/`）。
 
 ## E2B Sandbox 规则（强制）
 

@@ -420,10 +420,80 @@ export interface SandboxManagementOverview {
   };
   summary: {
     total: number;
-    ready: number;
-    creating: number;
-    closed: number;
-    failed: number;
+    running: number;
+    paused: number;
   };
-  environments: SandboxEnvironmentItem[];
+  sandboxes: E2bSandboxItem[];
 }
+
+export interface E2bSandboxItem {
+  sandboxId: string;
+  state: 'running' | 'paused';
+  templateId: string;
+  alias?: string;
+  startedAt: string;
+  endAt: string;
+  cpuCount: number;
+  memoryMB: number;
+  diskSizeMB: number;
+  metadata?: Record<string, string>;
+}
+
+export interface E2bSandboxDetail {
+  sandboxId: string;
+  state: 'running' | 'paused';
+  templateId: string;
+  name?: string;
+  startedAt: string;
+  endAt: string;
+  cpuCount: number;
+  memoryMB: number;
+  diskSizeMB: number;
+  metadata: Record<string, string>;
+}
+
+export interface E2bSandboxFullInfo {
+  sandboxId: string;
+  state: 'running' | 'paused';
+  templateId: string;
+  name?: string;
+  startedAt: string;
+  endAt: string;
+  cpuCount: number;
+  memoryMB: number;
+  sandboxDomain?: string;
+  envdVersion?: string;
+  envdAccessToken?: string;
+  metadata: Record<string, string>;
+}
+
+export interface E2bSandboxMetricPoint {
+  timestamp: string;
+  cpuUsagePercent?: number;
+  memoryUsagePercent?: number;
+  memoryUsedMB?: number;
+  memoryTotalMB?: number;
+  diskUsagePercent?: number;
+}
+
+export type E2bTemplate = {
+  templateID?: string;
+  templateId?: string;
+  alias?: string;
+  name?: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+};
+
+export type E2bTemplateWithBuilds = {
+  templateID?: string;
+  templateId?: string;
+  alias?: string;
+  builds?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
+export type E2bTemplateBuildInfo = Record<string, unknown>;
+export type E2bTemplateBuildLogsResponse = Record<string, unknown>;

@@ -11,6 +11,13 @@ import type {
   KvmSessionInfo,
   KvmSessionQuota,
   KvmSnapshotInfo,
+  E2bSandboxDetail,
+  E2bSandboxFullInfo,
+  E2bSandboxMetricPoint,
+  E2bTemplate,
+  E2bTemplateBuildInfo,
+  E2bTemplateBuildLogsResponse,
+  E2bTemplateWithBuilds,
   SandboxManagementOverview,
   VmDetailResponse,
   VmIpInfo,
@@ -276,6 +283,107 @@ export const api = {
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
+  getSandboxEnvironment: (sandboxId: string) =>
+    request<E2bSandboxDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}`),
+  getSandboxFullInfo: (sandboxId: string) =>
+    request<E2bSandboxFullInfo>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/full-info`),
+  getSandboxMetrics: (sandboxId: string, query?: { start?: string; end?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.start) params.set('start', query.start);
+    if (query?.end) params.set('end', query.end);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<E2bSandboxMetricPoint[]>(
+      `/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/metrics${suffix}`
+    );
+  },
+  createSandboxEnvironment: (payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/sandbox-management/environments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  setSandboxTimeout: (sandboxId: string, timeoutMs: number) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/timeout`, {
+      method: 'POST',
+      body: JSON.stringify({ timeoutMs }),
+    }),
+  closeSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/close`, {
+      method: 'POST',
+    }),
+  pauseSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/pause`, {
+      method: 'POST',
+    }),
+  resumeSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/resume`, {
+      method: 'POST',
+    }),
+  runSandboxToolAction: (sandboxId: string, action: string, payload?: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/tools`, {
+      method: 'POST',
+      body: JSON.stringify({ action, payload }),
+    }),
+
+  listTemplates: (teamID?: string) =>
+    request<E2bTemplate[]>(`/api/sandbox-management/templates${teamID ? `?teamID=${encodeURIComponent(teamID)}` : ''}`),
+  getTemplate: (templateId: string, query?: { limit?: number; nextToken?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.limit) params.set('limit', String(query.limit));
+    if (query?.nextToken) params.set('nextToken', query.nextToken);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<E2bTemplateWithBuilds>(`/api/sandbox-management/templates/${encodeURIComponent(templateId)}${suffix}`);
+  },
+  createTemplate: (payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/sandbox-management/templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateTemplate: (templateId: string, payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/templates/${encodeURIComponent(templateId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  rebuildTemplate: (templateId: string, payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/templates/${encodeURIComponent(templateId)}/rebuild`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteTemplate: (templateId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/templates/${encodeURIComponent(templateId)}`, {
+      method: 'DELETE',
+    }),
+  getTemplateBuildLogs: (templateId: string, buildId: string, query?: Record<string, unknown>) => {
+    const params = new URLSearchParams();
+    Object.entries(query || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) params.set(key, String(value));
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<E2bTemplateBuildLogsResponse>(
+      `/api/sandbox-management/templates/${encodeURIComponent(templateId)}/builds/${encodeURIComponent(buildId)}/logs${suffix}`
+    );
+  },
+  getTemplateBuildStatus: (templateId: string, buildId: string, query?: Record<string, unknown>) => {
+    const params = new URLSearchParams();
+    Object.entries(query || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) params.set(key, String(value));
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<E2bTemplateBuildInfo>(
+      `/api/sandbox-management/templates/${encodeURIComponent(templateId)}/builds/${encodeURIComponent(buildId)}/status${suffix}`
+    );
+  },
+  checkTemplateAlias: (alias: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/templates/aliases/${encodeURIComponent(alias)}`),
+  assignTemplateTags: (payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/sandbox-management/templates/tags', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteTemplateTags: (payload: Record<string, unknown>) =>
+    request<Record<string, unknown>>('/api/sandbox-management/templates/tags', {
+      method: 'DELETE',
+      body: JSON.stringify(payload),
+    }),
 
   listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
 };

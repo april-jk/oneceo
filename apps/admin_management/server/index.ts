@@ -27,7 +27,7 @@ const dashboardService = new DashboardService(kvmOrchestratorConnector, auditSer
 const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
 const conversationService = new ConversationManagementService(oneceoApiConnector, kvmOrchestratorConnector, auditService);
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
-const sandboxManagementService = new SandboxManagementService(oneceoApiConnector);
+const sandboxManagementService = new SandboxManagementService();
 
 app.use(
   cors({

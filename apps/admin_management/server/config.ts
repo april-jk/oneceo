@@ -30,10 +30,11 @@ const envSchema = z.object({
   KVM_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
   HOST_METRICS_CACHE_MS: z.coerce.number().int().min(10000).max(900000).default(90000),
   HOST_METRICS_CONCURRENCY: z.coerce.number().int().min(1).max(12).default(4),
-  ONECEO_API_URL: z.string().url().default('http://192.168.10.128:4000'),
+  ONECEO_API_URL: z.string().url().default('http://127.0.0.1:4000'),
   ONECEO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   ONECEO_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(1),
   ADMIN_MANAGEMENT_CORS_ORIGIN: z.string().default('http://localhost:5174'),
+  E2B_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -50,4 +51,5 @@ export const config = {
   oneceoApiUrl: parsed.ONECEO_API_URL.replace(/\/+$/, ''),
   oneceoRequestTimeoutMs: parsed.ONECEO_REQUEST_TIMEOUT_MS,
   oneceoRequestRetries: parsed.ONECEO_REQUEST_RETRIES,
+  e2bApiKey: parsed.E2B_API_KEY || '',
 };

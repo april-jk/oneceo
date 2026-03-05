@@ -22,6 +22,13 @@ import type {
   ConversationSession,
   ConversationSessionDetailResponse,
   DashboardOverview,
+  E2bSandboxDetail,
+  E2bSandboxFullInfo,
+  E2bSandboxMetricPoint,
+  E2bTemplate,
+  E2bTemplateBuildInfo,
+  E2bTemplateBuildLogsResponse,
+  E2bTemplateWithBuilds,
   HostListResponse,
   SandboxManagementOverview,
   VmItem,
@@ -201,6 +208,7 @@ const DEFAULT_TRANSITION_FILTERS = {
 
 export default function App() {
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
+  const [kvmMode, setKvmMode] = useState<'kvm' | 'sandbox'>('sandbox');
 
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
@@ -218,6 +226,28 @@ export default function App() {
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
+  const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
+  const [sandboxModalOpen, setSandboxModalOpen] = useState(false);
+  const [sandboxTab, setSandboxTab] = useState<'sandboxes' | 'templates'>('sandboxes');
+  const [sandboxDetailTab, setSandboxDetailTab] = useState<'info' | 'metrics' | 'tools'>('info');
+  const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
+  const [sandboxMetrics, setSandboxMetrics] = useState<E2bSandboxMetricPoint[]>([]);
+  const [sandboxToolAction, setSandboxToolAction] = useState('command.run');
+  const [sandboxToolPayload, setSandboxToolPayload] = useState('{"cmd":"ls"}');
+  const [sandboxToolResult, setSandboxToolResult] = useState<unknown>(null);
+  const [sandboxCreatePayload, setSandboxCreatePayload] = useState(
+    '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
+  );
+
+  const [templates, setTemplates] = useState<E2bTemplate[]>([]);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateDetail, setTemplateDetail] = useState<E2bTemplateWithBuilds | null>(null);
+  const [templateBuildLogs, setTemplateBuildLogs] = useState<E2bTemplateBuildLogsResponse | null>(null);
+  const [templateBuildStatus, setTemplateBuildStatus] = useState<E2bTemplateBuildInfo | null>(null);
+  const [templateActionPayload, setTemplateActionPayload] = useState('{}');
+  const [templateAliasQuery, setTemplateAliasQuery] = useState('');
+  const [templateAliasResult, setTemplateAliasResult] = useState<unknown>(null);
+  const [sandboxBusyIds, setSandboxBusyIds] = useState<Record<string, boolean>>({});
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -327,6 +357,197 @@ export default function App() {
     setSandboxOverview(result);
   }, []);
 
+  const loadTemplates = useCallback(async () => {
+    const result = await api.listTemplates();
+    setTemplates(result);
+  }, []);
+
+  const loadSandboxDetail = useCallback(async (sandboxId: string) => {
+    const result = await api.getSandboxEnvironment(sandboxId);
+    setSandboxDetail(result);
+  }, []);
+
+  const loadSandboxFullInfo = useCallback(async (sandboxId: string) => {
+    const result = await api.getSandboxFullInfo(sandboxId);
+    setSandboxFullInfo(result);
+  }, []);
+
+  const loadSandboxMetrics = useCallback(async (sandboxId: string) => {
+    const result = await api.getSandboxMetrics(sandboxId);
+    setSandboxMetrics(result);
+  }, []);
+
+  const openTemplateDetail = useCallback(async (templateId: string) => {
+    const result = await api.getTemplate(templateId);
+    setTemplateDetail(result);
+    setTemplateBuildLogs(null);
+    setTemplateBuildStatus(null);
+    setTemplateModalOpen(true);
+  }, []);
+
+  const openSandboxDetail = useCallback(
+    async (sandboxId: string) => {
+      await loadSandboxDetail(sandboxId);
+      setSandboxDetailTab('info');
+      setSandboxFullInfo(null);
+      setSandboxMetrics([]);
+      setSandboxModalOpen(true);
+    },
+    [loadSandboxDetail]
+  );
+
+  const closeSandboxDetail = useCallback(() => {
+    setSandboxModalOpen(false);
+  }, []);
+
+  const closeTemplateDetail = useCallback(() => {
+    setTemplateModalOpen(false);
+  }, []);
+
+  const closeSandbox = useCallback(
+    async (sandboxId: string) => {
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+      try {
+        await api.closeSandboxEnvironment(sandboxId);
+        if (sandboxDetail?.sandboxId === sandboxId) {
+          const refreshed = await api.getSandboxEnvironment(sandboxId).catch(() => null);
+          setSandboxDetail(refreshed);
+        }
+        await loadSandboxSection();
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '关闭 Sandbox 失败');
+      } finally {
+        setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+      }
+    },
+    [loadSandboxSection, sandboxDetail?.sandboxId]
+  );
+
+  const pauseSandbox = useCallback(
+    async (sandboxId: string) => {
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+      try {
+        await api.pauseSandboxEnvironment(sandboxId);
+        await loadSandboxSection();
+        if (sandboxDetail?.sandboxId === sandboxId) {
+          const refreshed = await api.getSandboxEnvironment(sandboxId).catch(() => null);
+          setSandboxDetail(refreshed);
+        }
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '暂停 Sandbox 失败');
+      } finally {
+        setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+      }
+    },
+    [loadSandboxSection, sandboxDetail?.sandboxId]
+  );
+
+  const resumeSandbox = useCallback(
+    async (sandboxId: string) => {
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+      try {
+        await api.resumeSandboxEnvironment(sandboxId);
+        await loadSandboxSection();
+        if (sandboxDetail?.sandboxId === sandboxId) {
+          const refreshed = await api.getSandboxEnvironment(sandboxId).catch(() => null);
+          setSandboxDetail(refreshed);
+        }
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '恢复 Sandbox 失败');
+      } finally {
+        setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+      }
+    },
+    [loadSandboxSection, sandboxDetail?.sandboxId]
+  );
+
+  const runSandboxTool = useCallback(async () => {
+    if (!sandboxDetail?.sandboxId) return;
+    try {
+      const payload = sandboxToolPayload.trim() ? (JSON.parse(sandboxToolPayload) as Record<string, unknown>) : undefined;
+      const result = await api.runSandboxToolAction(sandboxDetail.sandboxId, sandboxToolAction, payload);
+      setSandboxToolResult(result);
+    } catch (toolError) {
+      setError(toolError instanceof Error ? toolError.message : '执行工具操作失败');
+    }
+  }, [sandboxDetail?.sandboxId, sandboxToolAction, sandboxToolPayload]);
+
+  const createSandbox = useCallback(async () => {
+    try {
+      const payload = sandboxCreatePayload.trim()
+        ? (JSON.parse(sandboxCreatePayload) as Record<string, unknown>)
+        : {};
+      await api.createSandboxEnvironment(payload);
+      await loadSandboxSection();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '创建 Sandbox 失败');
+    }
+  }, [sandboxCreatePayload, loadSandboxSection]);
+
+  const updateTemplateDetail = useCallback(async (templateId: string) => {
+    const detail = await api.getTemplate(templateId);
+    setTemplateDetail(detail);
+  }, []);
+
+  const runTemplateAction = useCallback(
+    async (action: 'create' | 'update' | 'rebuild' | 'delete' | 'tags-assign' | 'tags-delete') => {
+      try {
+        const payload = templateActionPayload.trim()
+          ? (JSON.parse(templateActionPayload) as Record<string, unknown>)
+          : {};
+        const reason = action === 'delete' || action === 'rebuild' ? window.prompt('请输入操作备注（必填）') : 'ok';
+        if ((action === 'delete' || action === 'rebuild') && !reason) return;
+        if (action === 'create') {
+          await api.createTemplate(payload);
+        } else if (action === 'update' && templateDetail) {
+          await api.updateTemplate(
+            (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+            payload
+          );
+        } else if (action === 'rebuild' && templateDetail) {
+          await api.rebuildTemplate(
+            (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+            payload
+          );
+        } else if (action === 'delete' && templateDetail) {
+          await api.deleteTemplate((templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '');
+          setTemplateModalOpen(false);
+        } else if (action === 'tags-assign') {
+          await api.assignTemplateTags(payload);
+        } else if (action === 'tags-delete') {
+          await api.deleteTemplateTags(payload);
+        }
+        await loadTemplates();
+        if (templateDetail) {
+          await updateTemplateDetail((templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '');
+        }
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '模板操作失败');
+      }
+    },
+    [templateActionPayload, templateDetail, loadTemplates, updateTemplateDetail]
+  );
+
+  const checkAlias = useCallback(async () => {
+    if (!templateAliasQuery.trim()) return;
+    try {
+      const result = await api.checkTemplateAlias(templateAliasQuery.trim());
+      setTemplateAliasResult(result);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '别名查询失败');
+    }
+  }, [templateAliasQuery]);
+
+  const loadTemplateBuildLogs = useCallback(async (templateId: string, buildId: string) => {
+    const logs = await api.getTemplateBuildLogs(templateId, buildId);
+    setTemplateBuildLogs(logs);
+  }, []);
+
+  const loadTemplateBuildStatus = useCallback(async (templateId: string, buildId: string) => {
+    const status = await api.getTemplateBuildStatus(templateId, buildId);
+    setTemplateBuildStatus(status);
+  }, []);
+
   const loadAuditSection = useCallback(async () => {
     const result = await api.listAudit(80);
     setAuditEntries(result.entries);
@@ -341,7 +562,15 @@ export default function App() {
 
       try {
         if (section === 'kvm') {
-          await Promise.all([loadKvmSection(), loadAuditSection()]);
+          if (kvmMode === 'sandbox') {
+            if (sandboxTab === 'templates') {
+              await loadTemplates();
+            } else {
+              await loadSandboxSection();
+            }
+          } else {
+            await Promise.all([loadKvmSection(), loadAuditSection()]);
+          }
         } else if (section === 'conversation') {
           await loadConversationSessions();
         } else if (section === 'agent') {
@@ -359,7 +588,16 @@ export default function App() {
         setRefreshing(false);
       }
     },
-    [loadAgentSection, loadAuditSection, loadConversationSessions, loadKvmSection, loadSandboxSection]
+    [
+      kvmMode,
+      sandboxTab,
+      loadAgentSection,
+      loadAuditSection,
+      loadConversationSessions,
+      loadKvmSection,
+      loadSandboxSection,
+      loadTemplates,
+    ]
   );
 
   useEffect(() => {
@@ -367,20 +605,32 @@ export default function App() {
   }, [activeSection, loadSection]);
 
   useEffect(() => {
+    if (activeSection !== 'kvm') return;
+    void loadSection('kvm');
+  }, [activeSection, kvmMode, sandboxTab, loadSection]);
+
+  useEffect(() => {
     if (activeSection !== 'kvm') {
       return;
     }
 
     const timer = window.setInterval(() => {
-      void loadKvmSection().catch((requestError) => {
-        setError(requestError instanceof Error ? requestError.message : 'KVM 自动刷新失败');
-      });
+      if (kvmMode === 'sandbox') {
+        const refresh = sandboxTab === 'templates' ? loadTemplates : loadSandboxSection;
+        void refresh().catch((requestError) => {
+          setError(requestError instanceof Error ? requestError.message : 'Sandbox 自动刷新失败');
+        });
+      } else {
+        void loadKvmSection().catch((requestError) => {
+          setError(requestError instanceof Error ? requestError.message : 'KVM 自动刷新失败');
+        });
+      }
     }, 15000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, loadKvmSection]);
+  }, [activeSection, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
     if (!selectedSessionId || activeSection !== 'conversation') {
@@ -518,15 +768,23 @@ export default function App() {
     };
   }, [sortedTransitions.length, filteredTransitions]);
 
+  const kvmShowsSandbox = activeSection === 'kvm' && kvmMode === 'sandbox';
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
-      : activeSection === 'sandbox'
+      : activeSection === 'sandbox' || kvmShowsSandbox
         ? sandboxOverview?.sandboxApi.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
-    activeSection === 'agent' ? 'Agent 服务' : activeSection === 'sandbox' ? 'Sandbox 服务' : 'KVM 服务';
+    activeSection === 'agent'
+      ? 'Agent 服务'
+      : activeSection === 'sandbox' || kvmShowsSandbox
+        ? 'Sandbox 服务'
+        : 'KVM 服务';
+  const updatedAtLabel = kvmShowsSandbox
+    ? sandboxOverview?.sandboxApi.timestamp || sandboxOverview?.sandboxes?.[0]?.startedAt
+    : kvmOverview?.updatedAt;
 
   const handlePower = async (vm: VmItem, action: 'start' | 'stop') => {
     setBusyVmIds((prev) => ({ ...prev, [vm.vmId]: true }));
@@ -1430,64 +1688,577 @@ export default function App() {
     </main>
   );
 
-  const renderSandboxSection = () => (
-    <main className="content-stack">
-      <section className="kpi-grid fade-in">
-        <article className="kpi-card">
-          <p className="kpi-title">Sandbox API</p>
-          <p className="kpi-value">{sandboxOverview?.sandboxApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{sandboxOverview?.sandboxApi.service || '-'}</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">执行环境总数</p>
-          <p className="kpi-value">{sandboxOverview?.summary.total ?? 0}</p>
-          <p className="kpi-meta">环境记录</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">Ready 环境</p>
-          <p className="kpi-value">{sandboxOverview?.summary.ready ?? 0}</p>
-          <p className="kpi-meta">可执行</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">Creating 环境</p>
-          <p className="kpi-value">{sandboxOverview?.summary.creating ?? 0}</p>
-          <p className="kpi-meta">创建中</p>
-        </article>
-      </section>
+  const renderSandboxSection = () => {
+    const summary = sandboxOverview?.summary;
+    const statusData = [
+      { name: 'Running', value: summary?.running ?? 0, color: '#0f766e' },
+      { name: 'Paused', value: summary?.paused ?? 0, color: '#f59e0b' },
+    ];
+    const metricsData = sandboxMetrics.map((point) => ({
+      timeLabel: point.timestamp ? new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '-',
+      cpu: point.cpuUsagePercent ?? 0,
+      memory: point.memoryUsagePercent ?? 0,
+      disk: point.diskUsagePercent ?? 0,
+    }));
 
-      <section className="panel fade-in">
-        <div className="panel-header">
-          <h2>执行环境列表</h2>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Session ID</th>
-                <th>VM 名称</th>
-                <th>状态</th>
-                <th>基础镜像</th>
-                <th>更新时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(sandboxOverview?.environments || []).map((item) => (
-                <tr key={item.id}>
-                  <td className="mono">{item.sessionId}</td>
-                  <td className="mono">{item.vmName || '-'}</td>
-                  <td>{item.status}</td>
-                  <td>{item.baseImage || '-'}</td>
-                  <td>{formatDateTime(item.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </main>
-  );
+    return (
+      <>
+        <main className="content-stack">
+          <section className="panel fade-in">
+            <div className="panel-header">
+              <h2>Sandbox 模块</h2>
+            </div>
+            <div className="button-grid">
+              <button
+                type="button"
+                className={`secondary-btn ${sandboxTab === 'sandboxes' ? 'active' : ''}`}
+                onClick={() => setSandboxTab('sandboxes')}
+              >
+                Sandboxes
+              </button>
+              <button
+                type="button"
+                className={`secondary-btn ${sandboxTab === 'templates' ? 'active' : ''}`}
+                onClick={() => setSandboxTab('templates')}
+              >
+                Templates
+              </button>
+            </div>
+          </section>
 
-  const renderAuditSection = () => (
+          {sandboxTab === 'sandboxes' ? (
+            <>
+              <section className="kpi-grid fade-in">
+                <article className="kpi-card">
+                  <p className="kpi-title">Sandbox API</p>
+                  <p className="kpi-value">{sandboxOverview?.sandboxApi.online ? '在线' : '离线'}</p>
+                  <p className="kpi-meta">{sandboxOverview?.sandboxApi.service || '-'}</p>
+                </article>
+                <article className="kpi-card">
+                  <p className="kpi-title">执行环境总数</p>
+                  <p className="kpi-value">{sandboxOverview?.summary.total ?? 0}</p>
+                  <p className="kpi-meta">环境记录</p>
+                </article>
+                <article className="kpi-card">
+                  <p className="kpi-title">Running</p>
+                  <p className="kpi-value">{sandboxOverview?.summary.running ?? 0}</p>
+                  <p className="kpi-meta">运行中</p>
+                </article>
+                <article className="kpi-card">
+                  <p className="kpi-title">Paused</p>
+                  <p className="kpi-value">{sandboxOverview?.summary.paused ?? 0}</p>
+                  <p className="kpi-meta">暂停</p>
+                </article>
+              </section>
+
+              <section className="chart-grid fade-in">
+                <article className="panel">
+                  <div className="panel-header">
+                    <h2>Sandbox 状态分布</h2>
+                  </div>
+                  <div className="chart-wrap">
+                    <ResponsiveContainer width="100%" height={260}>
+                      <PieChart>
+                        <Pie
+                          data={statusData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={90}
+                          innerRadius={48}
+                          label
+                        >
+                          {statusData.map((entry) => (
+                            <Cell key={entry.name} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </article>
+              </section>
+
+              <section className="panel fade-in">
+                <div className="panel-header">
+                  <h2>执行环境列表</h2>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Sandbox ID</th>
+                        <th>状态</th>
+                        <th>模板</th>
+                        <th>开始时间</th>
+                        <th>到期时间</th>
+                        <th>资源</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(sandboxOverview?.sandboxes || []).length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="empty">
+                            暂无运行中的 Sandbox（请确认 E2B API Key 与是否存在运行实例）
+                          </td>
+                        </tr>
+                      ) : (
+                        (sandboxOverview?.sandboxes || []).map((item) => (
+                          <tr
+                            key={item.sandboxId}
+                            className={sandboxDetail?.sandboxId === item.sandboxId ? 'selected-row' : undefined}
+                          >
+                            <td className="mono">{item.sandboxId}</td>
+                            <td>{item.state}</td>
+                            <td className="mono">{item.alias || item.templateId}</td>
+                            <td>{formatDateTime(item.startedAt)}</td>
+                            <td>{formatDateTime(item.endAt)}</td>
+                            <td>{`${item.cpuCount}C / ${item.memoryMB}MB / ${item.diskSizeMB}MB`}</td>
+                            <td>
+                              <div className="action-inline">
+                                <button
+                                  type="button"
+                                  className="table-btn"
+                                  onClick={() => void openSandboxDetail(item.sandboxId)}
+                                >
+                                  查看详情
+                                </button>
+                                {item.state === 'running' ? (
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
+                                    disabled={sandboxBusyIds[item.sandboxId]}
+                                    onClick={() => void pauseSandbox(item.sandboxId)}
+                                  >
+                                    暂停
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
+                                    disabled={sandboxBusyIds[item.sandboxId]}
+                                    onClick={() => void resumeSandbox(item.sandboxId)}
+                                  >
+                                    恢复
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="table-btn danger"
+                                  disabled={sandboxBusyIds[item.sandboxId]}
+                                  onClick={() => {
+                                    const reason = window.prompt('请输入终止原因（必填）');
+                                    if (!reason) return;
+                                    if (window.confirm(`确认终止 sandbox ${item.sandboxId} 吗？`)) {
+                                      void closeSandbox(item.sandboxId);
+                                    }
+                                  }}
+                                >
+                                  终止
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="panel fade-in">
+                <div className="panel-header">
+                  <h2>创建 Sandbox</h2>
+                </div>
+                <div className="form-stack">
+                  <p className="muted">
+                    使用 E2B SDK 的 create/betaCreate 能力。JSON 支持 template/timeoutMs/metadata/envs/allowInternetAccess 等。
+                  </p>
+                  <textarea
+                    className="input-area"
+                    rows={6}
+                    value={sandboxCreatePayload}
+                    onChange={(event) => setSandboxCreatePayload(event.target.value)}
+                  />
+                  <button type="button" className="primary-btn" onClick={() => void createSandbox()}>
+                    创建 Sandbox
+                  </button>
+                </div>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="kpi-grid fade-in">
+                <article className="kpi-card">
+                  <p className="kpi-title">模板总数</p>
+                  <p className="kpi-value">{templates.length}</p>
+                  <p className="kpi-meta">来自 E2B</p>
+                </article>
+                <article className="kpi-card">
+                  <p className="kpi-title">别名检测</p>
+                  <p className="kpi-value">{templateAliasQuery || '-'}</p>
+                  <p className="kpi-meta">点击检测可查看</p>
+                </article>
+              </section>
+
+              <section className="panel fade-in">
+                <div className="panel-header">
+                  <h2>模板列表</h2>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>模板 ID</th>
+                        <th>别名/名称</th>
+                        <th>状态</th>
+                        <th>更新时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {templates.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="empty">
+                            暂无模板记录
+                          </td>
+                        </tr>
+                      ) : (
+                        templates.map((item, idx) => {
+                          const templateId = (item as any).templateID ?? (item as any).templateId ?? `template-${idx}`;
+                          const name = item.alias || (item as any).name || '-';
+                          return (
+                            <tr key={templateId}>
+                              <td className="mono">{templateId}</td>
+                              <td>{name}</td>
+                              <td>{(item as any).status ?? '-'}</td>
+                              <td>{formatDateTime((item as any).updatedAt ?? (item as any).createdAt)}</td>
+                              <td>
+                                <div className="action-inline">
+                                  <button type="button" className="table-btn" onClick={() => void openTemplateDetail(templateId)}>
+                                    查看详情
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="panel fade-in">
+                <div className="panel-header">
+                  <h2>模板动作</h2>
+                </div>
+                <div className="form-stack">
+                  <p className="muted">使用 JSON 触发创建/更新/重建/标签等操作。</p>
+                  <textarea
+                    className="input-area"
+                    rows={6}
+                    value={templateActionPayload}
+                    onChange={(event) => setTemplateActionPayload(event.target.value)}
+                  />
+                  <div className="button-grid">
+                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('create')}>
+                      创建模板
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-assign')}>
+                      分配标签
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-delete')}>
+                      删除标签
+                    </button>
+                  </div>
+                  <div className="button-grid">
+                    <input
+                      className="text-input"
+                      placeholder="输入模板别名"
+                      value={templateAliasQuery}
+                      onChange={(event) => setTemplateAliasQuery(event.target.value)}
+                    />
+                    <button type="button" className="secondary-btn" onClick={() => void checkAlias()}>
+                      检测别名
+                    </button>
+                  </div>
+                  {templateAliasResult ? <pre className="json-block">{toJsonText(templateAliasResult)}</pre> : null}
+                </div>
+              </section>
+            </>
+          )}
+        </main>
+
+        {sandboxModalOpen && sandboxDetail ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail}>
+            <div
+              className="modal-card"
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <div className="modal-header">
+                <h2>Sandbox 详情</h2>
+                <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
+                  关闭
+                </button>
+              </div>
+              <div className="button-grid">
+                <button
+                  type="button"
+                  className={`secondary-btn ${sandboxDetailTab === 'info' ? 'active' : ''}`}
+                  onClick={() => setSandboxDetailTab('info')}
+                >
+                  Info
+                </button>
+                <button
+                  type="button"
+                  className={`secondary-btn ${sandboxDetailTab === 'metrics' ? 'active' : ''}`}
+                  onClick={() => {
+                    setSandboxDetailTab('metrics');
+                    void loadSandboxMetrics(sandboxDetail.sandboxId);
+                  }}
+                >
+                  Metrics
+                </button>
+                <button
+                  type="button"
+                  className={`secondary-btn ${sandboxDetailTab === 'tools' ? 'active' : ''}`}
+                  onClick={() => setSandboxDetailTab('tools')}
+                >
+                  Tools
+                </button>
+              </div>
+
+              {sandboxDetailTab === 'info' ? (
+                <div className="detail-grid">
+                  <article className="sub-panel">
+                    <p className="kpi-title">Sandbox ID</p>
+                    <p className="mono">{sandboxDetail.sandboxId}</p>
+                    <p className="kpi-title">状态</p>
+                    <p>{sandboxDetail.state}</p>
+                    <p className="kpi-title">模板</p>
+                    <p className="mono">{sandboxDetail.name || sandboxDetail.templateId}</p>
+                    <p className="kpi-title">开始时间</p>
+                    <p>{formatDateTime(sandboxDetail.startedAt)}</p>
+                    <p className="kpi-title">到期时间</p>
+                    <p>{formatDateTime(sandboxDetail.endAt)}</p>
+                    <p className="kpi-title">资源</p>
+                    <p>{`${sandboxDetail.cpuCount}C / ${sandboxDetail.memoryMB}MB / ${sandboxDetail.diskSizeMB}MB`}</p>
+                  </article>
+                  <article className="sub-panel">
+                    <p className="kpi-title">元数据</p>
+                    <pre className="json-block">{toJsonText(sandboxDetail.metadata || {})}</pre>
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => void loadSandboxFullInfo(sandboxDetail.sandboxId)}
+                    >
+                      载入 Full Info
+                    </button>
+                    {sandboxFullInfo ? <pre className="json-block">{toJsonText(sandboxFullInfo)}</pre> : null}
+                  </article>
+                </div>
+              ) : null}
+
+              {sandboxDetailTab === 'metrics' ? (
+                <div className="chart-grid">
+                  <article className="panel">
+                    <div className="panel-header">
+                      <h2>CPU/内存/磁盘</h2>
+                    </div>
+                    <div className="chart-wrap">
+                      <ResponsiveContainer width="100%" height={260}>
+                        <LineChart data={metricsData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
+                          <XAxis dataKey="timeLabel" />
+                          <YAxis />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="cpu" stroke="#0f766e" name="CPU%" strokeWidth={2} />
+                          <Line type="monotone" dataKey="memory" stroke="#1d4ed8" name="内存%" strokeWidth={2} />
+                          <Line type="monotone" dataKey="disk" stroke="#b45309" name="磁盘%" strokeWidth={2} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </article>
+                </div>
+              ) : null}
+
+              {sandboxDetailTab === 'tools' ? (
+                <div className="form-stack">
+                  <p className="muted">通过统一工具入口调用 E2B SDK（命令/文件系统/Git 等）。</p>
+                  <select
+                    className="text-input"
+                    value={sandboxToolAction}
+                    onChange={(event) => setSandboxToolAction(event.target.value)}
+                  >
+                    {[
+                      'command.list',
+                      'command.run',
+                      'command.kill',
+                      'command.stdin',
+                      'files.list',
+                      'files.read',
+                      'files.write',
+                      'files.writeFiles',
+                      'files.remove',
+                      'files.mkdir',
+                      'files.rename',
+                      'files.exists',
+                      'files.info',
+                      'git.status',
+                      'git.branches',
+                      'git.clone',
+                      'git.init',
+                      'git.remoteAdd',
+                      'git.remoteGet',
+                      'git.createBranch',
+                      'git.checkoutBranch',
+                      'git.deleteBranch',
+                      'git.add',
+                      'git.commit',
+                      'git.reset',
+                      'git.restore',
+                      'git.pull',
+                      'git.push',
+                      'git.setConfig',
+                      'git.getConfig',
+                      'git.configureUser',
+                      'git.dangerouslyAuthenticate',
+                      'sandbox.host',
+                      'sandbox.uploadUrl',
+                      'sandbox.downloadUrl',
+                    ].map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <textarea
+                    className="input-area"
+                    rows={6}
+                    value={sandboxToolPayload}
+                    onChange={(event) => setSandboxToolPayload(event.target.value)}
+                  />
+                  <button type="button" className="primary-btn" onClick={() => void runSandboxTool()}>
+                    执行工具
+                  </button>
+                  {sandboxToolResult ? <pre className="json-block">{toJsonText(sandboxToolResult)}</pre> : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {templateModalOpen && templateDetail ? (
+          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeTemplateDetail}>
+            <div
+              className="modal-card"
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            >
+              <div className="modal-header">
+                <h2>模板详情</h2>
+                <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
+                  关闭
+                </button>
+              </div>
+              <div className="detail-grid">
+                <article className="sub-panel">
+                  <p className="kpi-title">模板信息</p>
+                  <pre className="json-block">{toJsonText(templateDetail)}</pre>
+                </article>
+                <article className="sub-panel">
+                  <p className="kpi-title">操作</p>
+                  <textarea
+                    className="input-area"
+                    rows={4}
+                    value={templateActionPayload}
+                    onChange={(event) => setTemplateActionPayload(event.target.value)}
+                  />
+                  <div className="button-grid">
+                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('update')}>
+                      更新模板
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
+                      重建模板
+                    </button>
+                    <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
+                      删除模板
+                    </button>
+                  </div>
+                </article>
+              </div>
+              {(templateDetail as any)?.builds ? (
+                <div className="panel">
+                  <div className="panel-header">
+                    <h2>Builds</h2>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Build ID</th>
+                          <th>状态</th>
+                          <th>创建时间</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(templateDetail as any).builds.map((build: any) => (
+                          <tr key={build.buildID || build.buildId}>
+                            <td className="mono">{build.buildID || build.buildId}</td>
+                            <td>{build.status || '-'}</td>
+                            <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
+                            <td>
+                              <div className="action-inline">
+                                <button
+                                  type="button"
+                                  className="table-btn"
+                                  onClick={() =>
+                                    void loadTemplateBuildLogs(
+                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                      build.buildID || build.buildId
+                                    )
+                                  }
+                                >
+                                  日志
+                                </button>
+                                <button
+                                  type="button"
+                                  className="table-btn"
+                                  onClick={() =>
+                                    void loadTemplateBuildStatus(
+                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                      build.buildID || build.buildId
+                                    )
+                                  }
+                                >
+                                  状态
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {templateBuildLogs ? <pre className="json-block">{toJsonText(templateBuildLogs)}</pre> : null}
+                  {templateBuildStatus ? <pre className="json-block">{toJsonText(templateBuildStatus)}</pre> : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+const renderAuditSection = () => (
     <main className="content-stack">
       <section className="panel fade-in">
         <div className="panel-header">
@@ -1520,7 +2291,7 @@ export default function App() {
       return <main className="loading-state">正在加载 {breadcrumbTitle} ...</main>;
     }
 
-    if (activeSection === 'kvm') return renderKvmSection();
+    if (activeSection === 'kvm') return kvmMode === 'sandbox' ? renderSandboxSection() : renderKvmSection();
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'sandbox') return renderSandboxSection();
@@ -1555,13 +2326,31 @@ export default function App() {
           <header className="top-header fade-in">
             <div>
               <p className="eyebrow">控制台 / {breadcrumbTitle}</p>
-              <h1>{breadcrumbTitle}</h1>
+              <h1>{kvmShowsSandbox ? `${breadcrumbTitle} · Sandbox` : breadcrumbTitle}</h1>
               <p className="subtitle">基于 oneceo 项目现有模块能力构建的管理标签页。</p>
             </div>
             <div className="header-tools">
               <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
                 {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
               </span>
+              {activeSection === 'kvm' ? (
+                <div className="toggle-group" role="group" aria-label="KVM 切换">
+                  <button
+                    type="button"
+                    className={`toggle-btn ${kvmMode === 'kvm' ? 'active' : ''}`}
+                    onClick={() => setKvmMode('kvm')}
+                  >
+                    自建 KVM
+                  </button>
+                  <button
+                    type="button"
+                    className={`toggle-btn ${kvmMode === 'sandbox' ? 'active' : ''}`}
+                    onClick={() => setKvmMode('sandbox')}
+                  >
+                    Sandbox
+                  </button>
+                </div>
+              ) : null}
               <button
                 type="button"
                 className="primary-btn"
@@ -1570,7 +2359,7 @@ export default function App() {
               >
                 {refreshing ? '刷新中...' : '刷新当前标签'}
               </button>
-              <p className="updated-at">最后更新: {formatDateTime(kvmOverview?.updatedAt)}</p>
+              <p className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</p>
             </div>
           </header>
 

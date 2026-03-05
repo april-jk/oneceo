@@ -225,6 +225,11 @@ h1 {
   background: #bfdbfe;
 }
 
+.secondary-btn.active {
+  background: #0f766e;
+  color: #fff;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -431,6 +436,15 @@ button:disabled {
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
+}
+
+.toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: #e2e8f0;
 }
 
 .toggle-btn.active {
@@ -677,6 +691,31 @@ button:disabled {
   border-radius: 10px;
   padding: 8px 10px;
   background: #fff;
+}
+
+.form-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.text-input,
+.input-area {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.input-area {
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.muted {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .button-grid {
@@ -1142,4 +1181,39 @@ button:focus-visible {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.modal-card {
+  width: min(900px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+  border: 1px solid #e2e8f0;
+  padding: 24px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.modal-header h2 {
+  margin: 0;
 }

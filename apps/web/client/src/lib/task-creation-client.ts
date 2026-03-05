@@ -70,6 +70,12 @@ export type WorkspaceFile = {
   content: string;
   truncated?: boolean;
   size?: number;
+  isBinary?: boolean;
+  encoding?: string;
+  mimeType?: string;
+  previewType?: "text" | "markdown" | "image" | "video" | "audio" | "pdf" | "binary";
+  previewAvailable?: boolean;
+  binaryTooLarge?: boolean;
 };
 
 async function fetchJson<T>(url: string): Promise<T> {

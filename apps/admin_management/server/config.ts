@@ -1,7 +1,26 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import path from 'node:path';
+import fs from 'node:fs';
 
-dotenv.config();
+const envCandidates = [
+  path.resolve(process.cwd(), '..', '.env'),
+  path.resolve(process.cwd(), 'apps', '.env'),
+  path.resolve(process.cwd(), '..', '..', 'apps', '.env'),
+];
+
+let loaded = false;
+for (const candidate of envCandidates) {
+  if (fs.existsSync(candidate)) {
+    dotenv.config({ path: candidate });
+    loaded = true;
+    break;
+  }
+}
+
+if (!loaded) {
+  dotenv.config();
+}
 
 const envSchema = z.object({
   ADMIN_MANAGEMENT_PORT: z.coerce.number().int().positive().default(9310),

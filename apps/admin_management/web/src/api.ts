@@ -32,7 +32,7 @@ type ApiFailure = {
 
 type ApiEnvelope<T> = ApiSuccess<T> | ApiFailure;
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

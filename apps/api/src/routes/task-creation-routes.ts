@@ -252,6 +252,8 @@ type OpencodeFileContent = {
   mimeType?: string;
 };
 
+type WorkspacePreviewType = 'text' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+
 async function listOpencodeDirectory(
   orchestratorSessionId: string,
   workspaceRoot: string,
@@ -350,6 +352,74 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; truncated
   }
   const sliced = buffer.subarray(0, maxBytes).toString('utf8');
   return { text: sliced, truncated: true, size: maxBytes };
+}
+
+function getFileExt(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const filename = normalized.split('/').pop() || '';
+  const dot = filename.lastIndexOf('.');
+  if (dot < 0) return '';
+  return filename.slice(dot + 1).toLowerCase();
+}
+
+function inferMimeTypeFromExt(filePath: string): string | undefined {
+  const ext = getFileExt(filePath);
+  if (!ext) return undefined;
+  const map: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    svg: 'image/svg+xml',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    m4v: 'video/x-m4v',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    flac: 'audio/flac',
+    pdf: 'application/pdf',
+    md: 'text/markdown',
+    markdown: 'text/markdown',
+    mdx: 'text/markdown',
+  };
+  return map[ext];
+}
+
+function resolveMimeType(filePath: string, fromUpstream?: string): string {
+  const normalized = (fromUpstream || '').trim().toLowerCase();
+  if (normalized) return normalized;
+  return inferMimeTypeFromExt(filePath) || 'application/octet-stream';
+}
+
+function detectPreviewType(filePath: string, mimeType: string, isBinary: boolean): WorkspacePreviewType {
+  const ext = getFileExt(filePath);
+  if (!isBinary) {
+    if (mimeType === 'image/svg+xml' || ext === 'svg') {
+      return 'image';
+    }
+    if (mimeType === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx') {
+      return 'markdown';
+    }
+    return 'text';
+  }
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType === 'application/pdf') return 'pdf';
+  return 'binary';
+}
+
+function estimateBase64Bytes(base64: string): number {
+  if (!base64) return 0;
+  const sanitized = base64.replace(/\s+/g, '');
+  const padding = sanitized.endsWith('==') ? 2 : sanitized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((sanitized.length * 3) / 4) - padding);
 }
 
 async function buildWorkspaceTreeFromOpencode(input: {
@@ -953,14 +1023,76 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
     const content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
     const isBinary = content.type !== 'text' || content.encoding === 'base64';
-    const textContent = isBinary ? '（二进制文件，暂不支持预览）' : content.content || '';
-    const trimmed = truncateUtf8(textContent, maxBytes);
-    const parsed = {
-      path: normalizedPath,
-      content: trimmed.text,
-      truncated: trimmed.truncated,
-      size: trimmed.size,
-    };
+    const mimeType = resolveMimeType(normalizedPath, content.mimeType);
+    const previewType = detectPreviewType(normalizedPath, mimeType, isBinary);
+    const maxBinaryBytes = clampNumber(
+      Number(req.query.maxBinaryBytes || 2 * 1024 * 1024),
+      64 * 1024,
+      10 * 1024 * 1024
+    );
+
+    let parsed:
+      | {
+          path: string;
+          content: string;
+          truncated: boolean;
+          size: number;
+          isBinary: boolean;
+          encoding: string;
+          mimeType: string;
+          previewType: WorkspacePreviewType;
+          previewAvailable: boolean;
+          binaryTooLarge?: boolean;
+        }
+      | {
+          path: string;
+          content: string;
+          truncated: boolean;
+          size: number;
+          isBinary: boolean;
+          encoding: string;
+          mimeType: string;
+          previewType: WorkspacePreviewType;
+          previewAvailable: boolean;
+          binaryTooLarge?: boolean;
+        };
+
+    if (isBinary) {
+      const encoded = (content.content || '').trim();
+      const base64Content =
+        content.encoding === 'base64'
+          ? encoded
+          : Buffer.from(content.content || '', 'utf8').toString('base64');
+      const byteSize = estimateBase64Bytes(base64Content);
+      const binaryTooLarge = byteSize > maxBinaryBytes;
+      const previewableKinds = new Set<WorkspacePreviewType>(['image', 'video', 'audio', 'pdf']);
+      parsed = {
+        path: normalizedPath,
+        content: binaryTooLarge ? '' : base64Content,
+        truncated: binaryTooLarge,
+        size: byteSize,
+        isBinary: true,
+        encoding: 'base64',
+        mimeType,
+        previewType,
+        previewAvailable: !binaryTooLarge && previewableKinds.has(previewType),
+        binaryTooLarge,
+      };
+    } else {
+      const textContent = content.content || '';
+      const trimmed = truncateUtf8(textContent, maxBytes);
+      parsed = {
+        path: normalizedPath,
+        content: trimmed.text,
+        truncated: trimmed.truncated,
+        size: trimmed.size,
+        isBinary: false,
+        encoding: 'utf8',
+        mimeType,
+        previewType,
+        previewAvailable: true,
+      };
+    }
 
     const ttlMs = clampNumber(
       Number(process.env.TASK_CREATION_CACHE_TTL_FILE_MS || 60000),

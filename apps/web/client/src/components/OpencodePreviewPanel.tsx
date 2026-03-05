@@ -349,8 +349,14 @@ export default function OpencodePreviewPanel({
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {currentTab === "files" ? (
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        <div
+          className={cn(
+            "absolute inset-0 h-full w-full transition-opacity",
+            currentTab === "files" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          )}
+          aria-hidden={currentTab !== "files"}
+        >
           <FilePreview
             tree={tree}
             loading={treeLoading}
@@ -376,8 +382,14 @@ export default function OpencodePreviewPanel({
             runtimeReady={runtimeReady !== false}
             runtimeStarting={runtimeStarting === true}
           />
-        ) : null}
-        {currentTab === "changes" ? (
+        </div>
+        <div
+          className={cn(
+            "absolute inset-0 h-full w-full transition-opacity",
+            currentTab === "changes" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          )}
+          aria-hidden={currentTab !== "changes"}
+        >
           <DiffPreview
             items={diffItems}
             current={currentDiff}
@@ -386,8 +398,14 @@ export default function OpencodePreviewPanel({
               setAutoDiff(false);
             }}
           />
-        ) : null}
-        {currentTab === "debug" ? (
+        </div>
+        <div
+          className={cn(
+            "absolute inset-0 h-full w-full transition-opacity",
+            currentTab === "debug" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          )}
+          aria-hidden={currentTab !== "debug"}
+        >
           <DebugPreview
             info={debugInfo}
             loading={debugLoading}
@@ -417,7 +435,7 @@ export default function OpencodePreviewPanel({
               }
             }}
           />
-        ) : null}
+        </div>
       </div>
     </aside>
   );
@@ -743,6 +761,24 @@ function DebugPreview({
       }
       if (!url.searchParams.get("pwd")) {
         url.searchParams.set("pwd", "oneceo");
+      }
+      if (!url.searchParams.get("username")) {
+        url.searchParams.set("username", url.searchParams.get("usr") || "oneceo");
+      }
+      if (!url.searchParams.get("password")) {
+        url.searchParams.set("password", url.searchParams.get("pwd") || "oneceo");
+      }
+      if (!url.searchParams.get("autoconnect")) {
+        url.searchParams.set("autoconnect", "1");
+      }
+      if (!url.searchParams.get("autoplay")) {
+        url.searchParams.set("autoplay", "1");
+      }
+      if (!url.searchParams.get("mute")) {
+        url.searchParams.set("mute", "1");
+      }
+      if (!url.searchParams.get("embed")) {
+        url.searchParams.set("embed", "1");
       }
       return url.toString();
     } catch {

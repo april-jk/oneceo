@@ -42,7 +42,7 @@ import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
-import { buildPreviewItems } from "@/lib/opencode-preview";
+import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -82,6 +82,7 @@ export default function Home() {
     answerQuestion,
   } = useTaskCreationAgent({
     autoRuntime: !isHistoryView,
+    compactHistory: false,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
       // TODO: 跳转到项目详情页面或更新左侧项目列表
@@ -732,13 +733,13 @@ function NoticeMessage({
   tone: "info" | "warning";
 }) {
   const toneClass =
-    tone === "warning"
-      ? "border-amber-200 bg-amber-50 text-amber-800"
-      : "border-slate-200 bg-slate-50 text-slate-700";
+    "border-border/70 bg-muted/50 text-foreground/80";
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-      <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${toneClass}`}>
+      <div
+        className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${toneClass} [&>svg]:size-3.5`}
+      >
         {icon}
         <span>{text}</span>
       </div>
@@ -770,6 +771,23 @@ type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
 function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
+  const seenDiffs = new Set<string>();
+
+  const getDiffSignature = (payload: ReturnType<typeof extractDiffPayload>): string | null => {
+    if (payload.kind === "structured") {
+      if (payload.files.length === 0) return null;
+      try {
+        return `structured:${JSON.stringify(payload.files)}`;
+      } catch {
+        return `structured:${payload.files.map((file) => file.file).join("|")}`;
+      }
+    }
+    if (payload.kind === "text") {
+      const trimmed = payload.text.trim();
+      return trimmed ? `text:${trimmed}` : null;
+    }
+    return null;
+  };
 
   const flushProgress = () => {
     if (!progressBuffer) return;
@@ -852,10 +870,18 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
-      const diffId =
-        eventInfo.eventType === "session.diff" || eventInfo.toolName.toLowerCase() === "apply_patch"
-          ? `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`
-          : undefined;
+      const isDiffEvent =
+        eventInfo.eventType === "session.diff" || eventInfo.toolName.toLowerCase() === "apply_patch";
+      let diffId: string | undefined;
+      if (isDiffEvent) {
+        const payload = extractDiffPayload(metadata);
+        const signature = getDiffSignature(payload);
+        if (!signature || seenDiffs.has(signature)) {
+          continue;
+        }
+        seenDiffs.add(signature);
+        diffId = `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`;
+      }
       if (eventInfo.eventType === "message.final" || eventInfo.partType === "text") {
         if (content) {
           items.push({
@@ -945,13 +971,7 @@ function MessageBubble({
   onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null }) => void;
 }) {
   if (item.kind === "capsule") {
-    const toneClass: Record<CapsuleTone, string> = {
-      system: "border-slate-200 bg-slate-50 text-slate-700",
-      intent: "border-blue-200 bg-blue-50 text-blue-700",
-      planning: "border-emerald-200 bg-emerald-50 text-emerald-700",
-      execution: "border-amber-200 bg-amber-50 text-amber-700",
-      error: "border-rose-200 bg-rose-50 text-rose-700",
-    };
+    const toneClass = "border-border/70 bg-muted/50 text-foreground/80";
     const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
     const lastIndex = segments.length - 1;
 
@@ -963,7 +983,7 @@ function MessageBubble({
         className="w-full"
       >
         <div
-          className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${toneClass[item.tone]} ${
+          className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass} ${
             item.loading ? "relative overflow-hidden" : ""
           }`}
         >
@@ -1284,25 +1304,57 @@ function OpencodeToolCard({
   const isDiffEvent = eventType === "session.diff" || (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
 
-  const capsuleTone =
-    status === "error"
-      ? "border-rose-200 bg-rose-50 text-rose-700"
-      : "border-slate-200 bg-slate-50 text-slate-700";
+  const capsuleTone = "border-border/70 bg-muted/50 text-foreground/80";
 
   const EventCapsule = ({
     icon: Icon,
     text,
+    title,
   }: {
     icon: LucideIcon;
     text: string;
-  }) => (
-    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${capsuleTone}`}>
-      <Icon className="w-4 h-4" />
-      <span>{text}</span>
-    </span>
-  );
+    title?: string;
+  }) => {
+    const capsule = (
+      <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${capsuleTone}`}>
+        <Icon className="w-3.5 h-3.5" />
+        <span>{text}</span>
+      </span>
+    );
+
+    if (!title) return capsule;
+
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{capsule}</TooltipTrigger>
+        <TooltipContent>
+          <p className="max-w-xs break-words">{title}</p>
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
 
   let info = getToolInfo(toolName || "tool", input);
+  const commandFromInput = asText(input.command) || asText(input.cmd);
+  const commandFromArgs = Array.isArray((input as Record<string, unknown>).args)
+    ? ((input as Record<string, unknown>).args as unknown[])
+        .map((item) => (typeof item === "string" ? item : ""))
+        .filter(Boolean)
+        .join(" ")
+    : "";
+  const commandFromArgv = Array.isArray((properties as Record<string, unknown>).argv)
+    ? ((properties as Record<string, unknown>).argv as unknown[])
+        .map((item) => (typeof item === "string" ? item : ""))
+        .filter(Boolean)
+        .join(" ")
+    : "";
+  const commandHint =
+    commandFromInput ||
+    commandFromArgs ||
+    commandFromArgv ||
+    asText(input.description) ||
+    asText(properties.command) ||
+    asText(properties.cmd);
   if (!toolName) {
     if (eventType.startsWith("file.")) {
       const filePath = asText(properties.file) || asText(properties.path);
@@ -1398,6 +1450,9 @@ function OpencodeToolCard({
   const todos = todosFromInput.length > 0 ? todosFromInput : todosFromOutput.length > 0 ? todosFromOutput : todosFromProps;
 
   if (toolKey === "todowrite") {
+    if (todos.length === 0) {
+      return null;
+    }
     return (
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -1442,9 +1497,7 @@ function OpencodeToolCard({
                 );
               })}
             </div>
-          ) : (
-            <div className="mt-2 text-xs text-muted-foreground">已生成待办列表</div>
-          )}
+          ) : null}
         </div>
       </motion.div>
     );
@@ -1491,7 +1544,7 @@ function OpencodeToolCard({
         className="w-full"
       >
         <div className="space-y-2">
-          <EventCapsule icon={Terminal} text="Shell 执行" />
+          <EventCapsule icon={Terminal} text="Shell 执行" title={commandHint || undefined} />
           {commandText ? (
             <div className="rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
               {commandText}
@@ -1532,7 +1585,11 @@ function OpencodeToolCard({
       transition={{ duration: 0.2 }}
       className="w-full"
     >
-      <EventCapsule icon={FileText} text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`} />
+      <EventCapsule
+        icon={toolKey === "bash" ? Terminal : FileText}
+        text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`}
+        title={toolKey === "bash" ? commandHint || undefined : undefined}
+      />
     </motion.div>
   );
 }

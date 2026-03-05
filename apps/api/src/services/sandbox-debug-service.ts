@@ -71,7 +71,9 @@ type EnsureDebugResult = {
 };
 
 export async function ensureNekoDebug(orchestratorSessionId: string): Promise<EnsureDebugResult> {
-  const configVersion = 'neko-multiuser-epr-v2';
+  const screenWidth = toPositiveInt(process.env.NEKO_SCREEN_WIDTH, 1280);
+  const screenHeight = toPositiveInt(process.env.NEKO_SCREEN_HEIGHT, 1008);
+  const configVersion = `neko-multiuser-epr-v2-${screenWidth}x${screenHeight}`;
   const nekoPort = toPositiveInt(process.env.NEKO_PORT, 8081);
   const cdpPort = toPositiveInt(process.env.NEKO_CDP_PORT, 9222);
   const display = process.env.NEKO_DISPLAY || ':0';
@@ -176,6 +178,7 @@ ${iceLiteYaml}${tcpMuxYaml}${udpMuxYaml}${eprYaml}${nat1To1Yaml}session:
 desktop:
   input:
     enabled: false
+  screen: "${screenWidth}x${screenHeight}@30"
 member:
   provider: "multiuser"
   multiuser:
@@ -183,9 +186,11 @@ member:
     user_password: "${nekoPassword}"
 EOF
 
-if ! pgrep -x Xvfb >/dev/null 2>&1; then
-  nohup Xvfb ${display} -screen 0 1280x720x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
-fi
+pkill -x Xvfb || true
+pkill -x chromium || true
+pkill -x chromium-browser || true
+sleep 1
+nohup Xvfb ${display} -screen 0 ${screenWidth}x${screenHeight}x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
 
 export DISPLAY=${display}
 for i in $(seq 1 10); do
@@ -194,6 +199,10 @@ for i in $(seq 1 10); do
   fi
   sleep 0.5
 done
+
+if command -v xrandr >/dev/null 2>&1; then
+  xrandr -s ${screenWidth}x${screenHeight} || xrandr --output screen --mode ${screenWidth}x${screenHeight} || true
+fi
 
 cdp_ready="false"
 if curl -fsSL --max-time 2 "http://127.0.0.1:${cdpPort}/json/version" >/dev/null 2>&1; then
@@ -215,7 +224,7 @@ if [[ "$cdp_ready" != "true" ]]; then
     --no-first-run \
     --no-default-browser-check \
     --disable-features=TranslateUI \
-    --window-size=1280,720 \
+    --window-size=${screenWidth},${screenHeight} \
     about:blank \
     > /tmp/chromium.log 2>&1 &
   for i in $(seq 1 20); do
@@ -283,6 +292,8 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
           port: nekoPort,
           display,
           cdpPort,
+          screenWidth,
+          screenHeight,
           tcpMuxPort,
           udpMuxPort,
           nat1To1: nat1To1 || '',
@@ -307,6 +318,8 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
       port: nekoPort,
       display,
       cdpPort,
+      screenWidth,
+      screenHeight,
       message: nextMessage,
     };
   }

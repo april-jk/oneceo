@@ -10,9 +10,10 @@ import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
+import { opencodeRemoteService } from '../services/opencode-remote-service';
+import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
-import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug } from '../services/sandbox-debug-service';
 import { e2bConnector } from '../connectors/e2b-connector';
@@ -391,47 +392,17 @@ async function buildWorkspaceTreeFromOpencode(input: {
   };
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function findSessionId(value: unknown): string {
-  if (!value || typeof value !== 'object') return '';
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const hit = findSessionId(item);
-      if (hit) return hit;
-    }
-    return '';
+function writeSse(res: express.Response, payload: unknown, eventName?: string, eventId?: number) {
+  if (Number.isFinite(eventId) && eventId) {
+    res.write(`id: ${eventId}\n`);
   }
-  const record = value as Record<string, unknown>;
-  const direct =
-    (typeof record.sessionID === 'string' && record.sessionID.trim()) ||
-    (typeof record.sessionId === 'string' && record.sessionId.trim());
-  if (direct) return direct;
-  for (const child of Object.values(record)) {
-    const hit = findSessionId(child);
-    if (hit) return hit;
-  }
-  return '';
-}
-
-function normalizeEvent(event: Record<string, unknown>) {
-  if (event.payload && typeof event.payload === 'object') {
-    const payload = event.payload as Record<string, unknown>;
-    if (event.directory) {
-      return { ...payload, directory: event.directory };
-    }
-    return payload;
-  }
-  return event;
-}
-
-function writeSse(res: express.Response, payload: unknown, eventName?: string) {
   if (eventName) {
     res.write(`event: ${eventName}\n`);
   }
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  if (typeof (res as any).flush === 'function') {
+    (res as any).flush();
+  }
 }
 
 /**
@@ -1040,7 +1011,10 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 
 /**
  * GET /api/task-creation/sessions/:sessionId/opencode/events
- * SSE 转发 OpenCode 全局事件流（按会话过滤）
+ * SSE 转发 OpenCode 全局事件流（按会话过滤）。
+ *
+ * 注意：即使是“sandbox 直通”模式，也必须走编排平台转发，
+ * 以保证事件落盘与历史回放一致，避免前端直连 sandbox 导致丢消息。
  */
 router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   const { sessionId } = req.params;
@@ -1059,6 +1033,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       error: getPublicErrorMessage('执行环境未就绪，无法订阅事件流'),
     });
   }
+  opencodeEventStreamService.bindSession(orchestratorSessionId, sessionId, session.mode);
 
   const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
   if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
@@ -1074,6 +1049,24 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     '';
 
   const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+  const filterSessionId = String(opencodeSessionId || '').trim();
+  const parseSince = (value: unknown): number => {
+    if (!value) return 0;
+    if (Array.isArray(value)) {
+      return parseSince(value[0]);
+    }
+    const raw = String(value || '').trim();
+    if (!raw) return 0;
+    const asNumber = Number(raw);
+    if (!Number.isNaN(asNumber) && Number.isFinite(asNumber)) {
+      return asNumber;
+    }
+    const parsed = Date.parse(raw);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  const sinceParam =
+    parseSince(req.query.since) ||
+    parseSince(req.headers['last-event-id'] || (req.headers as Record<string, unknown>)['Last-Event-ID']);
 
   try {
     await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
@@ -1093,8 +1086,6 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     });
   }
 
-  const runtime = await osacAgentService.getRuntimeInfo(orchestratorSessionId);
-
   await touchSandbox(orchestratorSessionId, 'opencode_events');
 
   res.status(200);
@@ -1104,63 +1095,87 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
-  const abort = new AbortController();
   const pingMs = Math.max(5000, Number(process.env.OPENCODE_EVENT_PROXY_PING_MS || 15000));
-  const retryMs = Math.max(500, Number(process.env.OPENCODE_EVENT_PROXY_RETRY_MS || 1500));
 
   const pingTimer = setInterval(() => {
     res.write(': ping\n\n');
   }, pingMs);
 
-  req.on('close', () => {
-    abort.abort();
-  });
-
-  writeSse(res, { status: 'ready', opencodeSessionId: opencodeSessionId || undefined }, 'ready');
-
-  while (!abort.signal.aborted) {
+  if (sinceParam) {
     try {
-      await opencodeHttpClient.subscribeEvents(
-        runtime.baseUrl,
-        {
-          directory: workspaceRoot,
-          signal: abort.signal,
-          onEvent: (event) => {
-            const normalized = normalizeEvent(event);
-            const eventSessionId = findSessionId(normalized);
-            if (opencodeSessionId && eventSessionId && eventSessionId !== opencodeSessionId) {
-              return;
-            }
-            void touchSandbox(orchestratorSessionId, 'opencode_event_stream');
-            writeSse(res, {
-              opencodeSessionId: eventSessionId || opencodeSessionId || undefined,
-              event: normalized,
-            });
-          },
-        },
-        runtime.trafficAccessToken || undefined
-      );
+      const history = await taskCreationFileMemoryStore.getMessages(sessionId);
+      const filtered = history
+        .filter((item) => item.messageType === 'opencode_event')
+        .filter((item) => {
+          if (!item.createdAt) return false;
+          const createdAt = Date.parse(item.createdAt);
+          if (Number.isNaN(createdAt)) return false;
+          return createdAt > sinceParam;
+        })
+        .filter((item) => {
+          if (!filterSessionId) return true;
+          const metadata = pickRecord(item.metadata);
+          const msgOpencodeSessionId = asText(metadata.opencodeSessionId);
+          if (!msgOpencodeSessionId) return false;
+          return msgOpencodeSessionId === filterSessionId;
+        })
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+        .slice(-500);
+      for (const item of filtered) {
+        const meta = pickRecord(item.metadata);
+        const eventId =
+          (typeof meta.seq === 'number' && Number.isFinite(meta.seq) ? meta.seq : undefined) ??
+          (typeof meta.timestamp === 'number' && Number.isFinite(meta.timestamp) ? meta.timestamp : undefined) ??
+          (item.createdAt ? Date.parse(item.createdAt) : undefined);
+        writeSse(res, {
+          sessionId,
+          type: item.messageType,
+          content: item.content,
+          metadata: item.metadata,
+          createdAt: item.createdAt,
+        }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
+      }
     } catch (error) {
-      if (abort.signal.aborted) {
-        break;
-      }
-      if (isSandboxNotFoundError(error)) {
-        await markSandboxClosed(orchestratorSessionId);
-        break;
-      }
-      writeSse(
-        res,
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'error'
-      );
-      await sleep(retryMs);
+      console.warn('[OPENCODE_SSE_REPLAY_FAILED]', error);
     }
   }
 
-  clearInterval(pingTimer);
-  res.end();
+  const unsubscribe = opencodeEventStreamService.subscribe(orchestratorSessionId, (payload) => {
+    const msgOpencodeSessionId = String(payload.opencodeSessionId || '').trim();
+    if (filterSessionId && msgOpencodeSessionId && msgOpencodeSessionId !== filterSessionId) {
+      return;
+    }
+    const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
+    writeSse(
+      res,
+      {
+        sessionId,
+        opencodeSessionId: msgOpencodeSessionId || undefined,
+        eventType: payload.eventType,
+        event: payload.event,
+        createdAt,
+        metadata: {
+          seq: payload.seq,
+          timestamp: payload.timestamp,
+          opencodeSessionId: msgOpencodeSessionId || undefined,
+        },
+      },
+      undefined,
+      payload.seq || undefined
+    );
+  });
+
+  const cleanup = () => {
+    clearInterval(pingTimer);
+    unsubscribe();
+    res.end();
+  };
+
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+
+  writeSse(res, { status: 'ready', opencodeSessionId: opencodeSessionId || undefined }, 'ready');
+  return undefined;
 });
 
 /**

@@ -200,6 +200,15 @@ export class OneceoApiConnector {
     return this.request<SandboxEnvironmentRecord>(`/api/sandbox/environment/${encodeURIComponent(sessionId)}`);
   }
 
+  closeSandboxEnvironment(sessionId: string) {
+    return this.request<Record<string, unknown>>(
+      `/api/sandbox/environment/${encodeURIComponent(sessionId)}/close`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
   listOsacMessages(sessionId: string, limit = 200) {
     return this.request<OsacMessageRecord[]>(
       `/api/sandbox/osac/${encodeURIComponent(sessionId)}/messages?limit=${Math.max(1, Math.min(limit, 500))}`

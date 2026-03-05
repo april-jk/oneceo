@@ -10,6 +10,7 @@ const apiProxyTarget =
 const webPort = Number(process.env.ADMIN_MANAGEMENT_WEB_PORT || process.env.VITE_DEV_PORT || 5174);
 
 export default defineConfig({
+  envDir: path.resolve(__dirname, '..', '..'),
   root: path.resolve(__dirname),
   plugins: [react()],
   server: {

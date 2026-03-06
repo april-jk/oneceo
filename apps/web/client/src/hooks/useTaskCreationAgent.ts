@@ -122,6 +122,25 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+    const asDate = Date.parse(raw);
+    if (!Number.isNaN(asDate)) {
+      return asDate;
+    }
+  }
+  return null;
+}
+
 function compactText(value: string, maxLen: number = 320): string {
   const text = value.trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -447,11 +466,11 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
   );
 }
 
-  function mergeRealtimeMessage(
-    prev: AgentMessage[],
-    message: AgentMessage,
-    welcomeMessage: string
-  ): AgentMessage[] {
+function mergeRealtimeMessage(
+  prev: AgentMessage[],
+  message: AgentMessage,
+  welcomeMessage: string
+): AgentMessage[] {
   if (message.type === 'error') {
     return prev;
   }
@@ -474,8 +493,54 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
   if (isDuplicateStatus) {
     return prev;
   }
+  const isDuplicateUserMessage =
+    (message.type === 'user_input' || message.type === 'user_response') &&
+    lastMessage?.type === message.type &&
+    (message.content || '').trim() &&
+    (message.content || '').trim() === (lastMessage?.content || '').trim();
+  if (isDuplicateUserMessage) {
+    return prev;
+  }
 
   const metadata = toRecord(message.metadata);
+  const eventType = asText(metadata.eventType);
+  const seq = asFiniteNumber(metadata.seq);
+  const timestamp = asFiniteNumber(metadata.timestamp);
+  if (message.type === 'opencode_event' && eventType === 'message.final') {
+    const hasDuplicateFinal = prev.some((item) => {
+      if (item.type !== 'opencode_event') return false;
+      const itemMeta = toRecord(item.metadata);
+      if (asText(itemMeta.eventType) !== 'message.final') return false;
+      return (item.content || '').trim() === (message.content || '').trim();
+    });
+    if (hasDuplicateFinal) {
+      return prev;
+    }
+  }
+  if (message.type === 'opencode_event' && seq !== null) {
+    const hasSameSeq = prev.some((item) => {
+      if (item.type !== 'opencode_event') return false;
+      const itemMeta = toRecord(item.metadata);
+      return asFiniteNumber(itemMeta.seq) === seq && (item.content || '') === (message.content || '');
+    });
+    if (hasSameSeq) {
+      return prev;
+    }
+  }
+  if (message.type === 'opencode_event' && seq === null && timestamp !== null) {
+    const hasSameTimestamp = prev.some((item) => {
+      if (item.type !== 'opencode_event') return false;
+      const itemMeta = toRecord(item.metadata);
+      return (
+        asFiniteNumber(itemMeta.timestamp) === timestamp &&
+        asText(itemMeta.eventType) === eventType &&
+        (item.content || '') === (message.content || '')
+      );
+    });
+    if (hasSameTimestamp) {
+      return prev;
+    }
+  }
   if (message.type === 'opencode_event' && !shouldDisplayOpencodeEvent(metadata, message.content)) {
     return prev;
   }
@@ -529,6 +594,11 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
     if (idx >= 0) {
       const next = [...prev];
       const existing = next[idx];
+      const existingMeta = toRecord(existing.metadata);
+      const chunkSignature = `${asFiniteNumber(metadata.seq) ?? 'na'}:${asFiniteNumber(metadata.timestamp) ?? 'na'}:${message.content || ''}`;
+      if (metadata.streamDelta === true && chunkSignature !== 'na:na:' && asText(existingMeta._streamChunkSignature) === chunkSignature) {
+        return prev;
+      }
       const nextContent =
         metadata.streamDelta === true
           ? `${existing?.content || ''}${message.content || ''}`
@@ -540,6 +610,7 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
         metadata: {
           ...toRecord(next[idx].metadata),
           ...metadata,
+          _streamChunkSignature: chunkSignature !== 'na:na:' ? chunkSignature : undefined,
         },
       };
       return next;
@@ -557,7 +628,7 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
     return [...filtered, message];
   }
 
-  if ((message.type === 'status_update' || message.type === 'error') && isTerminalOpencodeMessage(message)) {
+  if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
     const hasFinal = prev.some((item) => {
       if (item.type !== 'opencode_event') return false;
       const itemMeta = toRecord(item.metadata);
@@ -581,6 +652,7 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
 function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreationHistoryMessage[] {
   const result: TaskCreationHistoryMessage[] = [];
   const streamIndexByKey = new Map<string, number>();
+  const streamSignatureByKey = new Map<string, string>();
   const hasFinalInResult = () =>
     result.some((item) => {
       if (asText(item?.messageType) !== 'opencode_event') return false;
@@ -610,6 +682,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
       result.length = 0;
       result.push(...filtered, item);
       streamIndexByKey.clear();
+      streamSignatureByKey.clear();
       continue;
     }
 
@@ -643,6 +716,10 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
 
       const existingIndex = streamIndexByKey.get(streamKey);
       if (existingIndex !== undefined) {
+        const signature = `${asFiniteNumber(metadata.seq) ?? 'na'}:${asFiniteNumber(metadata.timestamp) ?? 'na'}:${item?.content || ''}`;
+        if (signature !== 'na:na:' && streamSignatureByKey.get(streamKey) === signature) {
+          continue;
+        }
         const existing = result[existingIndex];
         if (isDeltaStream(metadata)) {
           const nextContent = `${existing?.content || ''}${item?.content || ''}`;
@@ -654,9 +731,16 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         } else {
           result[existingIndex] = item;
         }
+        if (signature !== 'na:na:') {
+          streamSignatureByKey.set(streamKey, signature);
+        }
       } else {
         streamIndexByKey.set(streamKey, result.length);
         result.push(item);
+        const signature = `${asFiniteNumber(metadata.seq) ?? 'na'}:${asFiniteNumber(metadata.timestamp) ?? 'na'}:${item?.content || ''}`;
+        if (signature !== 'na:na:') {
+          streamSignatureByKey.set(streamKey, signature);
+        }
       }
       continue;
     }
@@ -676,6 +760,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
           result.length = 0;
           result.push(...filtered);
           streamIndexByKey.clear();
+          streamSignatureByKey.clear();
         }
       }
     }
@@ -697,6 +782,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         }
       }
       streamIndexByKey.clear();
+      streamSignatureByKey.clear();
     }
 
     result.push(item);
@@ -734,8 +820,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const sseActiveRef = useRef(false);
   const sseLastAtRef = useRef(0);
   const sseCursorRef = useRef(0);
+  const sseStreamSeqRef = useRef<Map<string, number>>(new Map());
   const sseStreamClockRef = useRef<Map<string, number>>(new Map());
   const sseStreamLengthRef = useRef<Map<string, number>>(new Map());
+  const sseStreamSignatureRef = useRef<Map<string, string>>(new Map());
   const sseReconnectTimerRef = useRef<number | null>(null);
   const sseReconnectAttemptRef = useRef(0);
   const ssePreferredRef = useRef(false);
@@ -759,6 +847,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setRuntimeMessages([]);
     setRuntimeError(null);
     setRuntimeEnabled(autoRuntime);
+    sseCursorRef.current = 0;
+    sseStreamSeqRef.current.clear();
+    sseStreamClockRef.current.clear();
+    sseStreamLengthRef.current.clear();
+    sseStreamSignatureRef.current.clear();
     setSessionId(nextSessionId);
     if (nextSessionId) {
       window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
@@ -890,43 +983,73 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (!streamKey) {
         return true;
       }
+      const seq =
+        asFiniteNumber(metadata.seq) ??
+        asFiniteNumber(toRecord(payload?.metadata).seq) ??
+        asFiniteNumber(payload?.seq);
       const metaTs =
-        typeof metadata.timestamp === 'number'
-          ? metadata.timestamp
-          : typeof payload?.metadata?.timestamp === 'number'
-            ? payload.metadata.timestamp
-            : undefined;
-    if (typeof metaTs === 'number' && Number.isFinite(metaTs)) {
-      const lastTs = sseStreamClockRef.current.get(streamKey) || 0;
-      if (metaTs < lastTs) {
+        asFiniteNumber(metadata.timestamp) ??
+        asFiniteNumber(toRecord(payload?.metadata).timestamp) ??
+        asFiniteNumber(payload?.createdAt);
+      const isDelta = metadata.streamDelta === true;
+      const content = message.content || '';
+      const signature = `${seq ?? 'na'}:${metaTs ?? 'na'}:${content}`;
+
+      const lastSeq = sseStreamSeqRef.current.get(streamKey);
+      if (seq !== null && typeof lastSeq === 'number' && seq < lastSeq) {
         return false;
       }
-      if (metaTs > lastTs) {
-        sseStreamClockRef.current.set(streamKey, metaTs);
+
+      const lastTs = sseStreamClockRef.current.get(streamKey) || 0;
+      if (seq === null && metaTs !== null && metaTs < lastTs) {
+        return false;
       }
-      if (metadata.streamDelta) {
-        const lastLen = sseStreamLengthRef.current.get(streamKey) || 0;
-        const nextLen = lastLen + (message.content || '').length;
-        sseStreamLengthRef.current.set(streamKey, nextLen);
+
+      const lastSignature = sseStreamSignatureRef.current.get(streamKey);
+      if (lastSignature && lastSignature === signature) {
+        return false;
       }
+
+      const lastLen = sseStreamLengthRef.current.get(streamKey) || 0;
+      if (seq === null && metaTs === null) {
+        if (isDelta) {
+          if (!content) {
+            return false;
+          }
+          if (lastSignature === `na:na:${content}`) {
+            return false;
+          }
+        } else {
+          const nextLen = content.length;
+          if (nextLen < lastLen) {
+            return false;
+          }
+        }
+      }
+
+      if (seq !== null) {
+        const prevSeq = sseStreamSeqRef.current.get(streamKey);
+        if (typeof prevSeq !== 'number' || seq >= prevSeq) {
+          sseStreamSeqRef.current.set(streamKey, seq);
+        }
+      }
+      if (metaTs !== null) {
+        const prevTs = sseStreamClockRef.current.get(streamKey) || 0;
+        if (metaTs >= prevTs) {
+          sseStreamClockRef.current.set(streamKey, metaTs);
+        }
+      }
+
+      if (isDelta) {
+        sseStreamLengthRef.current.set(streamKey, lastLen + content.length);
+      } else {
+        sseStreamLengthRef.current.set(streamKey, content.length);
+      }
+      sseStreamSignatureRef.current.set(streamKey, signature);
       return true;
-    }
-    const lastLen = sseStreamLengthRef.current.get(streamKey) || 0;
-    if (metadata.streamDelta) {
-      sseStreamLengthRef.current.set(streamKey, lastLen + (message.content || '').length);
-      return true;
-    }
-    const nextLen = (message.content || '').length;
-    if (nextLen < lastLen) {
-      return false;
-    }
-    if (nextLen > lastLen) {
-      sseStreamLengthRef.current.set(streamKey, nextLen);
-    }
-    return true;
-  },
-  []
-);
+    },
+    []
+  );
 
   const handleSsePayload = useCallback((payload: any) => {
     if (!payload || typeof payload !== 'object') return;
@@ -961,12 +1084,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const eventType = asText(event.type) || asText(payload.eventType) || 'unknown';
     const stream = extractStreamContent(eventType, event);
     const opencodeSessionId = asText(payload.opencodeSessionId) || findSessionId(event) || '';
+    const payloadMetadata = toRecord(payload.metadata);
 
     const metadata: Record<string, unknown> = {
       eventType,
       event,
       rawPayload: { event },
       opencodeSessionId: opencodeSessionId || undefined,
+      seq: asFiniteNumber(payloadMetadata.seq) ?? asFiniteNumber(payload.seq) ?? undefined,
+      timestamp:
+        asFiniteNumber(payloadMetadata.timestamp) ??
+        asFiniteNumber(payload.createdAt) ??
+        undefined,
     };
 
     let content = '';
@@ -1187,14 +1316,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             // OpenCode 运行时事件，直接进入消息流展示
             break;
 
-          case 'error':
-            // 错误处理
-            setIsProcessing(false);
-            if (message.message && onErrorRef.current) {
-              onErrorRef.current(message.message);
-            }
-            break;
-
         }
       } catch (error) {
         console.error('[TaskCreationAgent] 解析消息失败:', error);
@@ -1273,19 +1394,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         return ta - tb;
       });
       sseStreamClockRef.current.clear();
+      sseStreamSeqRef.current.clear();
       sseStreamLengthRef.current.clear();
+      sseStreamSignatureRef.current.clear();
       for (const item of ordered) {
         if (item?.messageType !== 'opencode_event') continue;
         const meta = toRecord(item.metadata);
         if (!isTextStreamEvent(meta, item.content)) continue;
         const streamKey = resolveStreamKeyFromMetadata(meta);
         if (!streamKey) continue;
+        const seq = asFiniteNumber(meta.seq);
+        if (seq !== null) {
+          const prevSeq = sseStreamSeqRef.current.get(streamKey);
+          if (typeof prevSeq !== 'number' || seq > prevSeq) {
+            sseStreamSeqRef.current.set(streamKey, seq);
+          }
+        }
         const ts =
-          typeof meta.timestamp === 'number'
-            ? meta.timestamp
-            : item?.createdAt
-              ? Date.parse(item.createdAt)
-              : 0;
+          asFiniteNumber(meta.timestamp) ??
+          (item?.createdAt ? Date.parse(item.createdAt) : 0);
         if (Number.isFinite(ts) && ts) {
           const prevTs = sseStreamClockRef.current.get(streamKey) || 0;
           if (ts > prevTs) {
@@ -1297,6 +1424,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (len > prevLen) {
           sseStreamLengthRef.current.set(streamKey, len);
         }
+        const signature = `${seq ?? 'na'}:${ts || 'na'}:${item?.content || ''}`;
+        if (signature !== 'na:na:') {
+          sseStreamSignatureRef.current.set(streamKey, signature);
+        }
       }
       const latestCursor = ordered.reduce((max, item) => {
         const ts = item?.createdAt ? Date.parse(item.createdAt) : NaN;
@@ -1307,7 +1438,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         sseCursorRef.current = latestCursor;
       }
       const sourceList = compactHistory ? compactHistoryMessages(ordered) : ordered;
-      const mapped: AgentMessage[] = sourceList.map((item: any) => {
+      const mapped = sourceList.map((item: any) => {
         const metadata = item?.metadata || {};
         const messageType = item?.messageType;
         const role = item?.role;

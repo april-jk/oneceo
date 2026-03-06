@@ -750,10 +750,11 @@ function NoticeMessage({
 type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; markdown: string }
+  | { kind: "agent_plain"; text: string; author?: string }
   | {
       kind: "capsule";
       label: string;
-      tone: "system" | "intent" | "planning" | "execution" | "error";
+      tone: "system" | "intent" | "planning" | "execution" | "review" | "error";
       loading?: boolean;
       segments?: string[];
     }
@@ -766,12 +767,57 @@ type ChatItem =
       diffId?: string;
     };
 
-type CapsuleTone = "system" | "intent" | "planning" | "execution" | "error";
+type CapsuleTone = "system" | "intent" | "planning" | "execution" | "review" | "error";
 
 function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
   const seenDiffs = new Set<string>();
+  const normalizeForDedup = (value: string): string => value.replace(/\r\n/g, "\n").trim();
+
+  const pushUser = (text: string) => {
+    const normalized = normalizeForDedup(text);
+    if (!normalized) return;
+    const last = items[items.length - 1];
+    if (last?.kind === "user" && normalizeForDedup(last.text) === normalized) {
+      return;
+    }
+    items.push({
+      kind: "user",
+      text,
+    });
+  };
+
+  const pushAgentMarkdown = (markdown: string) => {
+    const normalized = normalizeForDedup(markdown);
+    if (!normalized) return;
+    const last = items[items.length - 1];
+    if (last?.kind === "agent" && normalizeForDedup(last.markdown) === normalized) {
+      return;
+    }
+    items.push({
+      kind: "agent",
+      markdown,
+    });
+  };
+
+  const pushAgentPlain = (text: string, author?: string) => {
+    const normalized = normalizeForDedup(text);
+    if (!normalized) return;
+    const last = items[items.length - 1];
+    if (
+      last?.kind === "agent_plain" &&
+      normalizeForDedup(last.text) === normalized &&
+      (last.author || "OpenCode") === (author || "OpenCode")
+    ) {
+      return;
+    }
+    items.push({
+      kind: "agent_plain",
+      text,
+      author,
+    });
+  };
 
   const getDiffSignature = (payload: ReturnType<typeof extractDiffPayload>): string | null => {
     if (payload.kind === "structured") {
@@ -812,10 +858,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
       flushProgress();
-      items.push({
-        kind: "user",
-        text: message.content || "",
-      });
+      pushUser(message.content || "");
       continue;
     }
 
@@ -833,19 +876,13 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           tone: getCapsuleTone(parsed.label),
         });
         if (parsed.rest.trim()) {
-          items.push({
-            kind: "agent",
-            markdown: `**${getAgentName(message.agent)}**\n\n${parsed.rest}`,
-          });
+          pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${parsed.rest}`);
         }
         continue;
       }
 
       flushProgress();
-      items.push({
-        kind: "agent",
-        markdown: `**${getAgentName(message.agent)}**\n\n${message.content || ""}`,
-      });
+      pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${message.content || ""}`);
       continue;
     }
 
@@ -882,12 +919,13 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         seenDiffs.add(signature);
         diffId = `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`;
       }
-      if (eventInfo.eventType === "message.final" || eventInfo.partType === "text") {
+      if (eventInfo.eventType === "message.final") {
         if (content) {
-          items.push({
-            kind: "agent",
-            markdown: `**OpenCode**\n\n${content}`,
-          });
+          pushAgentMarkdown(`**OpenCode**\n\n${content}`);
+        }
+      } else if (eventInfo.partType === "text") {
+        if (content) {
+          pushAgentPlain(content, "OpenCode");
         }
       } else if (eventInfo.partType === "tool") {
         const toolName = eventInfo.toolName.toLowerCase();
@@ -930,10 +968,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "error") {
       flushProgress();
-      items.push({
-        kind: "agent",
-        markdown: `**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`,
-      });
+      pushAgentMarkdown(`**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`);
       continue;
     }
 
@@ -943,19 +978,13 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         message.options && message.options.length > 0
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
           : "";
-      items.push({
-        kind: "agent",
-        markdown: `**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`,
-      });
+      pushAgentMarkdown(`**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`);
       continue;
     }
 
     if (message.type === "plan_generated") {
       flushProgress();
-      items.push({
-        kind: "agent",
-        markdown: `**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`,
-      });
+      pushAgentMarkdown(`**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`);
     }
   }
 
@@ -1023,6 +1052,24 @@ function MessageBubble({
 
   if (item.kind === "opencode_tool") {
     return <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />;
+  }
+
+  if (item.kind === "agent_plain") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="space-y-1.5 text-sm text-foreground">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            {item.author || "OpenCode"}
+          </div>
+          <div className="whitespace-pre-wrap break-words leading-6">{item.text}</div>
+        </div>
+      </motion.div>
+    );
   }
 
   return (

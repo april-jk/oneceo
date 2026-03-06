@@ -1443,8 +1443,16 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const messageType = item?.messageType;
         const role = item?.role;
 
-        if (messageType === 'opencode_agent_input' || messageType === 'opencode_user_input') {
+        if (messageType === 'opencode_agent_input') {
           return null;
+        }
+        if (messageType === 'opencode_user_input') {
+          return {
+            type: 'user_input',
+            content: item?.content || '',
+            sessionId: historySessionId,
+            metadata,
+          };
         }
         if (messageType === 'error' || messageType === 'opencode_error') {
           return null;

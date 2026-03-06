@@ -11,7 +11,7 @@ import type { NewConversationMessage } from '../db/schema';
 import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/types/intent';
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
 import { playwrightTestDetectionAgent } from '../agents/task-creation/layers/playwright-test-detection-agent';
-import { touchSandbox } from './sandbox-activity-service';
+import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 
@@ -1445,7 +1445,11 @@ export class OpencodeRemoteService {
       return null;
     }
 
-    const partId = asString(part.id) || asString(properties.partId) || 'text';
+    const partId = asString(part.id) || asString(properties.partId);
+    if (!partId) {
+      // 无 partId 的文本分片无法可靠归属到同一回复流，跳过以防止串流拼接错乱。
+      return null;
+    }
 
     const opencodeSessionId =
       asString(payload.opencodeSessionId) ||
@@ -1600,7 +1604,8 @@ export class OpencodeRemoteService {
   private async flushTextStreams(
     taskSessionId: string,
     orchestratorSessionId: string,
-    opencodeSessionId?: string
+    opencodeSessionId?: string,
+    options?: { persistMode?: 'all' | 'latest' }
   ): Promise<string | null> {
     const matched: OpencodeTextStreamEntry[] = [];
     for (const [key, entry] of this.textStreams.entries()) {
@@ -1617,19 +1622,64 @@ export class OpencodeRemoteService {
     }
 
     matched.sort((a, b) => a.updatedAt - b.updatedAt);
-    const latest = matched[matched.length - 1];
-    const latestContent = latest.text.trim();
-    if (!latestContent) {
+
+    const normalizeForCompare = (value: string) => value.replace(/\r\n/g, '\n').trim();
+    let latestUserInput = '';
+    let latestUserInputAt = 0;
+    try {
+      const history = await taskCreationFileMemoryStore.getMessages(taskSessionId);
+      for (let i = history.length - 1; i >= 0; i -= 1) {
+        const item = history[i];
+        if (
+          item.messageType !== 'user_input' &&
+          item.messageType !== 'user_response' &&
+          item.messageType !== 'opencode_user_input'
+        ) {
+          continue;
+        }
+        latestUserInput = normalizeForCompare(String(item.content || ''));
+        const ts = Date.parse(String(item.createdAt || ''));
+        latestUserInputAt = Number.isFinite(ts) ? ts : 0;
+        break;
+      }
+    } catch {
+      // ignore
+    }
+
+    const isLikelyUserEcho = (text: string): boolean => {
+      const normalized = normalizeForCompare(text);
+      if (!normalized || !latestUserInput) return false;
+      if (normalized !== latestUserInput) return false;
+      if (!latestUserInputAt) return true;
+      return Math.abs(Date.now() - latestUserInputAt) <= 5 * 60 * 1000;
+    };
+
+    const candidateEntries = matched.filter((entry) => {
+      const content = entry.text.trim();
+      if (!content) return false;
+      if (isLikelyUserEcho(content)) return false;
+      return true;
+    });
+    if (candidateEntries.length === 0) {
       return null;
     }
 
-    // 保留每个流(part)的最终文本，避免刷新后丢失中间阶段的说明文字。
-    const latestByKey = new Map<string, OpencodeTextStreamEntry>();
-    for (const entry of matched) {
-      const key = this.buildTextStreamKey(entry.taskSessionId, entry.opencodeSessionId, entry.partId);
-      latestByKey.set(key, entry);
+    const latest = candidateEntries[candidateEntries.length - 1];
+    const latestContent = latest.text.trim();
+
+    const persistMode = options?.persistMode === 'latest' ? 'latest' : 'all';
+    let persisted: OpencodeTextStreamEntry[];
+    if (persistMode === 'latest') {
+      persisted = [latest];
+    } else {
+      // 非直连模式保留每个流(part)的最终文本，便于完整回放。
+      const latestByKey = new Map<string, OpencodeTextStreamEntry>();
+      for (const entry of candidateEntries) {
+        const key = this.buildTextStreamKey(entry.taskSessionId, entry.opencodeSessionId, entry.partId);
+        latestByKey.set(key, entry);
+      }
+      persisted = Array.from(latestByKey.values()).sort((a, b) => a.updatedAt - b.updatedAt);
     }
-    const persisted = Array.from(latestByKey.values()).sort((a, b) => a.updatedAt - b.updatedAt);
     for (const entry of persisted) {
       const content = entry.text.trim();
       if (!content) continue;
@@ -2191,7 +2241,12 @@ export class OpencodeRemoteService {
       if (opencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
       }
-      await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+      await this.flushTextStreams(
+        session.id,
+        orchestratorSessionId,
+        opencodeSessionId || undefined,
+        { persistMode: this.isDirectSession(session) ? 'latest' : 'all' }
+      );
 
       await this.persistMessage(
         session.id,
@@ -2423,6 +2478,10 @@ export class OpencodeRemoteService {
         this.sessionArtifactsSeen.add(session.id);
         const nextRevision = (this.sessionArtifactRevision.get(session.id) || 0) + 1;
         this.sessionArtifactRevision.set(session.id, nextRevision);
+        void markSandboxDirty(orchestratorSessionId, `opencode_${eventType || 'workspace_change'}`).catch((error) => {
+          console.warn('[OPENCODE_MARK_DIRTY_FAILED]', orchestratorSessionId, error);
+        });
+        metadata.pendingArchiveUpdate = true;
       }
     }
 
@@ -2452,8 +2511,14 @@ export class OpencodeRemoteService {
         return;
       }
 
-      const aggregated = await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
-      if (this.isDirectSession(session)) {
+      const isDirect = this.isDirectSession(session);
+      const aggregated = await this.flushTextStreams(
+        session.id,
+        orchestratorSessionId,
+        opencodeSessionId || undefined,
+        { persistMode: isDirect ? 'latest' : 'all' }
+      );
+      if (isDirect) {
         const artifact = this.getRunArtifact(runKey);
         this.finalizedRuns.add(runKey);
         if (runOpencodeSessionId) {
@@ -2838,7 +2903,12 @@ export class OpencodeRemoteService {
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
-        await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+        await this.flushTextStreams(
+          session.id,
+          orchestratorSessionId,
+          opencodeSessionId || undefined,
+          { persistMode: 'latest' }
+        );
         this.runArtifacts.delete(runKey);
         return;
       }
@@ -2847,7 +2917,12 @@ export class OpencodeRemoteService {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
       }
 
-      await this.flushTextStreams(session.id, orchestratorSessionId, opencodeSessionId || undefined);
+      await this.flushTextStreams(
+        session.id,
+        orchestratorSessionId,
+        opencodeSessionId || undefined,
+        { persistMode: 'all' }
+      );
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'failed',
         stage: 'failed',

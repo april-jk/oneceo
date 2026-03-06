@@ -773,7 +773,52 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
   const seenDiffs = new Set<string>();
+  const seenFinalMessages = new Set<string>();
   const normalizeForDedup = (value: string): string => value.replace(/\r\n/g, "\n").trim();
+  const userTextSet = new Set<string>();
+  const finalizedPartIds = new Set<string>();
+  const skipFinalIndices = new Set<number>();
+
+  const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
+    const explicit = asText(metadata.partId);
+    if (explicit) return explicit;
+    const rawPayload = toRecord(metadata.rawPayload);
+    const event = toRecord(rawPayload.event);
+    const properties = toRecord(event.properties);
+    const part = toRecord(properties.part);
+    return asText(part.id) || asText(properties.partId);
+  };
+
+  // 预扫描：构建用户文本集、已终态 partId、每轮仅保留最后一条 final。
+  let currentTurnFinalIndices: number[] = [];
+  const flushTurnFinalIndices = () => {
+    if (currentTurnFinalIndices.length <= 1) {
+      currentTurnFinalIndices = [];
+      return;
+    }
+    for (let i = 0; i < currentTurnFinalIndices.length - 1; i += 1) {
+      skipFinalIndices.add(currentTurnFinalIndices[i]);
+    }
+    currentTurnFinalIndices = [];
+  };
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type === "user_input" || message.type === "user_response") {
+      const normalized = normalizeForDedup(message.content || "");
+      if (normalized) userTextSet.add(normalized);
+      flushTurnFinalIndices();
+      continue;
+    }
+    if (message.type !== "opencode_event") continue;
+    const metadata = toRecord(message.metadata);
+    const eventInfo = getOpencodeEventInfo(metadata);
+    if (eventInfo.eventType === "message.final") {
+      const partId = getPartIdFromMetadata(metadata);
+      if (partId) finalizedPartIds.add(partId);
+      currentTurnFinalIndices.push(index);
+    }
+  }
+  flushTurnFinalIndices();
 
   const pushUser = (text: string) => {
     const normalized = normalizeForDedup(text);
@@ -907,6 +952,8 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       const eventInfo = getOpencodeEventInfo(metadata);
       const content = (message.content || "").trim();
+      const normalizedContent = normalizeForDedup(content);
+      const partId = getPartIdFromMetadata(metadata);
       const isDiffEvent =
         eventInfo.eventType === "session.diff" || eventInfo.toolName.toLowerCase() === "apply_patch";
       let diffId: string | undefined;
@@ -920,10 +967,29 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         diffId = `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`;
       }
       if (eventInfo.eventType === "message.final") {
+        if (skipFinalIndices.has(index)) {
+          continue;
+        }
+        if (!normalizedContent) {
+          continue;
+        }
+        if (userTextSet.has(normalizedContent)) {
+          continue;
+        }
+        if (seenFinalMessages.has(normalizedContent)) {
+          continue;
+        }
+        seenFinalMessages.add(normalizedContent);
         if (content) {
           pushAgentMarkdown(`**OpenCode**\n\n${content}`);
         }
       } else if (eventInfo.partType === "text") {
+        if (partId && finalizedPartIds.has(partId)) {
+          continue;
+        }
+        if (normalizedContent && userTextSet.has(normalizedContent)) {
+          continue;
+        }
         if (content) {
           pushAgentPlain(content, "OpenCode");
         }

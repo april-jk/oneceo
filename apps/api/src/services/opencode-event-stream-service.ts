@@ -4,6 +4,7 @@ import { osacConnectionManager } from './osac-connection-manager';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { ensureDatabaseConnection } from '../config/database';
+import { touchSandbox } from './sandbox-activity-service';
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
@@ -249,20 +250,6 @@ export class OpencodeEventStreamService {
     return { eventType, properties, part, partType, toolName, partId, role: role.toLowerCase() };
   }
 
-  private isBlockedText(text: string): boolean {
-    if (!text) return true;
-    const normalized = text.replace(/\s+/g, ' ');
-    const blockedPhrases = [
-      '你是执行智能体',
-      '用户需求',
-      '任务描述',
-      '执行计划摘要',
-      '要求：',
-      '要求:',
-    ];
-    return blockedPhrases.some((phrase) => normalized.includes(phrase));
-  }
-
   private shouldPersistCommandEvent(properties: Record<string, unknown>): boolean {
     const command = (properties.command as string) || (properties.cmd as string) || '';
     const output =
@@ -336,7 +323,7 @@ export class OpencodeEventStreamService {
     const partId =
       (typeof part.id === 'string' && part.id) ||
       (typeof properties.partId === 'string' && properties.partId) ||
-      'text';
+      '';
     const delta =
       (typeof properties.delta === 'string' && properties.delta) ||
       '';
@@ -346,6 +333,11 @@ export class OpencodeEventStreamService {
       (typeof properties.text === 'string' && properties.text) ||
       '';
     if (!delta && !fullText) {
+      return event;
+    }
+
+    // 没有 partId 的增量分片无法稳定归属到同一流，避免错误拼接导致文本乱序。
+    if (!partId) {
       return event;
     }
 
@@ -592,54 +584,8 @@ export class OpencodeEventStreamService {
           : {};
         const partType = ((part.type as string) || (properties.type as string) || '').toLowerCase();
         if (!partType || partType === 'text') {
-          const partId = (part.id as string) || (properties.partId as string) || 'text';
-          const fullText = (part.text as string) || (part.content as string) || (properties.text as string) || '';
-          const delta = (properties.delta as string) || '';
-          const textCandidate = delta || fullText;
-          if (!textCandidate || this.isBlockedText(textCandidate)) {
-            return;
-          }
-          const key = this.buildStreamKey(orchestratorSessionId, payload.opencodeSessionId, partId);
-          const prev = this.streamTextState.get(key)?.text || '';
-          const isReset =
-            prev &&
-            fullText &&
-            !fullText.startsWith(prev) &&
-            !prev.startsWith(fullText);
-          if (isReset && prev) {
-            this.persistQueue.push({
-              sessionId: binding.sessionId,
-              role: 'agent',
-              messageType: 'opencode_event',
-              content: prev,
-              metadata: {
-                ...metadata,
-                stream: false,
-                source: 'stream_segment',
-                streamKey: key,
-                partId,
-              },
-              createdAt,
-            });
-          }
-          if (fullText || delta) {
-            this.persistQueue.push({
-              sessionId: binding.sessionId,
-              role: 'agent',
-              messageType: 'opencode_event',
-              content: delta || fullText,
-              metadata: {
-                ...metadata,
-                stream: true,
-                streamDelta: Boolean(delta),
-                streamKey: key,
-                partId,
-              },
-              createdAt,
-            });
-            this.schedulePersistFlush();
-            return;
-          }
+          // 文本流由 opencode-remote-service 统一聚合为 message.final，
+          // 这里不再落盘 text delta，避免用户回声与乱序拼接污染历史。
           return;
         }
       }
@@ -717,6 +663,7 @@ export class OpencodeEventStreamService {
                   seq: Number(message.payload.seq || 0),
                   timestamp: Number(message.payload.timestamp || Date.now()),
                 };
+                void touchSandbox(input.orchestratorSessionId, 'opencode_sse_event');
                 this.emitFast(input.orchestratorSessionId, fastPayload);
                 this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 osacConnectionManager.emitExternalMessage(input.orchestratorSessionId, message);

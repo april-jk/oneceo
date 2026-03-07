@@ -67,4 +67,5 @@ others/osac-linux/
 others/opencode/opencode
 apps/api/data/task-creation-memory.json
 apps/api/data/task-creation-cache.json
+apps/api/data/task-creation-message-queue.wal.jsonl
 apps/api/.runtime-cache/

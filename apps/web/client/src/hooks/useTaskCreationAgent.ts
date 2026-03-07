@@ -143,6 +143,13 @@ function asFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function asPositiveInt(value: unknown): number | null {
+  const parsed = asFiniteNumber(value);
+  if (parsed === null) return null;
+  if (parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
 function compactText(value: string, maxLen: number = 320): string {
   const text = value.trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -623,6 +630,19 @@ function mergeRealtimeMessage(
   }
 
   const metadata = toRecord(message.metadata);
+  const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
+  if (sessionEventSeq !== null) {
+    const hasSameSessionEventSeq = prev.some((item) => {
+      const itemMeta = toRecord(item.metadata);
+      return (
+        asPositiveInt(itemMeta.sessionEventSeq) === sessionEventSeq &&
+        item.type === message.type
+      );
+    });
+    if (hasSameSessionEventSeq) {
+      return prev;
+    }
+  }
   const eventType = asText(metadata.eventType);
   const seq = asFiniteNumber(metadata.seq);
   const timestamp = asFiniteNumber(metadata.timestamp);
@@ -1622,6 +1642,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     try {
       const list = await listTaskCreationMessages(historySessionId);
       const ordered = [...list].sort((a, b) => {
+        const sa = asPositiveInt(toRecord(a?.metadata).sessionEventSeq);
+        const sb = asPositiveInt(toRecord(b?.metadata).sessionEventSeq);
+        if (sa !== null && sb !== null && sa !== sb) {
+          return sa - sb;
+        }
+        if (sa !== null && sb === null) return -1;
+        if (sa === null && sb !== null) return 1;
         const ta = a?.createdAt ? Date.parse(a.createdAt) : NaN;
         const tb = b?.createdAt ? Date.parse(b.createdAt) : NaN;
         if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;

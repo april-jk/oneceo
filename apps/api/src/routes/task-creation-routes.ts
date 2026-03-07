@@ -301,6 +301,19 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asPositiveInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return null;
+}
+
 function pickRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   return {};
@@ -895,15 +908,27 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
           } as any);
         }
 
-        messages.sort((a, b) => {
-          const ta = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
-          const tb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
-          return ta - tb;
-        });
       }
     } catch (snapshotError) {
       console.warn('[TASK_CREATION_LIVE_STREAM_SNAPSHOT_MERGE_FAILED]', snapshotError);
     }
+
+    messages.sort((a, b) => {
+      const ma = pickRecord(a?.metadata);
+      const mb = pickRecord(b?.metadata);
+      const sa = asPositiveInt(ma.sessionEventSeq);
+      const sb = asPositiveInt(mb.sessionEventSeq);
+      if (sa !== null && sb !== null && sa !== sb) {
+        return sa - sb;
+      }
+      if (sa !== null && sb === null) return -1;
+      if (sa === null && sb !== null) return 1;
+
+      const ta = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
+      const tb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+      if (ta !== tb) return ta - tb;
+      return 0;
+    });
 
     res.json({
       success: true,

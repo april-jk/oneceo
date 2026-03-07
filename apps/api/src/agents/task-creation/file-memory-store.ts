@@ -211,6 +211,52 @@ class TaskCreationFileMemoryStore {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
+  private asSessionEventSeq(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+    if (typeof value === 'string') {
+      const parsed = Number(value.trim());
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+    return null;
+  }
+
+  private resolveNextSessionEventSeq(session: FileSessionRecord): number {
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const metadata = messages[i]?.metadata;
+      if (!metadata || typeof metadata !== 'object') continue;
+      const seq = this.asSessionEventSeq((metadata as Record<string, unknown>).sessionEventSeq);
+      if (seq !== null) {
+        return seq + 1;
+      }
+    }
+    return 1;
+  }
+
+  private attachSessionEventSeq(
+    metadataInput: Record<string, unknown> | undefined,
+    nextSeq: number
+  ): { metadata: Record<string, unknown>; nextSeq: number } {
+    const metadata: Record<string, unknown> = { ...(metadataInput || {}) };
+    const existing = this.asSessionEventSeq(metadata.sessionEventSeq);
+    if (existing !== null) {
+      metadata.sessionEventSeq = existing;
+      return {
+        metadata,
+        nextSeq: Math.max(nextSeq, existing + 1),
+      };
+    }
+    metadata.sessionEventSeq = nextSeq;
+    return {
+      metadata,
+      nextSeq: nextSeq + 1,
+    };
+  }
+
   async createSession(title: string, sessionId?: string): Promise<FileSessionRecord> {
     return this.withLock(async () => {
       const memory = await this.readMemory();
@@ -500,16 +546,21 @@ class TaskCreationFileMemoryStore {
       const maxLen =
         session.mode === 'sandbox' ? this.sandboxMaxMessageLength : this.maxMessageLength;
       const sanitized = this.sanitizeText(String(content || ''), maxLen);
+      const mergedMetadata = meta.metadata
+        ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
+        : sanitized.truncated
+          ? { contentTruncated: true }
+          : undefined;
+      const seqAttached = this.attachSessionEventSeq(
+        mergedMetadata as Record<string, unknown> | undefined,
+        this.resolveNextSessionEventSeq(session)
+      );
       session.messages.push({
         id: this.createId('msg'),
         role,
         messageType,
         content: sanitized.text,
-        metadata: meta.metadata
-          ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
-          : sanitized.truncated
-            ? { contentTruncated: true }
-            : meta.metadata,
+        metadata: seqAttached.metadata,
         createdAt: new Date().toISOString(),
       });
       const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
@@ -540,19 +591,26 @@ class TaskCreationFileMemoryStore {
       const maxLen =
         session.mode === 'sandbox' ? this.sandboxMaxMessageLength : this.maxMessageLength;
       const now = new Date().toISOString();
+      let nextSeq = this.resolveNextSessionEventSeq(session);
       items.forEach((item, idx) => {
         const meta = metaList[idx];
         const sanitized = this.sanitizeText(String(item.content || ''), maxLen);
+        const mergedMetadata = meta.metadata
+          ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
+          : sanitized.truncated
+            ? { contentTruncated: true }
+            : undefined;
+        const seqAttached = this.attachSessionEventSeq(
+          mergedMetadata as Record<string, unknown> | undefined,
+          nextSeq
+        );
+        nextSeq = seqAttached.nextSeq;
         session.messages.push({
           id: this.createId('msg'),
           role: item.role,
           messageType: item.messageType,
           content: sanitized.text,
-          metadata: meta.metadata
-            ? { ...meta.metadata, contentTruncated: sanitized.truncated || meta.truncated }
-            : sanitized.truncated
-              ? { contentTruncated: true }
-              : meta.metadata,
+          metadata: seqAttached.metadata,
           createdAt: item.createdAt || now,
         });
       });

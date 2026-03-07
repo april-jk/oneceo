@@ -9,6 +9,15 @@ export type TaskCreationSessionSummary = {
   updatedAt?: string;
 };
 
+export type CreateTaskCreationSessionInput = {
+  sessionId?: string;
+  title?: string;
+  mode?: "sandbox" | "altus";
+  executor?: "opencode" | "claudecode" | "codex";
+  initialMessage?: string;
+  initialMessageType?: "user_input" | "user_response";
+};
+
 export type TaskCreationHistoryMessage = {
   role?: string;
   content?: string;
@@ -65,6 +74,17 @@ export type WorkspaceTree = {
   items: WorkspaceTreeItem[];
 };
 
+export type WorkspaceDirectoryPage = {
+  root: string;
+  path: string;
+  items: WorkspaceTreeItem[];
+  total: number;
+  returned: number;
+  limit: number;
+  hasMore: boolean;
+  nextCursor: number | null;
+};
+
 export type WorkspaceFile = {
   path: string;
   content: string;
@@ -96,6 +116,24 @@ export async function listTaskCreationSessions(
   const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function createTaskCreationSession(
+  input: CreateTaskCreationSessionInput
+): Promise<TaskCreationSessionSummary | null> {
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input || {}),
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
 }
 
 export async function listTaskCreationMessages(sessionId: string): Promise<TaskCreationHistoryMessage[]> {
@@ -164,7 +202,8 @@ export async function listOsacMessages(orchestratorSessionId: string, limit: num
 export function getOpencodeEventStreamUrl(
   sessionId: string,
   opencodeSessionId?: string,
-  since?: number
+  since?: number,
+  clientId?: string
 ): string {
   const safeSessionId = encodeURIComponent(sessionId);
   const params = new URLSearchParams();
@@ -173,6 +212,9 @@ export function getOpencodeEventStreamUrl(
   }
   if (since && Number.isFinite(since) && since > 0) {
     params.set('since', String(since));
+  }
+  if (clientId) {
+    params.set('clientId', clientId);
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : '';
@@ -185,6 +227,39 @@ export async function getWorkspaceTree(sessionId: string): Promise<WorkspaceTree
   const result = await fetchJson<{ data?: WorkspaceTree }>(url);
   if (!result?.data) {
     throw new Error("workspace tree empty");
+  }
+  return result.data;
+}
+
+export async function getWorkspaceDirectory(
+  sessionId: string,
+  options?: {
+    path?: string;
+    cursor?: number;
+    limit?: number;
+    refresh?: boolean;
+  }
+): Promise<WorkspaceDirectoryPage> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (options?.path) {
+    params.set("path", options.path);
+  }
+  if (typeof options?.cursor === "number" && Number.isFinite(options.cursor) && options.cursor >= 0) {
+    params.set("cursor", String(options.cursor));
+  }
+  if (typeof options?.limit === "number" && Number.isFinite(options.limit) && options.limit > 0) {
+    params.set("limit", String(Math.floor(options.limit)));
+  }
+  if (options?.refresh) {
+    params.set("refresh", "1");
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/dir${suffix}`;
+  const result = await fetchJson<{ data?: WorkspaceDirectoryPage }>(url);
+  if (!result?.data) {
+    throw new Error("workspace dir empty");
   }
   return result.data;
 }

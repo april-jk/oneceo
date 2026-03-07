@@ -132,13 +132,13 @@ export default function Home() {
   }, [location, search, sessionIdFromPath]);
 
   useEffect(() => {
-    if (!isConnected || !pendingInputRef.current) {
+    if (!pendingInputRef.current) {
       return;
     }
     const input = pendingInputRef.current;
     pendingInputRef.current = null;
     void sendChatInput(input);
-  }, [isConnected, sendChatInput]);
+  }, [sendChatInput]);
 
   const exitHistoryView = () => {
     if (!isHistoryView) return;
@@ -155,24 +155,16 @@ export default function Home() {
       const input = message.trim();
       // 切换到对话模式
       setMode('chat');
-      if (isConnected) {
-        exitHistoryView();
-        void sendChatInput(input);
-      } else {
-        pendingInputRef.current = input;
-      }
+      exitHistoryView();
+      void sendChatInput(input);
       setMessage("");
     }
   };
 
   const handleQuickAction = (action: string) => {
     setMode('chat');
-    if (isConnected) {
-      exitHistoryView();
-      void sendChatInput(action);
-    } else {
-      pendingInputRef.current = action;
-    }
+    exitHistoryView();
+    void sendChatInput(action);
     setMessage("");
   };
 
@@ -191,28 +183,67 @@ export default function Home() {
   const chatItems = useMemo(() => buildChatItems(messages), [messages]);
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
+  const normalizePath = (value: string) =>
+    value.replace(/\\+/g, "/").replace(/^\.\/+/, "").toLowerCase();
+
+  const pathMatches = (left: string, right: string) => {
+    const a = normalizePath(left);
+    const b = normalizePath(right);
+    if (!a || !b) return false;
+    return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+  };
+
+  const pickExistingDiffId = (id: string | null | undefined) =>
+    id && diffItems.some((item) => item.id === id) ? id : null;
+
   const findDiffIdForFile = (filePath: string | null | undefined) => {
     if (!filePath) return null;
     const fileName = getFilename(filePath).toLowerCase();
-    if (!fileName) return null;
+    const normalized = normalizePath(filePath);
+    if (!fileName && !normalized) return null;
     for (let i = diffItems.length - 1; i >= 0; i -= 1) {
       const item = diffItems[i];
-      if (item.files?.some((file) => file.file.toLowerCase().includes(fileName))) {
+      if (
+        item.files?.some((file) =>
+          pathMatches(file.file, filePath) || (fileName ? file.file.toLowerCase().includes(fileName) : false)
+        )
+      ) {
         return item.id;
       }
-      if (item.diff && item.diff.toLowerCase().includes(fileName)) {
+      if (
+        item.diff &&
+        ((normalized && item.diff.toLowerCase().includes(normalized)) ||
+          (fileName && item.diff.toLowerCase().includes(fileName)))
+      ) {
         return item.id;
       }
     }
     return null;
   };
 
-  const openDiffPreview = (options?: { diffId?: string | null; filePath?: string | null }) => {
+  const findDiffIdForMessageIndex = (messageIndex: number | null | undefined) => {
+    if (typeof messageIndex !== "number" || !Number.isFinite(messageIndex)) {
+      return null;
+    }
+    for (let i = diffItems.length - 1; i >= 0; i -= 1) {
+      const item = diffItems[i];
+      if (item.eventIndex === messageIndex) return item.id;
+      if (item.relatedEventIndexes?.includes(messageIndex)) return item.id;
+    }
+    return null;
+  };
+
+  const openDiffPreview = (options?: {
+    diffId?: string | null;
+    filePath?: string | null;
+    messageIndex?: number | null;
+  }) => {
     setPreviewTab("changes");
     setPreviewOpen(true);
     const target =
-      options?.diffId ||
-      findDiffIdForFile(options?.filePath || null) ||
+      pickExistingDiffId(options?.diffId) ||
+      pickExistingDiffId(findDiffIdForMessageIndex(options?.messageIndex)) ||
+      pickExistingDiffId(findDiffIdForFile(options?.filePath || null)) ||
       diffItems[diffItems.length - 1]?.id ||
       null;
     setSelectedDiffId(target);
@@ -747,7 +778,7 @@ function NoticeMessage({
   );
 }
 
-type ChatItem =
+export type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "agent"; markdown: string }
   | { kind: "agent_plain"; text: string; author?: string }
@@ -764,12 +795,13 @@ type ChatItem =
       event: Record<string, unknown>;
       content?: string;
       metadata?: Record<string, unknown>;
+      messageIndex: number;
       diffId?: string;
     };
 
 type CapsuleTone = "system" | "intent" | "planning" | "execution" | "review" | "error";
 
-function buildChatItems(messages: AgentMessage[]): ChatItem[] {
+export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
   const seenDiffs = new Set<string>();
@@ -954,8 +986,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const content = (message.content || "").trim();
       const normalizedContent = normalizeForDedup(content);
       const partId = getPartIdFromMetadata(metadata);
-      const isDiffEvent =
-        eventInfo.eventType === "session.diff" || eventInfo.toolName.toLowerCase() === "apply_patch";
+      const isDiffEvent = eventInfo.toolName.toLowerCase() === "apply_patch";
       let diffId: string | undefined;
       if (isDiffEvent) {
         const payload = extractDiffPayload(metadata);
@@ -964,7 +995,6 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           continue;
         }
         seenDiffs.add(signature);
-        diffId = `diff-${index}-${eventInfo.eventType || "event"}-${eventInfo.toolName || "tool"}-0`;
       }
       if (eventInfo.eventType === "message.final") {
         if (skipFinalIndices.has(index)) {
@@ -1002,14 +1032,14 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
             event: eventInfo.event,
             content: message.content || "",
             metadata,
+            messageIndex: index,
             diffId,
           });
         }
       } else if (
         eventInfo.eventType.startsWith("file.") ||
         eventInfo.eventType.startsWith("pty.") ||
-        eventInfo.eventType === "command.executed" ||
-        eventInfo.eventType === "session.diff"
+        eventInfo.eventType === "command.executed"
       ) {
         items.push({
           kind: "opencode_tool",
@@ -1017,6 +1047,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           event: eventInfo.event,
           content: message.content || "",
           metadata,
+          messageIndex: index,
           diffId,
         });
       } else if (content.startsWith("[Tool]")) {
@@ -1026,6 +1057,7 @@ function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           event: eventInfo.event,
           content: message.content || "",
           metadata,
+          messageIndex: index,
           diffId,
         });
       }
@@ -1063,7 +1095,7 @@ function MessageBubble({
   onOpenDiffPreview,
 }: {
   item: ChatItem;
-  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null }) => void;
+  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null; messageIndex?: number | null }) => void;
 }) {
   if (item.kind === "capsule") {
     const toneClass = "border-border/70 bg-muted/50 text-foreground/80";
@@ -1388,7 +1420,7 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
     case "todowrite":
       return { title: "待办" };
     case "question":
-      return { title: "提问" };
+      return { title: "待确认" };
     default:
       return { title: tool || "Tool" };
   }
@@ -1399,7 +1431,7 @@ function OpencodeToolCard({
   onOpenDiffPreview,
 }: {
   item: Extract<ChatItem, { kind: "opencode_tool" }>;
-  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null }) => void;
+  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null; messageIndex?: number | null }) => void;
 }) {
   const metadata = item.metadata || {};
   const { eventType, part, toolName, properties } = getOpencodeEventInfo(metadata);
@@ -1414,7 +1446,7 @@ function OpencodeToolCard({
   const error = asText(toolState.error) || asText(properties.error);
   const status = asText(toolState.status) || asText(properties.status) || (error ? "error" : "unknown");
 
-  const isDiffEvent = eventType === "session.diff" || (toolName || "").toLowerCase() === "apply_patch";
+  const isDiffEvent = (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
 
   const capsuleTone = "border-border/70 bg-muted/50 text-foreground/80";
@@ -1485,11 +1517,6 @@ function OpencodeToolCard({
         title: "终端",
         subtitle: eventType.replace("pty.", ""),
       };
-    } else if (eventType === "session.diff") {
-      info = {
-        title: "Diff",
-        subtitle: "",
-      };
     }
   }
 
@@ -1497,9 +1524,6 @@ function OpencodeToolCard({
     const filePath = asText(properties.file) || asText(properties.path);
     const action = asText(properties.event);
     output = [action, filePath].filter(Boolean).join(" ");
-  }
-  if (!output && eventType === "session.diff") {
-    output = stringifySafe(properties.diff);
   }
   if (!output && eventType.startsWith("pty.")) {
     output = asText(properties.data) || asText(properties.text);
@@ -1527,7 +1551,7 @@ function OpencodeToolCard({
       >
         <button
           type="button"
-          onClick={() => onOpenDiffPreview?.({ diffId: item.diffId })}
+          onClick={() => onOpenDiffPreview?.({ diffId: item.diffId, messageIndex: item.messageIndex })}
           className="text-left"
         >
           <EventCapsule icon={FileDiff} text="Diff · 点击查看更改" />
@@ -1561,6 +1585,68 @@ function OpencodeToolCard({
   const todosFromOutput = todosFromInput.length > 0 ? [] : extractTodos(output);
   const todosFromProps = todosFromInput.length > 0 || todosFromOutput.length > 0 ? [] : extractTodos(properties.todos);
   const todos = todosFromInput.length > 0 ? todosFromInput : todosFromOutput.length > 0 ? todosFromOutput : todosFromProps;
+
+  const extractQuestions = (value: unknown): Array<{ header: string; question: string; options: string[] }> => {
+    const mapOptions = (raw: unknown): string[] => {
+      if (!Array.isArray(raw)) return [];
+      return raw
+        .map((option) => {
+          if (typeof option === "string") return option.trim();
+          if (option && typeof option === "object") {
+            const record = option as Record<string, unknown>;
+            return asText(record.label) || asText(record.text) || asText(record.value);
+          }
+          return "";
+        })
+        .filter(Boolean);
+    };
+
+    const normalizeQuestionRecord = (record: Record<string, unknown>) => {
+      const question = asText(record.question) || asText(record.content) || asText(record.title);
+      if (!question) return null;
+      return {
+        header: asText(record.header),
+        question,
+        options: mapOptions(record.options),
+      };
+    };
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => (item && typeof item === "object" ? normalizeQuestionRecord(item as Record<string, unknown>) : null))
+        .filter((item): item is { header: string; question: string; options: string[] } => Boolean(item));
+    }
+
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (Array.isArray(record.questions)) {
+        return extractQuestions(record.questions);
+      }
+      const single = normalizeQuestionRecord(record);
+      return single ? [single] : [];
+    }
+
+    if (typeof value === "string" && value.trim()) {
+      try {
+        return extractQuestions(JSON.parse(value));
+      } catch {
+        return [];
+      }
+    }
+
+    return [];
+  };
+
+  const questionsFromInput = extractQuestions((input as { questions?: unknown[] }).questions);
+  const questionsFromOutput = questionsFromInput.length > 0 ? [] : extractQuestions(output);
+  const questionsFromProps =
+    questionsFromInput.length > 0 || questionsFromOutput.length > 0 ? [] : extractQuestions(properties.questions);
+  const questions =
+    questionsFromInput.length > 0
+      ? questionsFromInput
+      : questionsFromOutput.length > 0
+        ? questionsFromOutput
+        : questionsFromProps;
 
   if (toolKey === "todowrite") {
     if (todos.length === 0) {
@@ -1616,6 +1702,42 @@ function OpencodeToolCard({
     );
   }
 
+  if (toolKey === "question") {
+    if (questions.length === 0) {
+      return null;
+    }
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">待确认</div>
+          <div className="mt-3 space-y-3">
+            {questions.map((question, index) => (
+              <div key={`${question.question}-${index}`} className="space-y-1.5">
+                {question.header ? (
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{question.header}</div>
+                ) : null}
+                <div className="text-sm text-slate-800">{question.question}</div>
+                {question.options.length > 0 ? (
+                  <ul className="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                    {question.options.map((option, optionIndex) => (
+                      <li key={`${option}-${optionIndex}`}>{option}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ))}
+            <div className="text-xs text-slate-500">请直接在输入框回复你的选择或补充信息。</div>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
   if (toolKey === "write" || toolKey === "edit") {
     const filePath =
       asText(input.filePath) || asText(input.path) || asText(properties.file) || asText(properties.path);
@@ -1632,7 +1754,9 @@ function OpencodeToolCard({
         {onOpenDiffPreview ? (
           <button
             type="button"
-            onClick={() => onOpenDiffPreview?.({ filePath: filePath || null })}
+            onClick={() =>
+              onOpenDiffPreview?.({ filePath: filePath || null, messageIndex: item.messageIndex })
+            }
             className="text-left"
           >
             <EventCapsule icon={toolKey === "write" ? FilePlus : FilePenLine} text={capsuleText} />
@@ -1686,7 +1810,19 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
+        {onOpenDiffPreview ? (
+          <button
+            type="button"
+            onClick={() =>
+              onOpenDiffPreview?.({ filePath: filePath || null, messageIndex: item.messageIndex })
+            }
+            className="text-left"
+          >
+            <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
+          </button>
+        ) : (
+          <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
+        )}
       </motion.div>
     );
   }

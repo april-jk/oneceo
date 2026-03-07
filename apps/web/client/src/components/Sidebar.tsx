@@ -104,15 +104,20 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
         void load(true);
       }
     };
+    const onSessionUpdated = () => {
+      void load(true);
+    };
     void load(true);
     const timer = window.setInterval(() => {
       void load(false);
     }, LIST_POLL_MS);
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('task-creation-session-updated', onSessionUpdated);
     return () => {
       disposed = true;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('task-creation-session-updated', onSessionUpdated);
     };
   }, []);
 

@@ -1,0 +1,20 @@
+{
+  "suiteId": "mmetvuzc",
+  "apiBase": "http://127.0.0.1:4000",
+  "wsUrl": "ws://127.0.0.1:4000/ws/task-creation",
+  "startedAt": "2026-03-06T11:45:43.320Z",
+  "finishedAt": "2026-03-06T11:46:13.333Z",
+  "passed": false,
+  "scenarioResults": [
+    {
+      "name": "01_session_bootstrap",
+      "passed": false,
+      "startedAt": "2026-03-06T11:46:13.333Z",
+      "finishedAt": "2026-03-06T11:46:13.333Z",
+      "details": {
+        "error": "[timeout] scenario.01_session_bootstrap exceeded 30000ms\nError: [timeout] scenario.01_session_bootstrap exceeded 30000ms\n    at Timeout._onTimeout (D:\\project\\oneceo.ai\\oneceo\\apps\\api\\tests\\opencode-sandbox-direct\\run-direct-mode-tests.ts:38:14)\n    at listOnTimeout (node:internal/timers:605:17)\n    at process.processTimers (node:internal/timers:541:7)"
+      }
+    }
+  ],
+  "error": "recentWsMessages=[\n  {\n    \"type\": \"agent_message\",\n    \"agent\": \"system\",\n    \"content\": \"欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。\",\n    \"metadata\": {},\n    \"receivedAt\": 1772797543326\n  },\n  {\n    \"type\": \"agent_message\",\n    \"agent\": \"system\",\n    \"content\": \"会话已创建\",\n    \"sessionId\": \"b6c33f2b-03d7-4208-9c61-2dfb3cbcb2e2\",\n    \"metadata\": {\n      \"sessionId\": \"b6c33f2b-03d7-4208-9c61-2dfb3cbcb2e2\"\n    },\n    \"receivedAt\": 1772797544113\n  }\n]"
+}

@@ -1440,8 +1440,15 @@ export class OpencodeRemoteService {
     const event = toRecord(payload.event);
     const properties = normalizeRecord(event.properties);
     const part = normalizeRecord(properties.part);
+    const message = normalizeRecord(properties.message);
     const partType = (asString(part.type) || asString(properties.type)).toLowerCase();
     if (partType && partType !== 'text') {
+      return null;
+    }
+    const role =
+      (asString(message.role) || asString(properties.role) || asString(part.role)).toLowerCase();
+    if (role === 'user') {
+      // 仅聚合 assistant/system 文本，避免把用户输入误当作最终输出落盘并回放。
       return null;
     }
 
@@ -2374,6 +2381,13 @@ export class OpencodeRemoteService {
         });
       }
       if (this.isDirectSession(session)) {
+        // 直通模式下也要保留 checkpoint，保证前端断线重连后可补齐中途流式内容。
+        this.scheduleStreamCheckpoint(
+          session.id,
+          orchestratorSessionId,
+          textStream.opencodeSessionId,
+          stream.streamKey
+        );
         return;
       }
       this.scheduleStreamBroadcast(session.id, stream.streamKey);

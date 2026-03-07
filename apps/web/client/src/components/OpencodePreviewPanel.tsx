@@ -7,7 +7,7 @@ import {
   getTaskCreationDebugInfo,
   startTaskCreationDebug,
   getWorkspaceFile,
-  getWorkspaceTree,
+  getWorkspaceDirectory,
   type TaskCreationDebugInfo,
   type WorkspaceFile,
   type WorkspaceTree,
@@ -31,6 +31,16 @@ interface OpencodePreviewPanelProps {
 }
 
 type PreviewTab = "files" | "changes" | "debug";
+const DIRECTORY_PAGE_SIZE = 200;
+type DirectoryLoadState = {
+  initialized: boolean;
+  loading: boolean;
+  error: string | null;
+  hasMore: boolean;
+  nextCursor: number | null;
+  returned: number;
+  total: number;
+};
 
 export default function OpencodePreviewPanel({
   messages,
@@ -59,6 +69,7 @@ export default function OpencodePreviewPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [dirState, setDirState] = useState<Record<string, DirectoryLoadState>>({});
   const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugStarting, setDebugStarting] = useState(false);
@@ -90,6 +101,123 @@ export default function OpencodePreviewPanel({
     }
   }, [autoDiff, diffItems, open, selectedDiffId, controlledSelectedDiffId]);
 
+  const normalizeWorkspacePath = (value: string) =>
+    value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+
+  const mergeWorkspaceItems = (
+    currentItems: WorkspaceTreeItem[],
+    incomingItems: WorkspaceTreeItem[],
+    parentPath: string,
+    append: boolean
+  ): WorkspaceTreeItem[] => {
+    const normalizedParent = normalizeWorkspacePath(parentPath);
+    const parentPrefix = normalizedParent ? `${normalizedParent}/` : "";
+    const byPath = new Map<string, WorkspaceTreeItem>();
+
+    currentItems.forEach((item) => {
+      const normalized = normalizeWorkspacePath(item.path);
+      const belongsToParent = normalizedParent ? normalized.startsWith(parentPrefix) : true;
+      if (!append && belongsToParent) return;
+      byPath.set(normalized, { path: normalized, type: item.type });
+    });
+
+    incomingItems.forEach((item) => {
+      const normalized = normalizeWorkspacePath(item.path);
+      if (!normalized) return;
+      byPath.set(normalized, { path: normalized, type: item.type });
+    });
+
+    return Array.from(byPath.values());
+  };
+
+  async function loadDirectory(
+    dirPath: string,
+    options?: { append?: boolean; refresh?: boolean; silent?: boolean }
+  ) {
+    if (!sessionId) {
+      return null;
+    }
+    const normalizedDir = normalizeWorkspacePath(dirPath);
+    const dirKey = normalizedDir;
+    const append = options?.append === true;
+    const refresh = options?.refresh === true;
+    const currentDirState = dirState[dirKey];
+    const cursor = append
+      ? Math.max(0, Number(currentDirState?.nextCursor ?? 0))
+      : 0;
+
+    setDirState((prev) => ({
+      ...prev,
+      [dirKey]: {
+        initialized: prev[dirKey]?.initialized ?? false,
+        loading: true,
+        error: null,
+        hasMore: prev[dirKey]?.hasMore ?? false,
+        nextCursor: prev[dirKey]?.nextCursor ?? null,
+        returned: prev[dirKey]?.returned ?? 0,
+        total: prev[dirKey]?.total ?? 0,
+      },
+    }));
+
+    try {
+      const page = await getWorkspaceDirectory(sessionId, {
+        path: normalizedDir,
+        cursor,
+        limit: DIRECTORY_PAGE_SIZE,
+        refresh,
+      });
+
+      setTree((prev) => {
+        const baseItems = prev?.items || [];
+        const mergedItems = mergeWorkspaceItems(baseItems, page.items || [], normalizedDir, append);
+        return {
+          root: page.root || prev?.root || "",
+          items: mergedItems,
+        };
+      });
+
+      setDirState((prev) => ({
+        ...prev,
+        [dirKey]: {
+          initialized: true,
+          loading: false,
+          error: null,
+          hasMore: Boolean(page.hasMore),
+          nextCursor:
+            typeof page.nextCursor === "number" && Number.isFinite(page.nextCursor)
+              ? page.nextCursor
+              : null,
+          returned: Number(page.returned || 0),
+          total: Number(page.total || 0),
+        },
+      }));
+
+      return page;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "获取目录失败";
+      if (!options?.silent && normalizedDir === "") {
+        if (message.includes("409")) {
+          setTreeError(null);
+        } else {
+          setTreeError(message);
+        }
+      }
+      setDirState((prev) => ({
+        ...prev,
+        [dirKey]: {
+          initialized: prev[dirKey]?.initialized ?? false,
+          loading: false,
+          error: message,
+          hasMore: prev[dirKey]?.hasMore ?? false,
+          nextCursor: prev[dirKey]?.nextCursor ?? null,
+          returned: prev[dirKey]?.returned ?? 0,
+          total: prev[dirKey]?.total ?? 0,
+        },
+      }));
+      return null;
+    }
+  }
+
   async function handleFileSelect(path: string) {
     if (!sessionId) return;
     if (runtimeReady === false) {
@@ -101,16 +229,25 @@ export default function OpencodePreviewPanel({
     }
     setSelectedPath(path);
     const parts = path.split("/").filter(Boolean);
+    const parentDirs: string[] = [];
+    let parentPath = "";
+    parts.slice(0, -1).forEach((part) => {
+      parentPath = parentPath ? `${parentPath}/${part}` : part;
+      parentDirs.push(parentPath);
+    });
     if (parts.length > 0) {
       setExpandedPaths((prev) => {
         const next = new Set(prev);
-        let current = "";
-        parts.slice(0, -1).forEach((part) => {
-          current = current ? `${current}/${part}` : part;
-          next.add(current);
-        });
+        parentDirs.forEach((dir) => next.add(dir));
         return next;
       });
+    }
+    for (const dirPath of parentDirs) {
+      const normalized = normalizeWorkspacePath(dirPath);
+      const state = dirState[normalized];
+      if (!state || !state.initialized || state.error) {
+        await loadDirectory(normalized, { append: false, refresh: false, silent: true });
+      }
     }
     setFileLoading(true);
     setFileError(null);
@@ -139,6 +276,7 @@ export default function OpencodePreviewPanel({
     if (!sessionId) {
       setTreeError("缺少会话信息");
       setTree(null);
+      setDirState({});
       return;
     }
     if (runtimeReady === false) {
@@ -146,6 +284,7 @@ export default function OpencodePreviewPanel({
         await onEnsureRuntime();
       } else {
         setTree(null);
+        setDirState({});
         setTreeError(null);
         setTreeLoading(false);
         return;
@@ -154,10 +293,27 @@ export default function OpencodePreviewPanel({
     setTreeLoading(true);
     setTreeError(null);
     try {
-      const data = await getWorkspaceTree(sessionId);
-      setTree(data);
+      const rootPage = await loadDirectory("", {
+        append: false,
+        refresh: mode === "manual",
+        silent: false,
+      });
+      if (!rootPage) {
+        return;
+      }
+      const expandedDirs = Array.from(expandedPaths)
+        .map((path) => normalizeWorkspacePath(path))
+        .filter(Boolean)
+        .sort((a, b) => a.split("/").length - b.split("/").length);
+      for (const dirPath of expandedDirs) {
+        await loadDirectory(dirPath, {
+          append: false,
+          refresh: false,
+          silent: true,
+        });
+      }
       if (!selectedPath) {
-        const firstFile = data.items.find((item) => item.type === "file");
+        const firstFile = rootPage.items.find((item) => item.type === "file");
         if (firstFile) {
           void handleFileSelect(firstFile.path);
         }
@@ -174,10 +330,53 @@ export default function OpencodePreviewPanel({
     }
   };
 
+  const handleTogglePath = (path: string) => {
+    const normalized = normalizeWorkspacePath(path);
+    const isOpen = expandedPaths.has(normalized);
+    if (isOpen) {
+      setExpandedPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(normalized);
+        return next;
+      });
+      return;
+    }
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      next.add(normalized);
+      return next;
+    });
+    const state = dirState[normalized];
+    if (!state || !state.initialized || state.error) {
+      void loadDirectory(normalized, { append: false, refresh: false, silent: true });
+    }
+  };
+
+  const handleLoadMoreDirectory = (path: string) => {
+    const normalized = normalizeWorkspacePath(path);
+    const state = dirState[normalized];
+    if (!state || state.loading || !state.hasMore || state.nextCursor === null) {
+      return;
+    }
+    void loadDirectory(normalized, { append: true, refresh: false, silent: true });
+  };
+
   useEffect(() => {
     if (!open) return;
     void refreshTree("auto");
   }, [open, sessionId, runtimeReady]);
+
+  useEffect(() => {
+    setTree(null);
+    setTreeError(null);
+    setTreeLoading(false);
+    setDirState({});
+    setExpandedPaths(new Set());
+    setSelectedPath(null);
+    setFileData(null);
+    setFileError(null);
+    setFileLoading(false);
+  }, [sessionId]);
 
   useEffect(() => {
     debugBootRef.current = false;
@@ -370,17 +569,9 @@ export default function OpencodePreviewPanel({
             contentError={fileError}
             contentLoading={fileLoading}
             expandedPaths={expandedPaths}
-            onTogglePath={(path) => {
-              setExpandedPaths((prev) => {
-                const next = new Set(prev);
-                if (next.has(path)) {
-                  next.delete(path);
-                } else {
-                  next.add(path);
-                }
-                return next;
-              });
-            }}
+            dirState={dirState}
+            onTogglePath={handleTogglePath}
+            onLoadMoreDir={handleLoadMoreDirectory}
             onRefresh={() => void refreshTree("manual")}
             onSelectFile={handleFileSelect}
             runtimeReady={runtimeReady !== false}
@@ -545,7 +736,9 @@ function FilePreview({
   contentError,
   contentLoading,
   expandedPaths,
+  dirState,
   onTogglePath,
+  onLoadMoreDir,
   onRefresh,
   onSelectFile,
   runtimeReady,
@@ -559,7 +752,9 @@ function FilePreview({
   contentError: string | null;
   contentLoading: boolean;
   expandedPaths: Set<string>;
+  dirState: Record<string, DirectoryLoadState>;
   onTogglePath: (path: string) => void;
+  onLoadMoreDir: (path: string) => void;
   onRefresh: () => void;
   onSelectFile: (path: string) => void;
   runtimeReady: boolean;
@@ -597,6 +792,7 @@ function FilePreview({
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
   const isBinary = Boolean(file?.isBinary);
+  const rootDirState = dirState[""];
   const binaryDataUrl =
     file && file.encoding === "base64" && file.content
       ? `data:${mimeType};base64,${file.content}`
@@ -605,15 +801,29 @@ function FilePreview({
   return (
     <div className="flex h-full flex-col md:flex-row">
       <div className="md:basis-[30%] md:max-w-[30%] border-b md:border-b-0 md:border-r border-border overflow-auto px-3 py-3 bg-slate-50/60">
-        <div className="text-[11px] text-muted-foreground mb-2 break-all font-mono">
-          根目录: {tree.root}
+        <div className="mb-2 space-y-1">
+          <div className="text-[11px] text-muted-foreground break-all font-mono">
+            根目录: {tree.root}
+          </div>
+          {rootDirState?.hasMore ? (
+            <button
+              type="button"
+              className="text-[11px] text-blue-600 hover:text-blue-700 disabled:text-slate-400"
+              onClick={() => onLoadMoreDir("")}
+              disabled={Boolean(rootDirState.loading)}
+            >
+              {rootDirState.loading ? "加载中..." : "加载更多根目录项..."}
+            </button>
+          ) : null}
         </div>
         <TreeList
           nodes={nodes}
           selectedPath={selectedPath}
           onSelectFile={onSelectFile}
           expandedPaths={expandedPaths}
+          dirState={dirState}
           onTogglePath={onTogglePath}
+          onLoadMoreDir={onLoadMoreDir}
         />
       </div>
       <div className="min-h-0 md:basis-[70%] md:max-w-[70%] overflow-hidden px-4 py-3">
@@ -681,14 +891,18 @@ function TreeList({
   selectedPath,
   onSelectFile,
   expandedPaths,
+  dirState,
   onTogglePath,
+  onLoadMoreDir,
   depth = 0,
 }: {
   nodes: TreeNode[];
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   expandedPaths: Set<string>;
+  dirState: Record<string, DirectoryLoadState>;
   onTogglePath: (path: string) => void;
+  onLoadMoreDir: (path: string) => void;
   depth?: number;
 }) {
   return (
@@ -697,6 +911,7 @@ function TreeList({
         const isDir = node.type === "dir";
         const isOpen = expandedPaths.has(node.path);
         const indent = depth * 12;
+        const state = dirState[node.path];
         return (
           <div key={node.path}>
             <button
@@ -717,16 +932,54 @@ function TreeList({
             >
               <span className="w-3">{isDir ? (isOpen ? "▾" : "▸") : ""}</span>
               <span className="truncate">{node.name}</span>
+              {isDir && state?.loading ? <span className="ml-1 text-[10px] text-slate-400">加载中</span> : null}
             </button>
-            {isDir && isOpen && node.children.length > 0 ? (
-              <TreeList
-                nodes={node.children}
-                selectedPath={selectedPath}
-                onSelectFile={onSelectFile}
-                expandedPaths={expandedPaths}
-                onTogglePath={onTogglePath}
-                depth={depth + 1}
-              />
+            {isDir && isOpen ? (
+              <div className="space-y-1">
+                {node.children.length > 0 ? (
+                  <TreeList
+                    nodes={node.children}
+                    selectedPath={selectedPath}
+                    onSelectFile={onSelectFile}
+                    expandedPaths={expandedPaths}
+                    dirState={dirState}
+                    onTogglePath={onTogglePath}
+                    onLoadMoreDir={onLoadMoreDir}
+                    depth={depth + 1}
+                  />
+                ) : null}
+                {state?.error ? (
+                  <div
+                    className="px-2 py-1 text-[11px] text-amber-600"
+                    style={{ paddingLeft: `${indent + 28}px` }}
+                  >
+                    {state.error}
+                  </div>
+                ) : null}
+                {state?.hasMore ? (
+                  <button
+                    type="button"
+                    onClick={() => onLoadMoreDir(node.path)}
+                    disabled={Boolean(state.loading)}
+                    className="px-2 py-1 text-[11px] text-blue-600 hover:text-blue-700 disabled:text-slate-400"
+                    style={{ paddingLeft: `${indent + 28}px` }}
+                  >
+                    {state.loading ? "加载中..." : "加载更多..."}
+                  </button>
+                ) : null}
+                {!state?.loading &&
+                state?.initialized &&
+                !state.hasMore &&
+                !state.error &&
+                node.children.length === 0 ? (
+                  <div
+                    className="px-2 py-1 text-[11px] text-slate-400"
+                    style={{ paddingLeft: `${indent + 28}px` }}
+                  >
+                    空目录
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
         );

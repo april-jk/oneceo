@@ -1,4 +1,5 @@
 import type { OsacMessage } from '../clients/osac-client';
+import { randomUUID } from 'node:crypto';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { osacConnectionManager } from './osac-connection-manager';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
@@ -170,6 +171,7 @@ export class OpencodeEventStreamService {
   private persistQueue: PersistEntry[] = [];
   private persistTimer: NodeJS.Timeout | null = null;
   private persistIntervalMs = Number(process.env.OPENCODE_EVENT_PERSIST_INTERVAL_MS || 1000);
+  private persistFlushInProgress: Promise<void> = Promise.resolve();
 
   subscribe(orchestratorSessionId: string, listener: FastEventListener): () => void {
     if (!orchestratorSessionId) {
@@ -397,7 +399,10 @@ export class OpencodeEventStreamService {
   }
 
   private schedulePersistFlush() {
-    if (this.persistIntervalMs <= 0) return;
+    if (this.persistIntervalMs <= 0) {
+      void this.flushPersistQueue(true);
+      return;
+    }
     if (this.persistTimer) return;
     this.persistTimer = setInterval(() => {
       void this.flushPersistQueue();
@@ -407,57 +412,96 @@ export class OpencodeEventStreamService {
     }
   }
 
-  private async flushPersistQueue() {
+  private async flushPersistQueue(force: boolean = false) {
     if (this.persistQueue.length === 0) return;
-    const batch = this.persistQueue.splice(0, this.persistQueue.length);
-    const grouped = new Map<string, PersistEntry[]>();
-    for (const item of batch) {
-      const list = grouped.get(item.sessionId) || [];
-      list.push(item);
-      grouped.set(item.sessionId, list);
-    }
-    try {
-      await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-      const dbBatch = batch.map((item) => {
-        const createdAt = (() => {
-          if (item.createdAt instanceof Date) return item.createdAt;
-          if (typeof item.createdAt === 'string') {
-            const parsed = new Date(item.createdAt);
-            if (!Number.isNaN(parsed.getTime())) return parsed;
-          }
-          return new Date();
-        })();
-        return {
-          sessionId: item.sessionId,
-          role: item.role,
-          messageType: item.messageType,
-          content: item.content,
-          metadata: item.metadata,
-          createdAt,
-        };
-      });
-      await taskCreationSessionDAO.addMessages(dbBatch);
-    } catch (error) {
-      console.warn('[OPENCODE_EVENT_PERSIST_DB_FAILED]', error);
-      this.persistQueue.unshift(...batch);
-      return;
-    }
-    for (const [sessionId, list] of grouped.entries()) {
+    const run = async () => {
+      if (this.persistQueue.length === 0) return;
+      const batch = this.persistQueue.splice(0, this.persistQueue.length);
+      const grouped = new Map<string, PersistEntry[]>();
+      for (const item of batch) {
+        const list = grouped.get(item.sessionId) || [];
+        list.push(item);
+        grouped.set(item.sessionId, list);
+      }
       try {
-        await taskCreationFileMemoryStore.addMessagesBatch(
-          sessionId,
-          list.map((item) => ({
+        await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+        const dbBatch = batch.map((item) => {
+          const createdAt = (() => {
+            if (typeof item.createdAt === 'string') {
+              const parsed = new Date(item.createdAt);
+              if (!Number.isNaN(parsed.getTime())) return parsed;
+            }
+            return new Date();
+          })();
+          return {
+            id: randomUUID(),
+            sessionId: item.sessionId,
             role: item.role,
             messageType: item.messageType,
             content: item.content,
             metadata: item.metadata,
-            createdAt: item.createdAt,
-          }))
-        );
+            createdAt,
+          };
+        });
+        await taskCreationSessionDAO.addMessages(dbBatch);
       } catch (error) {
-        console.warn('[OPENCODE_EVENT_PERSIST_MEMORY_FAILED]', sessionId, error);
+        console.warn('[OPENCODE_EVENT_PERSIST_DB_FAILED]', error);
+        this.persistQueue.unshift(...batch);
+        return;
       }
+      for (const [sessionId, list] of grouped.entries()) {
+        try {
+          await taskCreationFileMemoryStore.addMessagesBatch(
+            sessionId,
+            list.map((item) => ({
+              role: item.role,
+              messageType: item.messageType,
+              content: item.content,
+              metadata: item.metadata,
+              createdAt: item.createdAt,
+            }))
+          );
+        } catch (error) {
+          console.warn('[OPENCODE_EVENT_PERSIST_MEMORY_FAILED]', sessionId, error);
+        }
+      }
+    };
+
+    this.persistFlushInProgress = this.persistFlushInProgress.then(run, run);
+    await this.persistFlushInProgress;
+    if (force && this.persistQueue.length > 0) {
+      await this.flushPersistQueue(true);
     }
+  }
+
+  private shouldFlushPersistImmediately(eventType: string, event: Record<string, unknown>): boolean {
+    const lower = String(eventType || '').trim().toLowerCase();
+    if (!lower) return false;
+    if (
+      lower === 'message.final' ||
+      lower === 'message.completed' ||
+      lower === 'message.done' ||
+      lower === 'session.idle' ||
+      lower === 'session.completed' ||
+      lower === 'session.error'
+    ) {
+      return true;
+    }
+
+    if (lower === 'message.updated') {
+      const properties = (event.properties && typeof event.properties === 'object')
+        ? (event.properties as Record<string, unknown>)
+        : {};
+      const info = (properties.info && typeof properties.info === 'object')
+        ? (properties.info as Record<string, unknown>)
+        : {};
+      const state = String(info.state || info.status || properties.state || properties.status || '')
+        .trim()
+        .toLowerCase();
+      return state === 'completed' || state === 'done' || state === 'success' || state === 'failed';
+    }
+
+    return false;
   }
 
   private summarizeEventForHistory(eventType: string, event: Record<string, unknown>): string {
@@ -547,7 +591,11 @@ export class OpencodeEventStreamService {
 
       const eventType = payload.eventType;
       const info = this.extractEventInfo(payload.event);
+      const flushNow = this.shouldFlushPersistImmediately(eventType, payload.event);
       if (info.role === 'user') {
+        if (flushNow) {
+          void this.flushPersistQueue(true);
+        }
         return;
       }
 
@@ -565,6 +613,9 @@ export class OpencodeEventStreamService {
         eventType !== 'message.part.delta' &&
         eventType !== 'command.executed'
       ) {
+        if (flushNow) {
+          void this.flushPersistQueue(true);
+        }
         return;
       }
 
@@ -598,6 +649,9 @@ export class OpencodeEventStreamService {
           eventType.startsWith('pty.') ||
           eventType === 'command.executed';
         if (!stillPersist) {
+          if (flushNow) {
+            void this.flushPersistQueue(true);
+          }
           return;
         }
       }
@@ -610,6 +664,9 @@ export class OpencodeEventStreamService {
         createdAt,
       });
       this.schedulePersistFlush();
+      if (flushNow) {
+        void this.flushPersistQueue(true);
+      }
     })().catch((error) => {
       console.warn('[OPENCODE_EVENT_PERSIST_ENQUEUE_FAILED]', error);
     });
@@ -651,17 +708,26 @@ export class OpencodeEventStreamService {
                   normalized.directory = input.workspaceRoot;
                 }
                 const message = toEventMessage(input.orchestratorSessionId, entry, normalized);
+                const payloadRecord =
+                  message.payload && typeof message.payload === 'object'
+                    ? (message.payload as Record<string, unknown>)
+                    : {};
+                const opencodeSessionId = asText(payloadRecord.opencodeSessionId).trim() || undefined;
+                const eventRecord =
+                  payloadRecord.event && typeof payloadRecord.event === 'object'
+                    ? (payloadRecord.event as Record<string, unknown>)
+                    : (normalized as Record<string, unknown>);
                 const fastEvent = this.applyStreamDelta(
                   input.orchestratorSessionId,
-                  message.payload.opencodeSessionId,
-                  message.payload.event as Record<string, unknown>
+                  opencodeSessionId,
+                  eventRecord
                 );
                 const fastPayload = {
-                  opencodeSessionId: message.payload.opencodeSessionId,
-                  eventType: String(message.payload.eventType || 'unknown'),
+                  opencodeSessionId,
+                  eventType: asText(payloadRecord.eventType) || 'unknown',
                   event: fastEvent,
-                  seq: Number(message.payload.seq || 0),
-                  timestamp: Number(message.payload.timestamp || Date.now()),
+                  seq: Number(payloadRecord.seq || 0),
+                  timestamp: Number(payloadRecord.timestamp || Date.now()),
                 };
                 void touchSandbox(input.orchestratorSessionId, 'opencode_sse_event');
                 this.emitFast(input.orchestratorSessionId, fastPayload);
@@ -707,6 +773,7 @@ export class OpencodeEventStreamService {
     } catch {
       // ignore
     }
+    await this.flushPersistQueue(true);
   }
 }
 

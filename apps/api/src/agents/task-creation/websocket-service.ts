@@ -254,9 +254,6 @@ export class TaskCreationWebSocketService {
       }
     }
 
-    if (message.type === ('error' as any)) {
-      return;
-    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       console.log(`[WebSocket] 发送消息 to ${clientId}:`, message.type);
       ws.send(
@@ -529,10 +526,20 @@ export class TaskCreationWebSocketService {
       createdSession = true;
     }
 
+    // 允许前端在首条消息时主动携带 sessionId（避免并发输入导致重复新建会话）：
+    // 若该 id 尚不存在，则按“新会话”路径初始化。
+    if (!createdSession) {
+      const exists = await taskCreationFileMemoryStore.getSession(taskSessionId);
+      if (!exists) {
+        createdSession = true;
+      }
+    }
+
     this.sessionByClient.set(clientId, taskSessionId);
 
     const orchestratorSessionId = String((message.metadata as any)?.orchestratorSessionId || '').trim();
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
+    const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
 
     try {
       if (createdSession) {
@@ -556,6 +563,7 @@ export class TaskCreationWebSocketService {
             await taskCreationSessionDAO.createSession({ id: taskSessionId, status: 'in_progress' });
           }
           await taskCreationSessionDAO.addMessage({
+            id: randomUUID(),
             sessionId: taskSessionId,
             role: 'system',
             messageType: 'session_started',
@@ -583,24 +591,53 @@ export class TaskCreationWebSocketService {
         await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
       }
 
-      await taskCreationFileMemoryStore.addMessage(taskSessionId, 'user', 'user_input', message.content || '');
       try {
-        await taskCreationSessionDAO.addMessage({
-          sessionId: taskSessionId,
-          role: 'user',
-          messageType: 'user_input',
-          content: message.content || '',
-        });
+        const existingDbSession = await taskCreationSessionDAO.getSession(taskSessionId);
+        if (!existingDbSession) {
+          await taskCreationSessionDAO.createSession({ id: taskSessionId, status: 'in_progress' });
+        }
       } catch (error) {
-        console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
+        console.warn('[OPENCODE_INPUT_SESSION_DB_ENSURE_FAILED]', error);
       }
 
-      await opencodeRemoteService.sendUserInput({
+      if (!prePersistedUserInput) {
+        await taskCreationFileMemoryStore.addMessage(taskSessionId, 'user', 'user_input', message.content || '');
+        try {
+          await taskCreationSessionDAO.addMessage({
+            id: randomUUID(),
+            sessionId: taskSessionId,
+            role: 'user',
+            messageType: 'user_input',
+            content: message.content || '',
+          });
+        } catch (error) {
+          console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
+        }
+      }
+
+      const accepted = await opencodeRemoteService.sendUserInput({
         taskSessionId,
         content: message.content || '',
         orchestratorSessionId: orchestratorSessionId || undefined,
         workspacePath: workspacePath || undefined,
       });
+
+      // 直通模式下给前端一个“已接收”回执，并同步当前 opencodeSessionId，
+      // 避免前端在重连窗口期因会话绑定缺失导致后续续聊错位或卡住。
+      this.sendToClient(
+        clientId,
+        {
+          type: 'opencode_status' as any,
+          sessionId: taskSessionId,
+          content: 'OpenCode 已接收输入，正在执行...',
+          metadata: {
+            orchestratorSessionId: accepted.orchestratorSessionId,
+            opencodeSessionId: accepted.opencodeSessionId,
+            executionMode: 'sandbox_direct',
+          },
+        },
+        { skipPersistence: true }
+      );
 
       // 直通模式不注入额外状态消息，避免污染 OpenCode 原始对话流。
     } catch (error) {

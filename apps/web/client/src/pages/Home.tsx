@@ -834,7 +834,6 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const normalizeForDedup = (value: string): string => value.replace(/\r\n/g, "\n").trim();
   const userTextSet = new Set<string>();
   const finalizedPartIds = new Set<string>();
-  const skipFinalIndices = new Set<number>();
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -846,24 +845,12 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     return asText(part.id) || asText(properties.partId);
   };
 
-  // 预扫描：构建用户文本集、已终态 partId、每轮仅保留最后一条 final。
-  let currentTurnFinalIndices: number[] = [];
-  const flushTurnFinalIndices = () => {
-    if (currentTurnFinalIndices.length <= 1) {
-      currentTurnFinalIndices = [];
-      return;
-    }
-    for (let i = 0; i < currentTurnFinalIndices.length - 1; i += 1) {
-      skipFinalIndices.add(currentTurnFinalIndices[i]);
-    }
-    currentTurnFinalIndices = [];
-  };
+  // 预扫描：构建用户文本集和已终态 partId。
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
       const normalized = normalizeForDedup(message.content || "");
       if (normalized) userTextSet.add(normalized);
-      flushTurnFinalIndices();
       continue;
     }
     if (message.type !== "opencode_event") continue;
@@ -872,10 +859,8 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     if (eventInfo.eventType === "message.final") {
       const partId = getPartIdFromMetadata(metadata);
       if (partId) finalizedPartIds.add(partId);
-      currentTurnFinalIndices.push(index);
     }
   }
-  flushTurnFinalIndices();
 
   const pushUser = (text: string, attachments?: UploadedTaskAttachment[]) => {
     const normalized = normalizeForDedup(text);
@@ -1049,9 +1034,6 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         seenDiffs.add(signature);
       }
       if (eventInfo.eventType === "message.final") {
-        if (skipFinalIndices.has(index)) {
-          continue;
-        }
         if (!normalizedContent) {
           continue;
         }

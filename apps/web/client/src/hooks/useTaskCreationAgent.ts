@@ -780,6 +780,19 @@ function mergeRealtimeMessage(
   }
 
   if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
+    const normalized = (message.content || '').trim();
+    if (!normalized) {
+      return prev;
+    }
+    const exists = prev.some(
+      (item) =>
+        item.type === 'status_update' &&
+        isTerminalOpencodeMessage(item) &&
+        (item.content || '').trim() === normalized
+    );
+    if (exists) {
+      return prev;
+    }
     return [...prev, message];
   }
 
@@ -1801,10 +1814,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           if (looksLikeError) {
             return null;
           }
+          const content = item?.content || '';
+          const normalized = content.trim();
+          const inferredStage =
+            normalized.includes('OpenCode 执行完成')
+              ? 'completed'
+              : normalized.includes('OpenCode 执行失败') || normalized.includes('OpenCode 执行已结束')
+                ? 'failed'
+                : 'executing';
           return {
             type: 'status_update',
-            content: item?.content || '',
-            stage: 'executing',
+            content,
+            stage: inferredStage,
             tone: 'execution',
             sessionId: historySessionId,
             metadata,

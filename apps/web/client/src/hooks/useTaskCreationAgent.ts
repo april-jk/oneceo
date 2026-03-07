@@ -377,6 +377,18 @@ function resolveStreamKeyFromMetadata(metadata: Record<string, unknown>): string
   return null;
 }
 
+function resolveTextStreamKeyFromMetadata(metadata: Record<string, unknown>): string | null {
+  const explicit = asText(metadata.streamKey);
+  if (explicit) return explicit;
+
+  const { partId } = getOpencodeEventInfo(metadata);
+  const opencodeSessionId = asText(metadata.opencodeSessionId);
+  if (opencodeSessionId && partId) {
+    return `${opencodeSessionId}:${partId}`;
+  }
+  return null;
+}
+
 function isTextStreamEvent(metadata: Record<string, unknown>, content?: string): boolean {
   const { role } = getOpencodeEventInfo(metadata);
   if (role === 'user') {
@@ -687,7 +699,7 @@ function mergeRealtimeMessage(
     return [...prev, message];
   }
   if (message.type === 'opencode_event' && isTextStreamEvent(metadata, message.content)) {
-    const streamKey = resolveStreamKeyFromMetadata(metadata);
+    const streamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!streamKey) {
       return [...prev, message];
     }
@@ -696,7 +708,7 @@ function mergeRealtimeMessage(
       if (item.type !== 'opencode_event') return false;
       const itemMeta = toRecord(item.metadata);
       if (!isTextStreamEvent(itemMeta, item.content)) return false;
-      return resolveStreamKeyFromMetadata(itemMeta) === streamKey;
+      return resolveTextStreamKeyFromMetadata(itemMeta) === streamKey;
     });
 
     if (idx >= 0) {
@@ -728,30 +740,21 @@ function mergeRealtimeMessage(
   }
 
   if (message.type === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
-    const filtered = prev.filter((item) => {
-      if (item.type !== 'opencode_event') return true;
-      const itemMeta = toRecord(item.metadata);
-      return !isTextStreamEvent(itemMeta, item.content);
-    });
-    return [...filtered, message];
-  }
-
-  if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
-    const hasFinal = prev.some((item) => {
-      if (item.type !== 'opencode_event') return false;
-      const itemMeta = toRecord(item.metadata);
-      const eventType = asText(itemMeta.eventType);
-      return eventType === 'message.final' || itemMeta.source === 'stream_aggregate';
-    });
-    if (!hasFinal) {
+    const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
+    if (!finalStreamKey) {
       return [...prev, message];
     }
     const filtered = prev.filter((item) => {
       if (item.type !== 'opencode_event') return true;
       const itemMeta = toRecord(item.metadata);
-      return !isTextStreamEvent(itemMeta, item.content);
+      if (!isTextStreamEvent(itemMeta, item.content)) return true;
+      return resolveTextStreamKeyFromMetadata(itemMeta) !== finalStreamKey;
     });
     return [...filtered, message];
+  }
+
+  if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
+    return [...prev, message];
   }
 
   return [...prev, message];
@@ -761,13 +764,6 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
   const result: TaskCreationHistoryMessage[] = [];
   const streamIndexByKey = new Map<string, number>();
   const streamSignatureByKey = new Map<string, string>();
-  const hasFinalInResult = () =>
-    result.some((item) => {
-      if (asText(item?.messageType) !== 'opencode_event') return false;
-      const metadata = toRecord(item?.metadata);
-      const eventType = asText(metadata.eventType);
-      return eventType === 'message.final' || metadata.source === 'stream_aggregate';
-    });
 
   const isDeltaStream = (metadata: Record<string, unknown>) => {
     const eventType = asText(metadata.eventType).toLowerCase();
@@ -783,9 +779,16 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
     }
 
     if (messageType === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
+      const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
+      if (!finalStreamKey) {
+        result.push(item);
+        continue;
+      }
       const filtered = result.filter((existing) => {
         if (asText(existing?.messageType) !== 'opencode_event') return true;
-        return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
+        const existingMeta = toRecord(existing?.metadata);
+        if (!isTextStreamEvent(existingMeta, existing?.content)) return true;
+        return resolveTextStreamKeyFromMetadata(existingMeta) !== finalStreamKey;
       });
       result.length = 0;
       result.push(...filtered, item);
@@ -816,7 +819,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
     }
 
     if (messageType === 'opencode_event' && isTextStreamEvent(metadata, item?.content)) {
-      const streamKey = resolveStreamKeyFromMetadata(metadata);
+      const streamKey = resolveTextStreamKeyFromMetadata(metadata);
       if (!streamKey) {
         result.push(item);
         continue;
@@ -860,16 +863,8 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         content.includes('OpenCode 执行失败') ||
         content.includes('OpenCode 执行已结束')
       ) {
-        if (hasFinalInResult()) {
-          const filtered = result.filter((existing) => {
-            if (asText(existing?.messageType) !== 'opencode_event') return true;
-            return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
-          });
-          result.length = 0;
-          result.push(...filtered);
-          streamIndexByKey.clear();
-          streamSignatureByKey.clear();
-        }
+        streamIndexByKey.clear();
+        streamSignatureByKey.clear();
       }
     }
 
@@ -880,14 +875,7 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
         content.includes('OpenCode 执行失败') ||
         content.includes('OpenCode 执行已结束')
       ) {
-        if (hasFinalInResult()) {
-          const filtered = result.filter((existing) => {
-            if (asText(existing?.messageType) !== 'opencode_event') return true;
-            return !isTextStreamEvent(toRecord(existing?.metadata), existing?.content);
-          });
-          result.length = 0;
-          result.push(...filtered);
-        }
+        // keep text events; only reset stream compaction state for any subsequent run.
       }
       streamIndexByKey.clear();
       streamSignatureByKey.clear();
@@ -1122,7 +1110,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (!isTextStreamEvent(metadata, message.content)) {
         return true;
       }
-      const streamKey = resolveStreamKeyFromMetadata(metadata);
+      const streamKey = resolveTextStreamKeyFromMetadata(metadata);
       if (!streamKey) {
         return true;
       }
@@ -1647,7 +1635,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (item?.messageType !== 'opencode_event') continue;
         const meta = toRecord(item.metadata);
         if (!isTextStreamEvent(meta, item.content)) continue;
-        const streamKey = resolveStreamKeyFromMetadata(meta);
+        const streamKey = resolveTextStreamKeyFromMetadata(meta);
         if (!streamKey) continue;
         const seq = asFiniteNumber(meta.seq);
         if (seq !== null) {

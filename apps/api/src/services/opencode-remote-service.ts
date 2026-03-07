@@ -2252,7 +2252,7 @@ export class OpencodeRemoteService {
         session.id,
         orchestratorSessionId,
         opencodeSessionId || undefined,
-        { persistMode: this.isDirectSession(session) ? 'latest' : 'all' }
+        { persistMode: 'all' }
       );
 
       await this.persistMessage(
@@ -2530,7 +2530,7 @@ export class OpencodeRemoteService {
         session.id,
         orchestratorSessionId,
         opencodeSessionId || undefined,
-        { persistMode: isDirect ? 'latest' : 'all' }
+        { persistMode: 'all' }
       );
       if (isDirect) {
         const artifact = this.getRunArtifact(runKey);
@@ -2921,7 +2921,7 @@ export class OpencodeRemoteService {
           session.id,
           orchestratorSessionId,
           opencodeSessionId || undefined,
-          { persistMode: 'latest' }
+          { persistMode: 'all' }
         );
         this.runArtifacts.delete(runKey);
         return;

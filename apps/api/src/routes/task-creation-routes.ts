@@ -856,6 +856,55 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
         : [];
     }
 
+    // 合并尚未落盘完成的实时文本流快照，避免“刚完成立即刷新”出现文本缺失。
+    try {
+      const session = await taskCreationFileMemoryStore.getSession(sessionId);
+      const runtimeOpencodeSessionId = asText(session?.runtime?.opencodeSessionId);
+      const liveSnapshots = opencodeRemoteService.getLiveTextStreamSnapshots(
+        sessionId,
+        runtimeOpencodeSessionId || undefined
+      );
+      if (liveSnapshots.length > 0) {
+        const existingSignatures = new Set<string>();
+        for (const item of messages) {
+          if (item?.messageType !== 'opencode_event') continue;
+          const metadata = pickRecord(item.metadata);
+          const streamKey = asText(metadata.streamKey);
+          const content = asText(item.content);
+          if (!streamKey || !content) continue;
+          existingSignatures.add(`${streamKey}::${content}`);
+        }
+
+        for (const snapshot of liveSnapshots) {
+          const metadata = pickRecord(snapshot.metadata);
+          const streamKey = asText(metadata.streamKey);
+          const content = asText(snapshot.content);
+          if (!streamKey || !content) continue;
+          const signature = `${streamKey}::${content}`;
+          if (existingSignatures.has(signature)) {
+            continue;
+          }
+          existingSignatures.add(signature);
+          messages.push({
+            id: `live_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'agent',
+            messageType: 'opencode_event',
+            content: snapshot.content,
+            metadata: snapshot.metadata,
+            createdAt: snapshot.createdAt,
+          } as any);
+        }
+
+        messages.sort((a, b) => {
+          const ta = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
+          const tb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+          return ta - tb;
+        });
+      }
+    } catch (snapshotError) {
+      console.warn('[TASK_CREATION_LIVE_STREAM_SNAPSHOT_MERGE_FAILED]', snapshotError);
+    }
+
     res.json({
       success: true,
       data: messages,

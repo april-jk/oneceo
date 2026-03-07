@@ -5,6 +5,7 @@
  */
 
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
@@ -462,6 +463,19 @@ async function buildWorkspaceTreeFromOpencode(input: {
   };
 }
 
+function sortWorkspaceTreeItems(
+  items: Array<{ path: string; type: 'file' | 'dir' }>
+): Array<{ path: string; type: 'file' | 'dir' }> {
+  return items
+    .slice()
+    .sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === 'dir' ? -1 : 1;
+      }
+      return a.path.localeCompare(b.path, 'zh-CN');
+    });
+}
+
 function writeSse(res: express.Response, payload: unknown, eventName?: string, eventId?: number) {
   if (Number.isFinite(eventId) && eventId) {
     res.write(`id: ${eventId}\n`);
@@ -474,6 +488,231 @@ function writeSse(res: express.Response, payload: unknown, eventName?: string, e
     (res as any).flush();
   }
 }
+
+type SseClientRuntimeState = {
+  sessionId: string;
+  clientId: string;
+  connectedAt: number;
+  disconnectedAt: number;
+  activeConnections: number;
+  reconnectCount: number;
+  lastCursor: number;
+  updatedAt: number;
+};
+
+const sseClientState = new Map<string, SseClientRuntimeState>();
+const sseClientStateTtlMs = clampNumber(
+  Number(process.env.TASK_CREATION_SSE_CLIENT_STATE_TTL_MS || 24 * 60 * 60 * 1000),
+  5 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000
+);
+
+function buildSseClientStateKey(sessionId: string, clientId: string) {
+  return `${sessionId}::${clientId}`;
+}
+
+function isTimestampCursorValue(value: number) {
+  return Number.isFinite(value) && value >= 1_000_000_000_000;
+}
+
+function parseSseClientId(req: express.Request): string {
+  const fromQuery = asText(req.query.clientId);
+  if (fromQuery) return fromQuery.slice(0, 128);
+  const fromHeader = asText(req.headers['x-sse-client-id']);
+  if (fromHeader) return fromHeader.slice(0, 128);
+  const fallback =
+    asText(req.ip) ||
+    asText((req.headers['x-forwarded-for'] as string) || '') ||
+    'anonymous';
+  return `anon_${fallback}`.slice(0, 128);
+}
+
+function cleanupSseClientState(now: number) {
+  for (const [key, state] of sseClientState.entries()) {
+    if (state.activeConnections > 0) continue;
+    if (now - state.updatedAt <= sseClientStateTtlMs) continue;
+    sseClientState.delete(key);
+  }
+}
+
+function registerSseClientConnection(sessionId: string, clientId: string) {
+  const now = Date.now();
+  cleanupSseClientState(now);
+  const key = buildSseClientStateKey(sessionId, clientId);
+  const prev = sseClientState.get(key);
+  const reconnecting = Boolean(prev && prev.disconnectedAt > 0 && now >= prev.disconnectedAt);
+  const next: SseClientRuntimeState = {
+    sessionId,
+    clientId,
+    connectedAt: now,
+    disconnectedAt: 0,
+    activeConnections: (prev?.activeConnections || 0) + 1,
+    reconnectCount: reconnecting ? (prev?.reconnectCount || 0) + 1 : prev?.reconnectCount || 0,
+    lastCursor: prev?.lastCursor || 0,
+    updatedAt: now,
+  };
+  sseClientState.set(key, next);
+  return {
+    key,
+    state: next,
+    reconnecting,
+    previousDisconnectedAt: prev?.disconnectedAt || 0,
+  };
+}
+
+function markSseClientDisconnected(key: string) {
+  const now = Date.now();
+  const prev = sseClientState.get(key);
+  if (!prev) return;
+  const nextActive = Math.max(0, (prev.activeConnections || 0) - 1);
+  sseClientState.set(key, {
+    ...prev,
+    activeConnections: nextActive,
+    disconnectedAt: now,
+    updatedAt: now,
+  });
+}
+
+function updateSseClientCursor(key: string, cursor: number) {
+  if (!Number.isFinite(cursor) || cursor <= 0) return;
+  const prev = sseClientState.get(key);
+  if (!prev) return;
+  const prevCursor = prev.lastCursor || 0;
+  const prevIsTimestamp = isTimestampCursorValue(prevCursor);
+  const nextIsTimestamp = isTimestampCursorValue(cursor);
+  if (prevCursor > 0 && prevIsTimestamp !== nextIsTimestamp) {
+    if (nextIsTimestamp) {
+      // 保留 seq 游标，避免被时间戳游标覆盖后导致实时 seq 回放丢失。
+      return;
+    }
+    // 从 timestamp 切回 seq，优先保证增量流可回放。
+    sseClientState.set(key, {
+      ...prev,
+      lastCursor: cursor,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+  if (cursor <= prevCursor) return;
+  sseClientState.set(key, {
+    ...prev,
+    lastCursor: cursor,
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * POST /api/task-creation/sessions
+ * 先创建任务会话（可选写入首条用户消息），用于前端在 runtime 连接前先落盘任务
+ */
+router.post('/sessions', async (req, res) => {
+  try {
+    const requestedSessionId = asText(req.body?.sessionId);
+    const requestedTitle = asText(req.body?.title);
+    const requestedMode = asText(req.body?.mode);
+    const requestedExecutor = asText(req.body?.executor);
+    const initialMessage = asText(req.body?.initialMessage);
+    const initialMessageTypeRaw = asText(req.body?.initialMessageType);
+    const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
+
+    const existingSession = requestedSessionId
+      ? await taskCreationFileMemoryStore.getSession(requestedSessionId)
+      : null;
+    const isNewSession = !existingSession;
+    const title =
+      requestedTitle ||
+      (initialMessage ? initialMessage.slice(0, 80) : '') ||
+      '新建任务会话';
+
+    const session = await taskCreationFileMemoryStore.createSession(
+      title,
+      requestedSessionId || undefined
+    );
+
+    if (requestedMode === 'sandbox' || requestedMode === 'altus') {
+      await taskCreationFileMemoryStore.updateSessionMode(session.id, requestedMode as any);
+    }
+    if (requestedExecutor) {
+      await taskCreationFileMemoryStore.updateSessionExecutor(session.id, requestedExecutor);
+    }
+
+    if (isNewSession) {
+      await taskCreationFileMemoryStore.addMessage(
+        session.id,
+        'system',
+        'session_started',
+        '会话已创建'
+      );
+    }
+
+    let persistedInitialMessage = false;
+    if (initialMessage) {
+      const history = await taskCreationFileMemoryStore.getMessages(session.id);
+      const last = history.length > 0 ? history[history.length - 1] : null;
+      const isDuplicateTail =
+        last?.role === 'user' &&
+        last?.messageType === initialMessageType &&
+        String(last?.content || '') === initialMessage;
+      if (!isDuplicateTail) {
+        await taskCreationFileMemoryStore.addMessage(
+          session.id,
+          'user',
+          initialMessageType,
+          initialMessage
+        );
+        persistedInitialMessage = true;
+      }
+    }
+
+    if (requestedMode === 'sandbox') {
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: 'development',
+      });
+    }
+
+    try {
+      const existingDbSession = await taskCreationSessionDAO.getSession(session.id);
+      if (!existingDbSession) {
+        await taskCreationSessionDAO.createSession({ id: session.id, status: 'in_progress' });
+      }
+      if (isNewSession) {
+        await taskCreationSessionDAO.addMessage({
+          id: randomUUID(),
+          sessionId: session.id,
+          role: 'system',
+          messageType: 'session_started',
+          content: '会话已创建',
+        });
+      }
+      if (persistedInitialMessage) {
+        await taskCreationSessionDAO.addMessage({
+          id: randomUUID(),
+          sessionId: session.id,
+          role: 'user',
+          messageType: initialMessageType,
+          content: initialMessage,
+        });
+      }
+    } catch (error) {
+      console.warn('[TASK_CREATION_CREATE_SESSION_DB_FAILED]', error);
+    }
+
+    const snapshot = (await taskCreationFileMemoryStore.getSession(session.id)) || session;
+    return res.json({
+      success: true,
+      data: toSessionSummary(snapshot),
+      message: isNewSession ? '会话已创建' : '会话已就绪',
+    });
+  } catch (error: any) {
+    console.error('创建会话失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('创建会话失败，请稍后重试'),
+    });
+  }
+});
 
 /**
  * GET /api/task-creation/sessions
@@ -882,6 +1121,106 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
 });
 
 /**
+ * GET /api/task-creation/sessions/:sessionId/workspace/dir
+ * 分页获取指定目录的直接子项（用于前端渐进式加载文件树）
+ */
+router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const rawPath = String(req.query.path || '').trim();
+    if (rawPath && isUnsafePath(rawPath)) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('非法路径'),
+      });
+    }
+    const dirPath = normalizeWorkspacePath(rawPath);
+    const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
+    const rawCursor = Number(req.query.cursor || 0);
+    const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
+    const includeIgnored = !['0', 'false', 'no'].includes(
+      String(req.query.includeIgnored ?? '1').trim().toLowerCase()
+    );
+
+    const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+    if (!orchestratorSessionId) {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未就绪，无法读取目录'),
+      });
+    }
+    const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境未启动，无法读取目录'),
+      });
+    }
+
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
+    const nodes = await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, dirPath);
+    const normalizedCandidates = nodes
+      .map((node): { path: string; type: 'file' | 'dir'; ignored: boolean } | null => {
+        const normalizedPath = normalizeWorkspacePath(node.path || '');
+        if (!normalizedPath) return null;
+        return {
+          path: normalizedPath,
+          type: node.type === 'directory' ? 'dir' : 'file',
+          ignored: Boolean(node.ignored),
+        };
+      })
+      .filter((item): item is { path: string; type: 'file' | 'dir'; ignored: boolean } => Boolean(item));
+    const normalizedItems = sortWorkspaceTreeItems(
+      normalizedCandidates
+        .filter((item) => includeIgnored || !item.ignored)
+        .map((item) => ({ path: item.path, type: item.type }))
+    );
+
+    const total = normalizedItems.length;
+    const start = Math.min(Math.max(0, cursor), total);
+    const end = Math.min(total, start + limit);
+    const pageItems = normalizedItems.slice(start, end);
+
+    await touchSandbox(orchestratorSessionId, 'workspace_dir');
+
+    return res.json({
+      success: true,
+      data: {
+        root: workspaceRoot,
+        path: dirPath,
+        items: pageItems,
+        cursor: start,
+        total,
+        returned: pageItems.length,
+        limit,
+        hasMore: end < total,
+        nextCursor: end < total ? end : null,
+      },
+    });
+  } catch (error: any) {
+    const { sessionId } = req.params;
+    if (isSandboxNotFoundError(error)) {
+      const session = await taskCreationFileMemoryStore.getSession(sessionId);
+      const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+      if (orchestratorSessionId) {
+        await markSandboxClosed(orchestratorSessionId);
+      }
+      return res.status(409).json({
+        success: false,
+        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      });
+    }
+    console.error('获取目录列表失败:', error);
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取目录列表失败，请稍后重试'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/workspace/tree
  * 获取会话对应工作区的文件树
  */
@@ -1179,6 +1518,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     (typeof req.query.opencodeSessionId === 'string' && req.query.opencodeSessionId.trim()) ||
     session.runtime?.opencodeSessionId ||
     '';
+  const clientId = parseSseClientId(req);
 
   const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
   const filterSessionId = String(opencodeSessionId || '').trim();
@@ -1196,9 +1536,15 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     const parsed = Date.parse(raw);
     return Number.isNaN(parsed) ? 0 : parsed;
   };
-  const sinceParam =
-    parseSince(req.query.since) ||
-    parseSince(req.headers['last-event-id'] || (req.headers as Record<string, unknown>)['Last-Event-ID']);
+  const querySince = parseSince(req.query.since);
+  const headerSince = parseSince(
+    req.headers['last-event-id'] || (req.headers as Record<string, unknown>)['Last-Event-ID']
+  );
+  const sinceParam = querySince || headerSince;
+  let connection: ReturnType<typeof registerSseClientConnection> | null = null;
+  let replayCursor = sinceParam;
+  let isTimestampCursor = replayCursor >= 1_000_000_000_000;
+  let fallbackReplayTs = Date.now();
 
   try {
     await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
@@ -1218,6 +1564,42 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     });
   }
 
+  connection = registerSseClientConnection(sessionId, clientId);
+  const activeConnection = connection;
+  const stateCursor =
+    activeConnection.reconnecting && activeConnection.state.lastCursor > 0
+      ? activeConnection.state.lastCursor
+      : 0;
+  if (!replayCursor) {
+    replayCursor = stateCursor;
+  } else if (stateCursor > 0) {
+    const queryIsTimestamp = isTimestampCursorValue(replayCursor);
+    const stateIsTimestamp = isTimestampCursorValue(stateCursor);
+    replayCursor =
+      queryIsTimestamp === stateIsTimestamp
+        ? Math.max(replayCursor, stateCursor)
+        : stateCursor;
+  }
+  isTimestampCursor = isTimestampCursorValue(replayCursor);
+  fallbackReplayTs =
+    activeConnection.previousDisconnectedAt > 0
+      ? activeConnection.previousDisconnectedAt
+      : activeConnection.state.connectedAt;
+  console.log(
+    '[OPENCODE_SSE_CLIENT_CONNECTED]',
+    JSON.stringify({
+      sessionId,
+      orchestratorSessionId,
+      clientId,
+      reconnecting: activeConnection.reconnecting,
+      replayCursor,
+      connectedAt: new Date(activeConnection.state.connectedAt).toISOString(),
+      previousDisconnectedAt: activeConnection.previousDisconnectedAt
+        ? new Date(activeConnection.previousDisconnectedAt).toISOString()
+        : null,
+    })
+  );
+
   await touchSandbox(orchestratorSessionId, 'opencode_events');
 
   res.status(200);
@@ -1233,16 +1615,31 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     res.write(': ping\n\n');
   }, pingMs);
 
-  if (sinceParam) {
+  if (replayCursor) {
     try {
       const history = await taskCreationFileMemoryStore.getMessages(sessionId);
+      const pickCursorFromItem = (item: any) => {
+        const meta = pickRecord(item?.metadata);
+        const seq = Number(meta.seq);
+        const tsMeta = Number(meta.timestamp);
+        const tsCreated = item?.createdAt ? Date.parse(item.createdAt) : NaN;
+        if (isTimestampCursor) {
+          if (Number.isFinite(tsMeta) && tsMeta > 0) return tsMeta;
+          if (Number.isFinite(tsCreated) && tsCreated > 0) return tsCreated;
+          if (Number.isFinite(seq) && seq > 0) return seq;
+          return 0;
+        }
+        if (Number.isFinite(seq) && seq > 0) return seq;
+        if (Number.isFinite(tsMeta) && tsMeta > fallbackReplayTs) return tsMeta;
+        if (Number.isFinite(tsCreated) && tsCreated > fallbackReplayTs) return tsCreated;
+        return 0;
+      };
       const filtered = history
         .filter((item) => item.messageType === 'opencode_event')
         .filter((item) => {
-          if (!item.createdAt) return false;
-          const createdAt = Date.parse(item.createdAt);
-          if (Number.isNaN(createdAt)) return false;
-          return createdAt > sinceParam;
+          const cursor = pickCursorFromItem(item);
+          if (!Number.isFinite(cursor) || cursor <= 0) return false;
+          return cursor > replayCursor;
         })
         .filter((item) => {
           if (!filterSessionId) return true;
@@ -1256,8 +1653,10 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       for (const item of filtered) {
         const meta = pickRecord(item.metadata);
         const eventId =
-          (typeof meta.seq === 'number' && Number.isFinite(meta.seq) ? meta.seq : undefined) ??
-          (typeof meta.timestamp === 'number' && Number.isFinite(meta.timestamp) ? meta.timestamp : undefined) ??
+          (typeof meta.seq === 'number' && Number.isFinite(meta.seq) && meta.seq > 0 ? meta.seq : undefined) ??
+          (typeof meta.timestamp === 'number' && Number.isFinite(meta.timestamp) && meta.timestamp > 0
+            ? meta.timestamp
+            : undefined) ??
           (item.createdAt ? Date.parse(item.createdAt) : undefined);
         writeSse(res, {
           sessionId,
@@ -1266,6 +1665,9 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           metadata: item.metadata,
           createdAt: item.createdAt,
         }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
+        if (Number.isFinite(eventId as number) && (eventId as number) > 0) {
+          updateSseClientCursor(activeConnection.key, eventId as number);
+        }
       }
     } catch (error) {
       console.warn('[OPENCODE_SSE_REPLAY_FAILED]', error);
@@ -1278,6 +1680,14 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       return;
     }
     const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
+    const liveEventId =
+      (typeof payload.seq === 'number' && Number.isFinite(payload.seq) && payload.seq > 0
+        ? payload.seq
+        : undefined) ??
+      (typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp) && payload.timestamp > 0
+        ? payload.timestamp
+        : undefined) ??
+      Date.parse(createdAt);
     writeSse(
       res,
       {
@@ -1290,16 +1700,49 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           seq: payload.seq,
           timestamp: payload.timestamp,
           opencodeSessionId: msgOpencodeSessionId || undefined,
-        },
+          },
       },
       undefined,
-      payload.seq || undefined
+      Number.isFinite(liveEventId as number) ? (liveEventId as number) : undefined
     );
+    if (Number.isFinite(liveEventId as number) && (liveEventId as number) > 0) {
+      updateSseClientCursor(activeConnection.key, liveEventId as number);
+    }
   });
 
+  writeSse(
+    res,
+    {
+      status: 'connected',
+      reconnecting: activeConnection.reconnecting,
+      clientId,
+      connectedAt: new Date(activeConnection.state.connectedAt).toISOString(),
+      disconnectedAt: activeConnection.previousDisconnectedAt
+        ? new Date(activeConnection.previousDisconnectedAt).toISOString()
+        : undefined,
+      replayCursor: replayCursor || undefined,
+      relay: 'backend_only',
+    },
+    'bridge'
+  );
+
+  let cleaned = false;
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     clearInterval(pingTimer);
     unsubscribe();
+    console.log(
+      '[OPENCODE_SSE_CLIENT_DISCONNECTED]',
+      JSON.stringify({
+        sessionId,
+        orchestratorSessionId,
+        clientId,
+        lastCursor: sseClientState.get(activeConnection.key)?.lastCursor || 0,
+        disconnectedAt: new Date().toISOString(),
+      })
+    );
+    markSseClientDisconnected(activeConnection.key);
     res.end();
   };
 

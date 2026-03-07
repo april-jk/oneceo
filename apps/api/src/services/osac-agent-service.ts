@@ -85,6 +85,39 @@ function isAbortError(error: unknown): boolean {
   return normalized.includes('aborted') || normalized.includes('timeout');
 }
 
+function isRetryablePromptError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  if (isAbortError(error)) return true;
+  if (normalized.includes('fetch failed')) return true;
+  if (normalized.includes('network')) return true;
+  if (normalized.includes('socket hang up')) return true;
+  if (normalized.includes('econnreset')) return true;
+  if (normalized.includes('econnrefused')) return true;
+  if (normalized.includes('etimedout')) return true;
+  if (normalized.includes('eai_again')) return true;
+  const statusMatch = normalized.match(/opencode send prompt failed:\s*(\d{3})/);
+  if (statusMatch) {
+    const status = Number(statusMatch[1]);
+    if ([429, 500, 502, 503, 504].includes(status)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (!error) return 'unknown error';
+  return error instanceof Error ? error.message : String(error);
+}
+
+function preferSandboxPromptDispatch(): boolean {
+  return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'true')
+    .trim()
+    .toLowerCase() !== 'false';
+}
+
 async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
   try {
     await opencodeHttpClient.ensureServerReady(runtime.baseUrl, runtime.trafficAccessToken || undefined);
@@ -122,20 +155,85 @@ async function dispatchPromptInSandbox(
   )}/message${directory}`;
   const payload = JSON.stringify({ parts: input.parts || [] });
   const payloadB64 = Buffer.from(payload, 'utf-8').toString('base64');
-  const logPath = `/tmp/opencode-prompt-${input.opencodeSessionId}.log`;
-  const scriptPath = `/tmp/opencode-prompt-${input.opencodeSessionId}.py`;
-  const command = `cat <<'PY' > ${scriptPath}
-import base64, urllib.request, sys
+  const command = `python3 - <<'PY'
+import base64, json, socket, sys, urllib.parse
 payload = base64.b64decode('${payloadB64}').decode('utf-8')
 url = '${url}'
-req = urllib.request.Request(url, data=payload.encode('utf-8'), headers={'Content-Type':'application/json'})
+body = payload.encode('utf-8')
+parsed = urllib.parse.urlsplit(url)
+host = parsed.hostname or '127.0.0.1'
+port = parsed.port or 80
+path = parsed.path or '/'
+if parsed.query:
+    path += '?' + parsed.query
+request = (
+    f"POST {path} HTTP/1.1\\r\\n"
+    f"Host: {host}:{port}\\r\\n"
+    "Content-Type: application/json\\r\\n"
+    f"Content-Length: {len(body)}\\r\\n"
+    "Connection: close\\r\\n\\r\\n"
+).encode('utf-8') + body
+
+result = {"ok": False, "status": 0, "detail": ""}
 try:
-    urllib.request.urlopen(req, timeout=60).read()
+    sock = socket.create_connection((host, int(port)), timeout=5)
+    try:
+        sock.sendall(request)
+        sock.settimeout(2)
+        head = b""
+        try:
+            head = sock.recv(128)
+        except socket.timeout:
+            head = b""
+        status = 0
+        preview = ""
+        if head:
+            preview = head.decode('utf-8', 'ignore').splitlines()[0][:180]
+            if preview.startswith("HTTP/"):
+                parts = preview.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    status = int(parts[1])
+        # status=0 means response head not observed in short timeout; request is already sent.
+        ok = status == 0 or status < 400 or status == 409
+        result = {"ok": ok, "status": status, "detail": preview}
+    finally:
+        sock.close()
 except Exception as e:
-    sys.stderr.write(str(e))
+    result = {"ok": False, "status": 0, "detail": str(e)}
+print("OCPROMPT_RESULT=" + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+sys.exit(0 if result.get("ok") else 1)
 PY
-nohup python3 ${scriptPath} > ${logPath} 2>&1 &`;
-  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+__oc_prompt_rc=$?
+echo "__OCPROMPT_RC__=\${__oc_prompt_rc}"
+exit 0
+`;
+  const result: any = await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
+  const output = String(result?.stdout || result?.output || '');
+  const rcMatch = output.match(/__OCPROMPT_RC__=(\d+)/);
+  const rc = rcMatch ? Number(rcMatch[1]) : -1;
+  const jsonLine = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('OCPROMPT_RESULT='));
+
+  let ok = false;
+  let status = 0;
+  let detail = '';
+  if (jsonLine) {
+    try {
+      const parsed = JSON.parse(jsonLine.slice('OCPROMPT_RESULT='.length)) as Record<string, unknown>;
+      ok = Boolean(parsed.ok);
+      status = Number(parsed.status || 0);
+      detail = String(parsed.detail || '');
+    } catch (error) {
+      throw new Error(`sandbox prompt result parse failed: ${getErrorMessage(error)}; raw=${output.slice(0, 300)}`);
+    }
+  }
+
+  if (!ok || rc !== 0) {
+    const statusLabel = status ? `status=${status}` : 'status=unknown';
+    throw new Error(`sandbox prompt dispatch failed: ${statusLabel}; rc=${rc}; detail=${detail || 'none'}`);
+  }
 }
 
 export class OsacAgentService {
@@ -471,7 +569,8 @@ PY`;
   ) {
     const runtime = await resolveRuntime(sessionId);
     await ensureOpencodeServer(sessionId, runtime);
-    try {
+
+    const sendViaHttp = async () => {
       await opencodeHttpClient.sendPrompt(
         runtime.baseUrl,
         {
@@ -481,22 +580,74 @@ PY`;
         },
         runtime.trafficAccessToken || undefined
       );
-    } catch (error) {
-      if (!isAbortError(error)) {
-        throw error;
+    };
+
+    const logFallback = String(process.env.OPENCODE_PROMPT_TIMEOUT_LOG || 'false')
+      .trim()
+      .toLowerCase() === 'true';
+
+    if (preferSandboxPromptDispatch()) {
+      try {
+        await dispatchPromptInSandbox(sessionId, {
+          opencodeSessionId: input.opencodeSessionId,
+          parts: input.parts || [],
+          workspacePath: input.workspacePath || runtime.workspaceRoot,
+        });
+      } catch (sandboxError) {
+        const sandboxMessage = getErrorMessage(sandboxError);
+        if (logFallback) {
+          console.warn('[OPENCODE_PROMPT_SANDBOX_FAILED] fallback to http:', sandboxError);
+        }
+        try {
+          await sendViaHttp();
+        } catch (httpError) {
+          const httpMessage = getErrorMessage(httpError);
+          if (!isRetryablePromptError(httpError)) {
+            throw new Error(`opencode prompt failed: sandbox=${sandboxMessage}; http=${httpMessage}`);
+          }
+          await ensureOpencodeServer(sessionId, runtime);
+          try {
+            await sendViaHttp();
+          } catch (retryError) {
+            const retryMessage = getErrorMessage(retryError);
+            throw new Error(
+              `opencode prompt failed after sandbox+http retry: sandbox=${sandboxMessage}; http=${httpMessage}; retry=${retryMessage}`
+            );
+          }
+        }
       }
-      const logTimeout = String(process.env.OPENCODE_PROMPT_TIMEOUT_LOG || 'false')
-        .trim()
-        .toLowerCase() === 'true';
-      if (logTimeout) {
-        console.warn('[OPENCODE_PROMPT_TIMEOUT] fallback to sandbox dispatch:', error);
+    } else {
+      try {
+        await sendViaHttp();
+      } catch (error) {
+        if (!isRetryablePromptError(error)) {
+          throw error;
+        }
+        const primaryError = getErrorMessage(error);
+        if (logFallback) {
+          console.warn('[OPENCODE_PROMPT_FALLBACK] dispatch in sandbox:', error);
+        }
+        try {
+          await dispatchPromptInSandbox(sessionId, {
+            opencodeSessionId: input.opencodeSessionId,
+            parts: input.parts || [],
+            workspacePath: input.workspacePath || runtime.workspaceRoot,
+          });
+        } catch (fallbackError) {
+          const fallbackMessage = getErrorMessage(fallbackError);
+          await ensureOpencodeServer(sessionId, runtime);
+          try {
+            await sendViaHttp();
+          } catch (retryError) {
+            const retryMessage = getErrorMessage(retryError);
+            throw new Error(
+              `opencode prompt failed after fallback: primary=${primaryError}; fallback=${fallbackMessage}; retry=${retryMessage}`
+            );
+          }
+        }
       }
-      await dispatchPromptInSandbox(sessionId, {
-        opencodeSessionId: input.opencodeSessionId,
-        parts: input.parts || [],
-        workspacePath: input.workspacePath || runtime.workspaceRoot,
-      });
     }
+
     osacConnectionManager.emitExternalMessage(
       sessionId,
       buildSyntheticMessage('OPENCODE_PROMPT_ACCEPTED', sessionId, {
@@ -505,7 +656,6 @@ PY`;
     );
     return { opencodeSessionId: input.opencodeSessionId };
   }
-
   listMessages(sessionId: string, limit?: number) {
     return osacConnectionManager.listMessages(sessionId, limit);
   }

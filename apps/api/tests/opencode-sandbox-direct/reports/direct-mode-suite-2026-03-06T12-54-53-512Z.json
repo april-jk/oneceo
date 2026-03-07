@@ -1,0 +1,10 @@
+{
+  "suiteId": "mmewctab",
+  "apiBase": "http://127.0.0.1:4000",
+  "wsUrl": "ws://127.0.0.1:4000/ws/task-creation",
+  "startedAt": "2026-03-06T12:54:53.507Z",
+  "finishedAt": "2026-03-06T12:54:53.511Z",
+  "passed": false,
+  "scenarioResults": [],
+  "error": "connect ECONNREFUSED 127.0.0.1:4000\nError: connect ECONNREFUSED 127.0.0.1:4000\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16)"
+}

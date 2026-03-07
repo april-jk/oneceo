@@ -43,6 +43,16 @@ export async function touchSandbox(sessionId: string, reason: string): Promise<v
   });
 }
 
+export async function markSandboxDirty(sessionId: string, reason: string): Promise<void> {
+  if (!sessionId) return;
+  const now = new Date().toISOString();
+  await updateMetadata(sessionId, {
+    lastActiveAt: now,
+    lastActiveReason: reason,
+    pendingArchiveUpdate: true,
+  });
+}
+
 export async function setSandboxMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void> {
   if (!sessionId) return;
   await updateMetadata(sessionId, patch);

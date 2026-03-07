@@ -1737,6 +1737,61 @@ export class OpencodeRemoteService {
     return latestContent;
   }
 
+  public getLiveTextStreamSnapshots(
+    taskSessionId: string,
+    opencodeSessionId?: string
+  ): Array<{
+    content: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    const matched: OpencodeTextStreamEntry[] = [];
+    for (const entry of this.textStreams.values()) {
+      if (entry.taskSessionId !== taskSessionId) continue;
+      if (opencodeSessionId && entry.opencodeSessionId !== opencodeSessionId) continue;
+      matched.push(entry);
+    }
+    if (matched.length === 0) {
+      return [];
+    }
+
+    matched.sort((a, b) => a.updatedAt - b.updatedAt);
+
+    const snapshots: Array<{
+      content: string;
+      metadata: Record<string, unknown>;
+      createdAt: string;
+    }> = [];
+
+    for (const entry of matched) {
+      const content = (entry.text || '').trim();
+      if (!content) continue;
+      const streamKey = this.buildTextStreamKey(entry.taskSessionId, entry.opencodeSessionId, entry.partId);
+      snapshots.push({
+        content,
+        createdAt: new Date(entry.updatedAt || Date.now()).toISOString(),
+        metadata: {
+          orchestratorSessionId: entry.orchestratorSessionId,
+          opencodeSessionId: entry.opencodeSessionId,
+          eventType: 'message.part.updated',
+          stream: true,
+          streamDelta: false,
+          source: 'stream_live_snapshot',
+          streamKey,
+          partId: entry.partId,
+          timestamp: entry.updatedAt || Date.now(),
+          rawPayload: {
+            eventType: 'message.part.updated',
+            text: content,
+            source: 'stream_live_snapshot',
+          },
+        },
+      });
+    }
+
+    return snapshots;
+  }
+
   private formatRunSummary(artifact: RunArtifact, executionOutput: string): string {
     const tools = Array.from(artifact.toolsUsed || []);
     const toolSnippet = tools.length ? `工具: ${tools.slice(0, 6).join(', ')}${tools.length > 6 ? '…' : ''}` : '工具: 无';

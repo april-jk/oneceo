@@ -1,4 +1,7 @@
 import type { OsacMessage } from '../clients/osac-client';
+import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from './osac-agent-service';
@@ -62,6 +65,18 @@ type RunArtifact = {
   textEvents: number;
   lastText?: string;
   toolsUsed: Set<string>;
+};
+
+type QueuedDbMessage = {
+  walId: string;
+  message: {
+    id: string;
+    sessionId: string;
+    role: NewConversationMessage['role'];
+    content: string;
+    messageType: string;
+    metadata?: Record<string, unknown>;
+  };
 };
 
 function asString(value: unknown): string {
@@ -1002,15 +1017,20 @@ export class OpencodeRemoteService {
   private sessionNoArtifactNudges = new Map<string, number>();
   private sessionTestDispatchedCycle = new Map<string, number>();
   private workspaceBaselines = new Map<string, Set<string>>();
-  private messageQueue: NewConversationMessage[] = [];
+  private messageQueue: QueuedDbMessage[] = [];
   private messageFlushTimer: NodeJS.Timeout | null = null;
   private messageFlushInProgress: Promise<void> = Promise.resolve();
+  private messageWalWriteInProgress: Promise<void> = Promise.resolve();
+  private messageWalRecovered = false;
   private messageFlushIntervalMs =
     toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_INTERVAL_MS) ?? 2000;
   private messageFlushMaxBatch =
     toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_MAX_BATCH) ?? 50;
   private messageFlushMaxQueue =
     toNonNegativeInt(process.env.TASK_CREATION_MESSAGE_FLUSH_MAX_QUEUE) ?? 300;
+  private messageWalPath =
+    asString(process.env.TASK_CREATION_MESSAGE_WAL_PATH) ||
+    path.resolve(process.cwd(), 'data', 'task-creation-message-queue.wal.jsonl');
 
   private buildRunKey(taskSessionId: string, opencodeSessionId: string): string {
     return `${taskSessionId}::${opencodeSessionId}`;
@@ -1084,12 +1104,111 @@ export class OpencodeRemoteService {
     }
   }
 
-  private enqueueDbMessage(message: NewConversationMessage) {
-    this.messageQueue.push(message);
+  private async withWalWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.messageWalWriteInProgress.then(fn, fn);
+    this.messageWalWriteInProgress = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async ensureWalDir() {
+    const dir = path.dirname(this.messageWalPath);
+    await fs.mkdir(dir, { recursive: true });
+  }
+
+  private async appendWalEntry(item: QueuedDbMessage) {
+    await this.withWalWriteLock(async () => {
+      await this.ensureWalDir();
+      await fs.appendFile(this.messageWalPath, `${JSON.stringify(item)}\n`, 'utf-8');
+    });
+  }
+
+  private async rewriteWalFromQueue() {
+    await this.withWalWriteLock(async () => {
+      await this.ensureWalDir();
+      if (this.messageQueue.length === 0) {
+        await fs.writeFile(this.messageWalPath, '', 'utf-8');
+        return;
+      }
+      const serialized = this.messageQueue.map((item) => JSON.stringify(item)).join('\n');
+      await fs.writeFile(this.messageWalPath, `${serialized}\n`, 'utf-8');
+    });
+  }
+
+  private async recoverMessageQueueFromWal() {
+    if (this.messageWalRecovered) return;
+    this.messageWalRecovered = true;
+    try {
+      await this.ensureWalDir();
+      let raw = '';
+      try {
+        raw = await fs.readFile(this.messageWalPath, 'utf-8');
+      } catch (error: any) {
+        if (error?.code !== 'ENOENT') {
+          throw error;
+        }
+        raw = '';
+      }
+      if (!raw.trim()) {
+        return;
+      }
+
+      const recovered: QueuedDbMessage[] = [];
+      const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as { walId?: unknown; message?: unknown };
+          const msg = toRecord(parsed.message);
+          const sessionId = asString(msg.sessionId);
+          const role = asString(msg.role);
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          const messageType = asString(msg.messageType);
+          if (!sessionId || !role || !messageType) continue;
+          recovered.push({
+            walId: asString(parsed.walId) || randomUUID(),
+            message: {
+              id: asString(msg.id) || randomUUID(),
+              sessionId,
+              role: role as NewConversationMessage['role'],
+              content,
+              messageType,
+              metadata: msg.metadata as Record<string, unknown> | undefined,
+            },
+          });
+        } catch {
+          // ignore malformed wal line
+        }
+      }
+
+      if (recovered.length > 0) {
+        this.messageQueue.push(...recovered);
+        void this.flushMessageQueue(true);
+      }
+    } catch (error) {
+      console.warn('[TASK_CREATION_MESSAGE_WAL_RECOVER_FAILED]', error);
+    }
+  }
+
+  private async enqueueDbMessage(message: {
+    id: string;
+    sessionId: string;
+    role: NewConversationMessage['role'];
+    content: string;
+    messageType: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    const queued: QueuedDbMessage = {
+      walId: randomUUID(),
+      message,
+    };
+    this.messageQueue.push(queued);
+    await this.appendWalEntry(queued);
     const maxBatch = this.messageFlushMaxBatch > 0 ? this.messageFlushMaxBatch : 0;
     const maxQueue = this.messageFlushMaxQueue > 0 ? this.messageFlushMaxQueue : 0;
     if ((maxQueue > 0 && this.messageQueue.length >= maxQueue) || (maxBatch > 0 && this.messageQueue.length >= maxBatch)) {
-      void this.flushMessageQueue(true);
+      await this.flushMessageQueue(true);
       return;
     }
     this.scheduleMessageFlush();
@@ -1099,13 +1218,16 @@ export class OpencodeRemoteService {
     if (this.messageQueue.length === 0) return;
     const batchSize = this.messageFlushMaxBatch > 0 ? this.messageFlushMaxBatch : this.messageQueue.length;
     const batch = this.messageQueue.splice(0, batchSize);
+    const batchMessages = batch.map((item) => item.message);
     const run = async () => {
       try {
         await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-        await taskCreationSessionDAO.addMessages(batch);
+        await taskCreationSessionDAO.addMessages(batchMessages);
+        await this.rewriteWalFromQueue();
       } catch (error) {
         console.warn('[TASK_CREATION_MESSAGE_FLUSH_FAILED]', error);
         this.messageQueue.unshift(...batch);
+        await this.rewriteWalFromQueue();
       }
     };
     this.messageFlushInProgress = this.messageFlushInProgress.then(run, run);
@@ -1123,13 +1245,22 @@ export class OpencodeRemoteService {
     metadata?: Record<string, unknown>
   ) {
     await taskCreationFileMemoryStore.addMessage(taskSessionId, role, messageType, content, metadata);
-    this.enqueueDbMessage({
+    await this.enqueueDbMessage({
+      id: randomUUID(),
       sessionId: taskSessionId,
       role,
       content,
       messageType,
       metadata,
     });
+  }
+
+  private async flushPersistenceBarrier(reason: string) {
+    try {
+      await this.flushMessageQueue(true);
+    } catch (error) {
+      console.warn('[TASK_CREATION_PERSISTENCE_BARRIER_FAILED]', reason, error);
+    }
   }
 
   private async detectWorkspaceArtifactsAfterBaseline(
@@ -1979,6 +2110,7 @@ export class OpencodeRemoteService {
   initialize() {
     if (this.initialized) return;
     this.initialized = true;
+    void this.recoverMessageQueueFromWal();
 
     osacConnectionManager.registerMessageHandler(async (orchestratorSessionId, message) => {
       try {
@@ -2321,6 +2453,7 @@ export class OpencodeRemoteService {
           opencodeSessionId: opencodeSessionId || undefined,
         }
       );
+      await this.flushPersistenceBarrier('opencode_error');
       return;
     }
 
@@ -2593,6 +2726,7 @@ export class OpencodeRemoteService {
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
+        await this.flushPersistenceBarrier('direct_completed');
         artifact.completionInProgress = false;
         this.runArtifacts.delete(runKey);
         return;
@@ -2947,6 +3081,7 @@ export class OpencodeRemoteService {
           outcome,
         }
       );
+      await this.flushPersistenceBarrier('completed_status');
 
       await this.notify({
         taskSessionId: session.id,
@@ -2978,6 +3113,7 @@ export class OpencodeRemoteService {
           opencodeSessionId || undefined,
           { persistMode: 'all' }
         );
+        await this.flushPersistenceBarrier('direct_failed');
         this.runArtifacts.delete(runKey);
         return;
       }
@@ -3030,6 +3166,7 @@ export class OpencodeRemoteService {
           tone: 'execution',
         }
       );
+      await this.flushPersistenceBarrier('failed_status');
 
       await this.notify({
         taskSessionId: session.id,

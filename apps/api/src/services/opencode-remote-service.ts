@@ -2540,7 +2540,7 @@ export class OpencodeRemoteService {
         updatedAt: Number(payload.timestamp) || Date.now(),
       });
 
-      if (stream.resetFrom && !this.isDirectSession(session)) {
+      if (stream.resetFrom) {
         const resetMetadata: Record<string, unknown> = {
           orchestratorSessionId,
           opencodeSessionId: textStream.opencodeSessionId,

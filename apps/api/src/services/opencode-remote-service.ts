@@ -2432,8 +2432,10 @@ export class OpencodeRemoteService {
       }
       const content = rawMessage;
       const opencodeSessionId = asString(payload.opencodeSessionId) || session.runtime?.opencodeSessionId;
+      const runKey = opencodeSessionId ? this.buildRunKey(session.id, opencodeSessionId) : '';
       if (opencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
+        this.finalizedRuns.add(runKey);
       }
       await this.flushTextStreams(
         session.id,
@@ -2441,6 +2443,11 @@ export class OpencodeRemoteService {
         opencodeSessionId || undefined,
         { persistMode: 'all' }
       );
+
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'failed',
+        stage: 'failed',
+      });
 
       await this.persistMessage(
         session.id,
@@ -2453,6 +2460,25 @@ export class OpencodeRemoteService {
           opencodeSessionId: opencodeSessionId || undefined,
         }
       );
+
+      await this.notify({
+        taskSessionId: session.id,
+        message: {
+          type: 'status_update',
+          content: 'OpenCode 执行已结束',
+          stage: 'failed',
+          tone: 'error',
+          metadata: {
+            ...payload,
+            orchestratorSessionId,
+            opencodeSessionId: opencodeSessionId || undefined,
+            source: 'opencode_error',
+          },
+        },
+      });
+      if (runKey) {
+        this.runArtifacts.delete(runKey);
+      }
       await this.flushPersistenceBarrier('opencode_error');
       return;
     }
@@ -2465,6 +2491,13 @@ export class OpencodeRemoteService {
       '';
     if (opencodeSessionId) {
       this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
+    }
+    if (session.stage !== 'executing' && session.stage !== 'reviewing' && session.stage !== 'completed' && session.stage !== 'failed') {
+      await taskCreationFileMemoryStore.updateSessionState(session.id, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: session.phase ? (session.phase as any) : 'development',
+      });
     }
     const eventProps = normalizeRecord(event.properties);
     const shouldFetchDiff =
@@ -2576,11 +2609,16 @@ export class OpencodeRemoteService {
           textStream.opencodeSessionId,
           stream.streamKey
         );
-        return;
+        if (!outcome) {
+          return;
+        }
+      } else {
+        this.scheduleStreamBroadcast(session.id, stream.streamKey);
+        this.scheduleStreamCheckpoint(session.id, orchestratorSessionId, textStream.opencodeSessionId, stream.streamKey);
+        if (!outcome) {
+          return;
+        }
       }
-      this.scheduleStreamBroadcast(session.id, stream.streamKey);
-      this.scheduleStreamCheckpoint(session.id, orchestratorSessionId, textStream.opencodeSessionId, stream.streamKey);
-      return;
     }
 
     const summary = summarizeOpencodeEvent(eventType, payload);
@@ -2726,7 +2764,37 @@ export class OpencodeRemoteService {
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'completed',
+          stage: 'completed',
+          phase: session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery',
+        });
+        await this.persistMessage(
+          session.id,
+          'agent',
+          'opencode_status',
+          'OpenCode 执行完成',
+          {
+            ...metadata,
+            outcome,
+            source: 'direct_completed',
+          }
+        );
         await this.flushPersistenceBarrier('direct_completed');
+        await this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'status_update',
+            content: 'OpenCode 执行完成',
+            stage: 'completed',
+            tone: 'execution',
+            metadata: {
+              ...metadata,
+              outcome,
+              source: 'direct_completed',
+            },
+          },
+        });
         artifact.completionInProgress = false;
         this.runArtifacts.delete(runKey);
         return;
@@ -3113,7 +3181,36 @@ export class OpencodeRemoteService {
           opencodeSessionId || undefined,
           { persistMode: 'all' }
         );
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'failed',
+          stage: 'failed',
+        });
+        await this.persistMessage(
+          session.id,
+          'agent',
+          'opencode_error',
+          'OpenCode 执行失败',
+          {
+            ...metadata,
+            outcome,
+            source: 'direct_failed',
+          }
+        );
         await this.flushPersistenceBarrier('direct_failed');
+        await this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'status_update',
+            content: 'OpenCode 执行已结束',
+            stage: 'failed',
+            tone: 'error',
+            metadata: {
+              ...metadata,
+              outcome,
+              source: 'direct_failed',
+            },
+          },
+        });
         this.runArtifacts.delete(runKey);
         return;
       }

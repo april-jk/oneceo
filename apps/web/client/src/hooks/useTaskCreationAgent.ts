@@ -469,7 +469,7 @@ function shouldDisplayOpencodeEvent(metadata: Record<string, unknown>, content?:
   }
 
   if (eventType === 'message.final') {
-    return true;
+    return Boolean(text);
   }
 
   if (

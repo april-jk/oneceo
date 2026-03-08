@@ -6,6 +6,7 @@ import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/da
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { ensureDatabaseConnection } from '../config/database';
 import { touchSandbox } from './sandbox-activity-service';
+import { sessionConnectorService } from './session-connector-service';
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
@@ -730,6 +731,10 @@ export class OpencodeEventStreamService {
                   timestamp: Number(payloadRecord.timestamp || Date.now()),
                 };
                 void touchSandbox(input.orchestratorSessionId, 'opencode_sse_event');
+                void sessionConnectorService.noteUsageFromEvent(
+                  input.orchestratorSessionId,
+                  fastEvent
+                );
                 this.emitFast(input.orchestratorSessionId, fastPayload);
                 this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 osacConnectionManager.emitExternalMessage(input.orchestratorSessionId, message);

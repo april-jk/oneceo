@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Mic, Plug, Send, Plus, Sparkles } from "lucide-react";
+import { Mic, Send, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
@@ -22,7 +22,6 @@ import UserMenu from "@/components/UserMenu";
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
 
   const goToNewTask = (input: string) => {
@@ -110,19 +109,7 @@ export default function HomePage() {
                       <TooltipContent><p>Add attachment</p></TooltipContent>
                     </Tooltip>
 
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted"
-                          onClick={() => setShowConnector(true)}
-                        >
-                          <Plug className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent><p>Connector</p></TooltipContent>
-                    </Tooltip>
+                    <ConnectorDialog />
 
                     <DropdownMenu>
                       <Tooltip>
@@ -198,8 +185,6 @@ export default function HomePage() {
         </motion.div>
       </div>
 
-      <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
     </div>
   );
 }
-

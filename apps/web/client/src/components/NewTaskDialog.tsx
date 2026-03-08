@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Mic, Plug, Send, Plus } from "lucide-react";
+import { Mic, Send, Plus } from "lucide-react";
 import { useState } from "react";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import TaskCreationChat from "@/components/TaskCreationChat";
@@ -29,7 +29,6 @@ interface NewTaskDialogProps {
 
 export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps) {
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
   const [showAgentChat, setShowAgentChat] = useState(false);
   const [initialAgentInput, setInitialAgentInput] = useState("");
 
@@ -106,22 +105,7 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                             </TooltipContent>
                           </Tooltip>
 
-                          {/* Connector Button */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                onClick={() => setShowConnector(true)}
-                              >
-                                <Plug className="w-4 h-4 text-muted-foreground" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Connector</p>
-                            </TooltipContent>
-                          </Tooltip>
+                          <ConnectorDialog />
                         </div>
 
                         {/* Right Side Actions */}
@@ -200,8 +184,6 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
         </DialogContent>
       </Dialog>
 
-      {/* Connector Dialog */}
-      <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
     </>
   );
 }

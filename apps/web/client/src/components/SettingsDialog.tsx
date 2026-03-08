@@ -1,20 +1,50 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useSearch } from 'wouter';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
-import { Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
+import { Plug, Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
+import { ConnectorCenterPanel } from '@/components/ConnectorCenterPanel';
+import {
+  OPEN_SETTINGS_DIALOG_EVENT,
+  type OpenSettingsDialogDetail,
+  type SettingsTab,
+} from '@/lib/settings-dialog-events';
+import type { ConnectorKey } from '@/lib/connectors-client';
 
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  activeTab: SettingsTab;
+  onActiveTabChange: (tab: SettingsTab) => void;
+  connectorTargetSessionId?: string | null;
+  highlightedConnector?: ConnectorKey | null;
 }
 
-export function SettingsPanel() {
+type SettingsPanelProps = {
+  activeTab: SettingsTab;
+  onActiveTabChange: (tab: SettingsTab) => void;
+  connectorTargetSessionId?: string | null;
+  highlightedConnector?: ConnectorKey | null;
+};
+
+const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'connectors'];
+
+function isSettingsTab(value: string | null | undefined): value is SettingsTab {
+  return Boolean(value && SETTINGS_TABS.includes(value as SettingsTab));
+}
+
+export function SettingsPanel({
+  activeTab,
+  onActiveTabChange,
+  connectorTargetSessionId,
+  highlightedConnector,
+}: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
@@ -61,7 +91,11 @@ export function SettingsPanel() {
 
   return (
     <div className="h-full">
-      <Tabs defaultValue="settings" className="h-full">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => onActiveTabChange(value as SettingsTab)}
+        className="h-full"
+      >
         <div className="flex h-full flex-col md:flex-row">
           <aside className="md:w-[240px] shrink-0 border-b md:border-b-0 md:border-r border-border bg-muted/30 flex flex-col min-h-0">
             <div className="hidden md:flex items-center px-6 pt-6 pb-4">
@@ -96,6 +130,15 @@ export function SettingsPanel() {
                       <Settings2 className="h-4 w-4" />
                     </span>
                     <span className="truncate">{t('settings.settingsTab')}</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="connectors"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Plug className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">Connectors</span>
                   </TabsTrigger>
                 </div>
               </TabsList>
@@ -279,6 +322,13 @@ export function SettingsPanel() {
                   </Button>
                 </div>
               </TabsContent>
+
+              <TabsContent value="connectors" className="mt-0 h-full">
+                <ConnectorCenterPanel
+                  targetSessionId={connectorTargetSessionId}
+                  highlightedConnector={highlightedConnector}
+                />
+              </TabsContent>
             </div>
           </div>
         </div>
@@ -287,8 +337,14 @@ export function SettingsPanel() {
   );
 }
 
-export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const { t } = useTranslation();
+export function SettingsDialog({
+  open,
+  onOpenChange,
+  activeTab,
+  onActiveTabChange,
+  connectorTargetSessionId,
+  highlightedConnector,
+}: SettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -302,9 +358,73 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <X className="h-5 w-5" />
         </button>
         <div className="flex-1 min-h-0">
-          <SettingsPanel />
+          <SettingsPanel
+            activeTab={activeTab}
+            onActiveTabChange={onActiveTabChange}
+            connectorTargetSessionId={connectorTargetSessionId}
+            highlightedConnector={highlightedConnector}
+          />
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+export function GlobalSettingsDialogHost() {
+  const search = useSearch();
+  const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('settings');
+  const [connectorTargetSessionId, setConnectorTargetSessionId] = useState<string | null>(null);
+  const [highlightedConnector, setHighlightedConnector] = useState<ConnectorKey | null>(null);
+
+  const searchState = useMemo(() => {
+    const params = new URLSearchParams(search);
+    return {
+      shouldOpen:
+        params.get('settings') === 'open' ||
+        params.get('settingsTab') === 'connectors' ||
+        params.get('connector_oauth') === '1',
+      settingsTab: params.get('settingsTab'),
+      targetSessionId: params.get('targetSessionId'),
+      connector: params.get('connector'),
+    };
+  }, [search]);
+
+  useEffect(() => {
+    const handleOpen = (event: Event) => {
+      const detail =
+        (event as CustomEvent<OpenSettingsDialogDetail>).detail || {};
+      setOpen(true);
+      setActiveTab(detail.tab || 'settings');
+      setConnectorTargetSessionId(detail.targetSessionId || null);
+      setHighlightedConnector((detail.connectorKey as ConnectorKey | null) || null);
+    };
+    window.addEventListener(OPEN_SETTINGS_DIALOG_EVENT, handleOpen as EventListener);
+    return () => {
+      window.removeEventListener(OPEN_SETTINGS_DIALOG_EVENT, handleOpen as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!searchState.shouldOpen) return;
+    setOpen(true);
+    setActiveTab(
+      isSettingsTab(searchState.settingsTab) ? searchState.settingsTab : 'connectors'
+    );
+    setConnectorTargetSessionId(searchState.targetSessionId || null);
+    setHighlightedConnector(
+      (searchState.connector as ConnectorKey | null) || null
+    );
+  }, [searchState]);
+
+  return (
+    <SettingsDialog
+      open={open}
+      onOpenChange={setOpen}
+      activeTab={activeTab}
+      onActiveTabChange={setActiveTab}
+      connectorTargetSessionId={connectorTargetSessionId}
+      highlightedConnector={highlightedConnector}
+    />
   );
 }

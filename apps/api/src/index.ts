@@ -9,12 +9,14 @@ import taskCreationRoutes from './routes/task-creation-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
+import connectorRoutes from './routes/connector-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { startSandboxArchiveJob } from './services/sandbox-archive-job';
+import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 
 function mergeNoProxy(entries: string[], current?: string): string {
   const normalized = (current || '')
@@ -113,6 +115,7 @@ app.use('/api/task-creation', taskCreationRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
+app.use('/api/connectors', connectorRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -220,6 +223,8 @@ httpServer.listen(PORT, () => {
   void testDatabaseConnection({ retries: 5, delayMs: 1500 });
   // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
   void osacPersistentRecoveryService.recoverReadySessions();
+  // 预热连接器相关表，避免首次访问时因未迁移报错
+  void connectorStorageBootstrap.ensureReady();
   // 启动 Sandbox 空闲归档任务
   startSandboxArchiveJob();
   

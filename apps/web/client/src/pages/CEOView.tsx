@@ -14,7 +14,6 @@ import {
   FolderOpen,
   Target,
   Plus,
-  Plug,
   Mic,
   Send,
   Sparkles,
@@ -89,7 +88,6 @@ const mockProjects = [
 
 export default function CEOView() {
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const projects = mockProjects;
 
@@ -277,22 +275,7 @@ export default function CEOView() {
                           </TooltipContent>
                         </Tooltip>
 
-                        {/* Connector Button */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                              onClick={() => setShowConnector(true)}
-                            >
-                              <Plug className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Connector</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <ConnectorDialog />
 
                         {/* Model Selection Button */}
                         <DropdownMenu>
@@ -393,12 +376,6 @@ export default function CEOView() {
           </div>
         </div>
       </div>
-
-      {/* Connector Dialog */}
-      <ConnectorDialog
-        open={showConnector}
-        onOpenChange={setShowConnector}
-      />
     </WorkspaceLayout>
   );
 }

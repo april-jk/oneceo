@@ -59,6 +59,26 @@ export class TaskCreationSessionDAO {
   }
 
   /**
+   * 如果会话尚未绑定用户，则绑定到当前用户
+   */
+  async bindUserIfMissing(sessionId: string, userId: string) {
+    const session = await this.getSession(sessionId);
+    if (!session) return null;
+    if (session.userId && session.userId.trim()) {
+      return session;
+    }
+    const [updated] = await db
+      .update(taskCreationSessions)
+      .set({
+        userId,
+        updatedAt: new Date(),
+      })
+      .where(eq(taskCreationSessions.id, sessionId))
+      .returning();
+    return updated;
+  }
+
+  /**
    * 更新会话状态
    */
   async updateSessionStatus(
@@ -81,7 +101,7 @@ export class TaskCreationSessionDAO {
   /**
    * 添加对话消息
    */
-  async addMessage(data: NewConversationMessage) {
+  async addMessage(data: Omit<NewConversationMessage, 'id'> & { id?: string }) {
     const [message] = await db
       .insert(conversationMessages)
       .values({
@@ -96,7 +116,7 @@ export class TaskCreationSessionDAO {
   /**
    * 批量添加对话消息
    */
-  async addMessages(data: NewConversationMessage[]) {
+  async addMessages(data: Array<Omit<NewConversationMessage, 'id'> & { id?: string }>) {
     if (!Array.isArray(data) || data.length === 0) {
       return [];
     }
@@ -127,7 +147,7 @@ export class TaskCreationSessionDAO {
   /**
    * 保存意图识别结果
    */
-  async saveIntentResult(data: NewIntentRecognitionResult) {
+  async saveIntentResult(data: Omit<NewIntentRecognitionResult, 'id'> & { id?: string }) {
     const [result] = await db
       .insert(intentRecognitionResults)
       .values({
@@ -156,7 +176,7 @@ export class TaskCreationSessionDAO {
   /**
    * 保存任务描述
    */
-  async saveTaskDescription(data: NewTaskDescription) {
+  async saveTaskDescription(data: Omit<NewTaskDescription, 'id'> & { id?: string }) {
     const [description] = await db
       .insert(taskDescriptions)
       .values({
@@ -185,7 +205,7 @@ export class TaskCreationSessionDAO {
   /**
    * 保存执行计划
    */
-  async saveExecutionPlan(data: NewExecutionPlan) {
+  async saveExecutionPlan(data: Omit<NewExecutionPlan, 'id'> & { id?: string }) {
     const [plan] = await db
       .insert(executionPlans)
       .values({
@@ -214,7 +234,7 @@ export class TaskCreationSessionDAO {
   /**
    * 保存搜索记录
    */
-  async saveSearchRecord(data: NewSearchRecord) {
+  async saveSearchRecord(data: Omit<NewSearchRecord, 'id'> & { id?: string }) {
     const [record] = await db
       .insert(searchRecords)
       .values({

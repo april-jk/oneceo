@@ -8,6 +8,8 @@ import { osacConnectionManager } from './osac-connection-manager';
 import { opencodeEventStreamService } from './opencode-event-stream-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { auditOsacAction } from '../utils/osac-audit';
+import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
+import { sessionConnectorService } from './session-connector-service';
 
 type OpencodePartInput = {
   type: string;
@@ -388,6 +390,7 @@ PY`;
     const cwd = typeof options.cwd === 'string' ? options.cwd : '';
     const envs = (options.envs as Record<string, string>) || undefined;
     let command = input.command;
+    await touchSandbox(sessionId, 'sdk_execute_command');
     if (shell) {
       command = `/bin/bash -lc ${shellEscape(input.command)}`;
     }
@@ -408,6 +411,8 @@ PY`;
           ? result.status
           : undefined;
     const status = exitCode === undefined || exitCode === 0 ? 'completed' : 'failed';
+    await touchSandbox(sessionId, 'sdk_execute_result');
+    await markSandboxDirty(sessionId, 'sdk_execute_command');
     const messages: OsacMessage[] = [
       {
         type: 'COMMAND_OUTPUT',
@@ -423,6 +428,7 @@ PY`;
   }
 
   async getSessionList(sessionId: string, input?: { maxCount?: number; format?: string }) {
+    await touchSandbox(sessionId, 'sdk_get_session_list');
     const runtime = await resolveRuntime(sessionId);
     const query: Record<string, string> = {};
     if (input?.maxCount) query.limit = String(input.maxCount);
@@ -440,6 +446,7 @@ PY`;
   }
 
   async getSessionDetails(sessionId: string, opencodeSessionId: string) {
+    await touchSandbox(sessionId, 'sdk_get_session_details');
     const runtime = await resolveRuntime(sessionId);
     const response = await opencodeHttpClient.doRequest(
       runtime.baseUrl,
@@ -453,6 +460,7 @@ PY`;
   }
 
   async getSessionDiff(sessionId: string, opencodeSessionId: string) {
+    await touchSandbox(sessionId, 'sdk_get_session_diff');
     const runtime = await resolveRuntime(sessionId);
     return opencodeHttpClient.getSessionDiff(
       runtime.baseUrl,
@@ -472,6 +480,7 @@ PY`;
       workspacePath?: string;
     }
   ): Promise<OpencodeHttpResponse> {
+    await touchSandbox(sessionId, 'sdk_opencode_http_request');
     const runtime = await resolveRuntime(sessionId);
     const response = await opencodeHttpClient.doRequest(
       runtime.baseUrl,
@@ -484,6 +493,7 @@ PY`;
       },
       runtime.trafficAccessToken || undefined
     );
+    await touchSandbox(sessionId, 'sdk_opencode_http_response');
     return {
       status: response.status,
       headers: response.headers,
@@ -506,15 +516,72 @@ PY`;
 
   async addMcpServer(
     sessionId: string,
-    _input?: { serverName: string; serverConfig: Record<string, unknown>; overwrite?: boolean }
+    input?: { serverName: string; serverConfig: Record<string, unknown>; overwrite?: boolean }
   ) {
     auditOsacAction('ADD_MCP_SERVER', { sessionId });
-    throw new Error('E2B 模式不支持 OSAC MCP 管理');
+    if (!input?.serverName || !input?.serverConfig) {
+      throw new Error('缺少 serverName 或 serverConfig');
+    }
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    const response = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
+        method: 'POST',
+        path: '/mcp',
+        body: JSON.stringify({
+          name: input.serverName,
+          config: input.serverConfig,
+          overwrite: input.overwrite,
+        }),
+      },
+      runtime.trafficAccessToken || undefined
+    );
+    if (response.status < 200 || response.status >= 300) {
+      const body = String(response.body || '').toLowerCase();
+      if (response.status !== 409 && !body.includes('already') && !body.includes('exists')) {
+        throw new Error(response.body || `添加 MCP 失败: ${response.status}`);
+      }
+    }
+    const connectResponse = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
+        method: 'POST',
+        path: `/mcp/${encodeURIComponent(input.serverName)}/connect`,
+      },
+      runtime.trafficAccessToken || undefined
+    );
+    if (connectResponse.status < 200 || connectResponse.status >= 300) {
+      throw new Error(connectResponse.body || `连接 MCP 失败: ${connectResponse.status}`);
+    }
+    return {
+      serverName: input.serverName,
+      status: 'connected',
+    };
   }
 
-  async removeMcpServer(sessionId: string, _serverName?: string) {
+  async removeMcpServer(sessionId: string, serverName?: string) {
     auditOsacAction('REMOVE_MCP_SERVER', { sessionId });
-    throw new Error('E2B 模式不支持 OSAC MCP 管理');
+    if (!serverName) {
+      throw new Error('缺少 serverName');
+    }
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    const response = await opencodeHttpClient.doRequest(
+      runtime.baseUrl,
+      {
+        method: 'POST',
+        path: `/mcp/${encodeURIComponent(serverName)}/disconnect`,
+      },
+      runtime.trafficAccessToken || undefined
+    );
+    if (response.status >= 400 && response.status !== 404) {
+      throw new Error(response.body || `卸载 MCP 失败: ${response.status}`);
+    }
+    return {
+      serverName,
+      status: 'disconnected',
+    };
   }
 
   async initiateUpdate(
@@ -526,6 +593,7 @@ PY`;
   }
 
   async ensureOpencodeServer(sessionId: string, input?: { host?: string; port?: number; workspacePath?: string }) {
+    await touchSandbox(sessionId, 'ensure_opencode_server');
     const runtime = await resolveRuntime(sessionId);
     await ensureOpencodeServer(sessionId, runtime);
     await opencodeEventStreamService.ensureStream({
@@ -534,6 +602,7 @@ PY`;
       workspaceRoot: runtime.workspaceRoot || input?.workspacePath,
       trafficAccessToken: runtime.trafficAccessToken || undefined,
     });
+    await sessionConnectorService.reconcileByOrchestratorSessionId(sessionId);
     osacConnectionManager.emitExternalMessage(
       sessionId,
       buildSyntheticMessage('OPENCODE_SERVER_READY', sessionId, {
@@ -544,6 +613,7 @@ PY`;
   }
 
   async createOpencodeSession(sessionId: string, input?: { workspacePath?: string; title?: string }) {
+    await touchSandbox(sessionId, 'create_opencode_session');
     const runtime = await resolveRuntime(sessionId);
     await ensureOpencodeServer(sessionId, runtime);
     const result = await opencodeHttpClient.createSession(
@@ -560,6 +630,7 @@ PY`;
         opencodeSessionId: result.id,
       })
     );
+    await touchSandbox(sessionId, 'opencode_session_created');
     return { opencodeSessionId: result.id };
   }
 
@@ -567,6 +638,7 @@ PY`;
     sessionId: string,
     input: { opencodeSessionId: string; parts: OpencodePartInput[]; workspacePath?: string }
   ) {
+    await touchSandbox(sessionId, 'send_opencode_prompt');
     const runtime = await resolveRuntime(sessionId);
     await ensureOpencodeServer(sessionId, runtime);
 
@@ -654,6 +726,7 @@ PY`;
         opencodeSessionId: input.opencodeSessionId,
       })
     );
+    await touchSandbox(sessionId, 'opencode_prompt_accepted');
     return { opencodeSessionId: input.opencodeSessionId };
   }
   listMessages(sessionId: string, limit?: number) {

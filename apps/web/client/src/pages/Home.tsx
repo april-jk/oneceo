@@ -13,7 +13,6 @@ import WorkspaceLayout from "@/components/WorkspaceLayout";
 import ProjectDetail from "./ProjectDetail";
 import {
   Mic,
-  Plug,
   Send,
   Plus,
   Sparkles,
@@ -54,7 +53,6 @@ export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [mode, setMode] = useState<PageMode>('input');
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -348,22 +346,7 @@ export default function Home() {
                               </TooltipContent>
                             </Tooltip>
 
-                            {/* Connector Button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                  onClick={() => setShowConnector(true)}
-                                >
-                                  <Plug className="w-4 h-4 text-muted-foreground" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Connector</p>
-                              </TooltipContent>
-                            </Tooltip>
+                            <ConnectorDialog sessionId={sessionId} />
 
                             {/* Model Selection Button */}
                             <DropdownMenu>
@@ -610,21 +593,7 @@ export default function Home() {
                                       </TooltipContent>
                                     </Tooltip>
 
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                          onClick={() => setShowConnector(true)}
-                                        >
-                                          <Plug className="w-4 h-4 text-muted-foreground" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>Connector</p>
-                                      </TooltipContent>
-                                    </Tooltip>
+                                    <ConnectorDialog sessionId={sessionId} />
 
                                     <DropdownMenu>
                                       <Tooltip>
@@ -739,9 +708,6 @@ export default function Home() {
           </AnimatePresence>
         </div>
       )}
-
-      {/* Connector Dialog */}
-      <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
       <TaskRuntimeDrawer
         open={showRuntimeDrawer}
         onOpenChange={setShowRuntimeDrawer}

@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ATTACHMENT_ACCEPT } from "@/lib/task-attachments";
 
 type AttachmentPickerButtonProps = {
   onSelectFiles: (files: File[]) => void;
@@ -23,6 +24,7 @@ export default function AttachmentPickerButton({
         ref={inputRef}
         type="file"
         multiple
+        accept={ATTACHMENT_ACCEPT}
         className="hidden"
         onChange={(event) => {
           const files = Array.from(event.target.files || []);

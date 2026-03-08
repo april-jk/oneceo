@@ -2595,12 +2595,13 @@ export class OpencodeRemoteService {
       }
 
       const eventPreview = buildEventPreview(event);
+      const streamTimestamp = Number(payload.timestamp) || Date.now();
       const metadata: Record<string, unknown> = {
         orchestratorSessionId,
         opencodeSessionId: textStream.opencodeSessionId,
         eventType,
         seq: payload.seq,
-        timestamp: payload.timestamp,
+        timestamp: streamTimestamp,
         event: eventPreview,
         rawPayload: buildRawPayloadPreview(eventType, eventPreview),
         stream: true,
@@ -2676,12 +2677,13 @@ export class OpencodeRemoteService {
     }
 
     const eventPreview = buildEventPreview(event);
+    const eventTimestamp = Number(payload.timestamp) || Date.now();
     const metadata: Record<string, unknown> = {
       orchestratorSessionId,
       opencodeSessionId: opencodeSessionId || undefined,
       eventType,
       seq: payload.seq,
-      timestamp: payload.timestamp,
+      timestamp: eventTimestamp,
       event: eventPreview,
       rawPayload: buildRawPayloadPreview(eventType, eventPreview),
     };

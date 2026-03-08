@@ -66,7 +66,8 @@ export class TaskCreationService {
     userInput: string,
     userId?: string,
     sessionId?: string,
-    messageType: 'user_input' | 'user_response' = 'user_input'
+    messageType: 'user_input' | 'user_response' = 'user_input',
+    metadata?: Record<string, unknown>
   ): Promise<ExecutionPlan> {
     try {
       this.sessionId = sessionId;
@@ -112,6 +113,7 @@ export class TaskCreationService {
             role: 'user',
             content: userInput,
             messageType,
+            metadata: metadata || undefined,
           })
       );
 

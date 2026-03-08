@@ -1,4 +1,5 @@
 import { getApiBaseUrl, getTaskCreationWsUrl } from "@/lib/runtime-config";
+import { buildClientIdentityHeaders } from "@/lib/client-identity";
 
 export type TaskCreationSessionSummary = {
   id: string;
@@ -33,6 +34,14 @@ export type TaskCreationRuntimeStatus = {
   sandboxId?: string;
 };
 
+export type TaskCreationUploadedAttachment = {
+  name: string;
+  path: string;
+  size: number;
+  mimeType?: string;
+  uploadedAt?: string;
+};
+
 export type TaskCreationDebugInfo = {
   ready: boolean;
   url?: string;
@@ -54,6 +63,13 @@ export type TaskCreationSessionDetail = {
     updatedAt?: string;
   };
   runtimeStatus?: TaskCreationRuntimeStatus | null;
+  connectorsSummary?: {
+    total?: number;
+    attached?: number;
+    active?: number;
+    needsAuth?: number;
+    failed?: number;
+  } | null;
 };
 
 export type OsacMessagePayload = Record<string, unknown>;
@@ -98,8 +114,11 @@ export type WorkspaceFile = {
   binaryTooLarge?: boolean;
 };
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: buildClientIdentityHeaders(init?.headers),
+  });
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -143,6 +162,27 @@ export async function listTaskCreationMessages(sessionId: string): Promise<TaskC
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/draft`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      title: title || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionDetail };
+  if (!result?.data) {
+    throw new Error("draft session empty");
+  }
+  return result.data;
+}
+
 export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
@@ -160,7 +200,10 @@ export async function getTaskCreationDebugInfo(sessionId: string): Promise<TaskC
 export async function startTaskCreationDebug(sessionId: string): Promise<TaskCreationDebugInfo | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/debug/start`;
-  const response = await fetch(url, { method: "POST" });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders(),
+  });
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -175,7 +218,10 @@ export async function startTaskCreationRuntime(sessionId: string): Promise<{
 }> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/start`;
-  const response = await fetch(url, { method: "POST" });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders(),
+  });
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -186,7 +232,10 @@ export async function startTaskCreationRuntime(sessionId: string): Promise<{
 export async function touchTaskCreationRuntime(sessionId: string): Promise<void> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/touch`;
-  const response = await fetch(url, { method: "POST" });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders(),
+  });
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -271,6 +320,31 @@ export async function getWorkspaceFile(sessionId: string, filePath: string): Pro
   const result = await fetchJson<{ data?: WorkspaceFile }>(url);
   if (!result?.data) {
     throw new Error("workspace file empty");
+  }
+  return result.data;
+}
+
+export async function uploadTaskCreationAttachment(
+  sessionId: string,
+  file: File
+): Promise<TaskCreationUploadedAttachment> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/attachments`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Attachment-Name": encodeURIComponent(file.name),
+      "X-Attachment-Size": String(file.size),
+    }),
+    body: file,
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationUploadedAttachment };
+  if (!result?.data) {
+    throw new Error("attachment upload empty");
   }
   return result.data;
 }

@@ -12,13 +12,39 @@ import { useEffect, useRef, useState } from "react";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { motion, AnimatePresence } from "framer-motion";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
+import {
+  appendAttachmentsToPrompt,
+  DEFAULT_ATTACHMENT_PROMPT,
+  type UploadedTaskAttachment,
+} from "@/lib/task-attachments";
+import { toast } from "sonner";
 
 interface TaskCreationChatProps {
   onPlanGenerated?: (plan: any) => void;
   initialInput?: string;
+  initialAttachments?: File[];
 }
 
-export default function TaskCreationChat({ onPlanGenerated, initialInput }: TaskCreationChatProps) {
+function getMessageAttachments(message: AgentMessage): UploadedTaskAttachment[] {
+  const raw = message?.metadata?.attachments;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is UploadedTaskAttachment => {
+    return (
+      !!item &&
+      typeof item === "object" &&
+      typeof item.name === "string" &&
+      typeof item.size === "number"
+    );
+  });
+}
+
+export default function TaskCreationChat({
+  onPlanGenerated,
+  initialInput,
+  initialAttachments = [],
+}: TaskCreationChatProps) {
   const [userAnswer, setUserAnswer] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const hasSentInitialInputRef = useRef(false);
@@ -29,21 +55,55 @@ export default function TaskCreationChat({ onPlanGenerated, initialInput }: Task
     messages,
     sessionId,
     currentQuestion,
-    sendUserInput,
+    sendChatInput,
+    ensureSession,
     answerQuestion,
   } = useTaskCreationAgent({
     onPlanGenerated,
     onError: (error) => {
       console.error("任务创建失败:", error);
+      toast.error(error);
     },
   });
 
   useEffect(() => {
-    if (isConnected && initialInput && !hasSentInitialInputRef.current) {
-      sendUserInput(initialInput);
-      hasSentInitialInputRef.current = true;
+    if (!isConnected || hasSentInitialInputRef.current) {
+      return;
     }
-  }, [isConnected, initialInput, sendUserInput]);
+
+    const text = initialInput?.trim() || "";
+    const hasAttachments = initialAttachments.length > 0;
+    const baseText = text || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!baseText) {
+      return;
+    }
+
+    hasSentInitialInputRef.current = true;
+    void (async () => {
+      let targetSessionId = (sessionId || "").trim() || undefined;
+      let uploadedAttachments: UploadedTaskAttachment[] = [];
+
+      if (hasAttachments) {
+        targetSessionId = await ensureSession(text || "已添加附件");
+        uploadedAttachments = await Promise.all(
+          initialAttachments.map((file) => uploadTaskCreationAttachment(targetSessionId!, file))
+        );
+      }
+
+      await sendChatInput(appendAttachmentsToPrompt(baseText, uploadedAttachments), {
+        sessionId: targetSessionId,
+        metadata: uploadedAttachments.length
+          ? {
+              attachments: uploadedAttachments,
+              originalInput: text || "已添加附件",
+            }
+          : undefined,
+      });
+    })().catch((error) => {
+      console.error("任务创建附件发送失败:", error);
+      toast.error(error instanceof Error ? error.message : "附件发送失败");
+    });
+  }, [ensureSession, initialAttachments, initialInput, isConnected, sendChatInput, sessionId]);
 
   const handleAnswerSubmit = () => {
     if (userAnswer.trim()) {
@@ -174,6 +234,8 @@ export default function TaskCreationChat({ onPlanGenerated, initialInput }: Task
  * 消息卡片组件
  */
 function MessageCard({ message }: { message: AgentMessage }) {
+  const attachments = getMessageAttachments(message);
+
   const getAgentName = (agent?: string) => {
     const nameMap: Record<string, string> = {
       system: "系统",
@@ -234,6 +296,9 @@ function MessageCard({ message }: { message: AgentMessage }) {
             {getAgentName(message.agent)}
           </p>
           <p className="text-sm text-muted-foreground mt-1">{message.content}</p>
+          {attachments.length ? (
+            <AttachmentChipList attachments={attachments} className="mt-3" />
+          ) : null}
         </div>
       </div>
     </Card>

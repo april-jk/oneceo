@@ -6,15 +6,14 @@
  */
 
 import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import ProjectDetail from "./ProjectDetail";
 import {
   Mic,
   Send,
-  Plus,
   Sparkles,
   Loader2,
   FilePlus,
@@ -37,11 +36,24 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
+import {
+  uploadTaskCreationAttachment,
+} from "@/lib/task-creation-client";
+import {
+  appendAttachmentsToPrompt,
+  consumePendingDraftAttachments,
+  DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  type PendingAttachment,
+  type UploadedTaskAttachment,
+} from "@/lib/task-attachments";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -53,6 +65,7 @@ export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [mode, setMode] = useState<PageMode>('input');
   const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -78,6 +91,7 @@ export default function Home() {
     runtime,
     sendChatInput,
     answerQuestion,
+    ensureSession,
   } = useTaskCreationAgent({
     autoRuntime: !isHistoryView,
     compactHistory: false,
@@ -130,13 +144,20 @@ export default function Home() {
   }, [location, search, sessionIdFromPath]);
 
   useEffect(() => {
-    if (!pendingInputRef.current) {
+    if (!isConnected || !pendingInputRef.current) {
       return;
     }
     const input = pendingInputRef.current;
     pendingInputRef.current = null;
-    void sendChatInput(input);
-  }, [sendChatInput]);
+    void submitPrompt(input);
+  }, [isConnected]);
+
+  useEffect(() => {
+    const pendingFiles = consumePendingDraftAttachments();
+    if (!pendingFiles.length) return;
+    const merged = mergePendingAttachments([], pendingFiles);
+    setAttachments(merged.attachments);
+  }, []);
 
   const exitHistoryView = () => {
     if (!isHistoryView) return;
@@ -148,21 +169,71 @@ export default function Home() {
     window.history.replaceState(null, "", base);
   };
 
-  const handleSend = () => {
-    if (message.trim()) {
-      const input = message.trim();
-      // 切换到对话模式
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  async function submitPrompt(rawInput: string) {
+    const trimmed = rawInput.trim();
+    const hasAttachments = attachments.length > 0;
+    const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
+    const baseText = trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!baseText) return;
+
+    if (!isConnected) {
+      pendingInputRef.current = rawInput;
       setMode('chat');
-      exitHistoryView();
-      void sendChatInput(input);
-      setMessage("");
+      return;
     }
+
+    try {
+      let activeSessionId = (sessionId || "").trim();
+      if (hasAttachments && !activeSessionId) {
+        activeSessionId = await ensureSession(displayText || "新建任务会话");
+      }
+
+      let uploadedAttachments: UploadedTaskAttachment[] = [];
+      if (hasAttachments) {
+        uploadedAttachments = await Promise.all(
+          attachments.map((item) => uploadTaskCreationAttachment(activeSessionId, item.file))
+        );
+      }
+
+      exitHistoryView();
+      await sendChatInput(appendAttachmentsToPrompt(baseText, uploadedAttachments), {
+        sessionId: activeSessionId || undefined,
+        metadata: uploadedAttachments.length
+          ? {
+              attachments: uploadedAttachments,
+              originalInput: displayText,
+            }
+          : undefined,
+      });
+
+      if (uploadedAttachments.length) {
+        setAttachments([]);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "附件发送失败");
+    }
+  }
+
+  const handleSend = () => {
+    if (!message.trim() && attachments.length === 0) return;
+    setMode('chat');
+    void submitPrompt(message);
+    setMessage("");
   };
 
   const handleQuickAction = (action: string) => {
     setMode('chat');
-    exitHistoryView();
-    void sendChatInput(action);
+    void submitPrompt(action);
     setMessage("");
   };
 
@@ -325,26 +396,17 @@ export default function Home() {
                         rows={4}
                       />
 
+                      <AttachmentChipList
+                        attachments={attachments}
+                        onRemove={removeAttachment}
+                      />
+
                       {/* Bottom Action Bar */}
                       <TooltipProvider>
                         <div className="flex items-center justify-between pt-2">
                           {/* Left Side Actions */}
                           <div className="flex items-center gap-1">
-                            {/* Add Attachment Button */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                >
-                                  <Plus className="w-4 h-4 text-muted-foreground" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Add attachment</p>
-                              </TooltipContent>
-                            </Tooltip>
+                            <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
                             <ConnectorDialog sessionId={sessionId} />
 
@@ -390,8 +452,8 @@ export default function Home() {
                             </DropdownMenu>
                           </div>
 
-                          {/* Right Side Actions */}
-                          <div className="flex items-center gap-1">
+                        {/* Right Side Actions */}
+                        <div className="flex items-center gap-1">
                             {/* Voice Input Button */}
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -413,7 +475,7 @@ export default function Home() {
                               <TooltipTrigger asChild>
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!message.trim()}
+                                  disabled={!message.trim() && attachments.length === 0}
                                   size="icon"
                                   className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
                                 >
@@ -575,23 +637,20 @@ export default function Home() {
                                 rows={2}
                               />
 
+                              {!currentQuestion ? (
+                                <AttachmentChipList
+                                  attachments={attachments}
+                                  onRemove={removeAttachment}
+                                />
+                              ) : null}
+
                               <TooltipProvider>
                                 <div className="flex items-center justify-between pt-2">
                                   <div className="flex items-center gap-1">
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                        >
-                                          <Plus className="w-4 h-4 text-muted-foreground" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>Add attachment</p>
-                                      </TooltipContent>
-                                    </Tooltip>
+                                    <AttachmentPickerButton
+                                      onSelectFiles={handleAttachmentSelect}
+                                      disabled={Boolean(currentQuestion)}
+                                    />
 
                                     <ConnectorDialog sessionId={sessionId} />
 
@@ -663,7 +722,7 @@ export default function Home() {
                                               handleSend();
                                             }
                                           }}
-                                          disabled={!message.trim()}
+                                          disabled={currentQuestion ? !message.trim() : (!message.trim() && attachments.length === 0)}
                                           size="icon"
                                           className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
                                         >
@@ -745,7 +804,7 @@ function NoticeMessage({
 }
 
 export type ChatItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; attachments?: UploadedTaskAttachment[] }
   | { kind: "agent"; markdown: string }
   | { kind: "agent_plain"; text: string; author?: string }
   | {
@@ -818,17 +877,40 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   }
   flushTurnFinalIndices();
 
-  const pushUser = (text: string) => {
+  const pushUser = (text: string, attachments?: UploadedTaskAttachment[]) => {
     const normalized = normalizeForDedup(text);
-    if (!normalized) return;
+    if (!normalized && (!attachments || attachments.length === 0)) return;
     const last = items[items.length - 1];
-    if (last?.kind === "user" && normalizeForDedup(last.text) === normalized) {
+    if (
+      last?.kind === "user" &&
+      normalizeForDedup(last.text) === normalized &&
+      JSON.stringify(last.attachments || []) === JSON.stringify(attachments || [])
+    ) {
       return;
     }
     items.push({
       kind: "user",
       text,
+      attachments,
     });
+  };
+
+  const extractUserAttachments = (metadata: unknown): UploadedTaskAttachment[] => {
+    const record = toRecord(metadata);
+    const raw = Array.isArray(record.attachments) ? record.attachments : [];
+    return raw
+      .map((item) => toRecord(item))
+      .map((item) => ({
+        name: asText(item.name),
+        path: asText(item.path),
+        size:
+          typeof item.size === "number" && Number.isFinite(item.size)
+            ? item.size
+            : Number(String(item.size || 0)) || 0,
+        mimeType: asText(item.mimeType) || undefined,
+        uploadedAt: asText(item.uploadedAt) || undefined,
+      }))
+      .filter((item) => item.name || item.path);
   };
 
   const pushAgentMarkdown = (markdown: string) => {
@@ -901,7 +983,11 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
       flushProgress();
-      pushUser(message.content || "");
+      const metadata = toRecord(message.metadata);
+      pushUser(
+        asText(metadata.originalInput) || message.content || "",
+        extractUserAttachments(metadata)
+      );
       continue;
     }
 
@@ -1107,8 +1193,13 @@ function MessageBubble({
         transition={{ duration: 0.2 }}
         className="w-full flex justify-end"
       >
-        <div className="max-w-[80%] rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
-          <span className="whitespace-pre-wrap break-words">{item.text}</span>
+        <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+          {item.text ? (
+            <span className="whitespace-pre-wrap break-words">{item.text}</span>
+          ) : null}
+          {item.attachments?.length ? (
+            <AttachmentChipList attachments={item.attachments} tone="inverse" />
+          ) : null}
         </div>
       </motion.div>
     );

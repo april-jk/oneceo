@@ -1,10 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Mic, Send, Plus, Sparkles } from "lucide-react";
+import { Mic, Send, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   Tooltip,
   TooltipContent,
@@ -18,16 +21,34 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import UserMenu from "@/components/UserMenu";
+import {
+  DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  stashPendingDraftAttachments,
+  type PendingAttachment,
+} from "@/lib/task-attachments";
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
 
   const goToNewTask = (input: string) => {
-    const value = input.trim();
+    const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!value) return;
+    stashPendingDraftAttachments(attachments.map((item) => item.file));
     setLocation(`/new-task?q=${encodeURIComponent(value)}`);
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   return (
@@ -97,17 +118,12 @@ export default function HomePage() {
                 rows={4}
               />
 
+              <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
               <TooltipProvider>
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex items-center gap-1">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-muted">
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent><p>Add attachment</p></TooltipContent>
-                    </Tooltip>
+                    <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
                     <ConnectorDialog />
 
@@ -145,7 +161,7 @@ export default function HomePage() {
                       <TooltipTrigger asChild>
                         <Button
                           onClick={() => goToNewTask(message)}
-                          disabled={!message.trim()}
+                          disabled={!message.trim() && attachments.length === 0}
                           size="icon"
                           className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 disabled:opacity-50"
                         >

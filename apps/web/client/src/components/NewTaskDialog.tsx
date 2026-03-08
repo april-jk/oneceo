@@ -11,16 +11,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Mic, Send, Plus } from "lucide-react";
+import { Mic, Send } from "lucide-react";
 import { useState } from "react";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import TaskCreationChat from "@/components/TaskCreationChat";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  type PendingAttachment,
+} from "@/lib/task-attachments";
+import { toast } from "sonner";
 
 interface NewTaskDialogProps {
   open: boolean;
@@ -29,21 +37,44 @@ interface NewTaskDialogProps {
 
 export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps) {
   const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showAgentChat, setShowAgentChat] = useState(false);
   const [initialAgentInput, setInitialAgentInput] = useState("");
+  const [initialAttachments, setInitialAttachments] = useState<File[]>([]);
 
   const handleSend = () => {
-    if (message.trim()) {
-      // 显示智能体对话
-      setInitialAgentInput(message.trim());
-      setShowAgentChat(true);
-      setMessage("");
-    }
+    const trimmed = message.trim();
+    if (!trimmed && attachments.length === 0) return;
+    setInitialAgentInput(trimmed || DEFAULT_ATTACHMENT_PROMPT);
+    setInitialAttachments(attachments.map((item) => item.file));
+    setShowAgentChat(true);
+    setMessage("");
+    setAttachments([]);
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleDialogChange = (nextOpen: boolean) => {
+    onOpenChange(nextOpen);
+    if (nextOpen) return;
+    setMessage("");
+    setAttachments([]);
+    setShowAgentChat(false);
+    setInitialAgentInput("");
+    setInitialAttachments([]);
   };
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleDialogChange}>
         <DialogContent className="max-w-3xl p-0 gap-0 border-2 max-h-[80vh] overflow-y-auto">
           {/* Dialog Header */}
           <DialogHeader className="px-6 pt-6 pb-4">
@@ -84,26 +115,14 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                       autoFocus
                     />
 
+                    <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
                     {/* Bottom Action Bar */}
                     <TooltipProvider>
                       <div className="flex items-center justify-between pt-2">
                         {/* Left Side Actions */}
                         <div className="flex items-center gap-1">
-                          {/* Add Attachment Button */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                              >
-                                <Plus className="w-4 h-4 text-muted-foreground" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>Add attachment</p>
-                            </TooltipContent>
-                          </Tooltip>
+                          <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
                           <ConnectorDialog />
                         </div>
@@ -131,7 +150,7 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                             <TooltipTrigger asChild>
                               <Button
                                 onClick={handleSend}
-                                disabled={!message.trim()}
+                                disabled={!message.trim() && attachments.length === 0}
                                 size="icon"
                                 className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
@@ -171,11 +190,13 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
               /* Agent Chat */
               <TaskCreationChat
                 initialInput={initialAgentInput}
+                initialAttachments={initialAttachments}
                 onPlanGenerated={(plan) => {
                   console.log("计划生成:", plan);
                   onOpenChange(false);
                   setShowAgentChat(false);
                   setInitialAgentInput("");
+                  setInitialAttachments([]);
                   // TODO: 跳转到项目详情页面
                 }}
               />

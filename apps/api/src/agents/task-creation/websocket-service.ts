@@ -542,6 +542,7 @@ export class TaskCreationWebSocketService {
     const orchestratorSessionId = String((message.metadata as any)?.orchestratorSessionId || '').trim();
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
+    const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
 
     try {
       if (createdSession) {
@@ -602,13 +603,18 @@ export class TaskCreationWebSocketService {
         console.warn('[OPENCODE_INPUT_SESSION_DB_ENSURE_FAILED]', error);
       }
 
-      if (!prePersistedUserInput) {
+      if (!prePersistedUserInput && persistLegacyUserInput) {
+        const userMessageTimestamp = Date.now();
+        const userMessageMetadata = {
+          timestamp: userMessageTimestamp,
+          sessionEventSeq: userMessageTimestamp * 1000,
+        };
         await taskCreationFileMemoryStore.addMessage(
           taskSessionId,
           'user',
           'user_input',
           message.content || '',
-          message.metadata || undefined
+          userMessageMetadata
         );
         try {
           await taskCreationSessionDAO.addMessage({
@@ -617,7 +623,7 @@ export class TaskCreationWebSocketService {
             role: 'user',
             messageType: 'user_input',
             content: message.content || '',
-            metadata: message.metadata || undefined,
+            metadata: userMessageMetadata,
           });
         } catch (error) {
           console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);

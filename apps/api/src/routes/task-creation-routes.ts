@@ -23,6 +23,8 @@ import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registr
 import { sessionConnectorService } from '../services/session-connector-service';
 
 const router = express.Router();
+const TASK_ATTACHMENT_DIR = '.attachments';
+const TASK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
@@ -213,6 +215,17 @@ async function buildSessionSummaryFromDb(limit: number) {
   return result;
 }
 
+async function createDraftTaskSession(title: string, userId: string) {
+  const created = await taskCreationSessionDAO.createSession({
+    id: randomUUID(),
+    userId,
+    status: 'in_progress',
+  });
+  await taskCreationFileMemoryStore.createSession(title, created.id);
+  await taskCreationFileMemoryStore.updateSessionStatus(created.id, 'in_progress');
+  return created.id;
+}
+
 async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot: string) {
   const enabledRaw = String(process.env.OPENCODE_SERVER_ENSURE_ON_READ || 'true').trim().toLowerCase();
   if (enabledRaw === 'false') return;
@@ -368,6 +381,17 @@ async function readOpencodeFile(
 
 function normalizeWorkspacePath(input: string): string {
   return input.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function shellEscape(value: string): string {
+  if (!value) return "''";
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function sanitizeAttachmentName(input: string): string {
+  const raw = input.split(/[\\/]/).pop() || 'attachment';
+  const normalized = raw.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  return normalized.slice(0, 120) || 'attachment';
 }
 
 function asText(value: unknown): string {
@@ -883,6 +907,25 @@ router.get('/sessions', async (req, res) => {
   }
 });
 
+router.post('/sessions/draft', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const title = asText(req.body?.title).slice(0, 80) || '新建任务会话';
+    const sessionId = await createDraftTaskSession(title, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    return res.json({
+      success: true,
+      data: session ? toSessionSummary(session) : { id: sessionId, title, status: 'in_progress' },
+    });
+  } catch (error: any) {
+    console.error('创建草稿会话失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '创建草稿会话失败'),
+    });
+  }
+});
+
 /**
  * GET /api/task-creation/sessions/:sessionId
  * 获取会话的完整信息（包括所有关联数据）
@@ -1023,6 +1066,76 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     });
   }
 });
+
+router.post(
+  '/sessions/:sessionId/attachments',
+  express.raw({ type: '*/*', limit: `${TASK_ATTACHMENT_MAX_BYTES}b` }),
+  async (req, res) => {
+    try {
+      const currentUser = currentUserResolver.require(req);
+      const { sessionId } = req.params;
+      await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+
+      const rawBody =
+        req.body instanceof Buffer
+          ? req.body
+          : Buffer.isBuffer(req.body)
+            ? req.body
+            : Buffer.from(req.body || []);
+      if (!rawBody.length) {
+        return res.status(400).json({
+          success: false,
+          error: getPublicErrorMessage('附件内容为空'),
+        });
+      }
+      if (rawBody.length > TASK_ATTACHMENT_MAX_BYTES) {
+        return res.status(400).json({
+          success: false,
+          error: getPublicErrorMessage('单个附件不能超过 10 MB'),
+        });
+      }
+
+      const originalName = decodeURIComponent(asText(req.header('X-Attachment-Name')) || 'attachment');
+      const safeName = sanitizeAttachmentName(originalName);
+      const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+      const runtime = await ensureTaskSessionRuntime(sessionId);
+      const orchestratorSessionId = asText(runtime.orchestratorSessionId);
+      if (!orchestratorSessionId) {
+        throw new Error('执行环境未就绪，无法上传附件');
+      }
+
+      const attachmentDir = `${workspaceRoot}/${TASK_ATTACHMENT_DIR}`;
+      const storedName = `${Date.now()}-${safeName}`;
+      const relativePath = `${TASK_ATTACHMENT_DIR}/${storedName}`;
+      const fullPath = `${workspaceRoot}/${relativePath}`;
+
+      await e2bConnector.runCommand(
+        orchestratorSessionId,
+        `mkdir -p ${shellEscape(attachmentDir)}`,
+        { timeoutMs: 15_000 }
+      );
+      await e2bConnector.writeFile(orchestratorSessionId, fullPath, rawBody);
+      await touchSandbox(orchestratorSessionId, 'task_attachment_upload');
+
+      return res.json({
+        success: true,
+        data: {
+          name: originalName || safeName,
+          path: relativePath,
+          size: rawBody.length,
+          mimeType: asText(req.header('Content-Type')) || 'application/octet-stream',
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error: any) {
+      console.error('上传附件失败:', error);
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage(error?.message || '上传附件失败'),
+      });
+    }
+  }
+);
 
 /**
  * POST /api/task-creation/sessions/:sessionId/runtime/start

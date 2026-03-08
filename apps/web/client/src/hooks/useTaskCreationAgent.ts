@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import {
   createTaskCreationSession,
+  createTaskCreationDraftSession,
   createTaskCreationSocket,
   getOpencodeEventStreamUrl,
   getTaskCreationSession,
@@ -63,6 +64,11 @@ export interface UseTaskCreationAgentOptions {
   autoRuntime?: boolean;
   compactHistory?: boolean;
 }
+
+type SendInputOptions = {
+  metadata?: Record<string, unknown>;
+  sessionId?: string;
+};
 
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
@@ -985,6 +991,23 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
   }, [autoRuntime]);
 
+  const bindSessionId = useCallback((nextSessionId: string) => {
+    if (!nextSessionId) return;
+    setSessionId(nextSessionId);
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    const params = new URLSearchParams(window.location.search);
+    const currentPath = window.location.pathname;
+    const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
+    const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
+    if (currentInPath !== nextSessionId || params.get('new') || params.get('sessionId')) {
+      params.delete('new');
+      params.delete('sessionId');
+      const query = params.toString();
+      const base = `/session/${encodeURIComponent(nextSessionId)}`;
+      window.history.replaceState(null, '', query ? `${base}?${query}` : base);
+    }
+  }, []);
+
   useEffect(() => {
     const params = new URLSearchParams(search);
     const querySessionId = params.get('sessionId')?.trim();
@@ -1500,19 +1523,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         const messageSessionId = message.sessionId || message.metadata?.sessionId;
         if (messageSessionId) {
-          setSessionId(messageSessionId);
-          window.localStorage.setItem(SESSION_STORAGE_KEY, messageSessionId);
-          const params = new URLSearchParams(window.location.search);
-          const currentPath = window.location.pathname;
-          const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
-          const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
-          if (currentInPath !== messageSessionId || params.get('new') || params.get('sessionId')) {
-            params.delete('new');
-            params.delete('sessionId');
-            const query = params.toString();
-            const base = `/session/${encodeURIComponent(messageSessionId)}`;
-            window.history.replaceState(null, '', query ? `${base}?${query}` : base);
-          }
+          bindSessionId(messageSessionId);
 
           if (startRuntimeOnNextSessionRef.current && autoRuntime) {
             startRuntimeOnNextSessionRef.current = false;
@@ -1589,7 +1600,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
 
     wsRef.current = ws;
-  }, [clearReconnectTimer, scheduleReconnect]);
+  }, [autoRuntime, bindSessionId, clearReconnectTimer, scheduleReconnect]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -2062,9 +2073,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [sessionId, runtimeEnabled, closeSse, scheduleSseReconnect]);
 
   // 发送用户输入
-  const sendUserInput = useCallback((input: string) => {
+  const sendUserInput = useCallback((input: string, options?: SendInputOptions) => {
+    const targetSessionId = (options?.sessionId || sessionId || '').trim() || undefined;
     startRuntimeOnNextSessionRef.current = true;
-    if (autoRuntime && runtimeEnabled && sessionId && !runtimeReady && !runtimeStarting) {
+    if (autoRuntime && runtimeEnabled && targetSessionId && !runtimeReady && !runtimeStarting) {
       void ensureRuntime();
     }
 
@@ -2075,26 +2087,29 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       {
         type: 'user_input',
         content: input,
+        metadata: options?.metadata,
+        sessionId: targetSessionId,
       },
     ]);
 
     sendOrQueueMessage({
       type: 'user_input',
       content: input,
-      sessionId: sessionId || undefined,
+      sessionId: targetSessionId,
       metadata: {
+        ...(options?.metadata || {}),
         altusMode: 'managed',
         executor: readExecutor(),
       },
     });
   }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, sendOrQueueMessage, sessionId]);
 
-  const sendChatInput = useCallback(async (input: string) => {
+  const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
     if (!text) return;
 
-    const altusMode = readAltusMode();
     let activeSessionId = (() => {
+      if (options?.sessionId) return options.sessionId;
       if (sessionId) return sessionId;
       const pathMatch = location.match(/^\/session\/([^/?#]+)/);
       const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
@@ -2107,14 +2122,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
     })();
     if (activeSessionId && activeSessionId !== sessionId) {
-      setSessionId(activeSessionId);
-      try {
-        window.localStorage.setItem(SESSION_STORAGE_KEY, activeSessionId);
-      } catch {
-        // ignore storage failures
-      }
+      bindSessionId(activeSessionId);
     }
 
+    const altusMode = readAltusMode();
     if (altusMode === 'sandbox') {
       if (!activeSessionId) {
         const provisionalId =
@@ -2122,22 +2133,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             ? crypto.randomUUID()
             : `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
         activeSessionId = provisionalId;
-        setSessionId(provisionalId);
-        try {
-          window.localStorage.setItem(SESSION_STORAGE_KEY, provisionalId);
-        } catch {
-          // ignore storage failures
-        }
-        try {
-          const params = new URLSearchParams(window.location.search);
-          params.delete('new');
-          params.delete('sessionId');
-          const query = params.toString();
-          const base = `/session/${encodeURIComponent(provisionalId)}`;
-          window.history.replaceState(null, '', query ? `${base}?${query}` : base);
-        } catch {
-          // ignore history failures
-        }
+        bindSessionId(provisionalId);
       }
       let prePersistedUserInput = false;
       if (activeSessionId) {
@@ -2173,6 +2169,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         {
           type: 'user_input',
           content: text,
+          metadata: options?.metadata,
+          sessionId: activeSessionId || undefined,
         },
       ]);
       const orchestratorId = (orchestratorSessionId || '').trim();
@@ -2181,6 +2179,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         content: text,
         sessionId: activeSessionId || undefined,
         metadata: {
+          ...(options?.metadata || {}),
           ...(orchestratorId ? { orchestratorSessionId: orchestratorId } : undefined),
           ...(opencodeSessionId ? { opencodeSessionId } : undefined),
           altusMode: 'sandbox',
@@ -2196,8 +2195,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
 
-    sendUserInput(text);
+    sendUserInput(text, {
+      ...options,
+      sessionId: activeSessionId || options?.sessionId || undefined,
+    });
   }, [
+    bindSessionId,
     location,
     orchestratorSessionId,
     opencodeSessionId,
@@ -2206,6 +2209,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sendUserInput,
     sessionId,
   ]);
+
+  const ensureSession = useCallback(async (title?: string) => {
+    const existing = (sessionId || '').trim();
+    if (existing) return existing;
+    const created = await createTaskCreationDraftSession(title);
+    const nextSessionId = (created.id || '').trim();
+    if (!nextSessionId) {
+      throw new Error('draft session id missing');
+    }
+    bindSessionId(nextSessionId);
+    return nextSessionId;
+  }, [bindSessionId, sessionId]);
 
   return {
     isConnected,
@@ -2237,6 +2252,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     } as OrchestrationRuntime,
     sendUserInput,
     sendChatInput,
+    ensureSession,
     answerQuestion,
     clearMessages,
     connect,

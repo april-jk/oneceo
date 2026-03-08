@@ -411,7 +411,8 @@ export class TaskCreationWebSocketService {
         sessionId,
         'user',
         message.type,
-        message.content || ''
+        message.content || '',
+        message.metadata
       );
     }
 
@@ -472,7 +473,8 @@ export class TaskCreationWebSocketService {
         message.content!,
         undefined,
         sessionId,
-        (message.type as any) || 'user_input'
+        (message.type as any) || 'user_input',
+        message.metadata
       );
       if (sessionId) {
         await this.syncSessionStateFromCurrentStage(sessionId);
@@ -601,7 +603,13 @@ export class TaskCreationWebSocketService {
       }
 
       if (!prePersistedUserInput) {
-        await taskCreationFileMemoryStore.addMessage(taskSessionId, 'user', 'user_input', message.content || '');
+        await taskCreationFileMemoryStore.addMessage(
+          taskSessionId,
+          'user',
+          'user_input',
+          message.content || '',
+          message.metadata || undefined
+        );
         try {
           await taskCreationSessionDAO.addMessage({
             id: randomUUID(),
@@ -609,6 +617,7 @@ export class TaskCreationWebSocketService {
             role: 'user',
             messageType: 'user_input',
             content: message.content || '',
+            metadata: message.metadata || undefined,
           });
         } catch (error) {
           console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);

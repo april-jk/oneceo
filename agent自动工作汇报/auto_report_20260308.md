@@ -10,15 +10,19 @@
   - 修正连接器一二级浮窗的视口溢出问题，增加碰撞边界、可用高度收缩和内部滚动。
   - 继续压缩一级连接器浮窗：上方只保留“连接器名称 + 开关”，并改成“头部固定 + 中部独立滚动 + 底部固定操作区”，避免列表和“管理连接器”互相遮挡。
   - 给一级连接器列表补上品牌图标，保持首层为“图标 + 名称 + 开关”的极简选择结构。
-  - 补充连接器相关文档与基础单测。
+  - 给 `/new-task` 主流程补上 `Add attachment`：前端可选择/移除附件，首次带附件发送时会先创建 draft session，再把附件上传到 task session 对应 workspace，最后把附件路径带进本轮消息 metadata 与 prompt。
+  - 继续把残留的 `Add attachment` 入口补齐到 `NewTaskDialog` 和 `AIAgent`，统一改成可选文件、可移除附件；其中 `NewTaskDialog` 的首条消息也会携带附件进入任务创建会话。
+- 补充连接器相关文档与基础单测。
   - 修复连接器查询因 `user_connector_accounts` 等新表未落地而失败的问题，增加启动预热和服务入口兜底迁移。
 - 遇到什么：
   - `apps/api` 全量 TypeScript 基线存在大量历史错误，无法用全量 `tsc` 作为本次改动的唯一验证手段。
   - 当前本地会话没有可直接复用的 `DATABASE_URL`，无法对开发库做一次真实连库 smoke test。
+  - 本轮附件上传后端依赖数据库初始化与 session 归属校验，在当前 shell 缺失 `DATABASE_URL` 的情况下无法做 API 侧真实导入/连库验证。
 - 计划如何解决：
   - 继续把连接器链路的验证维持在新增单测、前端 `tsc`、局部回归上。
   - 通过 API 启动预热和 `userConnectorService` / `sessionConnectorService` 的 `ensureReady()`，避免首个连接器请求直接命中缺表错误。
   - 后续若要把 API 全量 `tsc` 纳入 CI，需要先单独清理仓库历史类型问题。
+  - 附件链路先维持在前端 `tsc`、代码级导入检查和运行页手工回归上；待本地补齐 `DATABASE_URL` 后再补 API 真正上传 smoke test。
 
 ## 2026-03-08（服务管理 GUI）
 

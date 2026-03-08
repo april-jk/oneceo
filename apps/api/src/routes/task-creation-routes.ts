@@ -1975,14 +1975,26 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
         .sort((a, b) => {
           const ma = pickRecord(a?.metadata);
           const mb = pickRecord(b?.metadata);
-          const sa = asPositiveInt(ma.sessionEventSeq);
-          const sb = asPositiveInt(mb.sessionEventSeq);
-          if (sa !== null && sb !== null && sa !== sb) {
+          const ta = asTimelineCursor(ma.timestamp);
+          const tb = asTimelineCursor(mb.timestamp);
+          if (ta !== null && tb !== null && ta !== tb) {
+            return ta - tb;
+          }
+          if (ta !== null && tb === null) return -1;
+          if (ta === null && tb !== null) return 1;
+          const ca = a.createdAt ? Date.parse(a.createdAt) : null;
+          const cb = b.createdAt ? Date.parse(b.createdAt) : null;
+          if (ca !== null && cb !== null && ca !== cb) {
+            return ca - cb;
+          }
+          if (ca !== null && cb === null) return -1;
+          if (ca === null && cb !== null) return 1;
+          const sa = asPositiveInt(ma.seq);
+          const sb = asPositiveInt(mb.seq);
+          if (sa !== null && sb !== null) {
             return sa - sb;
           }
-          if (sa !== null && sb === null) return -1;
-          if (sa === null && sb !== null) return 1;
-          return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+          return 0;
         })
         .slice(-500);
       for (const item of filtered) {

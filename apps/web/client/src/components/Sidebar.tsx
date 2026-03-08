@@ -46,7 +46,7 @@ import { Link, useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import React from 'react';
 import { listTaskCreationSessions } from '@/lib/task-creation-client';
-import { SettingsDialog } from "@/components/SettingsDialog";
+import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface SidebarProps {
   className?: string;
@@ -63,7 +63,6 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
-  const [settingsDialogOpen, setSettingsDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [sessionTasks, setSessionTasks] = React.useState<Array<{
     sessionId: string;
@@ -452,7 +451,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
             <Button
               variant="ghost"
               className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150`}
-              onClick={() => setSettingsDialogOpen(true)}
+              onClick={() => openSettingsDialog({ tab: "settings" })}
             >
               <Settings className="w-4 h-4" />
               {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
@@ -499,7 +498,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="rounded-lg py-2.5 px-3"
-                onSelect={() => setSettingsDialogOpen(true)}
+                onSelect={() => openSettingsDialog({ tab: "settings" })}
               >
                 <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm">设置</span>
@@ -546,7 +545,6 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           </ScrollArea>
         </DialogContent>
       </Dialog>
-      <SettingsDialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
     </aside>
   );
 }

@@ -4,7 +4,7 @@
  * 使用 Drizzle ORM 定义数据库表结构
  */
 
-import { pgTable, text, timestamp, jsonb, uuid, integer, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index } from 'drizzle-orm/pg-core';
 
 /**
  * 任务创建会话表
@@ -123,6 +123,76 @@ export const sandboxExecutionEnvironments = pgTable('sandbox_execution_environme
   closedAt: timestamp('closed_at'),
 });
 
+export const userConnectorAccounts = pgTable(
+  'user_connector_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    authMode: text('auth_mode').notNull(),
+    authStatus: text('auth_status').notNull().default('not_configured'),
+    displayName: text('display_name'),
+    configJson: jsonb('config_json'),
+    secretCiphertext: text('secret_ciphertext'),
+    lastAuthAt: timestamp('last_auth_at'),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userConnectorUnique: uniqueIndex('idx_user_connector_accounts_user_connector').on(table.userId, table.connectorKey),
+    userConnectorUserIdx: index('idx_user_connector_accounts_user_id').on(table.userId),
+  })
+);
+
+export const taskSessionConnectorBindings = pgTable(
+  'task_session_connector_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskSessionId: text('task_session_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    desiredState: text('desired_state').notNull().default('detached'),
+    runtimeStatus: text('runtime_status').notNull().default('unknown'),
+    orchestratorSessionId: text('orchestrator_session_id'),
+    serverName: text('server_name'),
+    lastUsedAt: timestamp('last_used_at'),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    taskSessionConnectorUnique: uniqueIndex('idx_task_session_connector_bindings_session_connector').on(
+      table.taskSessionId,
+      table.connectorKey
+    ),
+    taskSessionConnectorTaskIdx: index('idx_task_session_connector_bindings_task_session_id').on(table.taskSessionId),
+    taskSessionConnectorOrchestratorIdx: index('idx_task_session_connector_bindings_orchestrator_session_id').on(
+      table.orchestratorSessionId
+    ),
+  })
+);
+
+export const connectorAuthRequests = pgTable(
+  'connector_auth_requests',
+  {
+    requestId: uuid('request_id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    provider: text('provider').notNull(),
+    state: text('state').notNull(),
+    codeVerifier: text('code_verifier'),
+    returnToSessionId: text('return_to_session_id'),
+    status: text('status').notNull().default('pending'),
+    expiresAt: timestamp('expires_at').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    connectorAuthStateUnique: uniqueIndex('idx_connector_auth_requests_state').on(table.state),
+    connectorAuthUserIdx: index('idx_connector_auth_requests_user_id').on(table.userId),
+  })
+);
+
 // 导出类型
 export type TaskCreationSession = typeof taskCreationSessions.$inferSelect;
 export type NewTaskCreationSession = typeof taskCreationSessions.$inferInsert;
@@ -144,3 +214,12 @@ export type NewSearchRecord = typeof searchRecords.$inferInsert;
 
 export type SandboxExecutionEnvironment = typeof sandboxExecutionEnvironments.$inferSelect;
 export type NewSandboxExecutionEnvironment = typeof sandboxExecutionEnvironments.$inferInsert;
+
+export type UserConnectorAccount = typeof userConnectorAccounts.$inferSelect;
+export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
+
+export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
+export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;
+
+export type ConnectorAuthRequest = typeof connectorAuthRequests.$inferSelect;
+export type NewConnectorAuthRequest = typeof connectorAuthRequests.$inferInsert;

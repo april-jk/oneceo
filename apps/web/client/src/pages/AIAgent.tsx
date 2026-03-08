@@ -5,7 +5,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Mic, Plug, Send, Plus, Sparkles } from "lucide-react";
+import { Mic, Send, Plus, Sparkles } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,7 +27,6 @@ import {
 export default function AIAgent() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
 
   const handleSend = () => {
@@ -116,22 +115,7 @@ export default function AIAgent() {
                       </TooltipContent>
                     </Tooltip>
 
-                    {/* Connector Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                          onClick={() => setShowConnector(true)}
-                        >
-                          <Plug className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Connector</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <ConnectorDialog />
 
                     {/* Model Selection Button */}
                     <DropdownMenu>
@@ -241,8 +225,6 @@ export default function AIAgent() {
         </motion.div>
       </div>
 
-      {/* Connector Dialog */}
-      <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
     </WorkspaceLayout>
   );
 }

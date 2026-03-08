@@ -10,6 +10,65 @@ import { db, ensureDatabaseConnection } from '../config/database';
 /**
  * 创建数据库表的 SQL 语句
  */
+const connectorTablesSQL = `
+-- 用户级连接器配置表
+CREATE TABLE IF NOT EXISTS user_connector_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  auth_mode TEXT NOT NULL,
+  auth_status TEXT NOT NULL DEFAULT 'not_configured',
+  display_name TEXT,
+  config_json JSONB,
+  secret_ciphertext TEXT,
+  last_auth_at TIMESTAMP,
+  last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 任务会话连接器绑定表
+CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  desired_state TEXT NOT NULL DEFAULT 'detached',
+  runtime_status TEXT NOT NULL DEFAULT 'unknown',
+  orchestrator_session_id TEXT,
+  server_name TEXT,
+  last_used_at TIMESTAMP,
+  last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- OAuth 请求事务表
+CREATE TABLE IF NOT EXISTS connector_auth_requests (
+  request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  state TEXT NOT NULL,
+  code_verifier TEXT,
+  return_to_session_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
+CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
+  ON task_session_connector_bindings(task_session_id, connector_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
+  ON task_session_connector_bindings(task_session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_session_id
+  ON task_session_connector_bindings(orchestrator_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
+CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
+`;
+
 const createTablesSQL = `
 -- 任务创建会话表
 CREATE TABLE IF NOT EXISTS task_creation_sessions (
@@ -110,6 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sand
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
+${connectorTablesSQL}
 `;
 
 /**
@@ -132,10 +192,24 @@ export async function runMigration() {
     console.log('  - execution_plans');
     console.log('  - search_records');
     console.log('  - sandbox_execution_environments');
+    console.log('  - user_connector_accounts');
+    console.log('  - task_session_connector_bindings');
+    console.log('  - connector_auth_requests');
     
     return true;
   } catch (error) {
     console.error('❌ 数据库迁移失败:', error);
+    throw error;
+  }
+}
+
+export async function runConnectorMigration() {
+  try {
+    await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
+    await db.execute(sql.raw(connectorTablesSQL));
+    return true;
+  } catch (error) {
+    console.error('❌ 连接器表迁移失败:', error);
     throw error;
   }
 }
@@ -155,6 +229,9 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
+      DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
+      DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
     `));
     

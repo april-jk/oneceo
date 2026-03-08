@@ -31,7 +31,6 @@ import {
   FileText,
   AlertCircle,
   Plus,
-  Plug,
   Sparkles,
   Mic,
 } from "lucide-react";
@@ -64,7 +63,6 @@ export default function TaskDetail() {
   const [ceoMessage, setCeoMessage] = useState("");
   const [selectedDeliverable, setSelectedDeliverable] = useState<any>(null);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
-  const [showConnector, setShowConnector] = useState(false);
 
   // Mock data - 模拟经理-员工对话数据
   const taskInfo = {
@@ -338,22 +336,7 @@ export default function TaskDetail() {
                         </TooltipContent>
                       </Tooltip>
 
-                      {/* Connector Button */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                            onClick={() => setShowConnector(true)}
-                          >
-                            <Plug className="w-4 h-4 text-muted-foreground" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Connector</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <ConnectorDialog />
 
                       {/* Model Selection Button */}
                       <DropdownMenu>
@@ -453,12 +436,6 @@ export default function TaskDetail() {
           </div>
         </div>
       </div>
-
-      {/* Connector Dialog */}
-      <ConnectorDialog
-        open={showConnector}
-        onOpenChange={setShowConnector}
-      />
 
       {/* Deliverable Viewer */}
       {selectedDeliverable && (

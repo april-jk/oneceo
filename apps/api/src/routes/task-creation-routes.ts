@@ -8,16 +8,19 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
+import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
 import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
-import { touchSandbox } from '../services/sandbox-activity-service';
+import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug } from '../services/sandbox-debug-service';
 import { e2bConnector } from '../connectors/e2b-connector';
+import { currentUserResolver } from '../services/current-user-resolver';
+import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
+import { sessionConnectorService } from '../services/session-connector-service';
 
 const router = express.Router();
 
@@ -49,6 +52,13 @@ function resolveTenantKey(req: express.Request): string {
   const queryTenant = String(req.query.tenantId || '').trim();
   if (queryTenant) return queryTenant;
   return 'default';
+}
+
+function parseConnectorKey(value: string): ConnectorKey {
+  if ((CONNECTOR_KEYS as readonly string[]).includes(value)) {
+    return value as ConnectorKey;
+  }
+  throw new Error(`未知连接器: ${value}`);
 }
 
 function toIso(value: Date | string | null | undefined): string {
@@ -90,7 +100,7 @@ async function findEnvironmentByTaskSessionId(taskSessionId: string) {
   return null;
 }
 
-async function buildFileSessionFromDb(sessionId: string) {
+async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
   const session = await taskCreationSessionDAO.getSession(sessionId);
   if (!session) return null;
   const [taskDescription, messages] = await Promise.all([
@@ -102,11 +112,11 @@ async function buildFileSessionFromDb(sessionId: string) {
     messages?.find((m) => m.role === 'user')?.content ||
     '新建任务会话';
 
-  const status =
+  const status: FileSessionRecord['status'] =
     session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
       ? session.status
       : 'in_progress';
-  const stage =
+  const stage: NonNullable<FileSessionRecord['stage']> =
     status === 'completed'
       ? 'completed'
       : status === 'failed'
@@ -126,6 +136,7 @@ async function buildFileSessionFromDb(sessionId: string) {
     runtime: orchestratorSessionId
       ? {
           orchestratorSessionId,
+          opencodeSessionId: undefined,
           updatedAt: toIso(env?.updatedAt as any),
         }
       : undefined,
@@ -156,6 +167,14 @@ async function hydrateFileSessionFromDb(sessionId: string) {
     });
   }
   return record;
+}
+
+async function resolveTaskSessionRecord(sessionId: string) {
+  let session = await taskCreationFileMemoryStore.getSession(sessionId);
+  if (!session) {
+    session = await hydrateFileSessionFromDb(sessionId);
+  }
+  return session;
 }
 
 type SessionListCache = {
@@ -204,6 +223,60 @@ async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot
   } catch (error) {
     console.warn('[OPENCODE_SERVER_ENSURE_FAILED]', orchestratorSessionId, error);
   }
+}
+
+async function ensureTaskSessionRuntime(sessionId: string) {
+  const session = await resolveTaskSessionRecord(sessionId);
+  if (!session) {
+    throw new Error('会话不存在');
+  }
+
+  const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+  const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+  if (orchestratorSessionId) {
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (environment?.status === 'ready') {
+      try {
+        await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+          workspacePath: workspaceRoot || undefined,
+        });
+        await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
+        const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+        return {
+          orchestratorSessionId,
+          status: runtimeStatus?.status || 'ready',
+          reused: true,
+        };
+      } catch (error) {
+        if (!isSandboxNotFoundError(error)) {
+          throw error;
+        }
+        await markSandboxClosed(orchestratorSessionId);
+      }
+    }
+  }
+
+  const provision = await sandboxAgentProvisionService.provisionWithLock({
+    metadata: {
+      taskSessionId: sessionId,
+      taskTitle: session.title,
+    },
+  });
+
+  await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
+    orchestratorSessionId: provision.sessionId,
+    opencodeSessionId: '',
+  });
+  await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+  await touchSandbox(provision.sessionId, 'runtime_start_new');
+
+  const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
+
+  return {
+    orchestratorSessionId: provision.sessionId,
+    status: runtimeStatus?.status || provision.status || 'ready',
+    reused: false,
+  };
 }
 
 async function fetchOpencodeJsonViaOsac<T>(
@@ -817,10 +890,7 @@ router.get('/sessions', async (req, res) => {
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    let sessionData = await taskCreationFileMemoryStore.getSession(sessionId);
-    if (!sessionData) {
-      sessionData = await hydrateFileSessionFromDb(sessionId);
-    }
+    const sessionData = await resolveTaskSessionRecord(sessionId);
 
     if (!sessionData) {
       return res.status(404).json({
@@ -830,12 +900,23 @@ router.get('/sessions/:sessionId', async (req, res) => {
     }
 
     const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
+    let connectorsSummary: ReturnType<typeof sessionConnectorService.summarizeStatuses> | null = null;
+    const currentUser = currentUserResolver.resolve(req);
+    if (currentUser?.userId) {
+      try {
+        const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
+        connectorsSummary = sessionConnectorService.summarizeStatuses(statuses);
+      } catch {
+        connectorsSummary = null;
+      }
+    }
 
     res.json({
       success: true,
       data: {
         ...sessionData,
         runtimeStatus,
+        connectorsSummary,
       },
     });
   } catch (error: any) {
@@ -950,74 +1031,25 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
 router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
         success: false,
         error: getPublicErrorMessage('会话不存在'),
       });
     }
-
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
-    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
-    if (orchestratorSessionId) {
-      const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
-      if (environment?.status === 'ready') {
-        try {
-          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
-            workspacePath: workspaceRoot || undefined,
-          });
-          await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
-          const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
-          return res.json({
-            success: true,
-            data: {
-              orchestratorSessionId,
-              status: runtimeStatus?.status || 'ready',
-              reused: true,
-            },
-          });
-        } catch (error) {
-          if (!isSandboxNotFoundError(error)) {
-            return res.status(502).json({
-              success: false,
-              error: getPublicErrorMessage('执行环境启动失败，请稍后重试'),
-            });
-          }
-          await markSandboxClosed(orchestratorSessionId);
-        }
-      }
-    }
-
-    const provision = await sandboxAgentProvisionService.provisionWithLock({
-      metadata: {
-        taskSessionId: sessionId,
-        taskTitle: session.title,
-      },
-    });
-
-    await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
-      orchestratorSessionId: provision.sessionId,
-      opencodeSessionId: '',
-    });
-    await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
-    await touchSandbox(provision.sessionId, 'runtime_start_new');
-
-    const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
-
+    const runtime = await ensureTaskSessionRuntime(sessionId);
     return res.json({
       success: true,
-      data: {
-        orchestratorSessionId: provision.sessionId,
-        status: runtimeStatus?.status || provision.status || 'ready',
-        reused: false,
-      },
+      data: runtime,
     });
   } catch (error: any) {
     console.error('启动执行环境失败:', error);
-    res.status(500).json({
+    res.status(isSandboxNotFoundError(error) ? 409 : 500).json({
       success: false,
-      error: getPublicErrorMessage('启动执行环境失败，请稍后重试'),
+      error: getPublicErrorMessage(
+        isSandboxNotFoundError(error) ? '执行环境已关闭，请重新启动' : '启动执行环境失败，请稍后重试'
+      ),
     });
   }
 });
@@ -1048,7 +1080,10 @@ router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
       });
     }
 
-    await touchSandbox(orchestratorSessionId, 'ui_keepalive');
+    await setSandboxMetadata(orchestratorSessionId, {
+      lastHeartbeatAt: new Date().toISOString(),
+      lastHeartbeatReason: 'ui_keepalive',
+    });
     try {
       await e2bConnector.getSandboxInfo(orchestratorSessionId);
     } catch (error) {
@@ -1067,6 +1102,102 @@ router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('维持执行环境失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/connectors
+ * 获取当前会话的连接器运行状态
+ */
+router.get('/sessions/:sessionId/connectors', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
+    return res.json({
+      success: true,
+      data: {
+        items: statuses,
+        summary: sessionConnectorService.summarizeStatuses(statuses),
+      },
+    });
+  } catch (error: any) {
+    return res.status(401).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取会话连接器失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attach
+ * 热加载当前会话连接器
+ */
+router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    const connectorKey = parseConnectorKey(req.params.connectorKey);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const status = await sessionConnectorService.attachConnector(
+      sessionId,
+      currentUser.userId,
+      connectorKey,
+      runtime.orchestratorSessionId
+    );
+    return res.json({
+      success: true,
+      data: {
+        runtime,
+        connector: status,
+      },
+    });
+  } catch (error: any) {
+    const message = error?.message || '挂载连接器失败';
+    const normalized = String(message).toLowerCase();
+    const status =
+      normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')
+        ? 401
+        : normalized.includes('未授权') || normalized.includes('尚未完成授权')
+          ? 409
+          : 400;
+    return res.status(status).json({
+      success: false,
+      error: getPublicErrorMessage(message),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/detach
+ * 热卸载当前会话连接器
+ */
+router.post('/sessions/:sessionId/connectors/:connectorKey/detach', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    const connectorKey = parseConnectorKey(req.params.connectorKey);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    const status = await sessionConnectorService.detachConnector(
+      sessionId,
+      currentUser.userId,
+      connectorKey,
+      session?.runtime?.orchestratorSessionId
+    );
+    return res.json({
+      success: true,
+      data: {
+        connector: status,
+      },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '卸载连接器失败'),
     });
   }
 });

@@ -7,9 +7,8 @@
 
 import { Button } from "@/components/ui/button";
 import { Bell, Settings } from "lucide-react";
-import { useState } from "react";
-import { SettingsDialog } from "@/components/SettingsDialog";
 import UserMenu from "@/components/UserMenu";
+import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface HeaderProps {
   className?: string;
@@ -18,25 +17,21 @@ interface HeaderProps {
 }
 
 export function HeaderActions({ className = "" }: { className?: string }) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
-    <>
-      <div className={`flex items-center gap-3 ${className}`}>
-        <Button variant="ghost" size="icon" className="h-9 w-9">
-          <Bell className="w-4 h-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-9 w-9"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings className="w-4 h-4" />
-        </Button>
-        <UserMenu />
-      </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-    </>
+    <div className={`flex items-center gap-3 ${className}`}>
+      <Button variant="ghost" size="icon" className="h-9 w-9">
+        <Bell className="w-4 h-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        onClick={() => openSettingsDialog({ tab: "settings" })}
+      >
+        <Settings className="w-4 h-4" />
+      </Button>
+      <UserMenu />
+    </div>
   );
 }
 

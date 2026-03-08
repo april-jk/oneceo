@@ -432,10 +432,13 @@ export class OpencodeEventStreamService {
     timestamp: number;
     sessionEventSeq?: number;
   }): ProjectedEventPayload {
-    const sessionEventSeq =
-      typeof input.sessionEventSeq === 'number' && Number.isFinite(input.sessionEventSeq) && input.sessionEventSeq > 0
-        ? input.sessionEventSeq
-        : buildSessionEventSeq(input.seq, input.timestamp);
+    const hasValidInputSeq =
+      typeof input.sessionEventSeq === 'number' &&
+      Number.isFinite(input.sessionEventSeq) &&
+      input.sessionEventSeq > 0;
+    const sessionEventSeq = hasValidInputSeq
+      ? input.sessionEventSeq
+      : buildSessionEventSeq(input.seq, input.timestamp);
     const metadata: Record<string, unknown> = {
       orchestratorSessionId: input.orchestratorSessionId,
       opencodeSessionId: input.opencodeSessionId || undefined,
@@ -799,13 +802,13 @@ export class OpencodeEventStreamService {
     return false;
   }
 
-  private enqueuePersist(orchestratorSessionId: string, payload: {
+  private async enqueuePersist(orchestratorSessionId: string, payload: {
     opencodeSessionId?: string;
     eventType: string;
     event: Record<string, unknown>;
     seq: number;
     timestamp: number;
-  }) {
+  }): Promise<void> {
     const run = async () => {
       const binding = this.getCachedBinding(orchestratorSessionId) || await this.resolveBoundSession(orchestratorSessionId);
       if (!binding || binding.mode !== 'sandbox') return;
@@ -877,7 +880,7 @@ export class OpencodeEventStreamService {
       console.warn('[OPENCODE_EVENT_PERSIST_ENQUEUE_FAILED]', error);
     });
     this.persistChains.set(orchestratorSessionId, next);
-    void next.finally(() => {
+    await next.finally(() => {
       if (this.persistChains.get(orchestratorSessionId) === next) {
         this.persistChains.delete(orchestratorSessionId);
       }
@@ -910,7 +913,7 @@ export class OpencodeEventStreamService {
             {
               directory: shouldFilterByWorkspace() ? input.workspaceRoot : undefined,
               signal: abort.signal,
-              onEvent: (event) => {
+              onEvent: async (event) => {
                 const normalized = normalizeEvent(event);
                 const currentDir =
                   typeof (normalized as Record<string, unknown>).directory === 'string'
@@ -947,8 +950,8 @@ export class OpencodeEventStreamService {
                   input.orchestratorSessionId,
                   fastEvent
                 );
+                await this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 this.emitFast(input.orchestratorSessionId, fastPayload);
-                this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 osacConnectionManager.emitExternalMessage(input.orchestratorSessionId, message);
               },
             },

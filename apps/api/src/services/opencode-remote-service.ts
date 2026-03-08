@@ -877,9 +877,6 @@ function detectOpencodeOutcome(
   if (lowerType === 'message.final' || lowerType === 'message.completed' || lowerType === 'message.done') {
     return 'completed';
   }
-  if (lowerType === 'session.idle') {
-    return 'completed';
-  }
 
   const event = toRecord(payload.event);
   const properties = toRecord(event.properties);
@@ -887,6 +884,32 @@ function detectOpencodeOutcome(
   const statusRecord = toRecord(properties.status);
   const infoStatusRecord = toRecord(info.status);
   const part = toRecord(properties.part);
+
+  const pendingStates = new Set(['pending', 'waiting', 'awaiting', 'pending_confirmation', 'requires_input']);
+  const partState = asString(part.state) || asString(part.status);
+  const partStateLower = partState.toLowerCase();
+  if (pendingStates.has(partStateLower)) {
+    return null;
+  }
+
+  const pendingTools = toRecord(properties.pendingTools || properties.pending_tools || {});
+  if (Object.keys(pendingTools).length > 0) {
+    return null;
+  }
+
+  const activeTools = Array.isArray(properties.activeTools) ? properties.activeTools : [];
+  if (activeTools.length > 0) {
+    return null;
+  }
+
+  if (lowerType === 'session.idle') {
+    const hasPendingParts = Boolean(properties.pendingParts) || Boolean(properties.pending_parts);
+    if (hasPendingParts) {
+      return null;
+    }
+    return 'completed';
+  }
+
   const messageStates = [
     asString(part.state),
     asString(part.status),
@@ -910,7 +933,6 @@ function detectOpencodeOutcome(
     }
   }
 
-  // 仅在 session 级事件上进行终态判定，避免 message.part.updated 等中间事件提前触发 completed。
   const isSessionScoped = lowerType.startsWith('session.');
   if (!isSessionScoped) {
     return null;

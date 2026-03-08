@@ -556,9 +556,10 @@ class TaskCreationFileMemoryStore {
         mergedMetadata as Record<string, unknown> | undefined,
         this.resolveNextSessionEventSeq(session)
       );
+      const effectiveTimestamp = meta.metadata?.timestamp || now;
       const messageMetadata: Record<string, unknown> = {
         ...seqAttached.metadata,
-        timestamp: now,
+        timestamp: effectiveTimestamp,
       };
       session.messages.push({
         id: this.createId('msg'),
@@ -566,7 +567,7 @@ class TaskCreationFileMemoryStore {
         messageType,
         content: sanitized.text,
         metadata: messageMetadata,
-        createdAt: new Date(now).toISOString(),
+        createdAt: new Date(effectiveTimestamp).toISOString(),
       });
       const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
       if (maxMessages > 0 && session.messages.length > maxMessages) {

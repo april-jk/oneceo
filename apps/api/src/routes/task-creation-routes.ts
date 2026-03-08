@@ -145,12 +145,12 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     createdAt: toIso(session.createdAt as any),
     updatedAt: toIso(session.updatedAt as any),
     messages: Array.isArray(messages)
-      ? messages.map((m) => ({
+      ? messages.map((m, idx) => ({
           id: String(m.id),
           role: (m.role as any) || 'agent',
           messageType: m.messageType || 'message',
           content: m.content || '',
-          metadata: m.metadata || undefined,
+          metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
           createdAt: toIso(m.createdAt as any),
         }))
       : [],
@@ -409,6 +409,63 @@ function asPositiveInt(value: unknown): number | null {
     }
   }
   return null;
+}
+
+function asTimelineCursor(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+    const parsedDate = Date.parse(raw);
+    if (Number.isFinite(parsedDate) && parsedDate > 0) {
+      return Math.floor(parsedDate);
+    }
+  }
+  return null;
+}
+
+function resolveMessageTimelineCursor(message: any): number {
+  const metadata = pickRecord(message?.metadata);
+  const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
+  if (sessionEventSeq !== null) return sessionEventSeq;
+
+  const metadataTimestamp = asTimelineCursor(metadata.timestamp);
+  if (metadataTimestamp !== null) return metadataTimestamp;
+
+  const createdAtTs = asTimelineCursor(message?.createdAt);
+  if (createdAtTs !== null) return createdAtTs;
+  return 0;
+}
+
+function normalizeMessageTimelineMetadata(
+  metadataRaw: unknown,
+  createdAt: unknown,
+  seed: number
+): Record<string, unknown> {
+  const metadata = { ...pickRecord(metadataRaw) };
+  const timestamp =
+    asTimelineCursor(metadata.timestamp) ??
+    asTimelineCursor(createdAt) ??
+    Date.now();
+  metadata.timestamp = timestamp;
+
+  const existingSeq = asPositiveInt(metadata.sessionEventSeq);
+  if (existingSeq !== null) {
+    metadata.sessionEventSeq = existingSeq;
+    return metadata;
+  }
+
+  const tail = Math.abs(seed || 0) % 1000;
+  const candidate = timestamp * 1000 + tail;
+  metadata.sessionEventSeq =
+    Number.isSafeInteger(candidate) && candidate > 0 ? candidate : timestamp;
+  return metadata;
 }
 
 function pickRecord(value: unknown): Record<string, unknown> {
@@ -691,17 +748,10 @@ function updateSseClientCursor(key: string, cursor: number) {
   const prevIsTimestamp = isTimestampCursorValue(prevCursor);
   const nextIsTimestamp = isTimestampCursorValue(cursor);
   if (prevCursor > 0 && prevIsTimestamp !== nextIsTimestamp) {
-    if (nextIsTimestamp) {
-      // 保留 seq 游标，避免被时间戳游标覆盖后导致实时 seq 回放丢失。
+    // 统一以时间戳/时间序列游标为主，避免 seq 在后端重连后重置导致断点错乱。
+    if (prevIsTimestamp && !nextIsTimestamp) {
       return;
     }
-    // 从 timestamp 切回 seq，优先保证增量流可回放。
-    sseClientState.set(key, {
-      ...prev,
-      lastCursor: cursor,
-      updatedAt: Date.now(),
-    });
-    return;
   }
   if (cursor <= prevCursor) return;
   sseClientState.set(key, {
@@ -982,75 +1032,29 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     if (!messages || messages.length === 0) {
       const fallback = await taskCreationSessionDAO.getMessages(sessionId);
       messages = Array.isArray(fallback)
-        ? fallback.map((m) => ({
+        ? fallback.map((m, idx) => ({
             id: String(m.id),
             role: (m.role as any) || 'agent',
             messageType: m.messageType || 'message',
             content: m.content || '',
-            metadata: m.metadata || undefined,
+            metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
             createdAt: toIso(m.createdAt as any),
           }))
         : [];
     }
 
-    // 合并尚未落盘完成的实时文本流快照，避免“刚完成立即刷新”出现文本缺失。
-    try {
-      const session = await taskCreationFileMemoryStore.getSession(sessionId);
-      const runtimeOpencodeSessionId = asText(session?.runtime?.opencodeSessionId);
-      const liveSnapshots = opencodeRemoteService.getLiveTextStreamSnapshots(
-        sessionId,
-        runtimeOpencodeSessionId || undefined
-      );
-      if (liveSnapshots.length > 0) {
-        const existingSignatures = new Set<string>();
-        for (const item of messages) {
-          if (item?.messageType !== 'opencode_event') continue;
-          const metadata = pickRecord(item.metadata);
-          const streamKey = asText(metadata.streamKey);
-          const content = asText(item.content);
-          if (!streamKey || !content) continue;
-          existingSignatures.add(`${streamKey}::${content}`);
-        }
-
-        for (const snapshot of liveSnapshots) {
-          const metadata = pickRecord(snapshot.metadata);
-          const streamKey = asText(metadata.streamKey);
-          const content = asText(snapshot.content);
-          if (!streamKey || !content) continue;
-          const signature = `${streamKey}::${content}`;
-          if (existingSignatures.has(signature)) {
-            continue;
-          }
-          existingSignatures.add(signature);
-          messages.push({
-            id: `live_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            role: 'agent',
-            messageType: 'opencode_event',
-            content: snapshot.content,
-            metadata: snapshot.metadata,
-            createdAt: snapshot.createdAt,
-          } as any);
-        }
-
-      }
-    } catch (snapshotError) {
-      console.warn('[TASK_CREATION_LIVE_STREAM_SNAPSHOT_MERGE_FAILED]', snapshotError);
-    }
-
     messages.sort((a, b) => {
-      const ma = pickRecord(a?.metadata);
-      const mb = pickRecord(b?.metadata);
-      const sa = asPositiveInt(ma.sessionEventSeq);
-      const sb = asPositiveInt(mb.sessionEventSeq);
-      if (sa !== null && sb !== null && sa !== sb) {
-        return sa - sb;
-      }
-      if (sa !== null && sb === null) return -1;
-      if (sa === null && sb !== null) return 1;
-
-      const ta = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
-      const tb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+      const ta = resolveMessageTimelineCursor(a);
+      const tb = resolveMessageTimelineCursor(b);
       if (ta !== tb) return ta - tb;
+
+      const sa = asPositiveInt(pickRecord(a?.metadata).sessionEventSeq) || 0;
+      const sb = asPositiveInt(pickRecord(b?.metadata).sessionEventSeq) || 0;
+      if (sa !== sb) return sa - sb;
+
+      const ca = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
+      const cb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+      if (ca !== cb) return ca - cb;
       return 0;
     });
 
@@ -1938,10 +1942,12 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       const history = await taskCreationFileMemoryStore.getMessages(sessionId);
       const pickCursorFromItem = (item: any) => {
         const meta = pickRecord(item?.metadata);
+        const sessionEventSeq = asPositiveInt(meta.sessionEventSeq);
         const seq = Number(meta.seq);
         const tsMeta = Number(meta.timestamp);
         const tsCreated = item?.createdAt ? Date.parse(item.createdAt) : NaN;
         if (isTimestampCursor) {
+          if (sessionEventSeq !== null) return sessionEventSeq;
           if (Number.isFinite(tsMeta) && tsMeta > 0) return tsMeta;
           if (Number.isFinite(tsCreated) && tsCreated > 0) return tsCreated;
           if (Number.isFinite(seq) && seq > 0) return seq;
@@ -1966,16 +1972,30 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           if (!msgOpencodeSessionId) return false;
           return msgOpencodeSessionId === filterSessionId;
         })
-        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+        .sort((a, b) => {
+          const ma = pickRecord(a?.metadata);
+          const mb = pickRecord(b?.metadata);
+          const sa = asPositiveInt(ma.sessionEventSeq);
+          const sb = asPositiveInt(mb.sessionEventSeq);
+          if (sa !== null && sb !== null && sa !== sb) {
+            return sa - sb;
+          }
+          if (sa !== null && sb === null) return -1;
+          if (sa === null && sb !== null) return 1;
+          return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+        })
         .slice(-500);
       for (const item of filtered) {
         const meta = pickRecord(item.metadata);
+        const sessionEventSeq = asPositiveInt(meta.sessionEventSeq);
+        const timestampEventId = Number(meta.timestamp);
+        const createdAtEventId = item.createdAt ? Date.parse(item.createdAt) : NaN;
+        const seqEventId = Number(meta.seq);
         const eventId =
-          (typeof meta.seq === 'number' && Number.isFinite(meta.seq) && meta.seq > 0 ? meta.seq : undefined) ??
-          (typeof meta.timestamp === 'number' && Number.isFinite(meta.timestamp) && meta.timestamp > 0
-            ? meta.timestamp
-            : undefined) ??
-          (item.createdAt ? Date.parse(item.createdAt) : undefined);
+          (sessionEventSeq !== null ? sessionEventSeq : undefined) ??
+          (Number.isFinite(timestampEventId) && timestampEventId > 0 ? timestampEventId : undefined) ??
+          (Number.isFinite(createdAtEventId) && createdAtEventId > 0 ? createdAtEventId : undefined) ??
+          (Number.isFinite(seqEventId) && seqEventId > 0 ? seqEventId : undefined);
         writeSse(res, {
           sessionId,
           type: item.messageType,
@@ -1997,28 +2017,38 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     if (filterSessionId && msgOpencodeSessionId && msgOpencodeSessionId !== filterSessionId) {
       return;
     }
+    const projected = opencodeEventStreamService.projectForClient({
+      orchestratorSessionId,
+      opencodeSessionId: msgOpencodeSessionId || undefined,
+      eventType: payload.eventType,
+      event: payload.event,
+      seq: payload.seq,
+      timestamp: payload.timestamp,
+      sessionEventSeq: payload.sessionEventSeq,
+    });
     const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
     const liveEventId =
-      (typeof payload.seq === 'number' && Number.isFinite(payload.seq) && payload.seq > 0
-        ? payload.seq
+      (typeof payload.sessionEventSeq === 'number' &&
+      Number.isFinite(payload.sessionEventSeq) &&
+      payload.sessionEventSeq > 0
+        ? payload.sessionEventSeq
         : undefined) ??
       (typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp) && payload.timestamp > 0
         ? payload.timestamp
+        : undefined) ??
+      (typeof payload.seq === 'number' && Number.isFinite(payload.seq) && payload.seq > 0
+        ? payload.seq
         : undefined) ??
       Date.parse(createdAt);
     writeSse(
       res,
       {
         sessionId,
+        ...projected,
         opencodeSessionId: msgOpencodeSessionId || undefined,
         eventType: payload.eventType,
         event: payload.event,
         createdAt,
-        metadata: {
-          seq: payload.seq,
-          timestamp: payload.timestamp,
-          opencodeSessionId: msgOpencodeSessionId || undefined,
-          },
       },
       undefined,
       Number.isFinite(liveEventId as number) ? (liveEventId as number) : undefined

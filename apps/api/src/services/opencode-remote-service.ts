@@ -2223,6 +2223,7 @@ export class OpencodeRemoteService {
 
           const role = input.source === 'agent' ? 'agent' : 'user';
           const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
+          const inputTimestamp = Date.now();
           await this.persistMessage(
             taskSessionId,
             role,
@@ -2232,6 +2233,8 @@ export class OpencodeRemoteService {
               orchestratorSessionId,
               opencodeSessionId,
               workspacePath,
+              timestamp: inputTimestamp,
+              sessionEventSeq: inputTimestamp * 1000,
             }
           );
 

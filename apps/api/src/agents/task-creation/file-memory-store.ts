@@ -551,17 +551,22 @@ class TaskCreationFileMemoryStore {
         : sanitized.truncated
           ? { contentTruncated: true }
           : undefined;
+      const now = Date.now();
       const seqAttached = this.attachSessionEventSeq(
         mergedMetadata as Record<string, unknown> | undefined,
         this.resolveNextSessionEventSeq(session)
       );
+      const messageMetadata: Record<string, unknown> = {
+        ...seqAttached.metadata,
+        timestamp: now,
+      };
       session.messages.push({
         id: this.createId('msg'),
         role,
         messageType,
         content: sanitized.text,
-        metadata: seqAttached.metadata,
-        createdAt: new Date().toISOString(),
+        metadata: messageMetadata,
+        createdAt: new Date(now).toISOString(),
       });
       const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
       if (maxMessages > 0 && session.messages.length > maxMessages) {
@@ -590,7 +595,8 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
       const maxLen =
         session.mode === 'sandbox' ? this.sandboxMaxMessageLength : this.maxMessageLength;
-      const now = new Date().toISOString();
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
       let nextSeq = this.resolveNextSessionEventSeq(session);
       items.forEach((item, idx) => {
         const meta = metaList[idx];
@@ -605,20 +611,25 @@ class TaskCreationFileMemoryStore {
           nextSeq
         );
         nextSeq = seqAttached.nextSeq;
+        const itemTimestamp = meta.metadata?.timestamp || now;
+        const messageMetadata: Record<string, unknown> = {
+          ...seqAttached.metadata,
+          timestamp: itemTimestamp,
+        };
         session.messages.push({
           id: this.createId('msg'),
           role: item.role,
           messageType: item.messageType,
           content: sanitized.text,
-          metadata: seqAttached.metadata,
-          createdAt: item.createdAt || now,
+          metadata: messageMetadata,
+          createdAt: item.createdAt || nowIso,
         });
       });
       const maxMessages = this.clampMax(this.maxMessagesPerSession, 1200);
       if (maxMessages > 0 && session.messages.length > maxMessages) {
         session.messages.splice(0, session.messages.length - maxMessages);
       }
-      session.updatedAt = now;
+      session.updatedAt = nowIso;
       await this.writeMemory(memory);
     });
   }

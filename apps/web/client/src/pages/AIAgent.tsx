@@ -5,7 +5,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Mic, Send, Plus, Sparkles } from "lucide-react";
+import { Mic, Send, Sparkles } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,25 +15,45 @@ import {
 import { useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  stashPendingDraftAttachments,
+  type PendingAttachment,
+} from "@/lib/task-attachments";
 
 export default function AIAgent() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
 
   const handleSend = () => {
-    if (message.trim()) {
-      // Smooth transition to workspace
-      setLocation("/ai-workspace");
-    }
+    const value = message.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!value) return;
+    stashPendingDraftAttachments(attachments.map((item) => item.file));
+    setLocation(`/new-task?q=${encodeURIComponent(value)}`);
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   return (
@@ -94,26 +114,14 @@ export default function AIAgent() {
                 rows={4}
               />
 
+              <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
               {/* Bottom Action Bar - No Border Separator */}
               <TooltipProvider>
                 <div className="flex items-center justify-between pt-2">
                   {/* Left Side Actions */}
                   <div className="flex items-center gap-1">
-                    {/* Add Attachment Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                        >
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Add attachment</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
                     <ConnectorDialog />
 
@@ -182,7 +190,7 @@ export default function AIAgent() {
                       <TooltipTrigger asChild>
                         <Button
                           onClick={handleSend}
-                          disabled={!message.trim()}
+                          disabled={!message.trim() && attachments.length === 0}
                           size="icon"
                           className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                         >

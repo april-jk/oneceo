@@ -266,11 +266,14 @@ export function ConnectorCenterPanel({
           redirectUri,
         });
         const attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+        let attachError: Error | null = null;
         if (attachTarget) {
-          await attachSessionConnector(attachTarget, connector);
-          toast.success("授权完成，连接器已挂载到目标会话");
-        } else {
-          toast.success("授权完成");
+          try {
+            await attachSessionConnector(attachTarget, connector);
+          } catch (error) {
+            attachError =
+              error instanceof Error ? error : new Error("连接器挂载失败");
+          }
         }
         window.history.replaceState(
           null,
@@ -278,6 +281,13 @@ export function ConnectorCenterPanel({
           cleanupConnectorQuery(location, search)
         );
         await load();
+        if (attachError) {
+          toast.error(`授权已完成，但挂载失败：${attachError.message}`);
+        } else if (attachTarget) {
+          toast.success("授权完成，连接器已挂载到目标会话");
+        } else {
+          toast.success("授权完成");
+        }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "OAuth callback failed");
       } finally {
@@ -319,13 +329,23 @@ export function ConnectorCenterPanel({
         config: payload.config,
         credentials: payload.credentials,
       });
+      let attachError: Error | null = null;
       if (effectiveTargetSessionId) {
-        await attachSessionConnector(effectiveTargetSessionId, item.key);
+        try {
+          await attachSessionConnector(effectiveTargetSessionId, item.key);
+        } catch (error) {
+          attachError =
+            error instanceof Error ? error : new Error("连接器挂载失败");
+        }
+      }
+      await load();
+      if (attachError) {
+        toast.error(`连接器配置已保存，但挂载失败：${attachError.message}`);
+      } else if (effectiveTargetSessionId) {
         toast.success("配置已保存，并已挂载到目标会话");
       } else {
         toast.success("连接器配置已保存");
       }
-      await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Save connector failed");
     } finally {

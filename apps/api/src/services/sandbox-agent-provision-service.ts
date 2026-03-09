@@ -1,6 +1,10 @@
 import { ensureDatabaseConnection } from '../config/database';
 import { e2bConfig } from '../config/e2b-config';
-import { sandboxExecutionEnvironmentDAO } from '../db/dao';
+import {
+  sandboxExecutionEnvironmentDAO,
+  taskCreationSessionDAO,
+  taskSessionConnectorBindingDAO,
+} from '../db/dao';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
@@ -11,6 +15,13 @@ import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
+import {
+  connectorRegistry,
+  type ConnectorKey,
+  type ConnectorRuntimeConfig,
+} from './connector-registry';
+import { userConnectorService } from './user-connector-service';
+import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 
 type ProvisionInput = {
   metadata?: Record<string, unknown>;
@@ -114,7 +125,91 @@ type OpencodeConfigPayload = {
   mcp?: Record<string, unknown>;
 };
 
-function buildOpencodeConfig(envs: Record<string, string>): string {
+type ResolvedConnectorBootstrap = {
+  mcpEntries: Record<string, unknown>;
+  processEnvs: Record<string, string>;
+};
+
+function connectorServerName(connectorKey: ConnectorKey, taskSessionId: string) {
+  return `${connectorKey}--${taskSessionId}`;
+}
+
+function buildGithubProcessEnv(runtimeConfig: Extract<ConnectorRuntimeConfig, { type: 'local' }>) {
+  const token = runtimeConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN?.trim();
+  if (!token) return {};
+  return {
+    GITHUB_PERSONAL_ACCESS_TOKEN: token,
+    GH_TOKEN: token,
+    GITHUB_TOKEN: token,
+  };
+}
+
+async function resolveAttachedConnectorBootstrap(
+  taskSessionId?: string
+): Promise<ResolvedConnectorBootstrap> {
+  if (!taskSessionId) {
+    return {
+      mcpEntries: {},
+      processEnvs: {},
+    };
+  }
+
+  await connectorStorageBootstrap.ensureReady();
+  const session = await taskCreationSessionDAO.getSession(taskSessionId);
+  const userId = pickString(session?.userId);
+  if (!userId) {
+    return {
+      mcpEntries: {},
+      processEnvs: {},
+    };
+  }
+
+  const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
+  const attachedBindings = bindings.filter((binding) => binding.desiredState === 'attached');
+  if (attachedBindings.length === 0) {
+    return {
+      mcpEntries: {},
+      processEnvs: {},
+    };
+  }
+
+  const mcpEntries: Record<string, unknown> = {};
+  const processEnvs: Record<string, string> = {};
+
+  for (const binding of attachedBindings) {
+    const connectorKey = binding.connectorKey as ConnectorKey;
+    const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
+    if (!catalogItem.available) continue;
+
+    const account = await userConnectorService.getAccountMaterial(userId, connectorKey);
+    if (!account || account.authStatus !== 'authorized') continue;
+
+    try {
+      const runtimeConfig = connectorRegistry.materializeRuntimeConfig({
+        connectorKey,
+        account,
+      });
+      const serverName = binding.serverName || connectorServerName(connectorKey, taskSessionId);
+      mcpEntries[serverName] = runtimeConfig;
+      if (connectorKey === 'github' && runtimeConfig.type === 'local') {
+        Object.assign(processEnvs, buildGithubProcessEnv(runtimeConfig));
+      }
+    } catch (error) {
+      console.warn('[OPENCODE_CONNECTOR_BOOTSTRAP_SKIP]', {
+        taskSessionId,
+        connectorKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { mcpEntries, processEnvs };
+}
+
+function buildOpencodeConfig(
+  envs: Record<string, string>,
+  extraMcpEntries: Record<string, unknown> = {}
+): string {
   const providerIdRaw = (envs.OPENCODE_PROVIDER_ID || 'openai').trim();
   const providerId = providerIdRaw.toLowerCase() || 'openai';
   const modelId = (envs.OPENCODE_MODEL || 'claude-haiku-4-5-20251001').trim();
@@ -157,14 +252,19 @@ function buildOpencodeConfig(envs: Record<string, string>): string {
         command: ['npx', '@playwright/mcp@latest', '--cdp-endpoint', 'http://127.0.0.1:9222'],
         enabled: true,
       },
+      ...extraMcpEntries,
     },
   };
 
   return JSON.stringify(payload, null, 2);
 }
 
-async function writeOpencodeConfig(sessionId: string, envs: Record<string, string>) {
-  const config = buildOpencodeConfig(envs);
+async function writeOpencodeConfig(
+  sessionId: string,
+  envs: Record<string, string>,
+  extraMcpEntries: Record<string, unknown> = {}
+) {
+  const config = buildOpencodeConfig(envs, extraMcpEntries);
   const configDir = '$HOME/.config/opencode';
   const configPath = `${configDir}/opencode.json`;
   const command = `mkdir -p ${configDir}
@@ -385,9 +485,53 @@ async function startOpencodeServer(
   throw new Error(`opencode serve 启动失败: ${message}`);
 }
 
+async function stopOpencodeServer(sessionId: string) {
+  const command = `pid=$(ps -ef | awk '/opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort}/ && !/awk/ {print $2; exit}')
+if [ -n "$pid" ]; then
+  kill "$pid" || true
+fi`;
+  try {
+    await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20_000 });
+  } catch {
+    // best effort
+  }
+}
+
+async function restartOpencodeServer(
+  sessionId: string,
+  baseUrl: string,
+  envs: Record<string, string>,
+  trafficAccessToken?: string | null
+) {
+  await stopOpencodeServer(sessionId);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await startOpencodeServer(sessionId, baseUrl, envs, trafficAccessToken);
+}
+
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
 
 export class SandboxAgentProvisionService {
+  async syncOpencodeRuntimeConfig(input: { orchestratorSessionId: string; taskSessionId?: string }) {
+    const sessionId = input.orchestratorSessionId;
+    const info = await e2bConnector.getSandboxInfo(sessionId);
+    const trafficAccessToken =
+      (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
+    const host = await e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort);
+    const baseUrl = `https://${host}`;
+    const baseEnvs = buildSandboxEnv();
+    const connectorBootstrap = await resolveAttachedConnectorBootstrap(input.taskSessionId);
+    const opencodeEnvs = {
+      ...baseEnvs,
+      ...connectorBootstrap.processEnvs,
+    };
+    await writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries);
+    await restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken);
+    return {
+      baseUrl,
+      trafficAccessToken,
+    };
+  }
+
   async provisionWithLock(input: ProvisionInput): Promise<ProvisionResult> {
     const taskSessionId = pickString(input.metadata?.taskSessionId);
     if (!taskSessionId) {
@@ -454,8 +598,20 @@ export class SandboxAgentProvisionService {
       }
     }
 
-    await runStep('opencode_config', () => writeOpencodeConfig(sessionId, envInput));
-    await runStep('opencode_start', () => startOpencodeServer(sessionId, baseUrl, envInput, trafficAccessToken));
+    const connectorBootstrap = await runStep('opencode_connector_config', () =>
+      resolveAttachedConnectorBootstrap(taskSessionId)
+    );
+    const opencodeEnvs = {
+      ...envInput,
+      ...connectorBootstrap.processEnvs,
+    };
+
+    await runStep('opencode_config', () =>
+      writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
+    );
+    await runStep('opencode_start', () =>
+      startOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken)
+    );
     await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
     await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
     await runStep('neko_debug', () => ensureNekoDebug(sessionId));

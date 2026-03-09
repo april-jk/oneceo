@@ -887,6 +887,7 @@ function updateSseClientCursor(key: string, cursor: number) {
  */
 router.post('/sessions', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.resolve(req);
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
@@ -894,9 +895,10 @@ router.post('/sessions', async (req, res) => {
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
+    const effectiveSessionId = requestedSessionId || randomUUID();
 
-    const existingSession = requestedSessionId
-      ? await taskCreationFileMemoryStore.getSession(requestedSessionId)
+    const existingSession = effectiveSessionId
+      ? await taskCreationFileMemoryStore.getSession(effectiveSessionId)
       : null;
     const isNewSession = !existingSession;
     const title =
@@ -906,7 +908,7 @@ router.post('/sessions', async (req, res) => {
 
     const session = await taskCreationFileMemoryStore.createSession(
       title,
-      requestedSessionId || undefined
+      effectiveSessionId
     );
 
     if (requestedMode === 'sandbox' || requestedMode === 'altus') {
@@ -955,7 +957,11 @@ router.post('/sessions', async (req, res) => {
     try {
       const existingDbSession = await taskCreationSessionDAO.getSession(session.id);
       if (!existingDbSession) {
-        await taskCreationSessionDAO.createSession({ id: session.id, status: 'in_progress' });
+        await taskCreationSessionDAO.createSession({
+          id: session.id,
+          userId: currentUser?.userId,
+          status: 'in_progress',
+        });
       }
       if (isNewSession) {
         await taskCreationSessionDAO.addMessage({

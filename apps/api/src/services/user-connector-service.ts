@@ -179,6 +179,23 @@ async function resolveGithubProfile(accessToken: string): Promise<{ displayName?
   };
 }
 
+async function resolveDisplayNameForSave(input: {
+  connectorKey: ConnectorKey;
+  secret: ConnectorAccountSecret | null;
+  fallbackDisplayName?: string;
+}): Promise<string | undefined> {
+  const fallback = asText(input.fallbackDisplayName) || undefined;
+  if (input.connectorKey !== 'github') {
+    return fallback;
+  }
+  const accessToken = asText(input.secret?.accessToken);
+  if (!accessToken) {
+    return fallback;
+  }
+  const profile = await resolveGithubProfile(accessToken);
+  return profile.displayName || fallback;
+}
+
 export class UserConnectorService {
   async listCatalog() {
     return connectorRegistry.listCatalog();
@@ -235,14 +252,19 @@ export class UserConnectorService {
     if (catalogItem.authMode === 'dsn' && !secret?.dsn) {
       throw new Error('Postgres 连接器需要提供 DSN');
     }
+    const resolvedDisplayName = await resolveDisplayNameForSave({
+      connectorKey,
+      secret,
+      fallbackDisplayName: displayName,
+    });
     const authStatus = resolveAuthStatus(catalogItem, secret, existing?.authStatus);
     const saved = await userConnectorAccountDAO.upsert({
       userId,
       connectorKey,
       authMode: catalogItem.authMode,
       authStatus,
-      displayName: displayName || null,
-      configJson: sanitizeConfig(connectorKey, config, displayName || undefined),
+      displayName: resolvedDisplayName || null,
+      configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
       secretCiphertext: connectorSecretService.encrypt(secret),
       lastAuthAt: authStatus === 'authorized' ? new Date() : existing?.lastAuthAt || null,
       lastError: null,

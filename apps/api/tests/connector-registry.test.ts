@@ -68,6 +68,9 @@ test('connector registry materializes local and remote MCP configs', () => {
     account: buildAccount('github', { accessToken: 'gh-token' }),
   });
   assert.equal(githubConfig.type, 'local');
+  assert.equal(githubConfig.command[0], 'node');
+  assert.equal(githubConfig.command[1], '-e');
+  assert.match(githubConfig.command[2], /server-github/);
   assert.equal(githubConfig.environment?.GITHUB_PERSONAL_ACCESS_TOKEN, 'gh-token');
 
   const postgresConfig = connectorRegistry.materializeRuntimeConfig({

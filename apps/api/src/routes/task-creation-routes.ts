@@ -21,6 +21,11 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
+import {
+  inferFilenameFromResponse,
+  resolveRemoteAttachmentTarget,
+  type RemoteAttachmentProvider,
+} from '../services/remote-attachment-service';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
@@ -488,6 +493,25 @@ function isAllowedAttachmentFile(input: { name: string; mimeType?: string }): bo
     return true;
   }
   return ALLOWED_ATTACHMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
+}
+
+function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {
+  const normalized = asText(value);
+  if (
+    normalized === 'website' ||
+    normalized === 'google-drive' ||
+    normalized === 'onedrive'
+  ) {
+    return normalized;
+  }
+  throw new Error('不支持的远程来源');
+}
+
+function shouldAllowPrivateRemoteAttachmentHosts() {
+  if (process.env.ALLOW_PRIVATE_REMOTE_ATTACHMENTS === '1') {
+    return true;
+  }
+  return process.env.NODE_ENV !== 'production';
 }
 
 function asText(value: unknown): string {
@@ -1163,6 +1187,68 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取对话消息失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/attachments/fetch', async (req, res) => {
+  try {
+    currentUserResolver.require(req);
+    const provider = parseRemoteAttachmentProvider(req.body?.provider);
+    const sourceUrl = asText(req.body?.url);
+    const target = resolveRemoteAttachmentTarget(provider, sourceUrl, {
+      allowPrivateHosts: shouldAllowPrivateRemoteAttachmentHosts(),
+    });
+
+    const upstream = await fetch(target.fetchUrl, {
+      redirect: 'follow',
+      headers: {
+        'user-agent': 'oneceo-remote-attachment/1.0',
+      },
+    });
+    if (!upstream.ok) {
+      throw new Error(`远程文件获取失败 (${upstream.status})`);
+    }
+
+    const declaredSize = asPositiveInt(upstream.headers.get('content-length'));
+    if (declaredSize !== null && declaredSize > TASK_ATTACHMENT_MAX_BYTES) {
+      throw new Error('单个附件不能超过 10 MB');
+    }
+
+    const rawBody = Buffer.from(await upstream.arrayBuffer());
+    if (!rawBody.length) {
+      throw new Error('远程文件内容为空');
+    }
+    if (rawBody.length > TASK_ATTACHMENT_MAX_BYTES) {
+      throw new Error('单个附件不能超过 10 MB');
+    }
+
+    const mimeType = asText(upstream.headers.get('content-type')).split(';')[0] || 'application/octet-stream';
+    const filename = inferFilenameFromResponse({
+      contentDisposition: upstream.headers.get('content-disposition'),
+      responseUrl: upstream.url || target.fetchUrl,
+      fallbackName: target.suggestedName,
+      mimeType,
+    });
+    if (!isAllowedAttachmentFile({ name: filename, mimeType })) {
+      throw new Error('仅支持文本、文档和图片类附件');
+    }
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', String(rawBody.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Type, Content-Length, X-Attachment-Name, X-Attachment-Provider'
+    );
+    res.setHeader('X-Attachment-Name', encodeURIComponent(filename));
+    res.setHeader('X-Attachment-Provider', provider);
+    return res.status(200).send(rawBody);
+  } catch (error: any) {
+    console.error('远程附件获取失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '远程附件获取失败'),
     });
   }
 });

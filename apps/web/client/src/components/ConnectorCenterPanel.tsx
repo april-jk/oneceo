@@ -4,11 +4,13 @@ import {
   AlertCircle,
   ArrowUpRight,
   CheckCircle2,
+  ChevronRight,
   Database,
   Github,
   Link2,
   Loader2,
   NotepadText,
+  Plus,
   Plug,
   ShieldCheck,
   Slack,
@@ -18,6 +20,13 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -187,6 +196,9 @@ export function ConnectorCenterPanel({
 
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<ConnectorKey | null>(
+    effectiveHighlightedConnector || null
+  );
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
   const [accounts, setAccounts] = useState<Record<string, UserConnectorAccount>>({});
   const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
@@ -218,6 +230,18 @@ export function ConnectorCenterPanel({
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (effectiveHighlightedConnector) {
+      setSelectedKey(effectiveHighlightedConnector);
+    }
+  }, [effectiveHighlightedConnector]);
+
+  useEffect(() => {
+    if (!selectedKey) return;
+    if (catalog.some((item) => item.key === selectedKey)) return;
+    setSelectedKey(null);
+  }, [catalog, selectedKey]);
 
   useEffect(() => {
     const code = params.get("code");
@@ -352,367 +376,412 @@ export function ConnectorCenterPanel({
     [accounts, catalog, formState]
   );
 
+  const selectedCard =
+    cards.find(({ item }) => item.key === selectedKey) || null;
+
+  const renderTargetBanner = () =>
+    effectiveTargetSessionId ? (
+      <div className="mx-6 mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+        <div className="flex items-center gap-2 font-medium">
+          <ShieldCheck className="h-4 w-4" />
+          正在为目标会话准备挂载
+        </div>
+        <p className="mt-1 text-emerald-700">Session ID: {effectiveTargetSessionId}</p>
+      </div>
+    ) : null;
+
+  const openSuggestedConnector = () => {
+    const preferred =
+      cards.find(({ account, item }) => item.available && account?.authStatus !== "authorized") ||
+      cards.find(({ item }) => item.available) ||
+      cards[0];
+    if (preferred) {
+      setSelectedKey(preferred.item.key);
+    }
+  };
+
   return (
-    <div className="flex h-full flex-col gap-5">
-      <div className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
-          Connector Center
-        </p>
-        <h2 className="text-2xl font-semibold tracking-tight">用户级 MCP 连接器中心</h2>
-        <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          统一配置用户授权与密钥，然后在任意会话中热挂载连接器。当前只控制
-          OpenCode runtime。
-        </p>
+    <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-border/70 bg-card">
+      <div className="hidden items-center gap-1 border-b border-border/70 px-6 py-5 md:flex">
+        <div className="flex flex-col">
+          <h3 className="text-[18px] font-medium leading-7 text-foreground">连接器</h3>
+          <p className="text-sm text-muted-foreground">统一管理用户级授权与密钥配置</p>
+        </div>
       </div>
 
-      {effectiveTargetSessionId ? (
-        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          <div className="flex items-center gap-2 font-medium">
-            <ShieldCheck className="h-4 w-4" />
-            正在为目标会话准备挂载
-          </div>
-          <p className="mt-1 text-emerald-700">
-            Session ID: {effectiveTargetSessionId}
-          </p>
-        </div>
-      ) : null}
+      {renderTargetBanner()}
 
-      <ScrollArea className="min-h-0 flex-1 pr-2">
-        <div className="grid gap-5 lg:grid-cols-2">
-          {cards.map(({ item, account, form }) => {
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col px-6">
+          {cards.map(({ item, account }) => {
             const Icon = iconMap[item.icon as keyof typeof iconMap] || Link2;
-            const guide = CONNECTOR_GUIDES[item.key];
-            const highlighted = effectiveHighlightedConnector === item.key;
-            const busy =
-              actionKey === `save:${item.key}` ||
-              actionKey === `oauth:${item.key}` ||
-              actionKey === `disconnect:${item.key}` ||
-              actionKey === `attach:${item.key}`;
-            const supportsManual = item.configFields.length > 0;
             const isAuthorized = account?.authStatus === "authorized";
             return (
-              <div
+              <button
                 key={item.key}
-                className={`rounded-[28px] border bg-card p-6 shadow-sm transition ${
-                  highlighted
-                    ? "border-foreground/60 shadow-lg shadow-black/5"
-                    : "border-border/70"
-                }`}
+                type="button"
+                onClick={() => setSelectedKey(item.key)}
+                className="flex w-full items-center gap-3 overflow-hidden border-b border-border/70 px-0 py-4 text-left transition hover:bg-muted/30"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-foreground">
-                      <Icon className="h-5 w-5" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-background">
+                  <Icon className="h-5 w-5 text-foreground/80" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {item.name}
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-xl font-semibold">{item.name}</h3>
-                        {isAuthorized ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                        ) : null}
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                        {item.description}
-                      </p>
-                    </div>
+                    {isAuthorized ? (
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                    ) : null}
                   </div>
+                  <div className="truncate text-xs leading-5 text-muted-foreground">
+                    {item.description}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
                   <Badge variant={statusTone(account?.authStatus || "not_configured")}>
                     {formatStatus(account?.authStatus || "not_configured")}
                   </Badge>
+                  <ChevronRight className="h-5 w-5 text-muted-foreground" />
                 </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Badge variant="outline">auth: {formatStatus(item.authMode)}</Badge>
-                  <Badge variant={statusTone(account?.authStatus || "not_configured")}>
-                    state: {formatStatus(account?.authStatus || "not_configured")}
-                  </Badge>
-                  {item.oauth?.supported ? (
-                    <Badge variant="outline">oauth available</Badge>
-                  ) : null}
-                  {supportsManual ? (
-                    <Badge variant="outline">
-                      {item.key === "postgres" ? "manual dsn" : "manual token"}
-                    </Badge>
-                  ) : null}
-                  {effectiveTargetSessionId && isAuthorized ? (
-                    <Badge variant="secondary">ready for session attach</Badge>
-                  ) : null}
-                </div>
-
-                <div className="mt-4 rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>Current account</span>
-                    <span className="truncate text-right text-foreground/80">
-                      {account?.displayName || account?.secretSummary || "Not configured"}
-                    </span>
-                  </div>
-                  {account?.lastAuthAt ? (
-                    <div className="mt-2 flex items-center justify-between gap-3">
-                      <span>Last authorized</span>
-                      <span className="text-right text-foreground/80">
-                        {new Date(account.lastAuthAt).toLocaleString()}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="mt-4 rounded-3xl border border-border/70 bg-background px-4 py-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium text-foreground">Quick setup</p>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                        {guide.intro}
-                      </p>
-                    </div>
-                    <Badge variant="outline">
-                      {item.oauth?.supported ? "recommended: oauth" : "recommended: manual"}
-                    </Badge>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {guide.quickLinks.map((link) => (
-                      <Button
-                        key={link.href}
-                        asChild
-                        variant="outline"
-                        size="sm"
-                        className="rounded-full"
-                      >
-                        <a
-                          href={link.href}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={link.description}
-                        >
-                          <ArrowUpRight className="h-4 w-4" />
-                          {link.label}
-                        </a>
-                      </Button>
-                    ))}
-                    {guide.exampleValue && guide.exampleLabel ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-full"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(guide.exampleValue || "");
-                            toast.success("模板已复制到剪贴板");
-                          } catch {
-                            toast.error("复制失败，请手动复制示例");
-                          }
-                        }}
-                      >
-                        <ShieldCheck className="h-4 w-4" />
-                        {guide.exampleLabel}
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                        How To Get It
-                      </p>
-                      <ol className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
-                        {guide.steps.map((step, index) => (
-                          <li key={step} className="flex gap-2">
-                            <span className="font-medium text-foreground">{index + 1}.</span>
-                            <span>{step}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-
-                    {guide.tips?.length ? (
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                          Tips
-                        </p>
-                        <div className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
-                          {guide.tips.map((tip) => (
-                            <p key={tip}>• {tip}</p>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {guide.exampleValue ? (
-                    <div className="mt-4 rounded-2xl bg-muted/50 px-3 py-3 font-mono text-xs text-foreground/80">
-                      {guide.exampleValue}
-                    </div>
-                  ) : null}
-                </div>
-
-                {item.availabilityReason ? (
-                  <div className="mt-4 flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{item.availabilityReason}</span>
-                  </div>
-                ) : null}
-
-                {account?.lastError ? (
-                  <div className="mt-4 flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{account.lastError}</span>
-                  </div>
-                ) : null}
-
-                {supportsManual ? (
-                  <div className="mt-5 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">Manual config</p>
-                        <p className="text-sm text-muted-foreground">
-                          {item.oauth?.supported
-                            ? "除了 OAuth，也可以直接保存现有 token / key。"
-                            : "从官方后台复制后直接保存到当前用户配置。"}
-                        </p>
-                      </div>
-                      {isAuthorized ? (
-                        <Badge variant="secondary">leave blank to keep secret</Badge>
-                      ) : null}
-                    </div>
-
-                    {item.configFields.map((field) => {
-                      const fieldDescription = [
-                        field.description,
-                        field.secret && isAuthorized
-                          ? "留空则保留当前已保存的 secret。"
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" ");
-
-                      const commonProps = {
-                        id: `${item.key}-${field.key}`,
-                        value: form[field.key] || "",
-                        onChange: (
-                          event: React.ChangeEvent<
-                            HTMLInputElement | HTMLTextAreaElement
-                          >
-                        ) => handleFieldChange(item.key, field.key, event.target.value),
-                        placeholder: field.placeholder,
-                      };
-
-                      return (
-                        <div key={field.key} className="space-y-2">
-                          <Label htmlFor={`${item.key}-${field.key}`}>{field.label}</Label>
-                          {field.type === "textarea" ? (
-                            <Textarea
-                              {...commonProps}
-                              className="min-h-28 rounded-2xl"
-                            />
-                          ) : (
-                            <Input
-                              {...commonProps}
-                              className="h-11 rounded-2xl"
-                              type={field.secret ? "password" : field.type}
-                            />
-                          )}
-                          {fieldDescription ? (
-                            <p className="text-xs leading-5 text-muted-foreground">
-                              {fieldDescription}
-                            </p>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="mt-5 rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-                    OAuth 已启用，授权完成后会把用户级 token 统一保存，后续任意
-                    session 都可直接复用。
-                  </div>
-                )}
-
-                <Separator className="my-5" />
-
-                <div className="flex flex-wrap gap-3">
-                  {supportsManual ? (
-                    <Button
-                      variant={item.oauth?.supported ? "secondary" : "default"}
-                      className="rounded-2xl"
-                      disabled={busy || !item.available}
-                      onClick={() => void handleSave(item)}
-                    >
-                      {busy && actionKey === `save:${item.key}` ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <ShieldCheck className="mr-2 h-4 w-4" />
-                      )}
-                      {item.key === "postgres"
-                        ? "Save DSN"
-                        : item.oauth?.supported
-                          ? "Save Manual Token"
-                          : "Save Config"}
-                    </Button>
-                  ) : null}
-
-                  {item.oauth?.supported ? (
-                    <Button
-                      className="rounded-2xl"
-                      disabled={busy || !item.available}
-                      onClick={() => void handleOAuth(item)}
-                    >
-                      {busy && actionKey === `oauth:${item.key}` ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <ArrowUpRight className="mr-2 h-4 w-4" />
-                      )}
-                      {isAuthorized ? "Re-authorize" : "Authorize"}
-                    </Button>
-                  ) : null}
-
-                  {effectiveTargetSessionId && isAuthorized ? (
-                    <Button
-                      variant="secondary"
-                      className="rounded-2xl"
-                      disabled={busy}
-                      onClick={async () => {
-                        setActionKey(`attach:${item.key}`);
-                        try {
-                          await attachSessionConnector(effectiveTargetSessionId, item.key);
-                          toast.success("连接器已挂载到目标会话");
-                        } catch (error) {
-                          toast.error(
-                            error instanceof Error
-                              ? error.message
-                              : "Attach connector failed"
-                          );
-                        } finally {
-                          setActionKey(null);
-                        }
-                      }}
-                    >
-                      <Plug className="mr-2 h-4 w-4" />
-                      Attach To Session
-                    </Button>
-                  ) : null}
-
-                  {isAuthorized ? (
-                    <Button
-                      variant="outline"
-                      className="rounded-2xl"
-                      disabled={busy}
-                      onClick={() => void handleDisconnect(item.key)}
-                    >
-                      <Unplug className="mr-2 h-4 w-4" />
-                      Clear Auth
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
+              </button>
             );
           })}
+
+          {!loading && cards.length === 0 ? (
+            <div className="py-10 text-sm text-muted-foreground">暂无可用连接器</div>
+          ) : null}
         </div>
       </ScrollArea>
 
+      <div className="border-t border-border/70 px-6 py-4">
+        <Button
+          variant="outline"
+          className="rounded-xl"
+          onClick={openSuggestedConnector}
+          disabled={loading || cards.length === 0}
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          添加连接器
+        </Button>
+      </div>
+
+      <Dialog open={Boolean(selectedCard)} onOpenChange={(open) => !open && setSelectedKey(null)}>
+        {selectedCard ? (() => {
+          const { item, account, form } = selectedCard;
+          const Icon = iconMap[item.icon as keyof typeof iconMap] || Link2;
+          const guide = CONNECTOR_GUIDES[item.key];
+          const busy =
+            actionKey === `save:${item.key}` ||
+            actionKey === `oauth:${item.key}` ||
+            actionKey === `disconnect:${item.key}` ||
+            actionKey === `attach:${item.key}`;
+          const supportsManual = item.configFields.length > 0;
+          const isAuthorized = account?.authStatus === "authorized";
+
+          return (
+            <DialogContent className="max-h-[82vh] max-w-4xl overflow-hidden rounded-[28px] border border-border/70 p-0">
+              <DialogHeader className="border-b border-border/70 px-6 py-5 text-left">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
+                    <Icon className="h-5 w-5 text-foreground" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <DialogTitle className="text-xl font-semibold text-foreground">
+                        {item.name}
+                      </DialogTitle>
+                      <Badge variant={statusTone(account?.authStatus || "not_configured")}>
+                        {formatStatus(account?.authStatus || "not_configured")}
+                      </Badge>
+                    </div>
+                    <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {item.description}
+                    </DialogDescription>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              <ScrollArea className="max-h-[calc(82vh-96px)]">
+                <div className="space-y-5 px-6 py-5">
+                  <div className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>当前账号</span>
+                      <span className="truncate text-right text-foreground/80">
+                        {account?.displayName || account?.secretSummary || "未配置"}
+                      </span>
+                    </div>
+                    {account?.lastAuthAt ? (
+                      <div className="mt-2 flex items-center justify-between gap-3">
+                        <span>最近授权</span>
+                        <span className="text-right text-foreground/80">
+                          {new Date(account.lastAuthAt).toLocaleString()}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-3xl border border-border/70 bg-background px-4 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">快速开始</p>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                          {guide.intro}
+                        </p>
+                      </div>
+                      <Badge variant="outline">
+                        {item.oauth?.supported ? "推荐 OAuth" : "推荐手动配置"}
+                      </Badge>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {guide.quickLinks.map((link) => (
+                        <Button
+                          key={link.href}
+                          asChild
+                          variant="outline"
+                          size="sm"
+                          className="rounded-full"
+                        >
+                          <a
+                            href={link.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={link.description}
+                          >
+                            <ArrowUpRight className="h-4 w-4" />
+                            {link.label}
+                          </a>
+                        </Button>
+                      ))}
+                      {guide.exampleValue && guide.exampleLabel ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="rounded-full"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(guide.exampleValue || "");
+                              toast.success("模板已复制到剪贴板");
+                            } catch {
+                              toast.error("复制失败，请手动复制示例");
+                            }
+                          }}
+                        >
+                          <ShieldCheck className="h-4 w-4" />
+                          {guide.exampleLabel}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
+                          How To Get It
+                        </p>
+                        <ol className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
+                          {guide.steps.map((step, index) => (
+                            <li key={step} className="flex gap-2">
+                              <span className="font-medium text-foreground">{index + 1}.</span>
+                              <span>{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+
+                      {guide.tips?.length ? (
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
+                            Tips
+                          </p>
+                          <div className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
+                            {guide.tips.map((tip) => (
+                              <p key={tip}>• {tip}</p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {guide.exampleValue ? (
+                      <div className="mt-4 rounded-2xl bg-muted/50 px-3 py-3 font-mono text-xs text-foreground/80">
+                        {guide.exampleValue}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {item.availabilityReason ? (
+                    <div className="flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{item.availabilityReason}</span>
+                    </div>
+                  ) : null}
+
+                  {account?.lastError ? (
+                    <div className="flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{account.lastError}</span>
+                    </div>
+                  ) : null}
+
+                  {supportsManual ? (
+                    <div className="space-y-3 rounded-3xl border border-border/70 bg-background px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">手动配置</p>
+                          <p className="text-sm text-muted-foreground">
+                            {item.oauth?.supported
+                              ? "除了 OAuth，也可以直接保存现有 token / key。"
+                              : "从官方后台复制后直接保存到当前用户配置。"}
+                          </p>
+                        </div>
+                        {isAuthorized ? (
+                          <Badge variant="secondary">留空则保留当前 secret</Badge>
+                        ) : null}
+                      </div>
+
+                      {item.configFields.map((field) => {
+                        const fieldDescription = [
+                          field.description,
+                          field.secret && isAuthorized
+                            ? "留空则保留当前已保存的 secret。"
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" ");
+
+                        const commonProps = {
+                          id: `${item.key}-${field.key}`,
+                          value: form[field.key] || "",
+                          onChange: (
+                            event: React.ChangeEvent<
+                              HTMLInputElement | HTMLTextAreaElement
+                            >
+                          ) => handleFieldChange(item.key, field.key, event.target.value),
+                          placeholder: field.placeholder,
+                        };
+
+                        return (
+                          <div key={field.key} className="space-y-2">
+                            <Label htmlFor={`${item.key}-${field.key}`}>{field.label}</Label>
+                            {field.type === "textarea" ? (
+                              <Textarea
+                                {...commonProps}
+                                className="min-h-28 rounded-2xl"
+                              />
+                            ) : (
+                              <Input
+                                {...commonProps}
+                                className="h-11 rounded-2xl"
+                                type={field.secret ? "password" : field.type}
+                              />
+                            )}
+                            {fieldDescription ? (
+                              <p className="text-xs leading-5 text-muted-foreground">
+                                {fieldDescription}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+                      OAuth 已启用，授权完成后会把用户级 token 统一保存，后续任意
+                      session 都可直接复用。
+                    </div>
+                  )}
+
+                  <Separator />
+
+                  <div className="flex flex-wrap gap-3">
+                    {supportsManual ? (
+                      <Button
+                        variant={item.oauth?.supported ? "secondary" : "default"}
+                        className="rounded-2xl"
+                        disabled={busy || !item.available}
+                        onClick={() => void handleSave(item)}
+                      >
+                        {busy && actionKey === `save:${item.key}` ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <ShieldCheck className="mr-2 h-4 w-4" />
+                        )}
+                        {item.key === "postgres"
+                          ? "保存 DSN"
+                          : item.oauth?.supported
+                            ? "保存手动凭证"
+                            : "保存配置"}
+                      </Button>
+                    ) : null}
+
+                    {item.oauth?.supported ? (
+                      <Button
+                        className="rounded-2xl"
+                        disabled={busy || !item.available}
+                        onClick={() => void handleOAuth(item)}
+                      >
+                        {busy && actionKey === `oauth:${item.key}` ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <ArrowUpRight className="mr-2 h-4 w-4" />
+                        )}
+                        {isAuthorized ? "重新授权" : "去授权"}
+                      </Button>
+                    ) : null}
+
+                    {effectiveTargetSessionId && isAuthorized ? (
+                      <Button
+                        variant="secondary"
+                        className="rounded-2xl"
+                        disabled={busy}
+                        onClick={async () => {
+                          setActionKey(`attach:${item.key}`);
+                          try {
+                            await attachSessionConnector(effectiveTargetSessionId, item.key);
+                            toast.success("连接器已挂载到目标会话");
+                          } catch (error) {
+                            toast.error(
+                              error instanceof Error
+                                ? error.message
+                                : "Attach connector failed"
+                            );
+                          } finally {
+                            setActionKey(null);
+                          }
+                        }}
+                      >
+                        <Plug className="mr-2 h-4 w-4" />
+                        挂载到当前会话
+                      </Button>
+                    ) : null}
+
+                    {isAuthorized ? (
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        disabled={busy}
+                        onClick={() => void handleDisconnect(item.key)}
+                      >
+                        <Unplug className="mr-2 h-4 w-4" />
+                        清除授权
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              </ScrollArea>
+            </DialogContent>
+          );
+        })() : null}
+      </Dialog>
+
       {loading ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading connector profiles
+        <div className="border-t border-border/70 px-6 py-3 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在加载连接器配置
+          </div>
         </div>
       ) : null}
     </div>

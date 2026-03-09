@@ -54,3 +54,41 @@
 - 计划如何解决：
   - 当前这条问题已经可以认为在本机 Chromium 上复测通过。
   - 如果用户接下来还在自己的 Chrome 窗口里复现同类问题，优先让其整页刷新并确认后端是当前 `pnpm dev` 进程，再根据具体 sessionId 继续抓取。
+
+## 2026-03-09 连接器设置页
+
+- 做了什么：
+  - 按用户给的参考样式重构了 [ConnectorCenterPanel.tsx](/Users/eunice/codingProject/oneceo/apps/web/client/src/components/ConnectorCenterPanel.tsx)，把“设置 -> Connectors”改成一级连接器列表 + 二级详情页结构。
+  - 一级页面现在只展示连接器行项目、状态和“添加连接器”按钮；点击某一行后进入二级详情页，才展示 OAuth、手动配置、挂载到会话等具体操作。
+  - 保留了原有 quick guide、manual config、attach session 等能力，但把它们都下沉到详情页，避免一级页面信息过载。
+- 遇到什么：
+  - 本机 `3000` 上原来的 Vite 进程没有把新组件热更新到浏览器，导致页面一直显示旧的大卡片布局；重启 web dev 进程后才拿到最新 bundle。
+- 计划如何解决：
+  - 当前样式和交互已经在本机 Chromium 实看通过。
+  - 如果后续还要继续贴近参考稿，可以再补真实品牌图标、状态分组和搜索/筛选，但这次先把结构层级调整正确。
+
+## 2026-03-09 连接器弹窗调整
+
+- 做了什么：
+  - 根据用户新要求，把 [ConnectorCenterPanel.tsx](/Users/eunice/codingProject/oneceo/apps/web/client/src/components/ConnectorCenterPanel.tsx) 的详情交互从“列表页内切换到二级子页”改成“列表页上方弹出详情弹窗”。
+  - 一级列表保留不动；点击连接器行会打开新的详情弹窗，关闭后回到原列表位置。
+  - 详情弹窗中保留原先的 quick guide、manual config、OAuth、attach session 等操作。
+- 遇到什么：
+  - 当前设置总弹窗本身仍有一条既有的 `DialogTitle/DialogDescription` 无障碍警告，这不是这次连接器弹窗改动引入的。
+- 计划如何解决：
+  - 当前连接器交互层级已经符合“一级列表 + 额外弹窗”的要求。
+
+## 2026-03-09 附件二级悬浮菜单
+
+- 做了什么：
+  - 将 [AttachmentPickerButton.tsx](/Users/eunice/codingProject/oneceo/apps/web/client/src/components/AttachmentPickerButton.tsx) 从“直接打开文件选择器”改成“点击加号显示二级悬浮菜单”。
+  - 一级菜单增加了“从云端添加”“使用技能”“从本地文件添加”；其中云端和技能都采用二级子菜单，网站/Google Drive/OneDrive 通过额外弹窗输入链接。
+  - 在 [task-creation-client.ts](/Users/eunice/codingProject/oneceo/apps/web/client/src/lib/task-creation-client.ts) 增加远程附件抓取方法，在 [task-creation-routes.ts](/Users/eunice/codingProject/oneceo/apps/api/src/routes/task-creation-routes.ts) 增加 `/api/task-creation/attachments/fetch`，并拆出 [remote-attachment-service.ts](/Users/eunice/codingProject/oneceo/apps/api/src/services/remote-attachment-service.ts) 负责链接校验、分享链接转换和文件名推断。
+  - “使用技能”暂时按用户交互需求实现为生成 skill brief markdown 附件，统一复用现有附件流，不额外发散成另一套会话状态。
+  - 增加 API 单测 [remote-attachment-service.test.ts](/Users/eunice/codingProject/oneceo/apps/api/tests/remote-attachment-service.test.ts) 和页面 smoke 脚本 [attachment-picker-menu.playwright.spec.ts](/Users/eunice/codingProject/oneceo/apps/web/client/src/tests/attachment-picker-menu.playwright.spec.ts)。
+- 遇到什么：
+  - 第一次页面实测时，网站导入虽然成功，但前端只能拿到 `website-file`，原因是 API 没有通过 CORS 暴露 `X-Attachment-Name` 响应头。
+  - Playwright MCP 在 file chooser 场景里崩了一次，最终改成仓库内显式依赖 `@playwright/test` 后再跑本地 smoke。
+- 计划如何解决：
+  - 当前“网站导入 + 技能导入 + 本地导入”已经在本机 Playwright 上整链路通过。
+  - 后续如果你还想把“使用技能”接成真正的 sandbox skill 装载，再单独补 E2B/OSAC 支持，不和这次附件入口改动混在一起。

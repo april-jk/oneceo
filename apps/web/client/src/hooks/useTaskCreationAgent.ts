@@ -1062,6 +1062,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       sseRef.current.close();
       sseRef.current = null;
     }
+    ssePreferredRef.current = false;
     sseActiveRef.current = false;
     sseLastAtRef.current = 0;
   }, [compactHistory]);
@@ -1340,7 +1341,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const openSse = useCallback(
     (targetSessionId: string, targetOpencodeSessionId?: string) => {
-      ssePreferredRef.current = true;
       const altusMode = readAltusMode();
       const streamOpencodeSessionId =
         altusMode === 'sandbox' ? undefined : targetOpencodeSessionId || undefined;
@@ -1359,6 +1359,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       sseRef.current = source;
 
       source.onopen = () => {
+        ssePreferredRef.current = true;
         sseActiveRef.current = true;
         sseLastAtRef.current = Date.now();
         sseReconnectAttemptRef.current = 0;
@@ -1434,6 +1435,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       });
 
       source.onerror = () => {
+        ssePreferredRef.current = false;
         sseActiveRef.current = false;
         sseLastAtRef.current = 0;
         void refreshRuntimeStatus(targetSessionId);

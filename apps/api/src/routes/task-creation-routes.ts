@@ -1914,7 +1914,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
  */
 router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   const { sessionId } = req.params;
-  const session = await taskCreationFileMemoryStore.getSession(sessionId);
+  const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     return res.status(404).json({
       success: false,

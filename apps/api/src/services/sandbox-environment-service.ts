@@ -3,6 +3,8 @@ import { e2bConfig } from '../config/e2b-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { ensureDatabaseConnection } from '../config/database';
 import { sandboxSecurityConfig } from '../config/sandbox-security';
+import { archiveSandboxWorkspace, isArchiveStorageConfigured } from './sandbox-archive-service';
+import { setSandboxMetadata } from './sandbox-activity-service';
 
 function isE2bEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
   if (!metadata) return false;
@@ -10,6 +12,11 @@ function isE2bEnvironment(metadata: Record<string, unknown> | null | undefined):
 }
 
 export class SandboxEnvironmentService {
+  private shouldArchiveOnClose(): boolean {
+    const raw = String(process.env.E2B_ARCHIVE_ON_CLOSE || 'true').trim().toLowerCase();
+    return !['0', 'false', 'no', 'off'].includes(raw);
+  }
+
   private buildSecurityProfile() {
     return {
       mode: 'e2b',
@@ -48,9 +55,11 @@ export class SandboxEnvironmentService {
       sandboxProvider: 'e2b',
       lastActiveAt: new Date().toISOString(),
       lastActiveReason: 'create',
+      pendingArchiveUpdate: false,
       e2b: {
         sandboxId: sandbox.sandboxId,
         template: e2bConfig.template,
+        timeoutMs: e2bConfig.timeoutMs,
         sandboxDomain: sandbox.sandboxDomain,
         trafficAccessToken: sandbox.trafficAccessToken || null,
       },
@@ -109,6 +118,27 @@ export class SandboxEnvironmentService {
     const isE2b = isE2bEnvironment(metadata);
 
     await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closing', environment.vmName || null);
+
+    if (isE2b && this.shouldArchiveOnClose() && isArchiveStorageConfigured()) {
+      try {
+        await archiveSandboxWorkspace(environment.orchestratorSessionId, 'close_environment', {
+          forceUpload: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[SANDBOX_CLOSE] archive before close failed', sessionId, message);
+        try {
+          await setSandboxMetadata(sessionId, {
+            archiveStatus: 'failed',
+            archiveReason: 'close_environment',
+            archiveError: message,
+          });
+        } catch (metaError) {
+          console.warn('[SANDBOX_CLOSE] set archive failure metadata failed', sessionId, metaError);
+        }
+      }
+    }
+
     if (isE2b) {
       await e2bConnector.killSandbox(environment.orchestratorSessionId);
     }

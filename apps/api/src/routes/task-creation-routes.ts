@@ -17,6 +17,12 @@ import { sandboxAgentProvisionService } from '../services/sandbox-agent-provisio
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug } from '../services/sandbox-debug-service';
+import {
+  getRailwayDeploymentPanel,
+  triggerRailwayDeploy,
+  triggerRailwayRedeploy,
+  triggerRailwayRollback,
+} from '../services/railway-deployment-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
@@ -257,6 +263,64 @@ async function resolveTaskSessionRecord(sessionId: string) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
   return session;
+}
+
+async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
+  const orchestratorSessionId = asText(session?.runtime?.orchestratorSessionId);
+  if (orchestratorSessionId) {
+    const byRuntime = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    if (byRuntime) {
+      return {
+        orchestratorSessionId,
+        environment: byRuntime,
+      };
+    }
+  }
+
+  const byTaskSession = session ? await findEnvironmentByTaskSessionId(session.id) : null;
+  if (byTaskSession) {
+    return {
+      orchestratorSessionId: byTaskSession.sessionId,
+      environment: byTaskSession,
+    };
+  }
+
+  return {
+    orchestratorSessionId: '',
+    environment: null,
+  };
+}
+
+async function buildRailwayDeploymentResponse(
+  session: FileSessionRecord | null,
+  selectedDeploymentId?: string
+) {
+  const { environment } = await resolveTaskSessionEnvironment(session);
+  const metadata = pickRecord(environment?.metadata);
+  return getRailwayDeploymentPanel(metadata, {
+    deploymentId: selectedDeploymentId,
+  });
+}
+
+async function persistRailwayDeploymentSelection(
+  orchestratorSessionId: string,
+  environmentMetadata: unknown,
+  payload: {
+    deploymentId?: string;
+    action: 'deploy' | 'redeploy' | 'rollback';
+  }
+) {
+  if (!orchestratorSessionId) return;
+  const metadata = pickRecord(environmentMetadata);
+  const railway = pickRecord(metadata.railway);
+  await setSandboxMetadata(orchestratorSessionId, {
+    railway: {
+      ...railway,
+      lastDeploymentId: payload.deploymentId || railway.lastDeploymentId || null,
+      lastAction: payload.action,
+      lastActionAt: new Date().toISOString(),
+    },
+  });
 }
 
 type SessionListCache = {
@@ -1633,6 +1697,151 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('启动调试失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment
+ * 获取 Railway 部署面板数据
+ */
+router.get('/sessions/:sessionId/deployment', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const deploymentId = asText(req.query.deploymentId);
+    const data = await buildRailwayDeploymentResponse(session, deploymentId || undefined);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取部署信息失败:', error);
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取部署信息失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/deploy
+ * 触发 Railway 部署
+ */
+router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const metadata = pickRecord(environment?.metadata);
+    const actionResult = await triggerRailwayDeploy(metadata);
+    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
+    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('触发部署失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '触发部署失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/redeploy
+ * 重新部署指定版本
+ */
+router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const deploymentId = asText(req.body?.deploymentId);
+    if (!deploymentId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 deploymentId'),
+      });
+    }
+
+    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const metadata = pickRecord(environment?.metadata);
+    const actionResult = await triggerRailwayRedeploy(metadata, deploymentId);
+    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
+    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('重新部署失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '重新部署失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/rollback
+ * 回滚到指定部署版本
+ */
+router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const deploymentId = asText(req.body?.deploymentId);
+    if (!deploymentId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 deploymentId'),
+      });
+    }
+
+    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const metadata = pickRecord(environment?.metadata);
+    const actionResult = await triggerRailwayRollback(metadata, deploymentId);
+    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
+    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('回滚部署失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '回滚部署失败'),
     });
   }
 });

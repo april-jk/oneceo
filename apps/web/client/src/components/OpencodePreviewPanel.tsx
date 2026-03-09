@@ -4,10 +4,15 @@ import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
 import { Streamdown } from "streamdown";
 import {
+  deployTaskCreationSession,
+  getTaskCreationDeploymentInfo,
   getTaskCreationDebugInfo,
   startTaskCreationDebug,
+  redeployTaskCreationSession,
+  rollbackTaskCreationSessionDeployment,
   getWorkspaceFile,
   getWorkspaceDirectory,
+  type TaskCreationDeploymentInfo,
   type TaskCreationDebugInfo,
   type WorkspaceFile,
   type WorkspaceTree,
@@ -30,7 +35,7 @@ interface OpencodePreviewPanelProps {
   className?: string;
 }
 
-type PreviewTab = "files" | "changes" | "debug";
+type PreviewTab = "files" | "changes" | "debug" | "deployment";
 const DIRECTORY_PAGE_SIZE = 200;
 type DirectoryLoadState = {
   initialized: boolean;
@@ -74,10 +79,16 @@ export default function OpencodePreviewPanel({
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugStarting, setDebugStarting] = useState(false);
   const [debugError, setDebugError] = useState<string | null>(null);
+  const [deploymentInfo, setDeploymentInfo] = useState<TaskCreationDeploymentInfo | null>(null);
+  const [deploymentLoading, setDeploymentLoading] = useState(false);
+  const [deploymentError, setDeploymentError] = useState<string | null>(null);
+  const [deploymentAction, setDeploymentAction] = useState<"deploy" | "redeploy" | "rollback" | null>(null);
+  const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const debugBootRef = useRef(false);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
+  const deploymentPollRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
@@ -392,6 +403,18 @@ export default function OpencodePreviewPanel({
   }, [sessionId]);
 
   useEffect(() => {
+    if (deploymentPollRef.current) {
+      window.clearTimeout(deploymentPollRef.current);
+      deploymentPollRef.current = null;
+    }
+    setDeploymentInfo(null);
+    setDeploymentError(null);
+    setDeploymentLoading(false);
+    setDeploymentAction(null);
+    setSelectedDeploymentId(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (runtimeReady === false) {
       debugBootRef.current = false;
       debugRuntimeBootRef.current = false;
@@ -477,6 +500,86 @@ export default function OpencodePreviewPanel({
 
   useEffect(() => {
     if (!open) return;
+    if (currentTab !== "deployment") return;
+    if (!sessionId) {
+      setDeploymentInfo(null);
+      setDeploymentError("缺少会话信息");
+      return;
+    }
+
+    let cancelled = false;
+
+    const schedulePoll = (enabled: boolean) => {
+      if (deploymentPollRef.current) {
+        window.clearTimeout(deploymentPollRef.current);
+        deploymentPollRef.current = null;
+      }
+      if (!enabled) return;
+      deploymentPollRef.current = window.setTimeout(() => {
+        if (!cancelled) {
+          void loadDeployment(true);
+        }
+      }, 4000);
+    };
+
+    const loadDeployment = async (silent: boolean = false, deploymentId?: string) => {
+      if (!silent) {
+        setDeploymentLoading(true);
+      }
+      setDeploymentError(null);
+      try {
+        const info = await getTaskCreationDeploymentInfo(
+          sessionId,
+          deploymentId || selectedDeploymentId || undefined
+        );
+        if (cancelled) return;
+        setDeploymentInfo(info);
+        setSelectedDeploymentId(info?.deploymentId || null);
+        schedulePoll(Boolean(info?.activeDeploymentPending));
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "加载部署信息失败";
+        setDeploymentError(message);
+        if (!silent) {
+          setDeploymentInfo(null);
+        }
+        schedulePoll(false);
+      } finally {
+        if (!cancelled) {
+          setDeploymentLoading(false);
+        }
+      }
+    };
+
+    void loadDeployment(false);
+    return () => {
+      cancelled = true;
+      if (deploymentPollRef.current) {
+        window.clearTimeout(deploymentPollRef.current);
+        deploymentPollRef.current = null;
+      }
+    };
+  }, [open, currentTab, sessionId]);
+
+  useEffect(() => {
+    if (!open || currentTab !== "deployment" || !sessionId) return;
+    if (!deploymentInfo?.activeDeploymentPending) return;
+    if (deploymentPollRef.current) {
+      window.clearTimeout(deploymentPollRef.current);
+    }
+    deploymentPollRef.current = window.setTimeout(() => {
+      void refreshDeployment(selectedDeploymentId || deploymentInfo.deploymentId || undefined);
+    }, 4000);
+    return () => {
+      if (deploymentPollRef.current) {
+        window.clearTimeout(deploymentPollRef.current);
+        deploymentPollRef.current = null;
+      }
+    };
+  }, [open, currentTab, sessionId, deploymentInfo?.activeDeploymentPending, deploymentInfo?.deploymentId, selectedDeploymentId]);
+
+  useEffect(() => {
+    if (!open) return;
     if (!sessionId) return;
     if (runtimeReady === false) return;
     const last = messages[messages.length - 1];
@@ -499,6 +602,52 @@ export default function OpencodePreviewPanel({
 
   const currentDiff = diffItems.find((item) => item.id === selectedDiffId) || null;
   const treeCount = tree?.items.length || 0;
+
+  const refreshDeployment = async (deploymentId?: string) => {
+    if (!sessionId) {
+      setDeploymentError("缺少会话信息");
+      return;
+    }
+    setDeploymentLoading(true);
+    setDeploymentError(null);
+    try {
+      const info = await getTaskCreationDeploymentInfo(
+        sessionId,
+        deploymentId || selectedDeploymentId || undefined
+      );
+      setDeploymentInfo(info);
+      setSelectedDeploymentId(info?.deploymentId || deploymentId || null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加载部署信息失败";
+      setDeploymentError(message);
+    } finally {
+      setDeploymentLoading(false);
+    }
+  };
+
+  const runDeploymentAction = async (action: "deploy" | "redeploy" | "rollback") => {
+    if (!sessionId) {
+      setDeploymentError("缺少会话信息");
+      return;
+    }
+    setDeploymentAction(action);
+    setDeploymentError(null);
+    try {
+      const result =
+        action === "deploy"
+          ? await deployTaskCreationSession(sessionId)
+          : action === "redeploy"
+            ? await redeployTaskCreationSession(sessionId, selectedDeploymentId || "")
+            : await rollbackTaskCreationSessionDeployment(sessionId, selectedDeploymentId || "");
+      setDeploymentInfo(result);
+      setSelectedDeploymentId(result?.deploymentId || selectedDeploymentId || null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "部署操作失败";
+      setDeploymentError(message);
+    } finally {
+      setDeploymentAction(null);
+    }
+  };
 
   return (
     <aside
@@ -550,6 +699,17 @@ export default function OpencodePreviewPanel({
         >
           调试
         </button>
+        <span>/</span>
+        <button
+          type="button"
+          onClick={() => {
+            onTabChange?.("deployment");
+            if (!onTabChange) setInternalTab("deployment");
+          }}
+          className={currentTab === "deployment" ? "text-foreground font-semibold" : ""}
+        >
+          部署
+        </button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden relative">
@@ -592,6 +752,29 @@ export default function OpencodePreviewPanel({
               setSelectedDiffId(id);
               setAutoDiff(false);
             }}
+          />
+        </div>
+        <div
+          className={cn(
+            "absolute inset-0 h-full w-full transition-opacity",
+            currentTab === "deployment" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          )}
+          aria-hidden={currentTab !== "deployment"}
+        >
+          <DeploymentPreview
+            info={deploymentInfo}
+            loading={deploymentLoading}
+            error={deploymentError}
+            actionLoading={deploymentAction}
+            selectedDeploymentId={selectedDeploymentId}
+            onRefresh={(deploymentId) => void refreshDeployment(deploymentId)}
+            onSelectDeployment={(deploymentId) => {
+              setSelectedDeploymentId(deploymentId);
+              void refreshDeployment(deploymentId);
+            }}
+            onDeploy={() => void runDeploymentAction("deploy")}
+            onRedeploy={() => void runDeploymentAction("redeploy")}
+            onRollback={() => void runDeploymentAction("rollback")}
           />
         </div>
         <div
@@ -1036,6 +1219,187 @@ function DiffPreview({
       </div>
       <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
         {current ? <DiffBlock diff={current.diff} files={current.files} /> : <EmptyState text="暂无更改" />}
+      </div>
+    </div>
+  );
+}
+
+function DeploymentPreview({
+  info,
+  loading,
+  error,
+  actionLoading,
+  selectedDeploymentId,
+  onRefresh,
+  onSelectDeployment,
+  onDeploy,
+  onRedeploy,
+  onRollback,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  loading: boolean;
+  error: string | null;
+  actionLoading: "deploy" | "redeploy" | "rollback" | null;
+  selectedDeploymentId: string | null;
+  onRefresh: (deploymentId?: string) => void;
+  onSelectDeployment: (deploymentId: string) => void;
+  onDeploy: () => void;
+  onRedeploy: () => void;
+  onRollback: () => void;
+}) {
+  const currentDeploymentId = selectedDeploymentId || info?.deploymentId || "";
+  const currentDeployment =
+    info?.deployments.find((item) => item.id === currentDeploymentId) || info?.deployments[0] || null;
+  const status = currentDeployment?.status || info?.latestStatus || "";
+  const statusTone =
+    status === "SUCCESS"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : status === "FAILED" || status === "CRASHED"
+        ? "bg-rose-50 text-rose-700 border-rose-200"
+        : "bg-amber-50 text-amber-700 border-amber-200";
+
+  if (loading && !info) {
+    return <EmptyState text="正在加载部署信息..." />;
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Railway 部署</span>
+          {status ? (
+            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}>{status}</span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="h-7" onClick={() => onRefresh(currentDeploymentId || undefined)}>
+            刷新
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7"
+            onClick={onDeploy}
+            disabled={!info?.canDeploy || Boolean(actionLoading)}
+          >
+            {actionLoading === "deploy" ? "部署中..." : "立即部署"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7"
+            onClick={onRedeploy}
+            disabled={!currentDeploymentId || Boolean(actionLoading)}
+          >
+            {actionLoading === "redeploy" ? "重新部署中..." : "重新部署"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7"
+            onClick={onRollback}
+            disabled={!currentDeploymentId || Boolean(actionLoading)}
+          >
+            {actionLoading === "rollback" ? "回滚中..." : "回滚"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-3">
+        {error ? <div className="text-xs text-rose-600">{error}</div> : null}
+        {info?.message ? <div className="text-xs text-muted-foreground">{info.message}</div> : null}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1">
+            <div className="font-semibold text-slate-700">项目</div>
+            <div className="text-slate-500">{info?.projectName || info?.projectId || "未配置"}</div>
+            {info?.projectId && info?.projectName ? <div className="font-mono text-[11px] text-slate-400">{info.projectId}</div> : null}
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1">
+            <div className="font-semibold text-slate-700">服务</div>
+            <div className="text-slate-500">{info?.serviceName || info?.serviceId || "未配置"}</div>
+            {info?.serviceId && info?.serviceName ? <div className="font-mono text-[11px] text-slate-400">{info.serviceId}</div> : null}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-slate-700">部署记录</div>
+            <select
+              className="text-xs border border-border rounded-md bg-background px-2 py-1 min-w-[220px]"
+              value={currentDeploymentId}
+              onChange={(event) => onSelectDeployment(event.target.value)}
+              disabled={!info?.deployments.length}
+            >
+              {info?.deployments.length ? (
+                info.deployments.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {`${item.status} · ${formatPreviewTimestamp(item.createdAt) || item.createdAt || item.id.slice(0, 8)}`}
+                  </option>
+                ))
+              ) : (
+                <option value="">暂无部署</option>
+              )}
+            </select>
+          </div>
+          <div className="text-[11px] text-slate-500">
+            环境: {info?.environmentName || info?.environmentId || "未配置"}
+          </div>
+          {currentDeployment?.commitMessage ? (
+            <div className="text-[11px] text-slate-500">
+              Commit: {currentDeployment.commitMessage}
+              {currentDeployment.commitAuthor ? ` · ${currentDeployment.commitAuthor}` : ""}
+            </div>
+          ) : null}
+          {(currentDeployment?.url || currentDeployment?.staticUrl || info?.latestUrl || info?.latestStaticUrl) ? (
+            <div className="flex flex-wrap gap-3 text-[11px]">
+              {currentDeployment?.url || info?.latestUrl ? (
+                <a
+                  href={currentDeployment?.url || info?.latestUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 hover:text-blue-700"
+                >
+                  打开运行地址
+                </a>
+              ) : null}
+              {currentDeployment?.staticUrl || info?.latestStaticUrl ? (
+                <a
+                  href={currentDeployment?.staticUrl || info?.latestStaticUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 hover:text-blue-700"
+                >
+                  打开静态地址
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+          {info?.domains.length ? (
+            <div className="text-[11px] text-slate-500 break-all">域名: {info.domains.join(" · ")}</div>
+          ) : null}
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+          <div className="px-3 py-2 border-b border-slate-200 text-xs font-semibold text-slate-700">部署日志</div>
+          {info?.logs.length ? (
+            <div className="max-h-[360px] overflow-auto bg-slate-950 text-slate-100">
+              <pre className="px-3 py-3 text-[11px] leading-5 whitespace-pre-wrap break-words">
+                <code>
+                  {info.logs
+                    .map((entry) =>
+                      `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${entry.severity ? `${entry.severity} ` : ""}${entry.message}`
+                    )
+                    .join("\n")}
+                </code>
+              </pre>
+            </div>
+          ) : (
+            <div className="px-3 py-6 text-xs text-muted-foreground">
+              {info?.configured ? "暂无日志" : "配置 Railway 后可查看部署日志"}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

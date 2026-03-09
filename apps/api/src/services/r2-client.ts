@@ -29,12 +29,18 @@ function buildClient(): S3Client {
   });
 }
 
-const r2Client = buildClient();
+let cachedClient: S3Client | null = null;
 const bucketName = () => requireEnv('R2_BUCKET_NAME');
+
+function getR2Client(): S3Client {
+  if (cachedClient) return cachedClient;
+  cachedClient = buildClient();
+  return cachedClient;
+}
 
 export async function uploadToR2(key: string, body: Buffer | Readable): Promise<void> {
   const upload = new Upload({
-    client: r2Client,
+    client: getR2Client(),
     params: {
       Bucket: bucketName(),
       Key: key,
@@ -45,7 +51,7 @@ export async function uploadToR2(key: string, body: Buffer | Readable): Promise<
 }
 
 export async function downloadFromR2(key: string): Promise<Buffer> {
-  const response = await r2Client.send(
+  const response = await getR2Client().send(
     new GetObjectCommand({
       Bucket: bucketName(),
       Key: key,
@@ -65,12 +71,12 @@ export async function getPresignedDownloadUrl(key: string, expiresInSeconds = 36
     Bucket: bucketName(),
     Key: key,
   });
-  return getSignedUrl(r2Client, command, { expiresIn: expiresInSeconds });
+  return getSignedUrl(getR2Client(), command, { expiresIn: expiresInSeconds });
 }
 
 export async function existsInR2(key: string): Promise<boolean> {
   try {
-    await r2Client.send(
+    await getR2Client().send(
       new HeadObjectCommand({
         Bucket: bucketName(),
         Key: key,

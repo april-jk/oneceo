@@ -469,6 +469,39 @@ PY`;
     );
   }
 
+  async listOpencodeQuestions(sessionId: string, input?: { workspacePath?: string }) {
+    await touchSandbox(sessionId, 'sdk_list_opencode_questions');
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    return opencodeHttpClient.listQuestions(
+      runtime.baseUrl,
+      {
+        directory: input?.workspacePath || runtime.workspaceRoot,
+      },
+      runtime.trafficAccessToken || undefined
+    );
+  }
+
+  async replyOpencodeQuestion(
+    sessionId: string,
+    input: { requestId: string; answers: string[][]; workspacePath?: string }
+  ) {
+    await touchSandbox(sessionId, 'sdk_reply_opencode_question');
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    const result = await opencodeHttpClient.replyQuestion(
+      runtime.baseUrl,
+      {
+        requestId: input.requestId,
+        answers: input.answers,
+        directory: input.workspacePath || runtime.workspaceRoot,
+      },
+      runtime.trafficAccessToken || undefined
+    );
+    await touchSandbox(sessionId, 'sdk_reply_opencode_question_done');
+    return result;
+  }
+
   async opencodeHttpRequest(
     sessionId: string,
     input: {

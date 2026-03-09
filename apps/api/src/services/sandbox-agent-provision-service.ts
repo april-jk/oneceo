@@ -473,6 +473,7 @@ export class SandboxAgentProvisionService {
         ...(existing?.metadata as any)?.e2b,
         sandboxId: sessionId,
         template: e2bConfig.template,
+        timeoutMs: e2bConfig.timeoutMs,
         trafficAccessToken: trafficAccessToken,
       },
     };

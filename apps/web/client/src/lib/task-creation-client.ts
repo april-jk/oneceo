@@ -42,6 +42,8 @@ export type TaskCreationUploadedAttachment = {
   uploadedAt?: string;
 };
 
+export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
+
 export type TaskCreationDebugInfo = {
   ready: boolean;
   url?: string;
@@ -123,6 +125,18 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`request failed: ${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { error?: string };
+    if (typeof payload?.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+  } catch {
+    // ignore non-json error bodies
+  }
+  return `request failed: ${response.status}`;
 }
 
 export function createTaskCreationSocket(): WebSocket {
@@ -347,4 +361,29 @@ export async function uploadTaskCreationAttachment(
     throw new Error("attachment upload empty");
   }
   return result.data;
+}
+
+export async function fetchRemoteTaskAttachment(input: {
+  provider: RemoteAttachmentProvider;
+  url: string;
+}): Promise<File> {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/attachments/fetch`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const blob = await response.blob();
+  const headerName = response.headers.get("X-Attachment-Name");
+  const fallbackName = input.provider === "website" ? "website-file" : `${input.provider}-file`;
+  const fileName = headerName ? decodeURIComponent(headerName) : fallbackName;
+  return new File([blob], fileName, {
+    type: blob.type || "application/octet-stream",
+    lastModified: Date.now(),
+  });
 }

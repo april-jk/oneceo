@@ -30,6 +30,9 @@ export class TaskCreationWebSocketService {
    */
   initialize(server: any): void {
     this.wss = new WebSocketServer({ server, path: '/ws/task-creation' });
+    this.wss.on('error', (error) => {
+      console.error('[WebSocket] 服务异常:', error);
+    });
     opencodeRemoteService.initialize();
     if (!this.opencodeUnsubscribe) {
       this.opencodeUnsubscribe = opencodeRemoteService.subscribe(async ({ taskSessionId, message }) => {

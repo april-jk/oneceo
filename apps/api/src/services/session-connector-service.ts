@@ -13,6 +13,7 @@ import {
 } from './connector-registry';
 import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
@@ -83,6 +84,21 @@ function parseMcpList(body: string): Map<string, Record<string, unknown>> {
   if (!body) return new Map();
   try {
     const parsed = JSON.parse(body) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      const directEntries = Object.entries(record).filter(([, value]) => value && typeof value === 'object');
+      if (directEntries.length > 0) {
+        return new Map(
+          directEntries.map(([name, value]) => [
+            name,
+            {
+              name,
+              ...(value as Record<string, unknown>),
+            },
+          ])
+        );
+      }
+    }
     const items = (() => {
       if (Array.isArray(parsed)) return parsed;
       if (parsed && typeof parsed === 'object') {
@@ -129,6 +145,10 @@ function pickToolName(event: Record<string, unknown>): string {
     asText(properties.tool) ||
     asText(properties.name)
   );
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export class SessionConnectorService {
@@ -212,6 +232,46 @@ export class SessionConnectorService {
       return new Map<string, Record<string, unknown>>();
     }
     return parseMcpList(response.body);
+  }
+
+  private async waitForRuntimeServer(
+    runtime: RuntimeContext,
+    serverName: string,
+    attempts = 12,
+    delayMs = 500
+  ) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const liveMap = await this.getRuntimeMcpMap(runtime);
+      const live = liveMap.get(serverName);
+      const status = mapRuntimeStatus(
+        live?.status || live?.runtimeStatus || live?.state || (live?.connected ? 'connected' : undefined)
+      );
+      if (live && status === 'connected') {
+        return live;
+      }
+      if (attempt < attempts - 1) {
+        await wait(delayMs);
+      }
+    }
+    return null;
+  }
+
+  private async waitForRuntimeServerAbsence(
+    runtime: RuntimeContext,
+    serverName: string,
+    attempts = 10,
+    delayMs = 400
+  ) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const liveMap = await this.getRuntimeMcpMap(runtime);
+      if (!liveMap.has(serverName)) {
+        return true;
+      }
+      if (attempt < attempts - 1) {
+        await wait(delayMs);
+      }
+    }
+    return false;
   }
 
   private buildStatus(input: {
@@ -336,7 +396,7 @@ export class SessionConnectorService {
       throw new Error('执行环境未就绪，请先启动 runtime');
     }
     const serverName = serverNameFor(connectorKey, taskSessionId);
-    const config = connectorRegistry.materializeRuntimeConfig({
+    connectorRegistry.materializeRuntimeConfig({
       connectorKey,
       account: accountMaterial,
     });
@@ -351,46 +411,26 @@ export class SessionConnectorService {
       lastError: null,
     });
 
-    const registerResponse = await opencodeHttpClient.doRequest(
-      runtime.baseUrl,
-      {
-        method: 'POST',
-        path: '/mcp',
-        body: JSON.stringify({
-          name: serverName,
-          config,
-        }),
-      },
-      runtime.trafficAccessToken
-    );
-    const registerBody = asText(registerResponse.body).toLowerCase();
-    const canContinue =
-      (registerResponse.status >= 200 && registerResponse.status < 300) ||
-      registerResponse.status === 409 ||
-      registerBody.includes('already') ||
-      registerBody.includes('exists');
-    if (!canContinue) {
+    try {
+      await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        taskSessionId,
+      });
+    } catch (error) {
       await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
         runtimeStatus: 'failed',
-        lastError: registerResponse.body || `register failed: ${registerResponse.status}`,
+        lastError: error instanceof Error ? error.message : String(error),
       });
-      throw new Error(registerResponse.body || '连接器注册失败');
+      throw error;
     }
 
-    const connectResponse = await opencodeHttpClient.doRequest(
-      runtime.baseUrl,
-      {
-        method: 'POST',
-        path: `/mcp/${encodeURIComponent(serverName)}/connect`,
-      },
-      runtime.trafficAccessToken
-    );
-    if (connectResponse.status < 200 || connectResponse.status >= 300) {
+    const live = await this.waitForRuntimeServer(runtime, serverName);
+    if (!live) {
       await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
         runtimeStatus: 'failed',
-        lastError: connectResponse.body || `connect failed: ${connectResponse.status}`,
+        lastError: '运行时未保留已注册的 MCP 服务',
       });
-      throw new Error(connectResponse.body || '连接器连接失败');
+      throw new Error('运行时未保留已注册的 MCP 服务');
     }
 
     const statuses = await this.listSessionConnectors(taskSessionId, userId);
@@ -416,28 +456,41 @@ export class SessionConnectorService {
     await this.assertSessionOwnership(taskSessionId, userId);
     const runtime = await this.resolveRuntimeContext(taskSessionId, orchestratorSessionId);
     const serverName = serverNameFor(connectorKey, taskSessionId);
-    if (runtime) {
-      const response = await opencodeHttpClient.doRequest(
-        runtime.baseUrl,
-        {
-          method: 'POST',
-          path: `/mcp/${encodeURIComponent(serverName)}/disconnect`,
-        },
-        runtime.trafficAccessToken
-      );
-      if (response.status >= 400 && response.status !== 404) {
-        throw new Error(response.body || '连接器卸载失败');
-      }
-    }
     await taskSessionConnectorBindingDAO.upsert({
       taskSessionId,
       connectorKey,
       desiredState: 'detached',
-      runtimeStatus: 'disconnected',
+      runtimeStatus: runtime ? 'connecting' : 'disconnected',
       orchestratorSessionId: asText(orchestratorSessionId) || runtime?.orchestratorSessionId || null,
       serverName,
       lastError: null,
     });
+    if (runtime) {
+      try {
+        await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
+          orchestratorSessionId: runtime.orchestratorSessionId,
+          taskSessionId,
+        });
+      } catch (error) {
+        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+          runtimeStatus: 'failed',
+          orchestratorSessionId: runtime.orchestratorSessionId,
+          serverName,
+          lastError: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      const removed = await this.waitForRuntimeServerAbsence(runtime, serverName);
+      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+        runtimeStatus: removed ? 'disconnected' : 'failed',
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        serverName,
+        lastError: removed ? null : '运行时仍保留已卸载的 MCP 服务',
+      });
+      if (!removed) {
+        throw new Error('运行时仍保留已卸载的 MCP 服务');
+      }
+    }
     return (await this.listSessionConnectors(taskSessionId, userId)).find(
       (item) => item.connectorKey === connectorKey
     );

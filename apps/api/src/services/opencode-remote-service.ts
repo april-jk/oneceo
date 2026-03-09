@@ -17,6 +17,11 @@ import { playwrightTestDetectionAgent } from '../agents/task-creation/layers/pla
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
+import {
+  buildOpencodeQuestionAnswers,
+  findPendingOpencodeQuestion,
+  type OpencodePendingQuestion,
+} from './opencode-question-adapter';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -2174,6 +2179,91 @@ export class OpencodeRemoteService {
     }
   }
 
+  private async replyPendingQuestionIfAny(input: {
+    taskSessionId: string;
+    content: string;
+    orchestratorSessionId: string;
+    opencodeSessionId: string;
+    workspacePath: string;
+    source?: 'user' | 'agent';
+  }): Promise<boolean> {
+    if (!input.opencodeSessionId || input.source === 'agent') {
+      return false;
+    }
+
+    let pendingQuestion: OpencodePendingQuestion | null = null;
+    try {
+      const questions = await osacAgentService.listOpencodeQuestions(input.orchestratorSessionId, {
+        workspacePath: input.workspacePath || undefined,
+      });
+      pendingQuestion = findPendingOpencodeQuestion(
+        questions as OpencodePendingQuestion[],
+        input.opencodeSessionId
+      );
+    } catch (error) {
+      console.warn('[OPENCODE_PENDING_QUESTION_LOOKUP_FAILED]', input.taskSessionId, error);
+      return false;
+    }
+
+    const requestId = asString(pendingQuestion?.id);
+    if (!requestId) {
+      return false;
+    }
+
+    const answers = buildOpencodeQuestionAnswers(pendingQuestion?.questions, input.content);
+    const session = await taskCreationFileMemoryStore.getSession(input.taskSessionId);
+
+    await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+      orchestratorSessionId: input.orchestratorSessionId,
+      opencodeSessionId: input.opencodeSessionId,
+    });
+    await taskCreationFileMemoryStore.updateSessionState(input.taskSessionId, {
+      status: 'in_progress',
+      stage: 'executing',
+      phase: session?.phase ? (session.phase as any) : 'development',
+      allowBackward: true,
+    });
+    await this.initRunArtifactsForPrompt(
+      input.taskSessionId,
+      input.orchestratorSessionId,
+      input.opencodeSessionId
+    );
+
+    await osacAgentService.replyOpencodeQuestion(input.orchestratorSessionId, {
+      requestId,
+      answers,
+      workspacePath: input.workspacePath || undefined,
+    });
+
+    const inputTimestamp = Date.now();
+    await this.persistMessage(
+      input.taskSessionId,
+      'user',
+      'opencode_user_input',
+      input.content,
+      {
+        orchestratorSessionId: input.orchestratorSessionId,
+        opencodeSessionId: input.opencodeSessionId,
+        workspacePath: input.workspacePath,
+        questionRequestId: requestId,
+        answeredVia: 'opencode_question_reply',
+        questionAnswers: answers,
+        timestamp: inputTimestamp,
+        sessionEventSeq: inputTimestamp * 1000,
+      }
+    );
+
+    auditOsacAction('OPENCODE_QUESTION_REPLY', {
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId: input.orchestratorSessionId,
+      opencodeSessionId: input.opencodeSessionId,
+      requestId,
+    });
+
+    await touchSandbox(input.orchestratorSessionId, 'opencode_question_reply');
+    return true;
+  }
+
   async sendUserInput(input: {
     taskSessionId: string;
     content: string;
@@ -2234,6 +2324,21 @@ export class OpencodeRemoteService {
             await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
               orchestratorSessionId,
             });
+          }
+
+          const answeredPendingQuestion = await this.replyPendingQuestionIfAny({
+            taskSessionId,
+            content,
+            orchestratorSessionId,
+            opencodeSessionId,
+            workspacePath,
+            source: input.source,
+          });
+          if (answeredPendingQuestion) {
+            return {
+              orchestratorSessionId,
+              opencodeSessionId,
+            };
           }
 
           await osacAgentService.sendOpencodePrompt(orchestratorSessionId, {

@@ -1,13 +1,50 @@
+import { e2bConfig } from '../config/e2b-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
-import { archiveSandboxWorkspace } from './sandbox-archive-service';
 import { e2bConnector } from '../connectors/e2b-connector';
-import { extractLastActiveAt, setSandboxMetadata } from './sandbox-activity-service';
+import { archiveSandboxWorkspace, isArchiveStorageConfigured } from './sandbox-archive-service';
+import {
+  extractInactivityTimeoutMs,
+  extractLastActiveAt,
+  extractPendingArchiveUpdate,
+  setSandboxMetadata,
+} from './sandbox-activity-service';
 
 let jobTimer: NodeJS.Timeout | null = null;
 let jobRunning = false;
 let lastDbFailureAt = 0;
 
 const DB_FAILURE_BACKOFF_MS = 60_000;
+// E2B official docs mention the auto-pause timeout default is 10 minutes when autoPause is enabled.
+const E2B_DOC_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+type SandboxArchiveJobDeps = {
+  sandboxExecutionEnvironmentDAO: typeof sandboxExecutionEnvironmentDAO;
+  archiveSandboxWorkspace: typeof archiveSandboxWorkspace;
+  isArchiveStorageConfigured: typeof isArchiveStorageConfigured;
+  e2bConnector: typeof e2bConnector;
+  setSandboxMetadata: typeof setSandboxMetadata;
+};
+
+const defaultSandboxArchiveJobDeps: SandboxArchiveJobDeps = {
+  sandboxExecutionEnvironmentDAO,
+  archiveSandboxWorkspace,
+  isArchiveStorageConfigured,
+  e2bConnector,
+  setSandboxMetadata,
+};
+
+let sandboxArchiveJobDeps: SandboxArchiveJobDeps = { ...defaultSandboxArchiveJobDeps };
+
+export function __setSandboxArchiveJobDepsForTest(overrides: Partial<SandboxArchiveJobDeps>): void {
+  sandboxArchiveJobDeps = {
+    ...sandboxArchiveJobDeps,
+    ...overrides,
+  };
+}
+
+export function __resetSandboxArchiveJobDepsForTest(): void {
+  sandboxArchiveJobDeps = { ...defaultSandboxArchiveJobDeps };
+}
 
 function toPositiveInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -21,10 +58,6 @@ function isEnabled(): boolean {
   return !['0', 'false', 'no', 'off'].includes(raw);
 }
 
-function getIdleMinutes(): number {
-  return toPositiveInt(process.env.E2B_ARCHIVE_IDLE_MINUTES, 40);
-}
-
 function getIntervalMs(): number {
   return Math.max(60_000, toPositiveInt(process.env.E2B_ARCHIVE_JOB_INTERVAL_MS, 600_000));
 }
@@ -33,10 +66,22 @@ function getScanLimit(): number {
   return Math.max(50, toPositiveInt(process.env.E2B_ARCHIVE_SCAN_LIMIT, 500));
 }
 
+function getPreTimeoutBufferMs(): number {
+  return Math.max(20_000, toPositiveInt(process.env.E2B_ARCHIVE_PRE_TIMEOUT_BUFFER_MS, 120_000));
+}
+
+function getPendingNoticeIntervalMs(): number {
+  return Math.max(60_000, toPositiveInt(process.env.E2B_ARCHIVE_PENDING_NOTICE_MS, 300_000));
+}
+
 function parseTimestamp(value: string | null | undefined): number | null {
   if (!value) return null;
   const ts = Date.parse(value);
   return Number.isFinite(ts) ? ts : null;
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function isSandboxNotFound(error: unknown): boolean {
@@ -103,20 +148,67 @@ function isDbConnectionError(error: unknown): boolean {
   );
 }
 
+function resolveInactivityTimeoutMs(metadata: Record<string, unknown>): number {
+  const fromMetadata = extractInactivityTimeoutMs(metadata);
+  if (fromMetadata && fromMetadata > 0) {
+    return fromMetadata;
+  }
+  const fromEnv = toPositiveInt(process.env.E2B_TIMEOUT_MS, e2bConfig.timeoutMs || E2B_DOC_DEFAULT_TIMEOUT_MS);
+  if (fromEnv > 0) {
+    return fromEnv;
+  }
+  return E2B_DOC_DEFAULT_TIMEOUT_MS;
+}
+
+function resolveArchiveTriggerAt(
+  lastActiveTs: number,
+  inactivityTimeoutMs: number,
+  preTimeoutBufferMs: number
+): number {
+  const timeoutMs = Math.max(60_000, inactivityTimeoutMs);
+  const bufferCap = Math.max(10_000, Math.floor(timeoutMs / 2));
+  const bufferMs = Math.min(Math.max(10_000, preTimeoutBufferMs), bufferCap);
+  return lastActiveTs + timeoutMs - bufferMs;
+}
+
+function shouldRefreshPendingNotice(
+  now: number,
+  metadata: Record<string, unknown>,
+  pendingNoticeIntervalMs: number
+): boolean {
+  const lastNoticeAt = parseTimestamp(asText((metadata as any).archivePendingNoticeAt));
+  if (!lastNoticeAt) return true;
+  return now - lastNoticeAt >= pendingNoticeIntervalMs;
+}
+
+async function markMissingAndClose(sessionId: string, vmName: string | null) {
+  console.info('[SANDBOX_ARCHIVE_JOB] sandbox not found, mark closed', sessionId);
+  await sandboxArchiveJobDeps.sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closed', vmName);
+  await sandboxArchiveJobDeps.setSandboxMetadata(sessionId, {
+    archiveStatus: 'missing',
+    archiveError: 'sandbox_not_found',
+  });
+}
+
 async function runOnce(): Promise<void> {
   if (jobRunning) return;
   jobRunning = true;
 
   try {
+    if (!sandboxArchiveJobDeps.isArchiveStorageConfigured()) {
+      return;
+    }
     if (Date.now() - lastDbFailureAt < DB_FAILURE_BACKOFF_MS) {
       return;
     }
-    const idleMinutes = getIdleMinutes();
-    const idleMs = idleMinutes * 60 * 1000;
+
     const limit = getScanLimit();
+    const preTimeoutBufferMs = getPreTimeoutBufferMs();
+    const pendingNoticeIntervalMs = getPendingNoticeIntervalMs();
+
     let environments = [];
     try {
-      environments = await sandboxExecutionEnvironmentDAO.listByStatus('ready', limit);
+      environments = await sandboxArchiveJobDeps.sandboxExecutionEnvironmentDAO.listByStatus('ready', limit);
     } catch (error) {
       if (isDbConnectionError(error)) {
         lastDbFailureAt = Date.now();
@@ -134,77 +226,74 @@ async function runOnce(): Promise<void> {
       if (archiveStatus === 'in_progress') {
         continue;
       }
+
+      const now = Date.now();
       const lastActiveAt = extractLastActiveAt(metadata) || env.updatedAt?.toISOString() || env.createdAt?.toISOString();
       const lastActiveTs = parseTimestamp(lastActiveAt);
       if (!lastActiveTs) {
         continue;
       }
-      const lastArchivedAtRaw = typeof (metadata as any).lastArchivedAt === 'string' ? (metadata as any).lastArchivedAt : null;
-      const lastArchivedTs = parseTimestamp(lastArchivedAtRaw || undefined);
-      if (lastArchivedTs && lastArchivedTs >= lastActiveTs) {
-        continue;
-      }
 
-      if (Date.now() - lastActiveTs < idleMs) {
-        continue;
-      }
+      const inactivityTimeoutMs = resolveInactivityTimeoutMs(metadata);
+      const timeoutAtTs = lastActiveTs + inactivityTimeoutMs;
+      const archiveTriggerAtTs = resolveArchiveTriggerAt(lastActiveTs, inactivityTimeoutMs, preTimeoutBufferMs);
+      const pendingArchiveUpdate = extractPendingArchiveUpdate(metadata);
+      const lastArchivedTs = parseTimestamp(asText((metadata as any).lastArchivedAt));
+      const hasArchivedBefore = Boolean(lastArchivedTs || asText((metadata as any).r2ArchiveKey));
 
-      try {
-        try {
-          await setSandboxMetadata(env.sessionId, {
-            archiveStatus: 'in_progress',
-            archiveReason: 'idle_timeout',
-          });
-        } catch (error) {
-          if (isDbConnectionError(error)) {
-            lastDbFailureAt = Date.now();
-            console.warn('[SANDBOX_ARCHIVE_JOB] set metadata failed (db)', env.sessionId, error);
-            return;
-          }
-          console.warn('[SANDBOX_ARCHIVE_JOB] set metadata failed', env.sessionId, error);
-        }
-
-        await archiveSandboxWorkspace(env.sessionId, 'idle_timeout');
-
-        await e2bConnector.pauseSandbox(env.sessionId);
-
-        try {
-          await setSandboxMetadata(env.sessionId, {
-            archiveStatus: 'archived',
-            pauseReason: 'idle_timeout',
-            pausedAt: new Date().toISOString(),
-          });
-        } catch (error) {
-          if (isDbConnectionError(error)) {
-            lastDbFailureAt = Date.now();
-            console.warn('[SANDBOX_ARCHIVE_JOB] set metadata failed (db)', env.sessionId, error);
-            return;
-          }
-          console.warn('[SANDBOX_ARCHIVE_JOB] set metadata failed', env.sessionId, error);
-        }
-      } catch (error) {
-        if (isDbConnectionError(error)) {
-          lastDbFailureAt = Date.now();
-          console.warn('[SANDBOX_ARCHIVE_JOB] db error', env.sessionId, error);
-          return;
-        }
-        const notFound = isSandboxNotFound(error);
-        if (notFound) {
-          console.info('[SANDBOX_ARCHIVE_JOB] sandbox not found, mark closed', env.sessionId);
+      if (now < archiveTriggerAtTs) {
+        if (pendingArchiveUpdate && shouldRefreshPendingNotice(now, metadata, pendingNoticeIntervalMs)) {
           try {
-            await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName ?? null);
-          } catch (metaError) {
-            if (isDbConnectionError(metaError)) {
+            await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
+              archiveStatus: 'pending_update',
+              archiveReason: 'waiting_timeout',
+              pendingArchiveUpdate: true,
+              archivePendingNoticeAt: new Date(now).toISOString(),
+              archiveTimeoutAt: new Date(timeoutAtTs).toISOString(),
+              archiveSyncEligibleAt: new Date(archiveTriggerAtTs).toISOString(),
+            });
+          } catch (error) {
+            if (isDbConnectionError(error)) {
               lastDbFailureAt = Date.now();
-              console.warn('[SANDBOX_ARCHIVE_JOB] updateStatus failed (db)', env.sessionId, metaError);
+              console.warn('[SANDBOX_ARCHIVE_JOB] pending notice update failed (db)', env.sessionId, error);
               return;
             }
-            console.warn('[SANDBOX_ARCHIVE_JOB] updateStatus failed', env.sessionId, metaError);
+            console.warn('[SANDBOX_ARCHIVE_JOB] pending notice update failed', env.sessionId, error);
           }
+        }
+        continue;
+      }
+
+      let archivedThisRound = false;
+      if (pendingArchiveUpdate || !hasArchivedBefore) {
+        try {
+          await sandboxArchiveJobDeps.archiveSandboxWorkspace(env.sessionId, 'idle_timeout');
+          archivedThisRound = true;
+        } catch (error) {
+          if (isDbConnectionError(error)) {
+            lastDbFailureAt = Date.now();
+            console.warn('[SANDBOX_ARCHIVE_JOB] db error', env.sessionId, error);
+            return;
+          }
+          if (isSandboxNotFound(error)) {
+            try {
+              await markMissingAndClose(env.sessionId, env.vmName ?? null);
+            } catch (metaError) {
+              if (isDbConnectionError(metaError)) {
+                lastDbFailureAt = Date.now();
+                console.warn('[SANDBOX_ARCHIVE_JOB] mark missing failed (db)', env.sessionId, metaError);
+                return;
+              }
+              console.warn('[SANDBOX_ARCHIVE_JOB] mark missing failed', env.sessionId, metaError);
+            }
+            continue;
+          }
+          console.warn('[SANDBOX_ARCHIVE_JOB] idle archive failed, skip pause', env.sessionId, error);
           try {
-            await setSandboxMetadata(env.sessionId, {
-              archiveStatus: 'missing',
-              archiveError: 'sandbox_not_found',
+            await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
+              archiveStatus: 'failed',
+              archiveReason: 'idle_timeout',
+              archiveError: error instanceof Error ? error.message : String(error),
             });
           } catch (metaError) {
             if (isDbConnectionError(metaError)) {
@@ -216,10 +305,56 @@ async function runOnce(): Promise<void> {
           }
           continue;
         }
-        console.warn('[SANDBOX_ARCHIVE_JOB] archive failed', env.sessionId, error);
+      } else {
         try {
-          await setSandboxMetadata(env.sessionId, {
+          await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
+            archiveStatus: 'up_to_date',
+            archiveReason: 'idle_timeout',
+            archiveSkippedAt: new Date(now).toISOString(),
+            archiveSkipReason: 'no_pending_update',
+            archiveTimeoutAt: new Date(timeoutAtTs).toISOString(),
+          });
+        } catch (error) {
+          if (isDbConnectionError(error)) {
+            lastDbFailureAt = Date.now();
+            console.warn('[SANDBOX_ARCHIVE_JOB] set skip metadata failed (db)', env.sessionId, error);
+            return;
+          }
+          console.warn('[SANDBOX_ARCHIVE_JOB] set skip metadata failed', env.sessionId, error);
+        }
+      }
+
+      try {
+        await sandboxArchiveJobDeps.e2bConnector.pauseSandbox(env.sessionId);
+        await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
+          pauseReason: 'idle_timeout',
+          pausedAt: new Date().toISOString(),
+          ...(archivedThisRound ? { archivePausedAfterSync: true } : {}),
+        });
+      } catch (error) {
+        if (isDbConnectionError(error)) {
+          lastDbFailureAt = Date.now();
+          console.warn('[SANDBOX_ARCHIVE_JOB] db error while pause', env.sessionId, error);
+          return;
+        }
+        if (isSandboxNotFound(error)) {
+          try {
+            await markMissingAndClose(env.sessionId, env.vmName ?? null);
+          } catch (metaError) {
+            if (isDbConnectionError(metaError)) {
+              lastDbFailureAt = Date.now();
+              console.warn('[SANDBOX_ARCHIVE_JOB] mark missing failed (db)', env.sessionId, metaError);
+              return;
+            }
+            console.warn('[SANDBOX_ARCHIVE_JOB] mark missing failed', env.sessionId, metaError);
+          }
+          continue;
+        }
+        console.warn('[SANDBOX_ARCHIVE_JOB] pause failed', env.sessionId, error);
+        try {
+          await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
             archiveStatus: 'failed',
+            archiveReason: 'idle_timeout',
             archiveError: error instanceof Error ? error.message : String(error),
           });
         } catch (metaError) {
@@ -248,6 +383,10 @@ export function startSandboxArchiveJob(): void {
     (jobTimer as any).unref();
   }
   void runOnce();
+}
+
+export async function runSandboxArchiveJobOnceForTest(): Promise<void> {
+  await runOnce();
 }
 
 export function stopSandboxArchiveJob(): void {

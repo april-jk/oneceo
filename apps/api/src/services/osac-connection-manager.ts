@@ -1,5 +1,6 @@
 import { osacConnector, type OsacConnectionHandle } from '../connectors/osac-connector';
 import type { OsacMessage } from '../clients/osac-client';
+import { touchSandbox } from './sandbox-activity-service';
 
 type ConnectionEntry = {
   handle: OsacConnectionHandle;
@@ -568,6 +569,15 @@ export class OsacConnectionManager {
   }
 
   private dispatchMessage(sessionId: string, message: OsacMessage) {
+    const messageType = typeof message?.type === 'string' ? message.type.toLowerCase() : 'unknown';
+    const shouldCountAsActivity =
+      messageType.startsWith('opencode_') ||
+      messageType.startsWith('command_') ||
+      messageType.startsWith('sandbox_webhook');
+    if (shouldCountAsActivity) {
+      void touchSandbox(sessionId, `osac_recv_${messageType}`);
+    }
+
     const buffer = this.messageBuffers.get(sessionId) || [];
     buffer.push(this.sanitizeMessage(message));
     const maxMessages = Number.isFinite(this.maxMessages) ? Math.max(20, this.maxMessages) : 120;

@@ -1,9 +1,15 @@
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 
 const lastTouch = new Map<string, number>();
+const lastDirtyMark = new Map<string, number>();
+const dirtySessions = new Set<string>();
 const MIN_TOUCH_INTERVAL_MS = Math.max(
   5000,
   Number(process.env.SANDBOX_ACTIVITY_MIN_INTERVAL_MS || 30000)
+);
+const MIN_DIRTY_INTERVAL_MS = Math.max(
+  5000,
+  Number(process.env.SANDBOX_DIRTY_MARK_MIN_INTERVAL_MS || 15000)
 );
 
 function shouldTouch(sessionId: string): boolean {
@@ -13,6 +19,16 @@ function shouldTouch(sessionId: string): boolean {
     return false;
   }
   lastTouch.set(sessionId, now);
+  return true;
+}
+
+function shouldMarkDirty(sessionId: string): boolean {
+  const now = Date.now();
+  const prev = lastDirtyMark.get(sessionId) || 0;
+  if (now - prev < MIN_DIRTY_INTERVAL_MS) {
+    return false;
+  }
+  lastDirtyMark.set(sessionId, now);
   return true;
 }
 
@@ -33,29 +49,109 @@ async function updateMetadata(sessionId: string, patch: Record<string, unknown>)
   return sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, next);
 }
 
-export async function touchSandbox(sessionId: string, reason: string): Promise<void> {
-  if (!sessionId) return;
-  if (!shouldTouch(sessionId)) return;
-  const now = new Date().toISOString();
-  await updateMetadata(sessionId, {
-    lastActiveAt: now,
-    lastActiveReason: reason,
-  });
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
-export async function markSandboxDirty(sessionId: string, reason: string): Promise<void> {
+function asObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object') {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function toPositiveMs(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
+export async function touchSandbox(
+  sessionId: string,
+  reason: string,
+  options?: { force?: boolean; extra?: Record<string, unknown> }
+): Promise<void> {
   if (!sessionId) return;
+  if (!options?.force && !shouldTouch(sessionId)) return;
   const now = new Date().toISOString();
   await updateMetadata(sessionId, {
     lastActiveAt: now,
     lastActiveReason: reason,
-    pendingArchiveUpdate: true,
+    ...(options?.extra || {}),
   });
 }
 
 export async function setSandboxMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void> {
   if (!sessionId) return;
   await updateMetadata(sessionId, patch);
+}
+
+export async function markSandboxDirty(sessionId: string, reason: string): Promise<void> {
+  if (!sessionId) return;
+  const now = new Date().toISOString();
+  if (dirtySessions.has(sessionId)) {
+    await updateMetadata(sessionId, {
+      lastActiveAt: now,
+      lastActiveReason: reason,
+    });
+    return;
+  }
+  if (!shouldMarkDirty(sessionId)) {
+    await updateMetadata(sessionId, {
+      lastActiveAt: now,
+      lastActiveReason: reason,
+    });
+    return;
+  }
+  const env = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+  if (!env) return;
+
+  const metadata = (env.metadata || {}) as Record<string, unknown>;
+  const alreadyDirty = extractPendingArchiveUpdate(metadata);
+  if (alreadyDirty) {
+    dirtySessions.add(sessionId);
+    await updateMetadata(sessionId, {
+      lastActiveAt: now,
+      lastActiveReason: reason,
+    });
+    return;
+  }
+
+  const currentStatus = asText((metadata as any).archiveStatus).toLowerCase();
+  const pendingSince = asText((metadata as any).archivePendingSince) || now;
+  const patch: Record<string, unknown> = {
+    lastActiveAt: now,
+    lastActiveReason: reason,
+    pendingArchiveUpdate: true,
+    archiveDirty: true,
+    archivePendingSince: pendingSince,
+    lastDirtyAt: now,
+    lastDirtyReason: reason,
+    lastDirtyBy: 'sandbox_activity',
+  };
+  if (currentStatus !== 'in_progress') {
+    patch.archiveStatus = 'pending_update';
+  }
+  const next = mergeMetadata(metadata, patch);
+  await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, next);
+  dirtySessions.add(sessionId);
+}
+
+export async function clearSandboxDirty(
+  sessionId: string,
+  patch?: Record<string, unknown>
+): Promise<void> {
+  if (!sessionId) return;
+  dirtySessions.delete(sessionId);
+  const now = new Date().toISOString();
+  await updateMetadata(sessionId, {
+    pendingArchiveUpdate: false,
+    archiveDirty: false,
+    archivePendingSince: null,
+    lastDirtyFlushedAt: now,
+    ...(patch || {}),
+  });
 }
 
 export function extractLastActiveAt(metadata: Record<string, unknown> | null | undefined): string | null {
@@ -68,4 +164,23 @@ export function extractTaskSessionId(metadata: Record<string, unknown> | null | 
   const value = metadata && (metadata as any).taskSessionId;
   if (typeof value === 'string' && value.trim()) return value.trim();
   return null;
+}
+
+export function extractPendingArchiveUpdate(metadata: Record<string, unknown> | null | undefined): boolean {
+  if (!metadata) return false;
+  const candidates = [
+    (metadata as any).pendingArchiveUpdate,
+    (metadata as any).archiveDirty,
+  ];
+  return candidates.some((value) => value === true || String(value).trim().toLowerCase() === 'true');
+}
+
+export function extractInactivityTimeoutMs(metadata: Record<string, unknown> | null | undefined): number | null {
+  if (!metadata) return null;
+  const e2b = asObject((metadata as any).e2b);
+  return (
+    toPositiveMs(e2b.timeoutMs) ||
+    toPositiveMs((metadata as any).timeoutMs) ||
+    toPositiveMs((metadata as any).sandboxTimeoutMs)
+  );
 }

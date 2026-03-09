@@ -14,6 +14,13 @@ type OpencodePartInput = {
   name?: string;
 };
 
+type OpencodePendingQuestionRecord = {
+  id: string;
+  sessionID?: string;
+  questions?: Array<Record<string, unknown>>;
+  tool?: Record<string, unknown>;
+};
+
 type OpencodeEventHandler = (event: Record<string, unknown>) => void;
 
 function resolveTimeoutMs(value: unknown, fallback: number): number {
@@ -176,6 +183,47 @@ async function getSessionDiff(
   return JSON.parse(text) as unknown;
 }
 
+async function listQuestions(
+  baseUrl: string,
+  input: { directory?: string },
+  trafficAccessToken?: string
+) {
+  const url = buildUrl(baseUrl, '/question', input.directory ? { directory: input.directory } : undefined);
+  const headers = buildHeaders({}, trafficAccessToken);
+  const resp = await fetchWithTimeout(url.toString(), { headers });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`opencode list questions failed: ${resp.status} ${text}`);
+  }
+  return JSON.parse(text || '[]') as OpencodePendingQuestionRecord[];
+}
+
+async function replyQuestion(
+  baseUrl: string,
+  input: { requestId: string; directory?: string; answers: string[][] },
+  trafficAccessToken?: string
+) {
+  if (!input.requestId) {
+    throw new Error('opencode requestId is required');
+  }
+  const url = buildUrl(
+    baseUrl,
+    `/question/${encodeURIComponent(input.requestId)}/reply`,
+    input.directory ? { directory: input.directory } : undefined
+  );
+  const headers = buildHeaders({ 'Content-Type': 'application/json' }, trafficAccessToken);
+  const resp = await fetchWithTimeout(url.toString(), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ answers: input.answers || [] }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`opencode reply question failed: ${resp.status} ${text}`);
+  }
+  return text;
+}
+
 async function doRequest(
   baseUrl: string,
   input: {
@@ -285,6 +333,8 @@ export const opencodeHttpClient = {
   createSession,
   sendPrompt,
   getSessionDiff,
+  listQuestions,
+  replyQuestion,
   doRequest,
   subscribeEvents,
   buildUrl,

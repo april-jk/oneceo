@@ -11,11 +11,11 @@ import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
-import { testDatabaseConnection } from './config/database';
+import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
-import { startSandboxArchiveJob } from './services/sandbox-archive-job';
+import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 
 function mergeNoProxy(entries: string[], current?: string): string {
@@ -204,6 +204,59 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
+let shuttingDown = false;
+
+async function shutdown(signal: string, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`[API] shutdown start: ${signal}`);
+
+  try {
+    stopSandboxArchiveJob();
+  } catch (error) {
+    console.warn('[API] stopSandboxArchiveJob failed:', error);
+  }
+
+  try {
+    io.close();
+  } catch (error) {
+    console.warn('[API] socket.io close failed:', error);
+  }
+
+  try {
+    taskCreationWebSocketService.close();
+  } catch (error) {
+    console.warn('[API] taskCreationWebSocketService.close failed:', error);
+  }
+
+  await new Promise<void>((resolve) => {
+    try {
+      httpServer.close(() => resolve());
+    } catch (_error) {
+      resolve();
+    }
+  });
+
+  try {
+    await closeDatabaseConnection();
+  } catch (error) {
+    console.warn('[API] closeDatabaseConnection failed:', error);
+  }
+
+  process.exit(exitCode);
+}
+
+httpServer.on('error', (error: any) => {
+  if (error?.code === 'EADDRINUSE') {
+    console.error(
+      `[API] Port ${PORT} is already in use. Another api dev process may still be running.`
+    );
+  } else {
+    console.error('[API] httpServer error:', error);
+  }
+  void shutdown('httpServer:error', 1);
+});
 
 // 初始化任务创建 WebSocket 服务
 taskCreationWebSocketService.initialize(httpServer);
@@ -229,4 +282,12 @@ httpServer.listen(PORT, () => {
   startSandboxArchiveJob();
   
   console.log('');
+});
+
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM');
 });

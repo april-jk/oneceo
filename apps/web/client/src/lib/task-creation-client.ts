@@ -53,6 +53,44 @@ export type TaskCreationDebugInfo = {
   message?: string;
 };
 
+export type TaskCreationDeploymentLog = {
+  timestamp?: string;
+  message: string;
+  severity?: string;
+};
+
+export type TaskCreationDeploymentRecord = {
+  id: string;
+  status: string;
+  createdAt?: string;
+  serviceName?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
+  url?: string;
+  staticUrl?: string;
+};
+
+export type TaskCreationDeploymentInfo = {
+  configured: boolean;
+  canDeploy: boolean;
+  message?: string;
+  projectId?: string;
+  projectName?: string;
+  environmentId?: string;
+  environmentName?: string;
+  serviceId?: string;
+  serviceName?: string;
+  deploymentId?: string;
+  latestStatus?: string;
+  latestUrl?: string;
+  latestStaticUrl?: string;
+  activeDeploymentPending: boolean;
+  domains: string[];
+  deployments: TaskCreationDeploymentRecord[];
+  logs: TaskCreationDeploymentLog[];
+  missing: string[];
+};
+
 export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
@@ -223,6 +261,62 @@ export async function startTaskCreationDebug(sessionId: string): Promise<TaskCre
   }
   const result = (await response.json()) as { data?: TaskCreationDebugInfo };
   return result?.data || null;
+}
+
+export async function getTaskCreationDeploymentInfo(
+  sessionId: string,
+  deploymentId?: string
+): Promise<TaskCreationDeploymentInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (deploymentId) {
+    params.set("deploymentId", deploymentId);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationDeploymentInfo }>(url);
+  return result?.data || null;
+}
+
+async function postTaskCreationDeploymentAction(
+  sessionId: string,
+  action: "deploy" | "redeploy" | "rollback",
+  body?: Record<string, unknown>
+): Promise<TaskCreationDeploymentInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/${action}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(body || {}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationDeploymentInfo };
+  return result?.data || null;
+}
+
+export async function deployTaskCreationSession(
+  sessionId: string
+): Promise<TaskCreationDeploymentInfo | null> {
+  return postTaskCreationDeploymentAction(sessionId, "deploy");
+}
+
+export async function redeployTaskCreationSession(
+  sessionId: string,
+  deploymentId: string
+): Promise<TaskCreationDeploymentInfo | null> {
+  return postTaskCreationDeploymentAction(sessionId, "redeploy", { deploymentId });
+}
+
+export async function rollbackTaskCreationSessionDeployment(
+  sessionId: string,
+  deploymentId: string
+): Promise<TaskCreationDeploymentInfo | null> {
+  return postTaskCreationDeploymentAction(sessionId, "rollback", { deploymentId });
 }
 
 export async function startTaskCreationRuntime(sessionId: string): Promise<{

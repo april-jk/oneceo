@@ -135,3 +135,17 @@
 - 计划如何解决：
   - 下一步应该改查 OpenCode/LLM proxy 请求结构，确认为什么当前会话恢复后的 `chat/completions` 负载被网关判定为非法。
   - GitHub 连接器这一层本轮已经达到目标：连接器以 MCP 形式存在于远端 OpenCode，且 token 已随服务进程注入，不需要再次交互式鉴权。
+
+## 2026-03-09 内容预览部署栏
+
+- 做了什么：
+  - 在 `apps/web/client/src/components/OpencodePreviewPanel.tsx` 的内容预览里新增了“部署”栏目，放在现有栏目右侧。
+  - 新增 `apps/api/src/services/railway-deployment-service.ts`，按 Railway 文档封装 `deployments`、`deployment`、`deploymentLogs`、`serviceInstanceDeployV2`、`deploymentRedeploy`、`deploymentRollback`。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 增加会话级部署查询/触发/重部署/回滚接口，并把最近一次 `deploymentId` 回写到 sandbox metadata 的 `railway` 字段。
+  - 在 `apps/web/client/src/lib/task-creation-client.ts` 补齐部署接口 client，前端面板支持查看状态、切换历史部署、刷新日志、触发部署、重新部署与回滚。
+- 遇到什么：
+  - 仓库当前 `apps/api` 全量 `type-check` 存在大量既有历史错误，无法作为本次改动的干净回归基线。
+  - 现有仓库没有成型的 Railway 配置页，因此本轮通过 `sandbox metadata.railway` 或服务端环境变量读取 `token / projectId / environmentId / serviceId`，未配置时前端做降级提示。
+- 计划如何解决：
+  - 下一步如果要把部署能力真正用于业务流程，需要补一层 Railway 配置录入/保存界面，而不是继续依赖环境变量或 metadata 预置。
+  - 若后续联调时发现某个 GraphQL 字段和当前文档不一致，再按真实 Railway 返回做一次窄范围修正。

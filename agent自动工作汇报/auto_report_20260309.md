@@ -92,3 +92,46 @@
 - 计划如何解决：
   - 当前“网站导入 + 技能导入 + 本地导入”已经在本机 Playwright 上整链路通过。
   - 后续如果你还想把“使用技能”接成真正的 sandbox skill 装载，再单独补 E2B/OSAC 支持，不和这次附件入口改动混在一起。
+
+## 2026-03-09 GitHub 连接器校验与挂载提示
+
+- 做了什么：
+  - 在 [user-connector-service.ts](/Users/eunice/codingProject/oneceo/apps/api/src/services/user-connector-service.ts) 补上 GitHub PAT 保存前的真实校验，保存时会请求 GitHub `/user`，只有 token 可用时才写入并回填 `displayName`。
+  - 在 [ConnectorCenterPanel.tsx](/Users/eunice/codingProject/oneceo/apps/web/client/src/components/ConnectorCenterPanel.tsx) 把“保存配置”和“自动挂载到会话”拆成两段处理，避免出现“配置其实已保存，但因为挂载失败导致前端整体报错”的误导状态。
+  - 新增 [user-connector-service.test.ts](/Users/eunice/codingProject/oneceo/apps/api/tests/user-connector-service.test.ts)，覆盖 GitHub token 有效/无效两条保存分支。
+  - 用用户提供的 GitHub PAT 做了两层验证：
+    - 直接请求 GitHub `/user`，返回登录名 `april-jk`；
+    - 调用本机 API `PUT /api/connectors/github` 和 `GET /api/connectors/me`，确认能保存并读回 `authorized`，测试后已执行 `DELETE /api/connectors/github/auth` 清理临时授权。
+- 遇到什么：
+  - 仓库当前全量 `pnpm --dir apps/api type-check` 仍有既有错误，和本次连接器改动无关；因此这次以新增单测和接口级验证作为最小闭环。
+- 计划如何解决：
+  - 如果下一步还要继续查“挂载后实际工具不可用”，建议直接抓某个具体 task session 的 `/api/task-creation/sessions/:sessionId/connectors` 返回体和 runtime `/mcp` 状态，继续排查 attach 阶段而不是保存阶段。
+
+## 2026-03-09 GitHub MCP 运行时假成功校验
+
+- 做了什么：
+  - 继续用 Playwright 真实走通“新建对话 -> 为对话启用 GitHub 连接器 -> 在 sandbox 中让智能体建仓并推送”整条链路。
+  - 在 [connector-registry.ts](/Users/eunice/codingProject/oneceo/apps/api/src/services/connector-registry.ts) 把 GitHub MCP 启动命令从 `bash -lc` 包装改成直接 `node -e`，避免占用 MCP 标准输入，并过滤 `@modelcontextprotocol/server-github` 启动时写到 stdout 的 banner。
+  - 在 [session-connector-service.ts](/Users/eunice/codingProject/oneceo/apps/api/src/services/session-connector-service.ts) 增加 attach 后的运行时复查：即使 `POST /mcp` 和 `POST /connect` 都返回成功，也必须再次 `GET /mcp` 确认 server 仍然存在，否则把连接器标记为 `failed`，错误写成“运行时未保留已注册的 MCP 服务”。
+  - 补了 [connector-registry.test.ts](/Users/eunice/codingProject/oneceo/apps/api/tests/connector-registry.test.ts) 断言，确保 GitHub 连接器运行时配置确实改成 `['node', '-e', ...]`。
+- 遇到什么：
+  - OpenCode runtime 当前存在更底层的问题：`POST /mcp` 响应体会显示 GitHub server 已 `connected`，但紧接着 `GET /mcp` 只剩 `playwright`，新注册的 GitHub server 会立即消失。
+  - 因此即使 attach 阶段表面成功，智能体实际执行时仍退回 `bash`/`gh`，无法真正使用 GitHub MCP。
+- 计划如何解决：
+  - 当前产品层已经不再把这类情况误报成“连接器可用”。
+  - 下一步要修的是 OpenCode/E2B 这一层的 `/mcp` 持久化问题，否则无法完成“通过 sandbox 中的 GitHub 连接器创建仓库并推送”的最终目标。
+
+## 2026-03-09 GitHub MCP 注入验证与后续阻塞
+
+- 做了什么：
+  - 已把 GitHub attach 流程改成写入远端 `~/.config/opencode/opencode.json` 后重启 `opencode serve`，并在真实 sandbox `ia5x5pxnljeli3rnp98bi` 上完成复测。
+  - 通过 `GET https://4096-ia5x5pxnljeli3rnp98bi.e2b.app/mcp` 确认会话级 server `github--8a07d793-1a12-44a9-b5a5-537e3e9cfdec` 稳定为 `connected`。
+  - 直接读取远端 `opencode.json`，确认 GitHub MCP 条目已经写入配置；再检查 `opencode serve` 进程环境，确认同时注入了 `GITHUB_PERSONAL_ACCESS_TOKEN`、`GH_TOKEN`、`GITHUB_TOKEN`，即无需在 sandbox 中再次浏览器登录。
+  - Playwright 再次在同一会话发起新指令，验证这次已经不再卡在“需要 GitHub 登录”，而是进入新的 OpenCode 执行阶段。
+  - 顺手修复 `POST /api/task-creation/sessions` 默认生成 `session_...` 非 UUID 的问题，避免新建草稿会话落库失败、后续无法 attach 连接器。
+- 遇到什么：
+  - 这次新的主阻塞点不再是 GitHub 连接器，而是 OpenCode 发往上游 LLM 代理的 `chat/completions` 请求被 400 拒绝，错误为“请求格式非法，请检查请求结构是否符合 API 规范”。
+  - 因此“GitHub 已免重新鉴权注入到 sandbox”已经成立，但“让模型继续完成创建仓库并推送”仍被上游模型请求格式问题拦住。
+- 计划如何解决：
+  - 下一步应该改查 OpenCode/LLM proxy 请求结构，确认为什么当前会话恢复后的 `chat/completions` 负载被网关判定为非法。
+  - GitHub 连接器这一层本轮已经达到目标：连接器以 MCP 形式存在于远端 OpenCode，且 token 已随服务进程注入，不需要再次交互式鉴权。

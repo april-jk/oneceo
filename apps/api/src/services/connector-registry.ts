@@ -141,6 +141,55 @@ function renderHeaders(
   return result;
 }
 
+function buildGithubStdioWrapperCommand(): string {
+  return [
+    "const { spawn } = require('node:child_process');",
+    "const child = spawn('npx', ['-y', '@modelcontextprotocol/server-github'], {",
+    "  stdio: ['pipe', 'pipe', 'inherit'],",
+    "  env: {",
+    "    ...process.env,",
+    "    NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL || 'silent',",
+    "  },",
+    "});",
+    "let buffer = Buffer.alloc(0);",
+    "let filtered = false;",
+    "const flushChunk = (chunk) => {",
+    "  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);",
+    "  if (filtered) {",
+    "    process.stdout.write(data);",
+    "    return;",
+    "  }",
+    "  buffer = Buffer.concat([buffer, data]);",
+    "  const newlineIndex = buffer.indexOf(0x0a);",
+    "  if (newlineIndex === -1) return;",
+    "  const firstLine = buffer.subarray(0, newlineIndex).toString('utf8').trim();",
+    "  const rest = buffer.subarray(newlineIndex + 1);",
+    "  if (firstLine && firstLine !== 'GitHub MCP Server running on stdio') {",
+    "    process.stdout.write(Buffer.from(`${firstLine}\\n`));",
+    "  }",
+    "  if (rest.length > 0) {",
+    "    process.stdout.write(rest);",
+    "  }",
+    "  filtered = true;",
+    "};",
+    "child.stdout.on('data', flushChunk);",
+    "child.stdout.on('end', () => {",
+    "  if (!filtered && buffer.length > 0) {",
+    "    process.stdout.write(buffer);",
+    "    filtered = true;",
+    "  }",
+    "});",
+    "process.stdin.pipe(child.stdin);",
+    "child.on('exit', (code, signal) => {",
+    "  if (signal) {",
+    "    process.kill(process.pid, signal);",
+    "    return;",
+    "  }",
+    "  process.exit(code ?? 0);",
+    "});",
+  ].join('\n');
+}
+
 function resolveOauthProvider(key: ConnectorKey): ConnectorOauthProvider | undefined {
   if (key === 'github') {
     const clientId = asText(process.env.GITHUB_CONNECTOR_CLIENT_ID);
@@ -359,9 +408,12 @@ export class ConnectorRegistry {
       return {
         type: 'local',
         enabled: true,
-        command: ['npx', '-y', '@modelcontextprotocol/server-github'],
+        // The upstream GitHub MCP server prints a startup banner to stdout.
+        // OpenCode treats stdout as the MCP transport, so we strip that first line.
+        command: ['node', '-e', buildGithubStdioWrapperCommand()],
         environment: {
           GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
+          NPM_CONFIG_LOGLEVEL: 'silent',
         },
       };
     }

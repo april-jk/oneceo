@@ -34,6 +34,7 @@
     "title": "设置",
     "settingsTab": "设置",
     "accountTab": "账户",
+    "modelTab": "模型设置",
     "languageLabel": "语言",
     "languageDescription": "选择您偏好的语言",
     "chinese": "中文",
@@ -45,7 +46,16 @@
     "notificationsLabel": "通知",
     "notificationsDescription": "管理您的通知偏好",
     "emailNotifications": "邮件通知",
-    "pushNotifications": "推送通知"
+    "pushNotifications": "推送通知",
+    "executorLabel": "执行器选择",
+    "executorDescription": "选择任务执行引擎",
+    "executorOpencode": "opencode",
+    "executorClaudecode": "claudecode",
+    "executorCodex": "codex",
+    "altusControlLabel": "Altus 接管设置",
+    "altusControlDescription": "控制对话是否由 Altus 接管",
+    "altusSandboxDirect": "sandbox 直通",
+    "altusManaged": "Altus 接管对话"
   },
   "account": {
     "title": "账户",

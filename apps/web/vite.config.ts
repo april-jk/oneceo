@@ -15,7 +15,7 @@ export default defineConfig({
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
     },
   },
-  envDir: path.resolve(import.meta.dirname),
+  envDir: path.resolve(import.meta.dirname, ".."),
   root: path.resolve(import.meta.dirname, "client"),
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
@@ -28,6 +28,10 @@ export default defineConfig({
     fs: {
       strict: true,
       deny: ["**/.*"],
+      allow: [".."]
+    },
+    hmr: {
+      clientPort: 3000,
     },
   },
 });

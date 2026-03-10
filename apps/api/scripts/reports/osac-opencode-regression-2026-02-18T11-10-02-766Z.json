@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T11:05:26.310Z",
+    "finishedAt": "2026-02-18T11:10:02.766Z",
+    "sessionId": "sess_00ec3ad22c95406a",
+    "provisioned": true,
+    "rounds": 1,
+    "roundsExecuted": 1,
+    "passed": 0,
+    "failed": 1,
+    "maxConsecutiveFailures": 1,
+    "maxFailures": 1,
+    "totalBudgetMs": 900000,
+    "aborted": true,
+    "abortReason": "Circuit break: 1 consecutive failures reached threshold 1",
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 120,
+    "execTimeoutSeconds": 150,
+    "roundExecTimeoutMs": 240000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": false,
+      "status": "completed",
+      "exit": 124,
+      "durationMs": 120495,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "",
+      "stderrSnippet": ""
+    }
+  ]
+}

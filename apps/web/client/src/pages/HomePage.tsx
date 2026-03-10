@@ -1,15 +1,13 @@
-/**
- * Design Philosophy: Swiss International Style + Digital Minimalism
- * Home Page - Independent landing page with top navigation bar
- */
-
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Mic, Plug, Send, Plus, Sparkles } from "lucide-react";
+import { Mic, Send, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   Tooltip,
   TooltipContent,
@@ -23,50 +21,53 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import UserMenu from "@/components/UserMenu";
+import {
+  DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  stashPendingDraftAttachments,
+  type PendingAttachment,
+} from "@/lib/task-attachments";
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
 
-  const handleSend = () => {
-    if (message.trim()) {
-      // Smooth transition to workspace
-      setLocation("/ai-workspace");
-    }
+  const goToNewTask = (input: string) => {
+    const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!value) return;
+    stashPendingDraftAttachments(attachments.map((item) => item.file));
+    setLocation(`/new-task?q=${encodeURIComponent(value)}`);
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Top Navigation Bar */}
       <nav className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-          {/* Left Side - Logo and Brand */}
           <div className="flex items-center gap-3">
-            <img 
-              src="/logo.png"
-              alt="oneceo"
-              className="w-9 h-9 rounded-xl"
-            />
+            <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-xl" />
             <div className="flex flex-col">
-              <span className="text-sm font-semibold text-foreground leading-tight">
-                oneceo
-              </span>
-              <span className="text-xs text-muted-foreground leading-tight">
-                AI Agent Platform
-              </span>
+              <span className="text-sm font-semibold text-foreground leading-tight">oneceo</span>
+              <span className="text-xs text-muted-foreground leading-tight">AI Agent Platform</span>
             </div>
           </div>
-
-          {/* Right Side - User Menu */}
           <div className="flex items-center gap-4">
             <UserMenu />
           </div>
         </div>
       </nav>
 
-      {/* Main Content Area */}
       <div className="flex-1 flex items-center justify-center p-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -74,7 +75,6 @@ export default function HomePage() {
           transition={{ duration: 0.4, ease: "easeOut" }}
           className="w-full max-w-3xl space-y-8"
         >
-          {/* Logo and Title */}
           <div className="text-center space-y-4">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
@@ -85,9 +85,7 @@ export default function HomePage() {
               <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
                 <span className="text-background font-bold text-xl">M</span>
               </div>
-              <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-                AI Agent
-              </h1>
+              <h1 className="text-3xl font-semibold text-foreground tracking-tight">AI Agent</h1>
             </motion.div>
             <motion.p
               initial={{ opacity: 0 }}
@@ -99,16 +97,13 @@ export default function HomePage() {
             </motion.p>
           </div>
 
-          {/* Main Input Area */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3, duration: 0.4 }}
             className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200"
           >
-            {/* Text Area and Actions - Single Container */}
             <div className="p-4 space-y-3">
-              {/* Textarea */}
               <Textarea
                 placeholder="Type your message here..."
                 value={message}
@@ -116,126 +111,64 @@ export default function HomePage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    handleSend();
+                    goToNewTask(message);
                   }
                 }}
                 className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
                 rows={4}
               />
 
-              {/* Bottom Action Bar - No Border Separator */}
+              <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
               <TooltipProvider>
                 <div className="flex items-center justify-between pt-2">
-                  {/* Left Side Actions */}
                   <div className="flex items-center gap-1">
-                    {/* Add Attachment Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                        >
-                          <Plus className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Add attachment</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
-                    {/* Connector Button */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                          onClick={() => setShowConnector(true)}
-                        >
-                          <Plug className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Connector</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <ConnectorDialog />
 
-                    {/* Model Selection Button */}
                     <DropdownMenu>
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
-                            >
+                            <Button variant="ghost" size="sm" className="h-9 px-3 rounded-xl gap-2 hover:bg-muted">
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
                               <span className="text-sm text-muted-foreground">{selectedModel}</span>
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Select AI model</p>
-                        </TooltipContent>
+                        <TooltipContent><p>Select AI model</p></TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Lite</span>
-                            <span className="text-xs text-muted-foreground">Fast & efficient</span>
-                          </div>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Pro</span>
-                            <span className="text-xs text-muted-foreground">Balanced performance</span>
-                          </div>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Max</span>
-                            <span className="text-xs text-muted-foreground">Maximum capability</span>
-                          </div>
-                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>Agent Lite</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>Agent Pro</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>Agent Max</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
 
-                  {/* Right Side Actions */}
                   <div className="flex items-center gap-1">
-                    {/* Voice Input Button */}
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                        >
+                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-muted">
                           <Mic className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Voice input</p>
-                      </TooltipContent>
+                      <TooltipContent><p>Voice input</p></TooltipContent>
                     </Tooltip>
 
-                    {/* Send Button */}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          onClick={handleSend}
-                          disabled={!message.trim()}
+                          onClick={() => goToNewTask(message)}
+                          disabled={!message.trim() && attachments.length === 0}
                           size="icon"
-                          className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 disabled:opacity-50"
                         >
                           <Send className="w-4 h-4" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Send message</p>
-                      </TooltipContent>
+                      <TooltipContent><p>Send message</p></TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
@@ -243,7 +176,6 @@ export default function HomePage() {
             </div>
           </motion.div>
 
-          {/* Quick Actions */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -251,16 +183,16 @@ export default function HomePage() {
             className="grid grid-cols-2 gap-3"
           >
             {[
-              "Analyze data",
-              "Generate report",
-              "Create presentation",
-              "Code assistant",
-            ].map((action, index) => (
+              "我想做一个Python开发行业的市场调研",
+              "帮我分析竞争对手的产品策略",
+              "创建一个新产品的营销计划",
+              "生成季度业务报告",
+            ].map((action) => (
               <Button
                 key={action}
                 variant="outline"
-                className="h-12 rounded-xl border-border hover:bg-accent hover:border-primary/30 transition-all duration-200 text-sm font-medium"
-                onClick={() => setMessage(action)}
+                className="h-auto py-3 px-4 rounded-xl border-border hover:bg-accent hover:border-primary/30 text-sm font-medium text-left whitespace-normal"
+                onClick={() => goToNewTask(action)}
               >
                 {action}
               </Button>
@@ -269,8 +201,6 @@ export default function HomePage() {
         </motion.div>
       </div>
 
-      {/* Connector Dialog */}
-      <ConnectorDialog open={showConnector} onOpenChange={setShowConnector} />
     </div>
   );
 }

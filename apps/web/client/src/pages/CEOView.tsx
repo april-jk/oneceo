@@ -4,17 +4,18 @@
  */
 
 import { useState } from "react";
+import { toast } from "sonner";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import {
   TrendingUp,
   Users,
   FolderOpen,
   Target,
-  Plus,
-  Plug,
   Mic,
   Send,
   Sparkles,
@@ -32,6 +33,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import { mergePendingAttachments, type PendingAttachment } from "@/lib/task-attachments";
 
 // 模拟数据
 const mockProjects = [
@@ -89,7 +91,7 @@ const mockProjects = [
 
 export default function CEOView() {
   const [message, setMessage] = useState("");
-  const [showConnector, setShowConnector] = useState(false);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const projects = mockProjects;
 
@@ -107,11 +109,22 @@ export default function CEOView() {
   };
 
   const handleSend = () => {
-    if (message.trim()) {
+    if (message.trim() || attachments.length > 0) {
       // TODO: 实现发送消息逻辑
-      console.log("Sending message:", message);
+      console.log("Sending message:", message, attachments.map((item) => item.name));
       setMessage("");
+      setAttachments([]);
     }
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -256,43 +269,16 @@ export default function CEOView() {
                     rows={4}
                   />
 
+                  <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
                   {/* Bottom Action Bar */}
                   <TooltipProvider>
                     <div className="flex items-center justify-between pt-2">
                       {/* Left Side Actions */}
                       <div className="flex items-center gap-1">
-                        {/* Add Attachment Button */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                            >
-                              <Plus className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Add attachment</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
-                        {/* Connector Button */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                              onClick={() => setShowConnector(true)}
-                            >
-                              <Plug className="w-4 h-4 text-muted-foreground" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Connector</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <ConnectorDialog />
 
                         {/* Model Selection Button */}
                         <DropdownMenu>
@@ -375,7 +361,7 @@ export default function CEOView() {
                               size="icon"
                               className="h-9 w-9 rounded-xl"
                               onClick={handleSend}
-                              disabled={!message.trim()}
+                              disabled={!message.trim() && attachments.length === 0}
                             >
                               <Send className="w-4 h-4" />
                             </Button>
@@ -393,12 +379,6 @@ export default function CEOView() {
           </div>
         </div>
       </div>
-
-      {/* Connector Dialog */}
-      <ConnectorDialog
-        open={showConnector}
-        onOpenChange={setShowConnector}
-      />
     </WorkspaceLayout>
   );
 }

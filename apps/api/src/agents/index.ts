@@ -8,9 +8,19 @@
 export { BaseAgent, type AgentConfig, type AgentResult } from './base-agent';
 
 // 导出三个主要智能体
-export { TaskCreationAgent, taskCreationAgent } from './task-creation/task-creation-agent';
-export { CEOViewAgent, ceoViewAgent } from './ceo-view/ceo-view-agent';
-export { TaskDetailAgent, taskDetailAgent } from './task-detail/task-detail-agent';
+import { TaskCreationAgent, taskCreationAgent } from './task-creation/task-creation-agent';
+import { CEOViewAgent } from './ceo-view/ceo-view-agent';
+import { TaskDetailAgent } from './task-detail/task-detail-agent';
+
+export { TaskCreationAgent, taskCreationAgent };
+export { CEOViewAgent };
+export { TaskDetailAgent };
+
+// 创建单例实例
+const ceoViewAgent = new CEOViewAgent();
+const taskDetailAgent = new TaskDetailAgent();
+
+export { ceoViewAgent, taskDetailAgent };
 
 /**
  * Agent 管理器

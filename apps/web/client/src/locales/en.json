@@ -34,6 +34,7 @@
     "title": "Settings",
     "settingsTab": "Settings",
     "accountTab": "Account",
+    "modelTab": "Model Settings",
     "languageLabel": "Language",
     "languageDescription": "Select your preferred language",
     "chinese": "中文",
@@ -45,7 +46,16 @@
     "notificationsLabel": "Notifications",
     "notificationsDescription": "Manage your notification preferences",
     "emailNotifications": "Email Notifications",
-    "pushNotifications": "Push Notifications"
+    "pushNotifications": "Push Notifications",
+    "executorLabel": "Executor Selection",
+    "executorDescription": "Choose the task execution engine",
+    "executorOpencode": "opencode",
+    "executorClaudecode": "claudecode",
+    "executorCodex": "codex",
+    "altusControlLabel": "Altus Control",
+    "altusControlDescription": "Decide whether Altus manages the conversation",
+    "altusSandboxDirect": "Sandbox direct",
+    "altusManaged": "Altus managed"
   },
   "account": {
     "title": "Account",

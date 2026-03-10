@@ -1,0 +1,109 @@
+# Sandbox 内使用 OpenCode 直连公网 LLM API 最佳实践
+
+更新时间：2026-02-20  
+适用范围：当前阶段（暂停 OSAC 方案），在 Sandbox 内直接使用 OpenCode 调用公网 LLM API。
+
+## 1. 当前策略（冻结口径）
+
+当前默认策略：
+
+1. 不走 OSAC 执行链路（仅保留代码，后续可恢复）。
+2. Sandbox 内 `opencode` 直接访问公网 OpenAI-compatible 端点。
+
+相关默认开关（编排侧）：
+
+- `OSAC_EXECUTION_ENABLED=false`
+- `OSAC_LLM_PROXY_ENABLE=false`
+
+## 2. 前置条件
+
+1. 已有可用 session（VM 运行中，已绑定）。
+2. VM 内已下发 `opencode` 二进制（路径：`/opt/.altus/opencode/opencode`）。
+3. 已准备可用的上游参数：
+- `OPENAI_BASE_URL`（例如 `https://hone.vvvv.ee/v1`）
+- `OPENAI_API_KEY`
+- `model`（推荐显式 `provider/model` 格式）
+
+## 3. 标准使用流程
+
+### 步骤 1：确认二进制可用
+
+```bash
+pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; test -x /opt/.altus/opencode/opencode; /opt/.altus/opencode/opencode --version"
+```
+
+### 步骤 2：写入 provider 配置（推荐，避免模型解析失败）
+
+建议写入 `/root/.config/opencode/opencode.json`，至少包含：
+
+1. provider id（如 `hone`）
+2. `npm: @ai-sdk/openai-compatible`
+3. `baseURL` 与 `apiKey`
+4. 模型映射（如 `claude-haiku-4-5-20251001`）
+
+模型建议统一使用：`hone/claude-haiku-4-5-20251001`  
+避免只写裸模型名导致 `ProviderModelNotFoundError`。
+
+### 步骤 3：执行最小烟测
+
+```bash
+pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; OPENAI_BASE_URL='<OPENAI_BASE_URL>' OPENAI_API_KEY='<OPENAI_API_KEY>' /opt/.altus/opencode/opencode run --format json -m 'hone/claude-haiku-4-5-20251001' 'Reply with exactly: OK'"
+```
+
+通过标准：输出中出现文本 `OK`。
+
+### 步骤 4：进入业务调用
+
+业务调用继续使用同一命令模板，仅替换 prompt。  
+建议每次命令都内联注入 `OPENAI_BASE_URL`、`OPENAI_API_KEY`，避免依赖 VM 全局环境漂移。
+
+## 4. 推荐超时与重试
+
+1. 单次请求总超时：60s。
+2. 首 token 延迟按 5~10s 预期设计，不要把超时设得过短。
+3. 失败重试最多 2 次，采用短退避（200~500ms），禁止无限重试。
+4. 出现配置类错误（401 / model not found）先修配置，不要盲重试。
+
+## 5. 常见错误与处理
+
+### 5.1 `ProviderModelNotFoundError`
+
+原因：模型格式或 provider 映射不正确。  
+处理：
+
+1. 改用 `provider/model`（例如 `hone/claude-haiku-4-5-20251001`）。
+2. 检查 `opencode.json` 是否存在且为合法 JSON。
+3. 确认 provider 下已声明该 model。
+
+### 5.2 `401 Unauthorized`
+
+原因：API Key 错误或认证格式不符合上游要求。  
+处理：
+
+1. 校验 `OPENAI_API_KEY`。
+2. 校验 `OPENAI_BASE_URL` 是否为正确 OpenAI-compatible 路径（通常含 `/v1`）。
+
+### 5.3 网络错误/连接超时
+
+处理：
+
+1. 先用最小 prompt 验证连通性。
+2. 检查 base URL 可达性。
+3. 保持 60s 超时窗口，避免误判。
+
+## 6. 运行检查清单（每次联调前）
+
+1. `opencode --version` 正常。
+2. `opencode.json` 存在且 JSON 合法。
+3. 模型格式为 `provider/model`。
+4. 烟测 prompt 能返回 `OK`。
+5. 超时与重试策略按本文执行。
+
+## 7. 回切 OSAC 时的注意点
+
+当后续恢复 OSAC 方案时：
+
+1. 打开 `OSAC_EXECUTION_ENABLED`。
+2. 根据目标链路决定是否打开 `OSAC_LLM_PROXY_ENABLE`。
+3. 回归测试要覆盖：连接建立、模型解析、首 token 延迟、重连稳定性。
+

@@ -7,48 +7,41 @@
 
 import { Button } from "@/components/ui/button";
 import { Bell, Settings } from "lucide-react";
-import { useState } from "react";
-import { SettingsDialog } from "@/components/SettingsDialog";
 import UserMenu from "@/components/UserMenu";
+import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface HeaderProps {
   className?: string;
+  sidebarCollapsed?: boolean;
+  hidden?: boolean;
 }
 
-export default function Header({ className = "" }: HeaderProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
+export function HeaderActions({ className = "" }: { className?: string }) {
+  return (
+    <div className={`flex items-center gap-3 ${className}`}>
+      <Button variant="ghost" size="icon" className="h-9 w-9">
+        <Bell className="w-4 h-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9"
+        onClick={() => openSettingsDialog({ tab: "settings" })}
+      >
+        <Settings className="w-4 h-4" />
+      </Button>
+      <UserMenu />
+    </div>
+  );
+}
+
+export default function Header({ className = "", hidden = false }: HeaderProps) {
+  if (hidden) return null;
   return (
     <header
-      className={`fixed top-0 right-0 left-60 h-14 bg-card border-b border-border flex items-center justify-between px-6 z-10 shadow-sm ${className}`}
+      className={`fixed top-4 right-4 h-14 bg-card/95 border border-border flex items-center px-4 z-20 shadow-lg rounded-2xl backdrop-blur ${className}`}
     >
-      {/* Left Section - Breadcrumb or Title */}
-      <div className="flex items-center gap-4">
-        {/* Reserved for breadcrumb or page title */}
-      </div>
-
-      {/* Right Section - Actions */}
-      <div className="flex items-center gap-3">
-        {/* Notifications */}
-        <Button variant="ghost" size="icon" className="h-9 w-9">
-          <Bell className="w-4 h-4" />
-        </Button>
-
-        {/* Settings */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-9 w-9"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings className="w-4 h-4" />
-        </Button>
-
-        {/* User Menu */}
-        <UserMenu />
-      </div>
-
-      {/* Settings Dialog */}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <HeaderActions />
     </header>
   );
 }

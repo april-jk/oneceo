@@ -1,0 +1,92 @@
+{
+  "summary": {
+    "startedAt": "2026-02-18T11:43:38.302Z",
+    "finishedAt": "2026-02-18T11:46:58.566Z",
+    "sessionId": "sess_2278c1b046604a59",
+    "provisioned": true,
+    "rounds": 5,
+    "roundsExecuted": 5,
+    "passed": 4,
+    "failed": 1,
+    "maxConsecutiveFailures": 3,
+    "maxFailures": 3,
+    "totalBudgetMs": 900000,
+    "aborted": false,
+    "abortReason": null,
+    "fatalError": null,
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 45,
+    "execTimeoutSeconds": 70,
+    "roundExecTimeoutMs": 90000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 5000,
+    "persistentBridgeReady": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "ok": false,
+      "status": "completed",
+      "exit": 124,
+      "durationMs": 45584,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 16231,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771415202964,\"sessionID\":\"ses_38f6d4b9bffe0LuJJo8X6sWOjN\",\"part\":{\"id\":\"prt_c7092ec91001w9yd0vq4UfueWj\",\"sessionID\":\"ses_38f6d4b9bffe0LuJJo8X6sWOjN\",\"messageID\":\"msg_c7092b4a7001xMxMYpbBMzO5Hk\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 3,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 4079,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771415207984,\"sessionID\":\"ses_38f6d08a0ffeDPPg7LCXSczS5U\",\"part\":{\"id\":\"prt_c7093002e001WhK7NwdEhe3Tio\",\"sessionID\":\"ses_38f6d08a0ffeDPPg7LCXSczS5U\",\"messageID\":\"msg_c7092f7a9001u90Zmt0LBZhV9a\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 4,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 4078,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771415212909,\"sessionID\":\"ses_38f6cf627ffeZO4yPyoCkpJsQx\",\"part\":{\"id\":\"prt_c7093136a001NNuSSKZ88WohQJ\",\"sessionID\":\"ses_38f6cf627ffeZO4yPyoCkpJsQx\",\"messageID\":\"msg_c70930a0a001kBqCYMvs6OoQ5l\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    },
+    {
+      "round": 5,
+      "ok": true,
+      "status": "completed",
+      "exit": 0,
+      "durationMs": 4099,
+      "timedOut": false,
+      "guestAgentRecovered": false,
+      "errorCode": null,
+      "errorMessage": null,
+      "stdoutSnippet": "{\"type\":\"step_start\",\"timestamp\":1771415218055,\"sessionID\":\"ses_38f6ce317ffeDYf4Ohfogy3dtA\",\"part\":{\"id\":\"prt_c70932784001vC7SAuj1HV6Rl3\",\"sessionID\":\"ses_38f6ce317ffeDYf4Ohfogy3dtA\",\"messageID\":\"msg_c70931d19001xPGFQgPizYcYd9\",\"type\":\"step-start\"}} {\"type\":\"text\",\"timestamp\":177",
+      "stderrSnippet": ""
+    }
+  ]
+}

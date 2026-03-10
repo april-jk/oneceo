@@ -1,5 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  BarChart3,
+  Database,
+  ExternalLink,
+  Globe,
+  HardDrive,
+  History,
+  Loader2,
+  RefreshCw,
+  Rocket,
+  ScrollText,
+  Server,
+  Settings2,
+  ShieldCheck,
+} from "lucide-react";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
 import { Streamdown } from "streamdown";
@@ -1247,16 +1262,100 @@ function DeploymentPreview({
   onRedeploy: () => void;
   onRollback: () => void;
 }) {
+  const [section, setSection] = useState<DeploymentWorkbenchSection>("overview");
+  const [settingsSection, setSettingsSection] =
+    useState<DeploymentSettingsSection>("general");
+  const pendingStatuses = new Set([
+    "BUILDING",
+    "DEPLOYING",
+    "INITIALIZING",
+    "PENDING",
+    "QUEUED",
+    "RESTARTING",
+    "REMOVING",
+  ]);
   const currentDeploymentId = selectedDeploymentId || info?.deploymentId || "";
   const currentDeployment =
     info?.deployments.find((item) => item.id === currentDeploymentId) || info?.deployments[0] || null;
   const status = currentDeployment?.status || info?.latestStatus || "";
-  const statusTone =
-    status === "SUCCESS"
-      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+  const hasSuccessfulDeployment =
+    info?.deployments.some((item) => item.status === "SUCCESS") || info?.latestStatus === "SUCCESS";
+  const isPending = Boolean(info?.activeDeploymentPending || pendingStatuses.has(status.toUpperCase()));
+  const statusMeta = !info?.configured
+    ? {
+        label: "未就绪",
+        description:
+          info?.missing.length ? `还需准备 ${info.missing.length} 项部署资源后才能发布。` : "正在准备部署资源。",
+        badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+        dotClass: "bg-slate-400",
+        panelClass: "border-slate-200 bg-slate-50/80",
+      }
+    : status === "SUCCESS"
+      ? {
+          label: "已发布",
+          description: "当前网站已有线上版本，可直接访问与验证。",
+          badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+          dotClass: "bg-emerald-500",
+          panelClass: "border-emerald-200 bg-emerald-50/70",
+        }
       : status === "FAILED" || status === "CRASHED"
-        ? "bg-rose-50 text-rose-700 border-rose-200"
-        : "bg-amber-50 text-amber-700 border-amber-200";
+        ? {
+            label: "发布失败",
+            description: "最近一次发布未完成，建议查看日志后重新发布。",
+            badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+            dotClass: "bg-rose-500",
+            panelClass: "border-rose-200 bg-rose-50/70",
+          }
+        : isPending
+          ? {
+              label: "发布中",
+              description: "平台正在同步代码并等待发布结果。",
+              badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+              dotClass: "bg-amber-500",
+              panelClass: "border-amber-200 bg-amber-50/70",
+            }
+          : {
+              label: hasSuccessfulDeployment ? "等待更新" : "未发布",
+              description: hasSuccessfulDeployment
+                ? "可以继续发布新版本，线上将保留最近的成功版本。"
+                : "项目已准备好，可以开始首次发布。",
+              badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+              dotClass: "bg-slate-400",
+              panelClass: "border-slate-200 bg-slate-50/80",
+            };
+  const staticUrl = currentDeployment?.staticUrl || info?.latestStaticUrl || "";
+  const runtimeUrl = currentDeployment?.url || info?.latestUrl || "";
+  const primaryAccessUrl = staticUrl || runtimeUrl || info?.domains[0] || "";
+  const accessEntries = Array.from(
+    new Map(
+      [
+        primaryAccessUrl ? ["网站地址", primaryAccessUrl] : null,
+        runtimeUrl && runtimeUrl !== primaryAccessUrl ? ["运行地址", runtimeUrl] : null,
+        ...((info?.domains || [])
+          .filter((domain) => domain && domain !== primaryAccessUrl && domain !== runtimeUrl)
+          .map((domain, index) => [`绑定域名 ${index + 1}`, domain] as const)),
+      ]
+        .filter(Boolean)
+        .map((entry) => entry as readonly [string, string])
+    )
+  );
+  const primaryActionText =
+    actionLoading === "deploy" ? "发布中..." : hasSuccessfulDeployment ? "发布新版本" : "立即发布";
+  const successCount = info?.deployments.filter((item) => item.status === "SUCCESS").length ?? 0;
+  const failedCount =
+    info?.deployments.filter((item) => item.status === "FAILED" || item.status === "CRASHED").length ?? 0;
+  const totalDeployments = info?.deployments.length ?? 0;
+  const successRate = totalDeployments ? `${Math.round((successCount / totalDeployments) * 100)}%` : "暂无数据";
+  const latestTimestamp = formatPreviewTimestamp(currentDeployment?.createdAt) || currentDeployment?.createdAt || "尚无记录";
+  const logsText = info?.logs.length
+    ? info.logs
+        .map((entry) =>
+          `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${
+            entry.severity ? `${entry.severity} ` : ""
+          }${entry.message}`
+        )
+        .join("\n")
+    : "";
 
   if (loading && !info) {
     return <EmptyState text="正在加载部署信息..." />;
@@ -1266,141 +1365,1097 @@ function DeploymentPreview({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Railway 部署</span>
-          {status ? (
-            <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}>{status}</span>
-          ) : null}
+          <span className="text-xs text-muted-foreground">部署</span>
+          <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", statusMeta.badgeClass)}>
+            {statusMeta.label}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-7" onClick={() => onRefresh(currentDeploymentId || undefined)}>
-            刷新
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7"
-            onClick={onDeploy}
-            disabled={!info?.canDeploy || Boolean(actionLoading)}
-          >
-            {actionLoading === "deploy" ? "部署中..." : "立即部署"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7"
-            onClick={onRedeploy}
-            disabled={!currentDeploymentId || Boolean(actionLoading)}
-          >
-            {actionLoading === "redeploy" ? "重新部署中..." : "重新部署"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7"
-            onClick={onRollback}
-            disabled={!currentDeploymentId || Boolean(actionLoading)}
-          >
-            {actionLoading === "rollback" ? "回滚中..." : "回滚"}
-          </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
+          onClick={() => onRefresh(currentDeploymentId || undefined)}
+        >
+          <RefreshCw className="size-3.5" />
+          刷新状态
+        </Button>
+      </div>
+      <div className="border-b border-border px-4 py-2">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          <DeploymentMenuButton
+            active={section === "overview"}
+            icon={Rocket}
+            label="发布"
+            onClick={() => setSection("overview")}
+          />
+          <DeploymentMenuButton
+            active={section === "dashboard"}
+            icon={BarChart3}
+            label="仪表盘"
+            onClick={() => setSection("dashboard")}
+          />
+          <DeploymentMenuButton
+            active={section === "database"}
+            icon={Database}
+            label="数据库"
+            onClick={() => setSection("database")}
+          />
+          <DeploymentMenuButton
+            active={section === "storage"}
+            icon={HardDrive}
+            label="存储桶"
+            onClick={() => setSection("storage")}
+          />
+          <DeploymentMenuButton
+            active={section === "settings"}
+            icon={Settings2}
+            label="设置"
+            onClick={() => setSection("settings")}
+          />
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-3">
+      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-4">
         {error ? <div className="text-xs text-rose-600">{error}</div> : null}
         {info?.message ? <div className="text-xs text-muted-foreground">{info.message}</div> : null}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1">
-            <div className="font-semibold text-slate-700">项目</div>
-            <div className="text-slate-500">{info?.projectName || info?.projectId || "未配置"}</div>
-            {info?.projectId && info?.projectName ? <div className="font-mono text-[11px] text-slate-400">{info.projectId}</div> : null}
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1">
-            <div className="font-semibold text-slate-700">服务</div>
-            <div className="text-slate-500">{info?.serviceName || info?.serviceId || "未配置"}</div>
-            {info?.serviceId && info?.serviceName ? <div className="font-mono text-[11px] text-slate-400">{info.serviceId}</div> : null}
-          </div>
-        </div>
+        {section === "overview" ? (
+          <DeploymentOverviewSection
+            info={info}
+            statusMeta={statusMeta}
+            currentDeployment={currentDeployment}
+            currentDeploymentId={currentDeploymentId}
+            accessEntries={accessEntries}
+            primaryAccessUrl={primaryAccessUrl}
+            runtimeUrl={runtimeUrl}
+            staticUrl={staticUrl}
+            actionLoading={actionLoading}
+            loading={loading}
+            primaryActionText={primaryActionText}
+            logsText={logsText}
+            onDeploy={onDeploy}
+            onRedeploy={onRedeploy}
+            onRollback={onRollback}
+            onRefresh={onRefresh}
+            onSelectDeployment={onSelectDeployment}
+          />
+        ) : null}
 
-        <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold text-slate-700">部署记录</div>
-            <select
-              className="text-xs border border-border rounded-md bg-background px-2 py-1 min-w-[220px]"
-              value={currentDeploymentId}
-              onChange={(event) => onSelectDeployment(event.target.value)}
-              disabled={!info?.deployments.length}
-            >
-              {info?.deployments.length ? (
-                info.deployments.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {`${item.status} · ${formatPreviewTimestamp(item.createdAt) || item.createdAt || item.id.slice(0, 8)}`}
-                  </option>
-                ))
+        {section === "dashboard" ? (
+          <DeploymentDashboardSection
+            info={info}
+            statusMeta={statusMeta}
+            successCount={successCount}
+            failedCount={failedCount}
+            successRate={successRate}
+            currentDeployment={currentDeployment}
+            latestTimestamp={latestTimestamp}
+            accessEntries={accessEntries}
+          />
+        ) : null}
+
+        {section === "database" ? (
+          <DeploymentDatabaseSection info={info} statusMeta={statusMeta} />
+        ) : null}
+
+        {section === "storage" ? (
+          <DeploymentStorageSection info={info} statusMeta={statusMeta} />
+        ) : null}
+
+        {section === "settings" ? (
+          <DeploymentSettingsSectionPanel
+            info={info}
+            statusMeta={statusMeta}
+            currentDeployment={currentDeployment}
+            primaryAccessUrl={primaryAccessUrl}
+            accessEntries={accessEntries}
+            settingsSection={settingsSection}
+            onSettingsSectionChange={setSettingsSection}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+type DeploymentWorkbenchSection =
+  | "overview"
+  | "dashboard"
+  | "database"
+  | "storage"
+  | "settings";
+
+type DeploymentSettingsSection =
+  | "general"
+  | "domain"
+  | "notifications"
+  | "payment"
+  | "seo"
+  | "keys"
+  | "github";
+
+type DeploymentStatusMeta = {
+  label: string;
+  description: string;
+  badgeClass: string;
+  dotClass: string;
+  panelClass: string;
+};
+
+function DeploymentOverviewSection({
+  info,
+  statusMeta,
+  currentDeployment,
+  currentDeploymentId,
+  accessEntries,
+  primaryAccessUrl,
+  runtimeUrl,
+  staticUrl,
+  actionLoading,
+  loading,
+  primaryActionText,
+  logsText,
+  onDeploy,
+  onRedeploy,
+  onRollback,
+  onRefresh,
+  onSelectDeployment,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  statusMeta: DeploymentStatusMeta;
+  currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
+  currentDeploymentId: string;
+  accessEntries: Array<[string, string] | readonly [string, string]>;
+  primaryAccessUrl: string;
+  runtimeUrl: string;
+  staticUrl: string;
+  actionLoading: "deploy" | "redeploy" | "rollback" | null;
+  loading: boolean;
+  primaryActionText: string;
+  logsText: string;
+  onDeploy: () => void;
+  onRedeploy: () => void;
+  onRollback: () => void;
+  onRefresh: (deploymentId?: string) => void;
+  onSelectDeployment: (deploymentId: string) => void;
+}) {
+  return (
+    <>
+      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-3">
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-600">
+              <Rocket className="size-3.5 text-slate-500" />
+              发布与访问
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className={cn("size-2 rounded-full", statusMeta.dotClass)} />
+                <h3 className="text-lg font-semibold text-slate-900">{statusMeta.label}</h3>
+              </div>
+              <p className="max-w-2xl text-sm leading-6 text-slate-600">{statusMeta.description}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={onDeploy} disabled={!info?.canDeploy || Boolean(actionLoading)}>
+              {actionLoading === "deploy" ? (
+                <Loader2 className="size-4 animate-spin" />
               ) : (
-                <option value="">暂无部署</option>
+                <Rocket className="size-4" />
               )}
-            </select>
+              {primaryActionText}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onRedeploy}
+              disabled={!currentDeploymentId || Boolean(actionLoading)}
+            >
+              {actionLoading === "redeploy" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <History className="size-4" />
+              )}
+              重新发布
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onRollback}
+              disabled={!currentDeploymentId || Boolean(actionLoading)}
+            >
+              {actionLoading === "rollback" ? <Loader2 className="size-4 animate-spin" /> : null}
+              回滚版本
+            </Button>
           </div>
-          <div className="text-[11px] text-slate-500">
-            环境: {info?.environmentName || info?.environmentId || "未配置"}
-          </div>
-          {currentDeployment?.commitMessage ? (
-            <div className="text-[11px] text-slate-500">
-              Commit: {currentDeployment.commitMessage}
-              {currentDeployment.commitAuthor ? ` · ${currentDeployment.commitAuthor}` : ""}
-            </div>
-          ) : null}
-          {(currentDeployment?.url || currentDeployment?.staticUrl || info?.latestUrl || info?.latestStaticUrl) ? (
-            <div className="flex flex-wrap gap-3 text-[11px]">
-              {currentDeployment?.url || info?.latestUrl ? (
-                <a
-                  href={currentDeployment?.url || info?.latestUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-600 hover:text-blue-700"
-                >
-                  打开运行地址
-                </a>
-              ) : null}
-              {currentDeployment?.staticUrl || info?.latestStaticUrl ? (
-                <a
-                  href={currentDeployment?.staticUrl || info?.latestStaticUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-600 hover:text-blue-700"
-                >
-                  打开静态地址
-                </a>
-              ) : null}
-            </div>
-          ) : null}
-          {info?.domains.length ? (
-            <div className="text-[11px] text-slate-500 break-all">域名: {info.domains.join(" · ")}</div>
-          ) : null}
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-200 text-xs font-semibold text-slate-700">部署日志</div>
-          {info?.logs.length ? (
-            <div className="max-h-[360px] overflow-auto bg-slate-950 text-slate-100">
-              <pre className="px-3 py-3 text-[11px] leading-5 whitespace-pre-wrap break-words">
-                <code>
-                  {info.logs
-                    .map((entry) =>
-                      `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${entry.severity ? `${entry.severity} ` : ""}${entry.message}`
-                    )
-                    .join("\n")}
-                </code>
-              </pre>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <DeploymentMetricCard
+            title="当前状态"
+            value={statusMeta.label}
+            subtitle={
+              currentDeployment?.createdAt
+                ? `最近变更 ${formatPreviewTimestamp(currentDeployment.createdAt) || currentDeployment.createdAt}`
+                : "等待首次发布后展示版本时间"
+            }
+            className={statusMeta.panelClass}
+          />
+          <DeploymentMetricCard
+            title="访问入口"
+            value={primaryAccessUrl ? "网站已生成访问地址" : "尚未生成访问地址"}
+            subtitle={primaryAccessUrl || "首次发布成功后，这里会展示线上访问地址。"}
+          />
+          <DeploymentMetricCard
+            title="版本概览"
+            value={info?.deployments.length ? `${info.deployments.length} 次发布记录` : "暂无发布记录"}
+            subtitle={
+              info?.activeDeploymentPending
+                ? "当前有任务正在发布中。"
+                : "发布后可在这里查看历史版本与回滚入口。"
+            }
+          />
+        </div>
+
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                <Globe className="size-4 text-slate-500" />
+                网站地址
+              </div>
+              {primaryAccessUrl ? (
+                <a
+                  href={primaryAccessUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all text-sm text-blue-600 hover:text-blue-700"
+                >
+                  {primaryAccessUrl}
+                </a>
+              ) : (
+                <p className="text-sm text-slate-500">发布完成后自动生成线上地址。</p>
+              )}
             </div>
-          ) : (
-            <div className="px-3 py-6 text-xs text-muted-foreground">
-              {info?.configured ? "暂无日志" : "配置 Railway 后可查看部署日志"}
+            <div className="flex flex-wrap items-center gap-2">
+              {primaryAccessUrl ? (
+                <Button asChild>
+                  <a href={primaryAccessUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-4" />
+                    打开网站
+                  </a>
+                </Button>
+              ) : null}
+              <Button
+                variant="outline"
+                onClick={() => onRefresh(currentDeploymentId || undefined)}
+                disabled={loading}
+              >
+                <RefreshCw className={cn("size-4", loading ? "animate-spin" : "")} />
+                刷新结果
+              </Button>
             </div>
-          )}
+          </div>
+        </div>
+
+        {accessEntries.length ? (
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            {accessEntries.map(([label, value]) => (
+              <a
+                key={`${label}-${value}`}
+                href={value}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-3 transition-colors hover:border-slate-300 hover:bg-slate-50"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+                      {label}
+                    </div>
+                    <div className="mt-1 break-all text-sm text-slate-700">{value}</div>
+                  </div>
+                  <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                </div>
+              </a>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <History className="size-4 text-slate-500" />
+              发布记录
+            </div>
+            <div className="text-xs text-slate-500">
+              {currentDeployment ? `当前查看 ${currentDeployment.id.slice(0, 8)}` : "暂无记录"}
+            </div>
+          </div>
+          <div className="space-y-3 p-4">
+            {info?.deployments.length ? (
+              <div className="space-y-2">
+                {info.deployments.slice(0, 6).map((item) => {
+                  const itemSelected = item.id === currentDeployment?.id;
+                  const itemStatusClass =
+                    item.status === "SUCCESS"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : item.status === "FAILED" || item.status === "CRASHED"
+                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700";
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => onSelectDeployment(item.id)}
+                      className={cn(
+                        "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                        itemSelected ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:bg-slate-50"
+                      )}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", itemStatusClass)}>
+                              {item.status}
+                            </span>
+                            <span className="font-mono text-[11px] text-slate-400">{item.id.slice(0, 8)}</span>
+                          </div>
+                          <div className="text-sm font-medium text-slate-900">
+                            {item.commitMessage || "由 OneCEO 触发的版本发布"}
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+                暂无发布记录
+              </div>
+            )}
+
+            {currentDeployment ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+                      当前版本详情
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900">
+                      {currentDeployment.commitMessage || "由 OneCEO 触发的版本发布"}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {currentDeployment.commitAuthor
+                        ? `提交人 ${currentDeployment.commitAuthor}`
+                        : "平台托管发布记录"}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {runtimeUrl ? (
+                      <Button variant="outline" asChild>
+                        <a href={runtimeUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="size-4" />
+                          运行地址
+                        </a>
+                      </Button>
+                    ) : null}
+                    {staticUrl && staticUrl !== runtimeUrl ? (
+                      <Button variant="outline" asChild>
+                        <a href={staticUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="size-4" />
+                          静态地址
+                        </a>
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <div className="space-y-4">
+          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+              <Server className="size-4 text-slate-500" />
+              资源状态
+            </div>
+            <div className="grid gap-3 p-4">
+              <DeploymentInfoCard
+                title="项目"
+                value={info?.projectName || info?.projectId || "未配置"}
+                mono={Boolean(info?.projectId && info?.projectName)}
+                extra={info?.projectId && info?.projectName ? info.projectId : undefined}
+              />
+              <DeploymentInfoCard
+                title="服务"
+                value={info?.serviceName || info?.serviceId || "未配置"}
+                mono={Boolean(info?.serviceId && info?.serviceName)}
+                extra={info?.serviceId && info?.serviceName ? info.serviceId : undefined}
+              />
+              <DeploymentInfoCard
+                title="环境"
+                value={info?.environmentName || info?.environmentId || "未配置"}
+              />
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                  <ShieldCheck className="size-4 text-slate-500" />
+                  部署准备情况
+                </div>
+                <div className="mt-2 text-xs leading-5 text-slate-600">
+                  {info?.missing.length
+                    ? `仍缺少 ${info.missing.join("、")}`
+                    : info?.configured
+                      ? "资源已准备完成，可继续发布与回滚。"
+                      : "正在准备部署资源。"}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+              <ScrollText className="size-4 text-slate-500" />
+              发布日志
+            </div>
+            {logsText ? (
+              <div className="max-h-[420px] overflow-auto bg-slate-950 text-slate-100">
+                <pre className="px-4 py-4 text-[11px] leading-5 whitespace-pre-wrap break-words">
+                  <code>{logsText}</code>
+                </pre>
+              </div>
+            ) : (
+              <div className="px-4 py-10 text-sm text-slate-500">
+                {info?.configured ? "当前版本暂无日志输出" : "部署资源准备完成后可查看发布日志"}
+              </div>
+            )}
+          </section>
         </div>
       </div>
+    </>
+  );
+}
+
+function DeploymentDashboardSection({
+  info,
+  statusMeta,
+  successCount,
+  failedCount,
+  successRate,
+  currentDeployment,
+  latestTimestamp,
+  accessEntries,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  statusMeta: DeploymentStatusMeta;
+  successCount: number;
+  failedCount: number;
+  successRate: string;
+  currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
+  latestTimestamp: string;
+  accessEntries: Array<[string, string] | readonly [string, string]>;
+}) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 text-white shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">部署仪表盘</div>
+            <div className="mt-2 text-2xl font-semibold">当前状态：{statusMeta.label}</div>
+            <div className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+              这里集中展示 OneCEO 平台部署工作台的运行指标。当前以发布稳定性、域名状态和版本轨迹为主，访客类统计后续再补。
+            </div>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-[0.14em] text-slate-400">最近活动</div>
+            <div className="mt-2 text-sm font-medium text-white">{latestTimestamp}</div>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <DeploymentMetricCard title="发布成功率" value={successRate} subtitle="基于当前会话内的发布历史计算" />
+        <DeploymentMetricCard title="成功版本" value={`${successCount}`} subtitle="可用于回滚的稳定版本数" />
+        <DeploymentMetricCard title="失败版本" value={`${failedCount}`} subtitle="建议结合日志继续排查的版本数" />
+        <DeploymentMetricCard
+          title="访问入口"
+          value={`${accessEntries.length}`}
+          subtitle={accessEntries.length ? "已生成可访问地址" : "等待发布后生成访问地址"}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+            发布健康度
+          </div>
+          <div className="grid gap-3 p-4 md:grid-cols-2">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">当前版本</div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">
+                {currentDeployment?.commitMessage || "等待首次发布"}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">
+                {currentDeployment?.commitAuthor
+                  ? `最近由 ${currentDeployment.commitAuthor} 触发`
+                  : "由平台托管的自动发布流程生成"}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">域名状态</div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">
+                {accessEntries.length ? "访问入口可用" : "尚未生成"}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">
+                {accessEntries.length
+                  ? `当前共 ${accessEntries.length} 个入口可用于访问与验证`
+                  : "完成首次发布后会自动生成默认访问地址"}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">部署摘要</div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", statusMeta.badgeClass)}>
+                  {statusMeta.label}
+                </span>
+                {info?.activeDeploymentPending ? (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                    有任务正在发布
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-2 text-sm leading-6 text-slate-600">{statusMeta.description}</div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+            最近版本轨迹
+          </div>
+          <div className="space-y-3 p-4">
+            {info?.deployments.length ? (
+              info.deployments.slice(0, 5).map((item) => (
+                <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-slate-900">
+                      {item.commitMessage || "由 OneCEO 触发的版本发布"}
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700">
+                      {item.status}
+                    </span>
+                    <span className="font-mono text-[11px] text-slate-400">{item.id.slice(0, 8)}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+                暂无版本轨迹
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function DeploymentDatabaseSection({
+  info,
+  statusMeta,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  statusMeta: DeploymentStatusMeta;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          数据库
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-2">
+          <DeploymentMetricCard
+            title="数据库状态"
+            value="未开通"
+            subtitle="当前部署链路已具备应用发布能力，数据库服务仍需后续接入。"
+          />
+          <DeploymentMetricCard
+            title="推荐形态"
+            value="托管 PostgreSQL"
+            subtitle="后续建议以平台托管数据库方式接入，避免把外部连接细节暴露给最终用户。"
+          />
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
+            <div className="text-sm font-semibold text-slate-900">当前部署工作台已经接入的能力</div>
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <DeploymentMiniStatus label="应用发布" value={statusMeta.label} />
+              <DeploymentMiniStatus
+                label="环境准备"
+                value={info?.configured ? "已完成" : "准备中"}
+              />
+              <DeploymentMiniStatus label="数据层" value="待接入" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          接入计划
+        </div>
+        <div className="space-y-3 p-4">
+          <DeploymentPlaceholderCard
+            title="业务数据库"
+            description="为应用提供结构化数据存储、事务处理和持久化能力。"
+          />
+          <DeploymentPlaceholderCard
+            title="连接配置"
+            description="后续将支持由平台统一注入连接串与访问策略，用户侧无需感知底层提供商。"
+          />
+          <DeploymentPlaceholderCard
+            title="迁移与初始化"
+            description="后续可结合首发部署自动执行 schema 初始化与数据迁移。"
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DeploymentStorageSection({
+  info,
+  statusMeta,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  statusMeta: DeploymentStatusMeta;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          存储桶
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-2">
+          <DeploymentMetricCard
+            title="存储状态"
+            value="未启用"
+            subtitle="当前静态资源仍跟随应用代码发布，用户上传与媒体文件存储尚未开通。"
+          />
+          <DeploymentMetricCard
+            title="推荐用途"
+            value="用户上传 / 媒体资源"
+            subtitle="适合图片、附件、导出文件和大体积静态资源。"
+          />
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
+            <div className="text-sm font-semibold text-slate-900">当前可见状态</div>
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <DeploymentMiniStatus label="应用访问" value={statusMeta.label} />
+              <DeploymentMiniStatus
+                label="默认域名"
+                value={info?.domains.length ? "已生成" : "待发布"}
+              />
+              <DeploymentMiniStatus label="对象存储" value="待接入" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          场景规划
+        </div>
+        <div className="space-y-3 p-4">
+          <DeploymentPlaceholderCard
+            title="用户文件上传"
+            description="用于头像、商品图片、用户附件等持久化存储。"
+          />
+          <DeploymentPlaceholderCard
+            title="构建产物分离"
+            description="让静态资源和运行时代码解耦，减轻重新发布的成本。"
+          />
+          <DeploymentPlaceholderCard
+            title="访问策略"
+            description="后续可扩展公开读、私有签名下载和生命周期清理策略。"
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DeploymentSettingsSectionPanel({
+  info,
+  statusMeta,
+  currentDeployment,
+  primaryAccessUrl,
+  accessEntries,
+  settingsSection,
+  onSettingsSectionChange,
+}: {
+  info: TaskCreationDeploymentInfo | null;
+  statusMeta: DeploymentStatusMeta;
+  currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
+  primaryAccessUrl: string;
+  accessEntries: Array<[string, string] | readonly [string, string]>;
+  settingsSection: DeploymentSettingsSection;
+  onSettingsSectionChange: (value: DeploymentSettingsSection) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          设置
+        </div>
+        <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
+          <DeploymentSettingsButton
+            active={settingsSection === "general"}
+            label="通用"
+            onClick={() => onSettingsSectionChange("general")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "domain"}
+            label="域名"
+            onClick={() => onSettingsSectionChange("domain")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "notifications"}
+            label="通知"
+            onClick={() => onSettingsSectionChange("notifications")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "payment"}
+            label="支付"
+            onClick={() => onSettingsSectionChange("payment")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "seo"}
+            label="SEO"
+            onClick={() => onSettingsSectionChange("seo")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "keys"}
+            label="密钥"
+            onClick={() => onSettingsSectionChange("keys")}
+          />
+          <DeploymentSettingsButton
+            active={settingsSection === "github"}
+            label="GitHub"
+            onClick={() => onSettingsSectionChange("github")}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+          {settingsSection === "general" ? "通用" : null}
+          {settingsSection === "domain" ? "域名" : null}
+          {settingsSection === "notifications" ? "通知" : null}
+          {settingsSection === "payment" ? "支付" : null}
+          {settingsSection === "seo" ? "SEO" : null}
+          {settingsSection === "keys" ? "密钥" : null}
+          {settingsSection === "github" ? "GitHub" : null}
+        </div>
+        <div className="p-4">
+          {settingsSection === "general" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="站点名称"
+                value={info?.serviceName || info?.projectName || "未命名应用"}
+                extra="当前由平台托管部署工作流统一管理"
+              />
+              <DeploymentInfoCard
+                title="发布状态"
+                value={statusMeta.label}
+                extra={statusMeta.description}
+              />
+              <DeploymentInfoCard
+                title="环境"
+                value={info?.environmentName || info?.environmentId || "未配置"}
+              />
+              <DeploymentInfoCard
+                title="当前版本"
+                value={currentDeployment?.commitMessage || "等待首次发布"}
+                extra={currentDeployment?.id ? `版本号 ${currentDeployment.id.slice(0, 8)}` : undefined}
+              />
+            </div>
+          ) : null}
+
+          {settingsSection === "domain" ? (
+            <div className="space-y-3">
+              <DeploymentInfoCard
+                title="主访问地址"
+                value={primaryAccessUrl || "尚未生成"}
+                extra={primaryAccessUrl ? "当前可直接用于线上访问与验证" : "完成首次发布后自动生成"}
+              />
+              <div className="grid gap-3 md:grid-cols-2">
+                {accessEntries.length ? (
+                  accessEntries.map(([label, value]) => (
+                    <DeploymentInfoCard key={`${label}-${value}`} title={label} value={value} />
+                  ))
+                ) : (
+                  <DeploymentPlaceholderCard
+                    title="域名列表为空"
+                    description="当前还没有可展示的访问域名，发布成功后会自动回填。"
+                  />
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {settingsSection === "notifications" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="发布成功通知"
+                value="即将支持"
+                extra="后续可在站内或消息渠道订阅发布成功通知。"
+              />
+              <DeploymentInfoCard
+                title="发布失败通知"
+                value="即将支持"
+                extra="后续可针对失败版本推送告警与排障建议。"
+              />
+              <DeploymentInfoCard
+                title="回滚通知"
+                value="即将支持"
+                extra="后续会记录并通知版本回滚行为。"
+              />
+              <DeploymentInfoCard
+                title="当前策略"
+                value="平台默认静默"
+                extra="目前仅在部署面板内查看发布状态，不会主动外发通知。"
+              />
+            </div>
+          ) : null}
+
+          {settingsSection === "payment" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="结算方式"
+                value="平台统一结算"
+                extra="当前部署供应链成本由平台侧统一处理，终端用户不直接接触底层供应商。"
+              />
+              <DeploymentInfoCard
+                title="用户侧计费"
+                value="未开放"
+                extra="暂未对单个应用暴露独立账单与资源费用。"
+              />
+              <DeploymentInfoCard
+                title="用量阈值提醒"
+                value="即将支持"
+                extra="后续可在达到部署或存储阈值时进行提醒。"
+              />
+              <DeploymentInfoCard
+                title="升级能力"
+                value="待扩展"
+                extra="如后续引入更高规格资源，可在此处集中管理。"
+              />
+            </div>
+          ) : null}
+
+          {settingsSection === "seo" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="站点标题"
+                value={info?.serviceName || info?.projectName || "OneCEO 应用"}
+                extra="当前仅做展示级整理，后续可扩展为真实 SEO 元信息配置。"
+              />
+              <DeploymentInfoCard
+                title="索引入口"
+                value={primaryAccessUrl || "待发布后生成"}
+                extra="成功发布后即可作为爬虫访问入口。"
+              />
+              <DeploymentInfoCard
+                title="Meta / Open Graph"
+                value="即将支持"
+                extra="后续可统一配置 description、preview 图和社交分享信息。"
+              />
+              <DeploymentInfoCard
+                title="站点地图"
+                value="待扩展"
+                extra="后续可按应用类型自动生成 sitemap 与 robots 策略。"
+              />
+            </div>
+          ) : null}
+
+          {settingsSection === "keys" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="平台托管部署密钥"
+                value={info?.configured ? "已就绪" : "准备中"}
+                extra="部署用凭据由平台保管，用户侧不需要直接处理供应链 token。"
+              />
+              <DeploymentInfoCard
+                title="用户自定义环境变量"
+                value="即将支持"
+                extra="后续可在此处管理业务密钥、第三方 API Key 和环境变量。"
+              />
+              <DeploymentInfoCard
+                title="密钥轮换"
+                value="平台管理"
+                extra="后续可结合发布工作流实现自动轮换与审计。"
+              />
+              <DeploymentInfoCard
+                title="审计视图"
+                value="待扩展"
+                extra="未来可在此查看密钥变更、发布使用和权限范围。"
+              />
+            </div>
+          ) : null}
+
+          {settingsSection === "github" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <DeploymentInfoCard
+                title="源码镜像"
+                value={info?.configured ? "平台托管同步中" : "尚未连接"}
+                extra="当前发布链路会把工作区导出到平台托管仓库，再由供应链执行部署。"
+              />
+              <DeploymentInfoCard
+                title="触发方式"
+                value="推送后自动发布"
+                extra="每次发布都会同步最新代码并驱动新的部署版本。"
+              />
+              <DeploymentInfoCard
+                title="最近同步版本"
+                value={currentDeployment?.commitMessage || "等待首次同步"}
+                extra={currentDeployment?.id ? `同步标识 ${currentDeployment.id.slice(0, 8)}` : undefined}
+              />
+              <DeploymentInfoCard
+                title="用户感知"
+                value="OneCEO 平台发布"
+                extra="GitHub 仅作为平台内部托管链路的一部分。"
+              />
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DeploymentMenuButton({
+  active,
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: ComponentType<any>;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
+        active
+          ? "border-slate-900 bg-slate-900 text-white"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      )}
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function DeploymentSettingsButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-xl border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
+        active
+          ? "border-slate-900 bg-slate-900 text-white"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function DeploymentMetricCard({
+  title,
+  value,
+  subtitle,
+  className,
+}: {
+  title: string;
+  value: string;
+  subtitle?: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("rounded-xl border border-slate-200 bg-white/90 p-3", className)}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
+      <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
+      {subtitle ? <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div> : null}
+    </div>
+  );
+}
+
+function DeploymentInfoCard({
+  title,
+  value,
+  extra,
+  mono = false,
+}: {
+  title: string;
+  value: string;
+  extra?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
+      <div className={cn("mt-2 text-sm font-medium text-slate-900 break-all", mono ? "font-mono text-[12px]" : "")}>
+        {value}
+      </div>
+      {extra ? <div className="mt-1 text-xs leading-5 text-slate-500">{extra}</div> : null}
+    </div>
+  );
+}
+
+function DeploymentMiniStatus({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
+      <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function DeploymentPlaceholderCard({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-4">
+      <div className="text-sm font-semibold text-slate-900">{title}</div>
+      <div className="mt-1 text-sm leading-6 text-slate-600">{description}</div>
     </div>
   );
 }

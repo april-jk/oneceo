@@ -19,10 +19,13 @@ import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-s
 import { ensureNekoDebug } from '../services/sandbox-debug-service';
 import {
   getRailwayDeploymentPanel,
-  triggerRailwayDeploy,
   triggerRailwayRedeploy,
   triggerRailwayRollback,
+  waitForRailwayDeploymentAfterSourceSync,
+  type RailwayDeploymentPanelData,
 } from '../services/railway-deployment-service';
+import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
+import { publishTaskSessionWorkspaceToRepository } from '../services/task-creation-deployment-source-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
@@ -292,12 +295,36 @@ async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) 
 }
 
 async function buildRailwayDeploymentResponse(
+  userId: string,
   session: FileSessionRecord | null,
   selectedDeploymentId?: string
 ) {
+  const account = await platformDeploymentAccountService.getUserAccount(userId);
+  if (!account) {
+    return {
+      configured: false,
+      canDeploy: true,
+      message: '首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。',
+      activeDeploymentPending: false,
+      domains: [],
+      deployments: [],
+      logs: [],
+      missing: [],
+    } satisfies RailwayDeploymentPanelData;
+  }
   const { environment } = await resolveTaskSessionEnvironment(session);
   const metadata = pickRecord(environment?.metadata);
   return getRailwayDeploymentPanel(metadata, {
+    platformDeployment: {
+      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
+      token: account.accessToken,
+      projectId: account.projectId,
+      projectName: account.projectName,
+      environmentId: account.environmentId,
+      environmentName: account.environmentName,
+      serviceId: account.serviceId,
+      serviceName: account.serviceName,
+    },
     deploymentId: selectedDeploymentId,
   });
 }
@@ -321,6 +348,21 @@ async function persistRailwayDeploymentSelection(
       lastActionAt: new Date().toISOString(),
     },
   });
+}
+
+function getDeploymentErrorMessage(error: unknown) {
+  const message = asText((error as { message?: unknown })?.message);
+  if (!message) {
+    return '触发部署失败';
+  }
+  if (
+    message.includes('No GitHub installation found for repo') ||
+    message.includes('not found or is not accessible') ||
+    message.includes('unable to access')
+  ) {
+    return '平台部署供应链接入未完成，当前托管仓库尚未授权到部署服务';
+  }
+  return message;
 }
 
 type SessionListCache = {
@@ -1708,6 +1750,8 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
 router.get('/sessions/:sessionId/deployment', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -1717,7 +1761,7 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
     }
 
     const deploymentId = asText(req.query.deploymentId);
-    const data = await buildRailwayDeploymentResponse(session, deploymentId || undefined);
+    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, deploymentId || undefined);
     return res.json({
       success: true,
       data,
@@ -1738,6 +1782,8 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
 router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -1746,11 +1792,59 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       });
     }
 
-    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
+    const environment = orchestratorSessionId
+      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
+      : null;
+    const workspaceRoot =
+      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
+      resolveOpencodeWorkspacePath(sessionId);
+    if (!orchestratorSessionId || !workspaceRoot) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('未找到可部署的工作区，请先生成项目文件'),
+      });
+    }
+    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
+    const deploymentRequestedAt = Date.now();
+    const platformDeployment = {
+      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
+      token: account.accessToken,
+      projectId: account.projectId,
+      projectName: account.projectName,
+      environmentId: account.environmentId,
+      environmentName: account.environmentName,
+      serviceId: account.serviceId,
+      serviceName: account.serviceName,
+      repository: account.githubRepoFullName,
+    };
+    await publishTaskSessionWorkspaceToRepository({
+      orchestratorSessionId,
+      workspaceRoot,
+      repository: {
+        owner: account.githubRepoOwner || '',
+        name: account.githubRepoName || '',
+        fullName: account.githubRepoFullName || '',
+        htmlUrl: account.githubRepoUrl,
+        defaultBranch: account.githubDefaultBranch || 'main',
+      },
+      sessionId,
+    });
     const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayDeploy(metadata);
+    const actionResult = await waitForRailwayDeploymentAfterSourceSync(
+      {
+        ...metadata,
+        platformDeployment,
+      },
+      {
+        since: deploymentRequestedAt,
+        timeoutMs: 120_000,
+        pollIntervalMs: 4_000,
+      }
+    );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     return res.json({
       success: true,
       data,
@@ -1759,7 +1853,7 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
     console.error('触发部署失败:', error);
     return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '触发部署失败'),
+      error: getPublicErrorMessage(getDeploymentErrorMessage(error)),
     });
   }
 });
@@ -1771,6 +1865,8 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
 router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -1788,10 +1884,26 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
     }
 
     const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
     const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRedeploy(metadata, deploymentId);
+    const actionResult = await triggerRailwayRedeploy(
+      {
+        ...metadata,
+        platformDeployment: {
+          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
+          token: account.accessToken,
+          projectId: account.projectId,
+          projectName: account.projectName,
+          environmentId: account.environmentId,
+          environmentName: account.environmentName,
+          serviceId: account.serviceId,
+          serviceName: account.serviceName,
+        },
+      },
+      deploymentId
+    );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     return res.json({
       success: true,
       data,
@@ -1800,7 +1912,7 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
     console.error('重新部署失败:', error);
     return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '重新部署失败'),
+      error: getPublicErrorMessage(getDeploymentErrorMessage(error) || '重新部署失败'),
     });
   }
 });
@@ -1812,6 +1924,8 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
 router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -1829,10 +1943,26 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
     }
 
     const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
+    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
     const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRollback(metadata, deploymentId);
+    const actionResult = await triggerRailwayRollback(
+      {
+        ...metadata,
+        platformDeployment: {
+          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
+          token: account.accessToken,
+          projectId: account.projectId,
+          projectName: account.projectName,
+          environmentId: account.environmentId,
+          environmentName: account.environmentName,
+          serviceId: account.serviceId,
+          serviceName: account.serviceName,
+        },
+      },
+      deploymentId
+    );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(session, actionResult.deploymentId);
+    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     return res.json({
       success: true,
       data,
@@ -1841,7 +1971,7 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
     console.error('回滚部署失败:', error);
     return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '回滚部署失败'),
+      error: getPublicErrorMessage(getDeploymentErrorMessage(error) || '回滚部署失败'),
     });
   }
 });

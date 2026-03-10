@@ -24,6 +24,10 @@ import {
   waitForRailwayDeploymentAfterSourceSync,
   type RailwayDeploymentPanelData,
 } from '../services/railway-deployment-service';
+import {
+  railwayDatabaseService,
+  type RailwayDatabaseRowLocator,
+} from '../services/railway-database-service';
 import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
 import { publishTaskSessionWorkspaceToRepository } from '../services/task-creation-deployment-source-service';
 import { e2bConnector } from '../connectors/e2b-connector';
@@ -1972,6 +1976,204 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(getDeploymentErrorMessage(error) || '回滚部署失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/database
+ * 获取数据库总览与连接信息
+ */
+router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const data = await railwayDatabaseService.getSummary(account);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取数据库信息失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取数据库信息失败'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/database/rows
+ * 获取数据库表数据
+ */
+router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const table = asText(req.query.table);
+    if (!table) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 table 参数'),
+      });
+    }
+
+    const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
+    const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
+    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取数据库表数据失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取数据库表数据失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/database/rows
+ * 新增数据库记录
+ */
+router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const table = asText(req.body?.table);
+    const values = pickRecord(req.body?.values);
+    if (!table) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 table 参数'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const data = await railwayDatabaseService.insertRow(account, table, values);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('新增数据库记录失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '新增数据库记录失败'),
+    });
+  }
+});
+
+/**
+ * PATCH /api/task-creation/sessions/:sessionId/deployment/database/rows
+ * 更新数据库记录
+ */
+router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const table = asText(req.body?.table);
+    const locator = pickRecord(req.body?.locator) as RailwayDatabaseRowLocator;
+    const values = pickRecord(req.body?.values);
+    if (!table) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 table 参数'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const data = await railwayDatabaseService.updateRow(account, table, locator, values);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('更新数据库记录失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '更新数据库记录失败'),
+    });
+  }
+});
+
+/**
+ * DELETE /api/task-creation/sessions/:sessionId/deployment/database/rows
+ * 删除数据库记录
+ */
+router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const table = asText(req.body?.table);
+    const locator = pickRecord(req.body?.locator) as RailwayDatabaseRowLocator;
+    if (!table) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('缺少 table 参数'),
+      });
+    }
+
+    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const data = await railwayDatabaseService.deleteRow(account, table, locator);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('删除数据库记录失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '删除数据库记录失败'),
     });
   }
 });

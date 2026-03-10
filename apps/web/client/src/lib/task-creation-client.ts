@@ -91,6 +91,63 @@ export type TaskCreationDeploymentInfo = {
   missing: string[];
 };
 
+export type TaskCreationDatabaseConnectionInfo = {
+  connectionUrl: string;
+  publicConnectionUrl?: string;
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  database: string;
+  sslMode: "require";
+};
+
+export type TaskCreationDatabaseTable = {
+  id: string;
+  schema: string;
+  name: string;
+  rowCount: number;
+  sourceLabel: string;
+};
+
+export type TaskCreationDatabaseColumn = {
+  name: string;
+  dataType: string;
+  format?: string;
+  isNullable: boolean;
+  isPrimaryKey: boolean;
+  hasDefault: boolean;
+  defaultValue?: string;
+};
+
+export type TaskCreationDatabaseInfo = {
+  configured: boolean;
+  provider: "railway_postgres";
+  serviceId: string;
+  serviceName: string;
+  volumeId?: string;
+  volumeName?: string;
+  latestDeploymentStatus?: string;
+  latestDeploymentAt?: string;
+  connection: TaskCreationDatabaseConnectionInfo;
+  tables: TaskCreationDatabaseTable[];
+};
+
+export type TaskCreationDatabaseRowLocator = {
+  ctid?: string;
+  primaryKey?: Record<string, unknown>;
+};
+
+export type TaskCreationDatabaseRowsPage = {
+  table: TaskCreationDatabaseTable;
+  columns: TaskCreationDatabaseColumn[];
+  rows: Array<Record<string, unknown>>;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
@@ -317,6 +374,88 @@ export async function rollbackTaskCreationSessionDeployment(
   deploymentId: string
 ): Promise<TaskCreationDeploymentInfo | null> {
   return postTaskCreationDeploymentAction(sessionId, "rollback", { deploymentId });
+}
+
+export async function getTaskCreationDatabaseInfo(
+  sessionId: string
+): Promise<TaskCreationDatabaseInfo | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database`;
+  const result = await fetchJson<{ data?: TaskCreationDatabaseInfo }>(url);
+  return result?.data || null;
+}
+
+export async function getTaskCreationDatabaseRows(
+  sessionId: string,
+  table: string,
+  page: number = 1,
+  pageSize: number = 50
+): Promise<TaskCreationDatabaseRowsPage | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams({
+    table,
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/rows?${params.toString()}`;
+  const result = await fetchJson<{ data?: TaskCreationDatabaseRowsPage }>(url);
+  return result?.data || null;
+}
+
+async function mutateTaskCreationDatabaseRows<T>(
+  sessionId: string,
+  method: "POST" | "PATCH" | "DELETE",
+  body: Record<string, unknown>
+): Promise<T | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/database/rows`;
+  const response = await fetch(url, {
+    method,
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: T };
+  return result?.data || null;
+}
+
+export async function insertTaskCreationDatabaseRow(
+  sessionId: string,
+  table: string,
+  values: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  return mutateTaskCreationDatabaseRows<Record<string, unknown>>(sessionId, "POST", {
+    table,
+    values,
+  });
+}
+
+export async function updateTaskCreationDatabaseRow(
+  sessionId: string,
+  table: string,
+  locator: TaskCreationDatabaseRowLocator,
+  values: Record<string, unknown>
+): Promise<Record<string, unknown> | null> {
+  return mutateTaskCreationDatabaseRows<Record<string, unknown>>(sessionId, "PATCH", {
+    table,
+    locator,
+    values,
+  });
+}
+
+export async function deleteTaskCreationDatabaseRow(
+  sessionId: string,
+  table: string,
+  locator: TaskCreationDatabaseRowLocator
+): Promise<{ deleted: number } | null> {
+  return mutateTaskCreationDatabaseRows<{ deleted: number }>(sessionId, "DELETE", {
+    table,
+    locator,
+  });
 }
 
 export async function startTaskCreationRuntime(sessionId: string): Promise<{

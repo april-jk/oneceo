@@ -1473,6 +1473,7 @@ function DeploymentPreview({
             statusMeta={statusMeta}
             successCount={successCount}
             failedCount={failedCount}
+            totalDeployments={totalDeployments}
             successRate={successRate}
             currentDeployment={currentDeployment}
             latestTimestamp={latestTimestamp}
@@ -1873,6 +1874,7 @@ function DeploymentDashboardSection({
   statusMeta,
   successCount,
   failedCount,
+  totalDeployments,
   successRate,
   currentDeployment,
   latestTimestamp,
@@ -1883,6 +1885,7 @@ function DeploymentDashboardSection({
   statusMeta: DeploymentStatusMeta;
   successCount: number;
   failedCount: number;
+  totalDeployments: number;
   successRate: string;
   currentDeployment: TaskCreationDeploymentInfo["deployments"][number] | null;
   latestTimestamp: string;
@@ -2021,113 +2024,231 @@ function DeploymentDashboardSection({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 text-white shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">部署仪表盘</div>
-            <div className="mt-2 text-2xl font-semibold">当前状态：{statusMeta.label}</div>
-            <div className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-              这里集中展示 OneCEO 平台部署工作台的运行指标。部署数据直接基于 Railway 部署历史生成，可用于查看版本、重部署与回退。
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 p-4 sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">部署数据</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <h3 className="text-xl font-semibold text-slate-900">当前状态：{statusMeta.label}</h3>
+                  <span className={cn("rounded-full border px-2.5 py-1 text-[11px]", statusMeta.badgeClass)}>
+                    {info?.activeDeploymentPending ? "发布进行中" : "状态已同步"}
+                  </span>
+                </div>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{statusMeta.description}</p>
+              </div>
+              <DashboardModeToggle mode={mode} onChange={setMode} />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+                最近同步: <span className="font-medium text-slate-900">{latestTimestamp}</span>
+              </div>
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+                可回退版本: <span className="font-medium text-slate-900">{successCount}</span>
+              </div>
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+                访问入口: <span className="font-medium text-slate-900">{accessEntries.length}</span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 self-start lg:self-auto">
-            <DashboardModeToggle mode={mode} onChange={setMode} />
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <div className="text-[11px] uppercase tracking-[0.14em] text-slate-400">最近活动</div>
-              <div className="mt-2 text-sm font-medium text-white">{latestTimestamp}</div>
+        </div>
+
+        <div className="grid gap-px bg-slate-200 grid-cols-2 lg:grid-cols-4">
+          <CompactDeploymentMetric
+            label="成功率"
+            value={successRate}
+            hint={totalDeployments ? `${totalDeployments} 次发布` : "暂无记录"}
+          />
+          <CompactDeploymentMetric
+            label="成功版本"
+            value={`${successCount}`}
+            hint={successCount ? "可作为稳定回退点" : "等待首个稳定版本"}
+          />
+          <CompactDeploymentMetric
+            label="失败版本"
+            value={`${failedCount}`}
+            hint={failedCount ? "建议回看失败日志" : "当前没有失败版本"}
+          />
+          <CompactDeploymentMetric
+            label="访问入口"
+            value={`${accessEntries.length}`}
+            hint={accessEntries.length ? "线上地址已可用" : "等待首次发布"}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-slate-900">当前线上版本</div>
+          <div className="mt-1 text-xs text-slate-500">先看当前可访问版本，再决定是否继续发布、验证或回退。</div>
+        </div>
+        <div className="space-y-4 p-4 sm:p-5">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">版本说明</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn("rounded-full border px-2 py-1 text-[11px]", statusMeta.badgeClass)}>
+                    {currentDeployment?.status || info?.latestStatus || "UNKNOWN"}
+                  </span>
+                  {info?.activeDeploymentPending ? (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+                      等待完成
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="text-base font-semibold text-slate-900">
+                {currentDeployment?.commitMessage || "等待首次发布"}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span>{currentDeployment?.commitAuthor || "平台自动发布"}</span>
+                <span className="size-1 rounded-full bg-slate-300" />
+                <span>{formatPreviewTimestamp(currentDeployment?.createdAt) || currentDeployment?.createdAt || "时间未知"}</span>
+                {currentDeployment?.id ? (
+                  <>
+                    <span className="size-1 rounded-full bg-slate-300" />
+                    <span className="font-mono">{currentDeployment.id.slice(0, 8)}</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">访问入口</div>
+              <div className="mt-3 space-y-2">
+                {accessEntries.length ? (
+                  accessEntries.slice(0, 3).map(([label, url]) => (
+                    <a
+                      key={`${label}:${url}`}
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                    >
+                      <span className="truncate">{label}</span>
+                      <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                    </a>
+                  ))
+                ) : (
+                  <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-sm text-slate-400">
+                    暂无可访问入口
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">发布概览</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <DashboardMiniStat label="成功版本" value={`${successCount}`} />
+                <DashboardMiniStat label="失败版本" value={`${failedCount}`} />
+                <DashboardMiniStat label="访问入口" value={`${accessEntries.length}`} />
+                <DashboardMiniStat label="最近活动" value={latestTimestamp} subtle />
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <DeploymentMetricCard title="发布成功率" value={successRate} subtitle="基于当前会话内的发布历史计算" />
-        <DeploymentMetricCard title="成功版本" value={`${successCount}`} subtitle="可用于回滚的稳定版本数" />
-        <DeploymentMetricCard title="失败版本" value={`${failedCount}`} subtitle="建议结合日志继续排查的版本数" />
-        <DeploymentMetricCard
-          title="访问入口"
-          value={`${accessEntries.length}`}
-          subtitle={accessEntries.length ? "已生成可访问地址" : "等待发布后生成访问地址"}
-        />
-      </div>
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-slate-900">操作判断</div>
+          <div className="mt-1 text-xs text-slate-500">把最重要的部署判断压缩成简短结论，减少在侧栏里反复找信息。</div>
+        </div>
+        <div className="grid gap-3 p-4 sm:p-5 md:grid-cols-3">
+          <InsightCard
+            title="当前版本"
+            description={
+              currentDeployment?.status === "SUCCESS"
+                ? "当前线上版本稳定，可继续发布新版本或作为回退基线。"
+                : info?.activeDeploymentPending
+                  ? "代码已同步，正在等待构建完成并切换线上版本。"
+                  : "当前还没有稳定线上版本，建议先完成一次成功发布。"
+            }
+          />
+          <InsightCard
+            title="入口状态"
+            description={
+              accessEntries.length
+                ? `当前有 ${accessEntries.length} 个访问入口，可直接用于线上验证。`
+                : "完成首次发布后会自动生成默认访问地址。"
+            }
+          />
+          <InsightCard
+            title="回退空间"
+            description={
+              successCount > 1
+                ? `当前有 ${successCount} 个成功版本，可以直接从历史版本中回退。`
+                : successCount === 1
+                  ? "当前只有 1 个成功版本，建议先积累更多稳定版本。"
+                  : "当前没有成功版本，暂时无法进行稳定回退。"
+            }
+          />
+        </div>
+      </section>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-            发布健康度
-          </div>
-          <div className="grid gap-3 p-4 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">当前版本</div>
-              <div className="mt-2 text-sm font-semibold text-slate-900">
-                {currentDeployment?.commitMessage || "等待首次发布"}
-              </div>
-              <div className="mt-1 text-xs leading-5 text-slate-500">
-                {currentDeployment?.commitAuthor
-                  ? `最近由 ${currentDeployment.commitAuthor} 触发`
-                  : "由平台托管的自动发布流程生成"}
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">域名状态</div>
-              <div className="mt-2 text-sm font-semibold text-slate-900">
-                {accessEntries.length ? "访问入口可用" : "尚未生成"}
-              </div>
-              <div className="mt-1 text-xs leading-5 text-slate-500">
-                {accessEntries.length
-                  ? `当前共 ${accessEntries.length} 个入口可用于访问与验证`
-                  : "完成首次发布后会自动生成默认访问地址"}
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
-              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">部署摘要</div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", statusMeta.badgeClass)}>
-                  {statusMeta.label}
-                </span>
-                {info?.activeDeploymentPending ? (
-                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
-                    有任务正在发布
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-2 text-sm leading-6 text-slate-600">{statusMeta.description}</div>
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">最近版本轨迹</div>
+            <div className="mt-1 text-xs text-slate-500">
+              精简展示最近 6 次发布，重点保留状态、时间和版本说明。
             </div>
           </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-            最近版本轨迹
-          </div>
-          <div className="space-y-3 p-4">
-            {info?.deployments.length ? (
-              info.deployments.slice(0, 5).map((item) => (
-                <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-slate-900">
-                      {item.commitMessage || "由 OneCEO 触发的版本发布"}
-                    </span>
-                    <span className="text-[11px] text-slate-500">
-                      {formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}
-                    </span>
+          <div className="text-xs text-slate-500">{info?.deployments.length || 0} 条记录</div>
+        </div>
+        <div className="p-5">
+          {info?.deployments.length ? (
+            <div className="space-y-4">
+              {info.deployments.slice(0, 6).map((item, index) => (
+                <div key={item.id} className="relative pl-6">
+                  {index < Math.min(info.deployments.length, 6) - 1 ? (
+                    <div className="absolute left-[7px] top-7 h-[calc(100%+12px)] w-px bg-slate-200" />
+                  ) : null}
+                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-slate-200 bg-white">
+                    <div
+                      className={cn(
+                        "mx-auto mt-[3px] size-2 rounded-full",
+                        item.status === "SUCCESS"
+                          ? "bg-emerald-500"
+                          : item.status === "FAILED" || item.status === "CRASHED"
+                            ? "bg-rose-500"
+                            : "bg-amber-500"
+                      )}
+                    />
                   </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700">
+                  <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-900">
+                        {item.commitMessage || "由 OneCEO 触发的版本发布"}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span>{item.commitAuthor || "平台自动发布"}</span>
+                        <span className="size-1 rounded-full bg-slate-300" />
+                        <span>{formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}</span>
+                        <span className="size-1 rounded-full bg-slate-300" />
+                        <span className="font-mono">{item.id.slice(0, 8)}</span>
+                      </div>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
                       {item.status}
                     </span>
-                    <span className="font-mono text-[11px] text-slate-400">{item.id.slice(0, 8)}</span>
                   </div>
                 </div>
-              ))
-            ) : (
-              <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
-                暂无版本轨迹
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+              暂无版本轨迹
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -2755,6 +2876,68 @@ function AnalyticsPlaceholderCard({
       </div>
       <div className="flex flex-1 items-center justify-center text-sm text-slate-400">没有数据</div>
     </section>
+  );
+}
+
+function CompactDeploymentMetric({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div className="bg-white px-5 py-4">
+      <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+      <div className="mt-1 text-xs text-slate-500">{hint}</div>
+    </div>
+  );
+}
+
+function DashboardMiniStat({
+  label,
+  value,
+  subtle = false,
+}: {
+  label: string;
+  value: string;
+  subtle?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border px-3 py-3",
+        subtle ? "border-slate-100 bg-slate-50/80" : "border-slate-200 bg-white"
+      )}
+    >
+      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">{label}</div>
+      <div
+        className={cn(
+          "mt-2 text-sm font-medium",
+          subtle ? "text-slate-600" : "text-slate-900"
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function InsightCard({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="text-sm font-medium text-slate-900">{title}</div>
+      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+    </div>
   );
 }
 

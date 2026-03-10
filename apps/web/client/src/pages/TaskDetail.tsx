@@ -30,16 +30,18 @@ import {
   Clock,
   FileText,
   AlertCircle,
-  Plus,
-  Plug,
   Sparkles,
   Mic,
 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { useRoute } from "wouter";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import { EmployeeDeliverableViewer, type EmployeeDeliverable } from "@/components/DeliverableViewer";
 import ConnectorDialog from "@/components/ConnectorDialog";
+import AttachmentChipList from "@/components/AttachmentChipList";
+import AttachmentPickerButton from "@/components/AttachmentPickerButton";
+import { mergePendingAttachments, type PendingAttachment } from "@/lib/task-attachments";
 
 interface Message {
   id: string;
@@ -62,9 +64,9 @@ interface Message {
 export default function TaskDetail() {
   const [, params] = useRoute("/task/:projectId/:managerId/:taskId");
   const [ceoMessage, setCeoMessage] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedDeliverable, setSelectedDeliverable] = useState<any>(null);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
-  const [showConnector, setShowConnector] = useState(false);
 
   // Mock data - 模拟经理-员工对话数据
   const taskInfo = {
@@ -129,10 +131,21 @@ export default function TaskDetail() {
   ];
 
   const handleSendMessage = () => {
-    if (!ceoMessage.trim()) return;
+    if (!ceoMessage.trim() && attachments.length === 0) return;
     // TODO: 发送消息给经理
-    console.log("CEO message to manager:", ceoMessage);
+    console.log("CEO message to manager:", ceoMessage, attachments.map((item) => item.name));
     setCeoMessage("");
+    setAttachments([]);
+  };
+
+  const handleAttachmentSelect = (files: File[]) => {
+    const merged = mergePendingAttachments(attachments, files);
+    setAttachments(merged.attachments);
+    merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -317,43 +330,16 @@ export default function TaskDetail() {
                   rows={4}
                 />
 
+                <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+
                 {/* Bottom Action Bar */}
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
                     {/* Left Side Actions */}
                     <div className="flex items-center gap-1">
-                      {/* Add Attachment Button */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                          >
-                            <Plus className="w-4 h-4 text-muted-foreground" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Add attachment</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
 
-                      {/* Connector Button */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                            onClick={() => setShowConnector(true)}
-                          >
-                            <Plug className="w-4 h-4 text-muted-foreground" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Connector</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <ConnectorDialog />
 
                       {/* Model Selection Button */}
                       <DropdownMenu>
@@ -436,7 +422,7 @@ export default function TaskDetail() {
                             size="icon"
                             className="h-9 w-9 rounded-xl"
                             onClick={handleSendMessage}
-                            disabled={!ceoMessage.trim()}
+                            disabled={!ceoMessage.trim() && attachments.length === 0}
                           >
                             <Send className="w-4 h-4" />
                           </Button>
@@ -453,12 +439,6 @@ export default function TaskDetail() {
           </div>
         </div>
       </div>
-
-      {/* Connector Dialog */}
-      <ConnectorDialog
-        open={showConnector}
-        onOpenChange={setShowConnector}
-      />
 
       {/* Deliverable Viewer */}
       {selectedDeliverable && (

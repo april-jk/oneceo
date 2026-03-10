@@ -7,6 +7,20 @@
  */
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -24,10 +38,15 @@ import {
   ChevronLeft,
   User,
   CheckCircle2,
+  Bell,
+  Coins,
+  Crown,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTranslation } from 'react-i18next';
 import React from 'react';
+import { listTaskCreationSessions } from '@/lib/task-creation-client';
+import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface SidebarProps {
   className?: string;
@@ -38,10 +57,68 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ className = "", collapsed = false, onToggleCollapse, selectedProjectId, onProjectSelect }: SidebarProps) {
-  const [location] = useLocation();
+  const SESSION_PREVIEW_COUNT = 3;
+  const [location, setLocation] = useLocation();
   const { t } = useTranslation();
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
+  const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
+  const [sessionTasks, setSessionTasks] = React.useState<Array<{
+    sessionId: string;
+    title: string;
+    status: string;
+  }>>([]);
+  const listLoadingRef = React.useRef(false);
+  const lastListFetchRef = React.useRef(0);
+  const LIST_POLL_MS = 30000;
+
+  React.useEffect(() => {
+    let disposed = false;
+    const load = async (force = false) => {
+      if (disposed) return;
+      if (listLoadingRef.current) return;
+      if (!force && document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (!force && now - lastListFetchRef.current < 3000) return;
+      listLoadingRef.current = true;
+      try {
+        const list = await listTaskCreationSessions('all');
+        if (disposed) return;
+        const mapped = list.map((session: any) => ({
+          sessionId: session.id,
+          title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+          status: session.status || "in_progress",
+        }));
+        setSessionTasks(mapped);
+        lastListFetchRef.current = Date.now();
+      } catch {
+        // ignore
+      } finally {
+        listLoadingRef.current = false;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void load(true);
+      }
+    };
+    const onSessionUpdated = () => {
+      void load(true);
+    };
+    void load(true);
+    const timer = window.setInterval(() => {
+      void load(false);
+    }, LIST_POLL_MS);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('task-creation-session-updated', onSessionUpdated);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('task-creation-session-updated', onSessionUpdated);
+    };
+  }, []);
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects(prev => 
@@ -121,15 +198,23 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       managers: []
     },
   ];
+  const sessionPreviewList = sessionTasks.slice(0, SESSION_PREVIEW_COUNT);
+  const hiddenSessionCount = Math.max(sessionTasks.length - SESSION_PREVIEW_COUNT, 0);
+  const hasSessionOverflow = hiddenSessionCount > 0;
+  const formatSessionStatus = (status: string) => {
+    if (status === "completed") return "完成";
+    if (status === "waiting_user") return "待补充";
+    return "进行中";
+  };
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border-r border-sidebar-border flex flex-col shadow-sm transition-all duration-300 ${className}`}
+      className={`fixed left-4 top-4 bottom-4 ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border border-sidebar-border flex flex-col shadow-lg rounded-3xl backdrop-blur-sm transition-all duration-300 ${className}`}
     >
       {/* Logo */}
-      <div className="h-14 flex items-center justify-between px-4 border-b border-sidebar-border">
+      <div className={`h-14 flex items-center ${collapsed ? "px-3 justify-center" : "px-4 justify-between"} border-b border-sidebar-border relative`}>
         <Link href="/">
-          <div className="flex items-center gap-2 cursor-pointer">
+          <div className={`flex items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer shrink-0`}>
             <img 
               src="/logo.png"
               alt="oneceo"
@@ -146,7 +231,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className={`h-8 w-8 shrink-0 ${collapsed ? "absolute right-2" : ""}`}
             onClick={onToggleCollapse}
           >
             {collapsed ? (
@@ -160,17 +245,40 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
       {/* Navigation */}
       <ScrollArea className="flex-1">
-        <div className="p-3 space-y-1">
+        <div className={`p-3 space-y-1 ${collapsed ? "items-center" : ""}`}>
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = location === item.href;
             const isNewTask = index === 0; // First item is New Task
-            
+
+            if (isNewTask) {
+              return (
+                <Button
+                  key={item.href}
+                  variant={isNewTask ? "default" : "ghost"}
+                  className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl transition-all duration-150 ${
+                    isNewTask
+                      ? "bg-foreground hover:bg-foreground/90 text-background"
+                      : isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                  }`}
+                  onClick={() => {
+                    setLocation(`/new-task?new=${Date.now()}`);
+                    onProjectSelect?.(null);
+                  }}
+                >
+                  <Icon className="w-4 h-4" />
+                  {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
+                </Button>
+              );
+            }
+
             return (
               <Link key={item.href} href={item.href}>
                 <Button
                   variant={isNewTask ? "default" : "ghost"}
-                  className={`w-full justify-start gap-3 h-9 px-3 rounded-xl transition-all duration-150 ${
+                  className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl transition-all duration-150 ${
                     isNewTask
                       ? "bg-foreground hover:bg-foreground/90 text-background"
                       : isActive
@@ -219,11 +327,11 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                     </Button>
                     <Button
                       variant="ghost"
-                      className="flex-1 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      className="flex-1 min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                       onClick={() => onProjectSelect?.(project.id)}
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
-                      <span className="text-sm truncate">{project.name}</span>
+                      <span className="text-sm truncate min-w-0">{project.name}</span>
                     </Button>
                   </div>
 
@@ -250,24 +358,24 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                               </Button>
                               <Button
                                 variant="ghost"
-                                className="flex-1 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                className="flex-1 min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                               >
                                 <User className="w-3 h-3" />
-                                <span className="text-xs truncate">{manager.name}</span>
+                                <span className="text-xs truncate min-w-0">{manager.name}</span>
                               </Button>
                             </div>
 
                             {/* Tasks */}
                             {isManagerExpanded && manager.tasks.length > 0 && (
                               <div className="ml-6 space-y-0.5">
-                                {manager.tasks.map((task) => (
+                                {manager.tasks.map((task: any) => (
                                   <Link key={task.id} href={`/task/${project.id}/${manager.id}/${task.id}`}>
                                     <Button
                                       variant="ghost"
-                                      className="w-full justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                      className="w-full min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                                     >
                                       <CheckCircle2 className={`w-3 h-3 ${task.status === 'completed' ? 'text-green-500' : 'text-muted-foreground'}`} />
-                                      <span className="text-xs truncate">{task.name}</span>
+                                      <span className="text-xs truncate min-w-0">{task.name}</span>
                                     </Button>
                                   </Link>
                                 ))}
@@ -282,40 +390,161 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
               );
             })}
           </div>
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
-          >
-            <span className="text-sm">{t('sidebar.viewMore')}</span>
-          </Button>
+          {hasSessionOverflow && (
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
+              onClick={() => setTasksDialogOpen(true)}
+            >
+              <span className="text-sm">
+                {t('sidebar.viewMore')} ({hiddenSessionCount})
+              </span>
+            </Button>
+          )}
+
+          {sessionTasks.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {sessionPreviewList.map((session) => (
+                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
+                  <Button
+                    variant="ghost"
+                    className="w-full min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span className="text-xs truncate flex-1 min-w-0 text-left">{session.title}</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      {formatSessionStatus(session.status)}
+                    </span>
+                  </Button>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>}
 
         {!collapsed && <Separator className="my-3 bg-sidebar-border" />}
 
         {/* All Tasks */}
         {!collapsed && <div className="px-3 pb-3">
-          <Link href="/tasks">
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-            >
-              <FileText className="w-4 h-4" />
-              <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
-            </Button>
-          </Link>
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+            onClick={() => setTasksDialogOpen(true)}
+          >
+            <FileText className="w-4 h-4" />
+            <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {sessionTasks.length}
+            </span>
+          </Button>
         </div>}
       </ScrollArea>
 
       {/* Bottom Section */}
-      <div className="border-t border-sidebar-border p-3">
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-        >
-          <Settings className="w-4 h-4" />
-          {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
-        </Button>
+      <div
+        className="border-t border-sidebar-border p-3"
+        onMouseEnter={() => setSettingsMenuOpen(true)}
+        onMouseLeave={() => setSettingsMenuOpen(false)}
+      >
+        <DropdownMenu open={settingsMenuOpen} onOpenChange={setSettingsMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150`}
+              onClick={() => openSettingsDialog({ tab: "settings" })}
+            >
+              <Settings className="w-4 h-4" />
+              {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="start"
+            className="w-72 p-0 rounded-2xl border border-border shadow-lg"
+          >
+            <div className="p-4 border-b border-border">
+              <div className="flex items-center gap-3 mb-3">
+                <Avatar className="h-12 w-12">
+                  <AvatarImage src="https://avatar.vercel.sh/user" alt="User" />
+                  <AvatarFallback>U</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-foreground truncate">
+                    John Doe
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    john.doe@example.com
+                  </div>
+                </div>
+              </div>
+              <div className="bg-accent/50 rounded-xl p-3 border border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-amber-500" />
+                    <span className="text-sm font-medium text-foreground">Credits</span>
+                  </div>
+                  <span className="text-sm font-bold text-foreground">13,639</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Crown className="w-4 h-4 text-purple-500" />
+                  <span className="text-xs text-muted-foreground">Pro Member</span>
+                </div>
+              </div>
+            </div>
+            <div className="p-2">
+              <DropdownMenuItem className="rounded-lg py-2.5 px-3">
+                <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
+                <span className="text-sm">通知</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="rounded-lg py-2.5 px-3"
+                onSelect={() => openSettingsDialog({ tab: "settings" })}
+              >
+                <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
+                <span className="text-sm">设置</span>
+              </DropdownMenuItem>
+            </div>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>
+        <DialogContent className="max-w-2xl p-0 gap-0 flex flex-col h-[80vh] max-h-[80vh] min-h-[420px] overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b">
+            <DialogTitle>{t('sidebar.allTasks')}</DialogTitle>
+            <DialogDescription>
+              {`共 ${sessionTasks.length} 个任务会话`}
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="flex-1 min-h-0 px-4 py-4 pr-6">
+            {sessionTasks.length === 0 ? (
+              <div className="text-sm text-muted-foreground px-2 py-6 text-center">
+                暂无任务会话
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sessionTasks.map((session) => (
+                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
+                    <Button
+                      variant="ghost"
+                      className="w-full min-w-0 justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      onClick={() => setTasksDialogOpen(false)}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <FileText className="w-4 h-4 shrink-0" />
+                        <span className="text-sm truncate min-w-0">{session.title}</span>
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {formatSessionStatus(session.status)}
+                      </span>
+                    </Button>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

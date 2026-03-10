@@ -1,0 +1,74 @@
+{
+  "suiteId": "mmhuu2lj",
+  "apiBase": "http://127.0.0.1:4000",
+  "wsUrl": "ws://127.0.0.1:4000/ws/task-creation",
+  "startedAt": "2026-03-08T14:35:38.023Z",
+  "finishedAt": "2026-03-08T14:37:18.212Z",
+  "passed": true,
+  "sessionId": "e3338377-a016-4b6e-a789-c9b7f299a043",
+  "opencodeSessionId": "ses_3321f14ebffeUIx4AbeZG4MHqp",
+  "orchestratorSessionId": "il3eepurnvp68phkwrd9l",
+  "scenarioResults": [
+    {
+      "name": "01_session_bootstrap",
+      "passed": true,
+      "startedAt": "2026-03-08T14:35:38.030Z",
+      "finishedAt": "2026-03-08T14:36:39.625Z",
+      "details": {
+        "sessionId": "e3338377-a016-4b6e-a789-c9b7f299a043",
+        "opencodeSessionId": "ses_3321f14ebffeUIx4AbeZG4MHqp",
+        "orchestratorSessionId": "il3eepurnvp68phkwrd9l",
+        "acceptedType": "opencode_status",
+        "firstEventType": "opencode_event",
+        "firstEventSubtype": "message.part.updated"
+      }
+    },
+    {
+      "name": "02_session_continuation",
+      "passed": true,
+      "startedAt": "2026-03-08T14:36:39.625Z",
+      "finishedAt": "2026-03-08T14:36:45.774Z",
+      "details": {
+        "sessionId": "e3338377-a016-4b6e-a789-c9b7f299a043",
+        "opencodeSessionId": "ses_3321f14ebffeUIx4AbeZG4MHqp",
+        "acceptedType": "opencode_status",
+        "nextEventType": "opencode_event",
+        "nextEventSubtype": "message.part.updated"
+      }
+    },
+    {
+      "name": "03_sse_realtime_incremental",
+      "passed": true,
+      "startedAt": "2026-03-08T14:36:45.774Z",
+      "finishedAt": "2026-03-08T14:36:57.738Z",
+      "details": {
+        "firstEventDelayMs": 2027,
+        "incrementalEventCount": 59,
+        "partUpdatedCount": 7
+      }
+    },
+    {
+      "name": "04_persistence_refresh_consistency",
+      "passed": true,
+      "startedAt": "2026-03-08T14:36:57.741Z",
+      "finishedAt": "2026-03-08T14:37:01.549Z",
+      "details": {
+        "firstMessageCount": 54,
+        "secondMessageCount": 70,
+        "firstOpencodeEventCount": 47,
+        "secondOpencodeEventCount": 63,
+        "persistedUserInputCount": 3
+      }
+    },
+    {
+      "name": "05_completion_signal",
+      "passed": true,
+      "startedAt": "2026-03-08T14:37:01.549Z",
+      "finishedAt": "2026-03-08T14:37:18.212Z",
+      "details": {
+        "completionSubtype": "message.final",
+        "completionContent": "DIRECT_SUITE_mmhuu2lj_SSE: 请输出 8 行带编号文本（line-1 到 line-8），每行简短解释。"
+      }
+    }
+  ]
+}

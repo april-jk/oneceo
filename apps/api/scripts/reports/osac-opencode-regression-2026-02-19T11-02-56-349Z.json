@@ -1,0 +1,27 @@
+{
+  "summary": {
+    "startedAt": "2026-02-19T10:58:55.595Z",
+    "finishedAt": "2026-02-19T11:02:56.349Z",
+    "sessionId": "sess_f7499b0a80664090",
+    "provisioned": true,
+    "rounds": 3,
+    "roundsExecuted": 0,
+    "passed": 0,
+    "failed": 0,
+    "maxConsecutiveFailures": 2,
+    "maxFailures": 2,
+    "totalBudgetMs": 900000,
+    "aborted": true,
+    "abortReason": "OSAC WebSocket 已断开",
+    "fatalError": "OSAC WebSocket 已断开",
+    "model": "hone/claude-haiku-4-5-20251001",
+    "commandTimeoutSeconds": 90,
+    "execTimeoutSeconds": 120,
+    "roundExecTimeoutMs": 240000,
+    "wsProbeMode": "ping",
+    "wsPingTimeoutMs": 12000,
+    "wsConnectAcquireTimeoutMs": 45000,
+    "persistentBridgeReady": false
+  },
+  "rounds": []
+}

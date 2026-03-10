@@ -1,12 +1,57 @@
+import './config/env';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import dotenv from 'dotenv';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
+import taskCreationRoutes from './routes/task-creation-routes';
+import sandboxRoutes from './routes/sandbox-routes';
+import osacRoutes from './routes/osac-routes';
+import llmProxyRoutes from './routes/llm-proxy-routes';
+import connectorRoutes from './routes/connector-routes';
+import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
+import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
+import { getPublicErrorMessage } from './utils/error-response';
+import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
+import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
+import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
+import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 
-dotenv.config();
+function mergeNoProxy(entries: string[], current?: string): string {
+  const normalized = (current || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const set = new Set(normalized);
+  for (const entry of entries) {
+    if (entry) set.add(entry);
+  }
+  return Array.from(set).join(',');
+}
+
+const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
+  .trim()
+  .toLowerCase();
+const proxyToggleEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
+const proxyEnabled =
+  proxyToggleEnabled &&
+  (Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
+    Boolean(process.env.HTTPS_PROXY || process.env.https_proxy));
+
+if (proxyEnabled) {
+  const bypass = [
+    '127.0.0.1',
+    'localhost',
+    '::1',
+    '.e2b.app',
+    'api.e2b.dev',
+    'e2b.dev',
+  ];
+  const merged = mergeNoProxy(bypass, process.env.NO_PROXY || process.env.no_proxy);
+  process.env.NO_PROXY = merged;
+  process.env.no_proxy = merged;
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -22,6 +67,8 @@ const io = new Server(httpServer, {
 // ============================================================================
 
 app.use(cors());
+// LLM proxy uses raw body for streaming compatibility
+app.use('/api/llm-proxy', express.raw({ type: '*/*' }));
 app.use(express.json());
 
 // 请求日志
@@ -62,6 +109,13 @@ app.post('/api/projects', (req, res) => {
     message: 'Project created - Coming soon',
   });
 });
+
+// 任务创建相关 API
+app.use('/api/task-creation', taskCreationRoutes);
+app.use('/api/sandbox', sandboxRoutes);
+app.use('/api/sandbox/osac', osacRoutes);
+app.use('/api/llm-proxy', llmProxyRoutes);
+app.use('/api/connectors', connectorRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -140,7 +194,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     success: false,
     error: {
       code: 'INTERNAL_ERROR',
-      message: err.message || 'Internal server error',
+      message: getPublicErrorMessage('服务异常，请稍后重试'),
     },
   });
 });
@@ -150,13 +204,90 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
+let shuttingDown = false;
+
+async function shutdown(signal: string, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`[API] shutdown start: ${signal}`);
+
+  try {
+    stopSandboxArchiveJob();
+  } catch (error) {
+    console.warn('[API] stopSandboxArchiveJob failed:', error);
+  }
+
+  try {
+    io.close();
+  } catch (error) {
+    console.warn('[API] socket.io close failed:', error);
+  }
+
+  try {
+    taskCreationWebSocketService.close();
+  } catch (error) {
+    console.warn('[API] taskCreationWebSocketService.close failed:', error);
+  }
+
+  await new Promise<void>((resolve) => {
+    try {
+      httpServer.close(() => resolve());
+    } catch (_error) {
+      resolve();
+    }
+  });
+
+  try {
+    await closeDatabaseConnection();
+  } catch (error) {
+    console.warn('[API] closeDatabaseConnection failed:', error);
+  }
+
+  process.exit(exitCode);
+}
+
+httpServer.on('error', (error: any) => {
+  if (error?.code === 'EADDRINUSE') {
+    console.error(
+      `[API] Port ${PORT} is already in use. Another api dev process may still be running.`
+    );
+  } else {
+    console.error('[API] httpServer error:', error);
+  }
+  void shutdown('httpServer:error', 1);
+});
+
+// 初始化任务创建 WebSocket 服务
+taskCreationWebSocketService.initialize(httpServer);
+osacLlmProxyBridgeService.initialize();
+
 httpServer.listen(PORT, () => {
   console.log('');
   console.log('🚀 oneceo.ai API Server');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📡 API server running on http://localhost:${PORT}`);
   console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
+  console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  
+  // 启动后先进行数据库连通性重试检测
+  void testDatabaseConnection({ retries: 5, delayMs: 1500 });
+  // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
+  void osacPersistentRecoveryService.recoverReadySessions();
+  // 预热连接器相关表，避免首次访问时因未迁移报错
+  void connectorStorageBootstrap.ensureReady();
+  // 启动 Sandbox 空闲归档任务
+  startSandboxArchiveJob();
+  
   console.log('');
+});
+
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM');
 });

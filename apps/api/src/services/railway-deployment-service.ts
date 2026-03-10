@@ -1,5 +1,4 @@
-const RAILWAY_GRAPHQL_ENDPOINT =
-  process.env.RAILWAY_GRAPHQL_ENDPOINT || 'https://backboard.railway.app/graphql/v2';
+import { requestRailwayGraphql } from './railway-graphql-client';
 
 const DEPLOYMENT_TRANSIENT_STATUSES = new Set([
   'BUILDING',
@@ -102,17 +101,30 @@ function toIso(value: unknown): string | undefined {
   return undefined;
 }
 
+function toPublicUrl(value: unknown): string | undefined {
+  const raw = asText(value);
+  if (!raw) return undefined;
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    return raw;
+  }
+  return `https://${raw}`;
+}
+
 function buildMissingMessage(missing: string[]) {
   if (missing.length === 0) return '';
-  return `Railway 部署未配置完整，缺少：${missing.join('、')}。请在 sandbox metadata.railway 或服务端环境变量中补齐。`;
+  return `部署尚未就绪，缺少：${missing.join('、')}。请联系平台管理员完成部署供应链配置。`;
 }
 
 function resolveBinding(metadata: Record<string, unknown>): {
   binding: RailwayBinding | null;
   missing: string[];
 } {
+  const platformDeployment = pickRecord(metadata.platformDeployment);
   const railway = pickRecord(metadata.railway);
   const token = firstText(
+    platformDeployment.adminToken,
+    platformDeployment.token,
+    platformDeployment.accessToken,
     railway.projectToken,
     railway.token,
     railway.apiToken,
@@ -123,16 +135,19 @@ function resolveBinding(metadata: Record<string, unknown>): {
     process.env.RAILWAY_ADMIN_TOKEN
   );
   const projectId = firstText(
+    platformDeployment.projectId,
     railway.projectId,
     metadata.railwayProjectId,
     process.env.RAILWAY_PROJECT_ID
   );
   const environmentId = firstText(
+    platformDeployment.environmentId,
     railway.environmentId,
     metadata.railwayEnvironmentId,
     process.env.RAILWAY_ENVIRONMENT_ID
   );
   const serviceId = firstText(
+    platformDeployment.serviceId,
     railway.serviceId,
     metadata.railwayServiceId,
     process.env.RAILWAY_SERVICE_ID
@@ -153,9 +168,18 @@ function resolveBinding(metadata: Record<string, unknown>): {
       projectId,
       environmentId,
       serviceId,
-      projectName: firstText(railway.projectName, metadata.railwayProjectName),
-      environmentName: firstText(railway.environmentName, metadata.railwayEnvironmentName),
-      serviceName: firstText(railway.serviceName, metadata.railwayServiceName, process.env.RAILWAY_SERVICE_NAME),
+      projectName: firstText(platformDeployment.projectName, railway.projectName, metadata.railwayProjectName),
+      environmentName: firstText(
+        platformDeployment.environmentName,
+        railway.environmentName,
+        metadata.railwayEnvironmentName
+      ),
+      serviceName: firstText(
+        platformDeployment.serviceName,
+        railway.serviceName,
+        metadata.railwayServiceName,
+        process.env.RAILWAY_SERVICE_NAME
+      ),
       lastDeploymentId: firstText(railway.lastDeploymentId, metadata.railwayLastDeploymentId),
     },
     missing: serviceId ? [] : ['serviceId'],
@@ -167,37 +191,11 @@ async function executeRailwayGraphql<T>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<T> {
-  const response = await fetch(RAILWAY_GRAPHQL_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      query,
-      variables: variables || {},
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Railway request failed: ${response.status}`);
+  try {
+    return await requestRailwayGraphql<T>(token, query, variables);
+  } catch (error: any) {
+    throw new Error(firstText(error?.message) || '部署服务请求失败');
   }
-
-  const payload = (await response.json()) as {
-    data?: T;
-    errors?: Array<{ message?: string }>;
-  };
-
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    const message = firstText(payload.errors[0]?.message) || 'Railway GraphQL 请求失败';
-    throw new Error(message);
-  }
-
-  if (!payload.data) {
-    throw new Error('Railway 响应为空');
-  }
-
-  return payload.data;
 }
 
 async function loadProjectSummary(binding: RailwayBinding) {
@@ -246,10 +244,6 @@ async function loadDeployments(binding: RailwayBinding) {
           id?: string;
           status?: string;
           createdAt?: string;
-          meta?: {
-            commitMessage?: string;
-            commitAuthor?: string;
-          } | null;
           service?: {
             name?: string;
           } | null;
@@ -259,19 +253,13 @@ async function loadDeployments(binding: RailwayBinding) {
   }>(
     binding.token,
     `
-      query RailwayDeployments($input: DeploymentListInput, $first: Int) {
+      query RailwayDeployments($input: DeploymentListInput!, $first: Int) {
         deployments(input: $input, first: $first) {
           edges {
             node {
               id
               status
               createdAt
-              meta {
-                ... on GithubMeta {
-                  commitMessage
-                  commitAuthor
-                }
-              }
               service {
                 name
               }
@@ -399,9 +387,16 @@ function normalizeDeploymentItems(
 
 export async function getRailwayDeploymentPanel(
   metadataRaw: Record<string, unknown>,
-  options?: { deploymentId?: string; logLimit?: number }
+  options?: {
+    deploymentId?: string;
+    logLimit?: number;
+    platformDeployment?: Record<string, unknown>;
+  }
 ): Promise<RailwayDeploymentPanelData> {
-  const metadata = pickRecord(metadataRaw);
+  const metadata = {
+    ...pickRecord(metadataRaw),
+    ...(options?.platformDeployment ? { platformDeployment: options.platformDeployment } : {}),
+  };
   const { binding, missing } = resolveBinding(metadata);
 
   if (!binding) {
@@ -458,8 +453,9 @@ export async function getRailwayDeploymentPanel(
   );
 
   const selectedDeploymentId =
-    firstText(options?.deploymentId, binding.lastDeploymentId) ||
+    firstText(options?.deploymentId) ||
     deployments[0]?.id ||
+    firstText(binding.lastDeploymentId) ||
     '';
   const selectedDeployment = selectedDeploymentId
     ? deployments.find((item) => item.id === selectedDeploymentId) || null
@@ -483,16 +479,17 @@ export async function getRailwayDeploymentPanel(
   }
 
   const activeStatus = asText(detail?.status) || selectedDeployment?.status || '';
-  const latestUrl = firstText(detail?.url);
-  const latestStaticUrl = firstText(detail?.staticUrl);
+  const latestUrl = toPublicUrl(detail?.url);
+  const latestStaticUrl = toPublicUrl(detail?.staticUrl);
   const canDeploy = Boolean(binding.serviceId);
   const missingForDeploy = canDeploy ? [] : ['serviceId'];
   const domains = [
     ...(domainsResult.domains?.serviceDomains || []),
     ...(domainsResult.domains?.customDomains || []),
   ]
-    .map((entry) => asText(entry.domain))
+    .map((entry) => toPublicUrl(entry.domain) || '')
     .filter(Boolean);
+  const resolvedStaticUrl = latestStaticUrl || domains[0] || undefined;
 
   return {
     configured: true,
@@ -507,7 +504,7 @@ export async function getRailwayDeploymentPanel(
     deploymentId: selectedDeploymentId || undefined,
     latestStatus: activeStatus || undefined,
     latestUrl: latestUrl || undefined,
-    latestStaticUrl: latestStaticUrl || undefined,
+    latestStaticUrl: resolvedStaticUrl,
     activeDeploymentPending: DEPLOYMENT_TRANSIENT_STATUSES.has(activeStatus),
     domains,
     deployments: deployments.map((item) =>
@@ -517,7 +514,7 @@ export async function getRailwayDeploymentPanel(
             status: activeStatus || item.status,
             createdAt: toIso(detail?.createdAt) || item.createdAt,
             url: latestUrl || undefined,
-            staticUrl: latestStaticUrl || undefined,
+            staticUrl: resolvedStaticUrl,
           }
         : item
     ),
@@ -532,7 +529,7 @@ function requireBindingForAction(
   const metadata = pickRecord(metadataRaw);
   const resolved = resolveBinding(metadata);
   if (!resolved.binding) {
-    throw new Error(buildMissingMessage(resolved.missing) || 'Railway 部署未配置');
+    throw new Error(buildMissingMessage(resolved.missing) || '部署未配置');
   }
   if (!resolved.binding.serviceId) {
     throw new Error(buildMissingMessage(['serviceId']));
@@ -540,6 +537,57 @@ function requireBindingForAction(
   return {
     binding: resolved.binding,
     missing: [],
+  };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function waitForRailwayDeploymentAfterSourceSync(
+  metadataRaw: Record<string, unknown>,
+  options?: {
+    since?: number;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }
+): Promise<RailwayDeploymentActionResult> {
+  const { binding } = requireBindingForAction(metadataRaw);
+  const since = Number.isFinite(options?.since) ? Number(options?.since) : Date.now();
+  const timeoutMs = Math.max(5_000, options?.timeoutMs || 90_000);
+  const pollIntervalMs = Math.max(1_000, options?.pollIntervalMs || 4_000);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const deploymentsResult = await loadDeployments(binding);
+    const deployments = normalizeDeploymentItems(
+      deploymentsResult.deployments?.edges?.map((edge) => ({
+        id: edge?.node?.id,
+        status: edge?.node?.status,
+        createdAt: edge?.node?.createdAt,
+        serviceName: edge?.node?.service?.name,
+      })) || [],
+      binding.serviceName
+    );
+
+    const matchedDeployment = deployments.find((item) => {
+      const createdAt = item.createdAt ? Date.parse(item.createdAt) : NaN;
+      if (!Number.isFinite(createdAt)) return false;
+      return createdAt >= since - 15_000;
+    });
+
+    if (matchedDeployment?.id) {
+      return {
+        action: 'deploy',
+        deploymentId: matchedDeployment.id,
+      };
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  return {
+    action: 'deploy',
   };
 }
 

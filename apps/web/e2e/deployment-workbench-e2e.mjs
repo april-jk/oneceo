@@ -50,7 +50,8 @@ async function main() {
     await preview.getByText('没有数据').first().waitFor({ state: 'visible', timeout: 30000 });
 
     await preview.getByRole('button', { name: '部署数据' }).click({ force: true });
-    await preview.getByText('最近版本轨迹').waitFor({ state: 'visible', timeout: 30000 });
+    await preview.getByText('当前线上版本', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+    await preview.getByText('最近版本轨迹', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
 
     console.log(
       JSON.stringify({

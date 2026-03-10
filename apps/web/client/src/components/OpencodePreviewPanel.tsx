@@ -1,32 +1,54 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   BarChart3,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
   Database,
   ExternalLink,
+  Filter,
   Globe,
+  Globe2,
   HardDrive,
   History,
+  KeyRound,
   Loader2,
+  Pencil,
+  Plus,
   RefreshCw,
   Rocket,
   ScrollText,
   Server,
   Settings2,
   ShieldCheck,
+  TableProperties,
+  Trash2,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
 import { Streamdown } from "streamdown";
 import {
+  deleteTaskCreationDatabaseRow,
   deployTaskCreationSession,
+  getTaskCreationDatabaseInfo,
+  getTaskCreationDatabaseRows,
   getTaskCreationDeploymentInfo,
   getTaskCreationDebugInfo,
+  insertTaskCreationDatabaseRow,
   startTaskCreationDebug,
   redeployTaskCreationSession,
   rollbackTaskCreationSessionDeployment,
+  updateTaskCreationDatabaseRow,
   getWorkspaceFile,
   getWorkspaceDirectory,
+  type TaskCreationDatabaseColumn,
+  type TaskCreationDatabaseInfo,
+  type TaskCreationDatabaseRowLocator,
+  type TaskCreationDatabaseRowsPage,
   type TaskCreationDeploymentInfo,
   type TaskCreationDebugInfo,
   type WorkspaceFile,
@@ -777,6 +799,7 @@ export default function OpencodePreviewPanel({
           aria-hidden={currentTab !== "deployment"}
         >
           <DeploymentPreview
+            sessionId={sessionId}
             info={deploymentInfo}
             loading={deploymentLoading}
             error={deploymentError}
@@ -1240,6 +1263,7 @@ function DiffPreview({
 }
 
 function DeploymentPreview({
+  sessionId,
   info,
   loading,
   error,
@@ -1251,6 +1275,7 @@ function DeploymentPreview({
   onRedeploy,
   onRollback,
 }: {
+  sessionId?: string | null;
   info: TaskCreationDeploymentInfo | null;
   loading: boolean;
   error: string | null;
@@ -1443,6 +1468,7 @@ function DeploymentPreview({
 
         {section === "dashboard" ? (
           <DeploymentDashboardSection
+            sessionId={sessionId}
             info={info}
             statusMeta={statusMeta}
             successCount={successCount}
@@ -1455,7 +1481,7 @@ function DeploymentPreview({
         ) : null}
 
         {section === "database" ? (
-          <DeploymentDatabaseSection info={info} statusMeta={statusMeta} />
+          <DeploymentDatabaseSection sessionId={sessionId} info={info} statusMeta={statusMeta} />
         ) : null}
 
         {section === "storage" ? (
@@ -1842,6 +1868,7 @@ function DeploymentOverviewSection({
 }
 
 function DeploymentDashboardSection({
+  sessionId,
   info,
   statusMeta,
   successCount,
@@ -1851,6 +1878,7 @@ function DeploymentDashboardSection({
   latestTimestamp,
   accessEntries,
 }: {
+  sessionId?: string | null;
   info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
   successCount: number;
@@ -1860,6 +1888,137 @@ function DeploymentDashboardSection({
   latestTimestamp: string;
   accessEntries: Array<[string, string] | readonly [string, string]>;
 }) {
+  const [mode, setMode] = useState<"deployments" | "site">("deployments");
+
+  if (mode === "site") {
+    const siteName = info?.projectName || "未命名站点";
+    const primaryUrl = accessEntries[0]?.[1] || "";
+    return (
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-3">
+                <div className="flex size-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-700">
+                  <Globe2 className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="truncate text-lg font-semibold text-slate-900">{siteName}</h3>
+                  </div>
+                  {primaryUrl ? (
+                    <a
+                      href={primaryUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 flex items-center gap-1 truncate text-sm text-slate-500 hover:text-slate-700 hover:underline"
+                    >
+                      {primaryUrl}
+                      <ExternalLink className="size-3.5 shrink-0" />
+                    </a>
+                  ) : (
+                    <div className="mt-1 text-sm text-slate-500">尚未生成站点访问地址</div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-start">
+              <DashboardModeToggle mode={mode} onChange={setMode} />
+              <Button variant="outline" size="sm" className="h-8 text-xs">
+                文档
+              </Button>
+              {primaryUrl ? (
+                <Button asChild size="sm" className="h-8 text-xs">
+                  <a href={primaryUrl} target="_blank" rel="noreferrer">
+                    打开网站
+                  </a>
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                <Globe className="size-4" />
+                公开
+              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {primaryUrl ? "您的网站现已公开，任何人都可以访问。" : "完成首次发布后，网站会自动对外开放访问。"}
+              </p>
+            </div>
+            <Button variant="outline" size="sm" className="h-8 text-xs">
+              管理访问权限
+            </Button>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <h3 className="text-base font-medium text-slate-900">分析</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+                <CalendarDays className="size-4" />
+                过去 24 小时
+              </Button>
+              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+                <Filter className="size-4" />
+                筛选器
+              </Button>
+              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+                <RefreshCw className="size-4" />
+                刷新
+              </Button>
+            </div>
+          </div>
+
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-5">
+              <SiteMetricTab label="页面浏览量" value="0" active />
+              <SiteMetricTab label="访问量" value="0" />
+              <SiteMetricTab label="访客" value="0" />
+              <SiteMetricTab label="持续时间" value="0 分钟 00 秒" />
+              <SiteMetricTab label="跳出率" value="0%" />
+            </div>
+            <div className="flex h-[320px] items-center justify-center text-sm text-slate-400">
+              {sessionId ? "当前还没有站点访问数据" : "缺少会话信息，无法展示站点数据"}
+            </div>
+          </section>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <AnalyticsPlaceholderCard title="浏览最多的页面" primaryLabel="页面" secondaryLabel="访客" />
+            <AnalyticsPlaceholderCard title="引荐来源" primaryLabel="引荐来源" secondaryLabel="访客" />
+            <AnalyticsPlaceholderCard
+              title="地区"
+              primaryLabel="地区"
+              secondaryLabel="访客"
+              rightControl={
+                <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 text-xs">
+                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">列表</span>
+                  <span className="px-3 py-1 text-slate-500">地图</span>
+                </div>
+              }
+            />
+            <AnalyticsPlaceholderCard
+              title="设备"
+              primaryLabel="浏览器"
+              secondaryLabel="访客"
+              rightControl={
+                <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 text-xs">
+                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">浏览器</span>
+                  <span className="px-3 py-1 text-slate-500">操作系统</span>
+                  <span className="px-3 py-1 text-slate-500">设备</span>
+                </div>
+              }
+            />
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 text-white shadow-sm">
@@ -1868,12 +2027,15 @@ function DeploymentDashboardSection({
             <div className="text-xs uppercase tracking-[0.18em] text-slate-400">部署仪表盘</div>
             <div className="mt-2 text-2xl font-semibold">当前状态：{statusMeta.label}</div>
             <div className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-              这里集中展示 OneCEO 平台部署工作台的运行指标。当前以发布稳定性、域名状态和版本轨迹为主，访客类统计后续再补。
+              这里集中展示 OneCEO 平台部署工作台的运行指标。部署数据直接基于 Railway 部署历史生成，可用于查看版本、重部署与回退。
             </div>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-            <div className="text-[11px] uppercase tracking-[0.14em] text-slate-400">最近活动</div>
-            <div className="mt-2 text-sm font-medium text-white">{latestTimestamp}</div>
+          <div className="flex items-center gap-3 self-start lg:self-auto">
+            <DashboardModeToggle mode={mode} onChange={setMode} />
+            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <div className="text-[11px] uppercase tracking-[0.14em] text-slate-400">最近活动</div>
+              <div className="mt-2 text-sm font-medium text-white">{latestTimestamp}</div>
+            </div>
           </div>
         </div>
       </section>
@@ -1971,64 +2133,777 @@ function DeploymentDashboardSection({
 }
 
 function DeploymentDatabaseSection({
+  sessionId,
   info,
   statusMeta,
 }: {
+  sessionId?: string | null;
   info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
 }) {
+  const [databaseInfo, setDatabaseInfo] = useState<TaskCreationDatabaseInfo | null>(null);
+  const [rowsPage, setRowsPage] = useState<TaskCreationDatabaseRowsPage | null>(null);
+  const [databaseLoading, setDatabaseLoading] = useState(false);
+  const [rowsLoading, setRowsLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<"insert" | "update" | "delete" | null>(null);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [rowsError, setRowsError] = useState<string | null>(null);
+  const [activeTableId, setActiveTableId] = useState<string | null>(null);
+  const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">("record");
+  const [selectedRowLocator, setSelectedRowLocator] = useState<TaskCreationDatabaseRowLocator | null>(null);
+  const [selectedRowValues, setSelectedRowValues] = useState<Record<string, string>>({});
+  const [page, setPage] = useState(1);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const loadDatabase = async () => {
+      setDatabaseLoading(true);
+      setDatabaseError(null);
+      try {
+        const result = await getTaskCreationDatabaseInfo(sessionId);
+        if (cancelled) return;
+        setDatabaseInfo(result);
+        setActiveTableId((current) => current || result?.tables[0]?.id || null);
+      } catch (error) {
+        if (cancelled) return;
+        setDatabaseError(error instanceof Error ? error.message : "加载数据库信息失败");
+      } finally {
+        if (!cancelled) {
+          setDatabaseLoading(false);
+        }
+      }
+    };
+    void loadDatabase();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !activeTableId) return;
+    let cancelled = false;
+    const loadRows = async () => {
+      setRowsLoading(true);
+      setRowsError(null);
+      try {
+        const result = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+        if (cancelled) return;
+        setRowsPage(result);
+        if (!result?.rows.length) {
+          setSelectedRowLocator(null);
+          if (panelMode === "record") {
+            setPanelMode("insert");
+          }
+          return;
+        }
+        const currentRow = selectedRowLocator
+          ? result.rows.find((row) => matchRowLocator(row, selectedRowLocator, result.columns))
+          : null;
+        const nextRow = currentRow || result.rows[0];
+        const nextLocator = buildRowLocator(nextRow, result.columns);
+        setSelectedRowLocator(nextLocator);
+        if (panelMode === "record") {
+          setSelectedRowValues(buildEditorValues(result.columns, nextRow));
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setRowsError(error instanceof Error ? error.message : "加载数据表失败");
+      } finally {
+        if (!cancelled) {
+          setRowsLoading(false);
+        }
+      }
+    };
+    void loadRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, activeTableId, page]);
+
+  const activeTable =
+    databaseInfo?.tables.find((table) => table.id === activeTableId) || databaseInfo?.tables[0] || null;
+  const editorColumns = rowsPage?.columns || [];
+
+  const handleRefresh = async () => {
+    if (!sessionId) return;
+    setDatabaseLoading(true);
+    setRowsLoading(true);
+    setDatabaseError(null);
+    setRowsError(null);
+    try {
+      const [summary, rows] = await Promise.all([
+        getTaskCreationDatabaseInfo(sessionId),
+        activeTableId ? getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50) : Promise.resolve(null),
+      ]);
+      setDatabaseInfo(summary);
+      if (rows) setRowsPage(rows);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "刷新数据库失败";
+      setDatabaseError(message);
+      setRowsError(message);
+    } finally {
+      setDatabaseLoading(false);
+      setRowsLoading(false);
+    }
+  };
+
+  const handleSelectRow = (row: Record<string, unknown>) => {
+    if (!rowsPage) return;
+    const locator = buildRowLocator(row, rowsPage.columns);
+    setSelectedRowLocator(locator);
+    setSelectedRowValues(buildEditorValues(rowsPage.columns, row));
+    setPanelMode("record");
+  };
+
+  const handleCreateNew = () => {
+    if (!rowsPage) return;
+    setPanelMode("insert");
+    setSelectedRowLocator(null);
+    setSelectedRowValues(buildEditorValues(rowsPage.columns));
+  };
+
+  const handleCopy = async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(key);
+      window.setTimeout(() => setCopiedField((current) => (current === key ? null : current)), 1200);
+    } catch {
+      // ignore clipboard errors in preview panel
+    }
+  };
+
+  const handleSave = async () => {
+    if (!sessionId || !activeTableId || !rowsPage) return;
+    setActionLoading(panelMode === "insert" ? "insert" : "update");
+    setRowsError(null);
+    try {
+      if (panelMode === "insert") {
+        await insertTaskCreationDatabaseRow(
+          sessionId,
+          activeTableId,
+          buildMutationValues(rowsPage.columns, selectedRowValues)
+        );
+      } else {
+        await updateTaskCreationDatabaseRow(
+          sessionId,
+          activeTableId,
+          selectedRowLocator || {},
+          buildMutationValues(rowsPage.columns, selectedRowValues)
+        );
+      }
+      const refreshed = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+      setRowsPage(refreshed);
+      if (panelMode === "insert") {
+        setPanelMode("record");
+      }
+      if (refreshed?.rows.length) {
+        const targetRow = refreshed.rows[0];
+        setSelectedRowLocator(buildRowLocator(targetRow, refreshed.columns));
+        setSelectedRowValues(buildEditorValues(refreshed.columns, targetRow));
+      }
+    } catch (error) {
+      setRowsError(error instanceof Error ? error.message : "保存数据库记录失败");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!sessionId || !activeTableId || !selectedRowLocator || !rowsPage) return;
+    const confirmed = window.confirm("确认删除当前记录？此操作无法撤销。");
+    if (!confirmed) return;
+    setActionLoading("delete");
+    setRowsError(null);
+    try {
+      await deleteTaskCreationDatabaseRow(sessionId, activeTableId, selectedRowLocator);
+      const refreshed = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+      setRowsPage(refreshed);
+      if (refreshed?.rows.length) {
+        const targetRow = refreshed.rows[0];
+        setSelectedRowLocator(buildRowLocator(targetRow, refreshed.columns));
+        setSelectedRowValues(buildEditorValues(refreshed.columns, targetRow));
+        setPanelMode("record");
+      } else {
+        handleCreateNew();
+      }
+    } catch (error) {
+      setRowsError(error instanceof Error ? error.message : "删除数据库记录失败");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  if (!sessionId) {
+    return <EmptyState text="缺少会话信息，无法管理数据库" />;
+  }
+
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+    <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          数据库
-        </div>
-        <div className="grid gap-3 p-4 md:grid-cols-2">
-          <DeploymentMetricCard
-            title="数据库状态"
-            value="未开通"
-            subtitle="当前部署链路已具备应用发布能力，数据库服务仍需后续接入。"
-          />
-          <DeploymentMetricCard
-            title="推荐形态"
-            value="托管 PostgreSQL"
-            subtitle="后续建议以平台托管数据库方式接入，避免把外部连接细节暴露给最终用户。"
-          />
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-slate-900">当前部署工作台已经接入的能力</div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <DeploymentMiniStatus label="应用发布" value={statusMeta.label} />
-              <DeploymentMiniStatus
-                label="环境准备"
-                value={info?.configured ? "已完成" : "准备中"}
-              />
-              <DeploymentMiniStatus label="数据层" value="待接入" />
-            </div>
+        <div className="relative flex h-full flex-col">
+          <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200" />
+          <div className="flex-1 space-y-2 overflow-y-auto p-3">
+            {databaseLoading && !databaseInfo ? (
+              <div className="px-3 py-2 text-sm text-slate-500">正在准备数据库…</div>
+            ) : null}
+            {databaseInfo?.tables.map((table) => (
+              <button
+                key={table.id}
+                type="button"
+                onClick={() => {
+                  setActiveTableId(table.id);
+                  setPage(1);
+                  setPanelMode("record");
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                  activeTableId === table.id
+                    ? "bg-slate-100 text-slate-900"
+                    : "text-slate-700 hover:bg-slate-50"
+                )}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{table.name}</div>
+                </div>
+                <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">
+                  {table.sourceLabel}
+                </span>
+              </button>
+            ))}
+            {!databaseLoading && !databaseInfo?.tables.length ? (
+              <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
+                数据库已准备，但还没有业务表
+              </div>
+            ) : null}
+          </div>
+          <div className="border-t border-slate-200 p-3">
+            <Button
+              variant="outline"
+              className="w-full justify-center text-sm"
+              onClick={() => setPanelMode("settings")}
+            >
+              <TableProperties className="size-4" />
+              设置
+            </Button>
           </div>
         </div>
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          接入计划
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              {activeTable ? activeTable.name : "数据库"}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {activeTable ? `${activeTable.schema}.${activeTable.name}` : "等待选择数据表"}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="h-8 text-xs">
+              <TableProperties className="size-4" />
+              列 {rowsPage?.columns.length || 0}
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void handleRefresh()}>
+              <RefreshCw className="size-4" />
+              刷新
+            </Button>
+            <Button size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
+              <Plus className="size-4" />
+              新增记录
+            </Button>
+          </div>
         </div>
-        <div className="space-y-3 p-4">
-          <DeploymentPlaceholderCard
-            title="业务数据库"
-            description="为应用提供结构化数据存储、事务处理和持久化能力。"
-          />
-          <DeploymentPlaceholderCard
-            title="连接配置"
-            description="后续将支持由平台统一注入连接串与访问策略，用户侧无需感知底层提供商。"
-          />
-          <DeploymentPlaceholderCard
-            title="迁移与初始化"
-            description="后续可结合首发部署自动执行 schema 初始化与数据迁移。"
-          />
+
+        {databaseError ? <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div> : null}
+        {rowsError ? <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div> : null}
+
+        <div className="min-h-0">
+          {activeTable && rowsPage ? (
+            <>
+              <div className="max-h-[520px] overflow-auto">
+                <table className="min-w-full border-separate border-spacing-0 text-sm">
+                  <thead className="sticky top-0 z-10 bg-white">
+                    <tr>
+                      {rowsPage.columns.map((column) => (
+                        <th
+                          key={column.name}
+                          className="border-b border-slate-200 px-3 py-2 text-left font-medium text-slate-600"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span>{column.name}</span>
+                            {column.isPrimaryKey ? <KeyRound className="size-3.5 text-slate-400" /> : null}
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rowsLoading ? (
+                      <tr>
+                        <td colSpan={Math.max(rowsPage.columns.length, 1)} className="px-4 py-16 text-center text-slate-400">
+                          正在加载数据…
+                        </td>
+                      </tr>
+                    ) : rowsPage.rows.length ? (
+                      rowsPage.rows.map((row, index) => {
+                        const locator = buildRowLocator(row, rowsPage.columns);
+                        const active = selectedRowLocator
+                          ? matchRowLocator(row, selectedRowLocator, rowsPage.columns)
+                          : index === 0;
+                        return (
+                          <tr
+                            key={String(row._oneceo_ctid || index)}
+                            className={cn(
+                              "cursor-pointer transition-colors",
+                              active ? "bg-slate-50" : "hover:bg-slate-50/70"
+                            )}
+                            onClick={() => handleSelectRow(row)}
+                          >
+                            {rowsPage.columns.map((column) => (
+                              <td key={column.name} className="border-b border-slate-100 px-3 py-2 align-top text-slate-700">
+                                <div className="max-w-[220px] truncate">
+                                  {formatDatabaseCell(row[column.name])}
+                                </div>
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={Math.max(rowsPage.columns.length, 1)} className="px-4 py-16 text-center text-slate-400">
+                          当前数据表没有数据
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+                <div className="flex items-center gap-2">
+                  <span>{rowsPage.total} 行</span>
+                  <span className="size-1 rounded-full bg-slate-300" />
+                  <span>每页行数：{rowsPage.pageSize}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={rowsPage.page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    <ChevronLeft className="size-4" />
+                    上一页
+                  </Button>
+                  <span>
+                    第 {rowsPage.page} / {rowsPage.totalPages} 页
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={rowsPage.page >= rowsPage.totalPages}
+                    onClick={() => setPage((current) => current + 1)}
+                  >
+                    下一页
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="px-4 py-20 text-center text-sm text-slate-400">
+              {databaseLoading ? "正在连接数据库…" : "选择数据表后即可查看和修改数据"}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <div className="text-sm font-semibold text-slate-900">
+            {panelMode === "settings" ? "连接信息" : panelMode === "insert" ? "新增记录" : "记录详情"}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            {panelMode === "settings"
+              ? "可直接复制到 DBeaver、DataGrip、TablePlus 等数据库工具"
+              : activeTable
+                ? `${activeTable.schema}.${activeTable.name}`
+                : "等待选择数据表"}
+          </div>
+        </div>
+
+        <div className="space-y-4 p-4">
+          {panelMode === "settings" && databaseInfo ? (
+            <>
+              <div className="grid gap-3">
+                <ConnectionInfoField
+                  label="连接 URL"
+                  value={databaseInfo.connection.publicConnectionUrl || databaseInfo.connection.connectionUrl}
+                  copied={copiedField === "url"}
+                  onCopy={() =>
+                    void handleCopy(
+                      "url",
+                      databaseInfo.connection.publicConnectionUrl || databaseInfo.connection.connectionUrl
+                    )
+                  }
+                />
+                <ConnectionInfoField
+                  label="主机"
+                  value={databaseInfo.connection.host}
+                  copied={copiedField === "host"}
+                  onCopy={() => void handleCopy("host", databaseInfo.connection.host)}
+                />
+                <ConnectionInfoField
+                  label="端口"
+                  value={databaseInfo.connection.port}
+                  copied={copiedField === "port"}
+                  onCopy={() => void handleCopy("port", databaseInfo.connection.port)}
+                />
+                <ConnectionInfoField
+                  label="用户名"
+                  value={databaseInfo.connection.username}
+                  copied={copiedField === "username"}
+                  onCopy={() => void handleCopy("username", databaseInfo.connection.username)}
+                />
+                <ConnectionInfoField
+                  label="密码"
+                  value={databaseInfo.connection.password}
+                  copied={copiedField === "password"}
+                  onCopy={() => void handleCopy("password", databaseInfo.connection.password)}
+                  sensitive
+                />
+                <ConnectionInfoField
+                  label="数据库"
+                  value={databaseInfo.connection.database}
+                  copied={copiedField === "database"}
+                  onCopy={() => void handleCopy("database", databaseInfo.connection.database)}
+                />
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <DeploymentMiniStatus label="数据库状态" value={databaseInfo.latestDeploymentStatus || "UNKNOWN"} />
+                <DeploymentMiniStatus label="连接模式" value={databaseInfo.connection.sslMode.toUpperCase()} />
+                <DeploymentMiniStatus label="卷标识" value={databaseInfo.volumeName || "已挂载"} />
+                <DeploymentMiniStatus
+                  label="应用发布"
+                  value={info?.configured ? statusMeta.label : "部署准备中"}
+                />
+              </div>
+            </>
+          ) : rowsPage ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium text-slate-900">
+                  {panelMode === "insert" ? "准备写入新记录" : "当前选中记录"}
+                </div>
+                {panelMode !== "settings" ? (
+                  <div className="flex items-center gap-2">
+                    {panelMode === "record" ? (
+                      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
+                        <Plus className="size-4" />
+                        新建
+                      </Button>
+                    ) : null}
+                    {panelMode === "record" ? (
+                      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setPanelMode("record")}>
+                        <Pencil className="size-4" />
+                        编辑
+                      </Button>
+                    ) : null}
+                    {panelMode === "record" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs text-rose-600"
+                        onClick={() => void handleDelete()}
+                        disabled={actionLoading === "delete"}
+                      >
+                        <Trash2 className="size-4" />
+                        删除
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-3">
+                {editorColumns.map((column) => (
+                  <DatabaseFieldEditor
+                    key={column.name}
+                    column={column}
+                    value={selectedRowValues[column.name] || ""}
+                    disabled={panelMode === "record" ? column.isPrimaryKey : false}
+                    onChange={(nextValue) =>
+                      setSelectedRowValues((current) => ({
+                        ...current,
+                        [column.name]: nextValue,
+                      }))
+                    }
+                  />
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <Button size="sm" className="h-8 text-xs" disabled={Boolean(actionLoading)} onClick={() => void handleSave()}>
+                  {actionLoading === "insert" || actionLoading === "update" ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  {panelMode === "insert" ? "写入记录" : "保存修改"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setPanelMode("settings")}
+                >
+                  查看连接信息
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="py-10 text-center text-sm text-slate-400">
+              {databaseLoading ? "正在准备数据库面板…" : "等待数据库准备完成"}
+            </div>
+          )}
         </div>
       </section>
     </div>
   );
+}
+
+function DashboardModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: "deployments" | "site";
+  onChange: (mode: "deployments" | "site") => void;
+}) {
+  return (
+    <div className="relative z-10 flex rounded-xl border border-slate-200 bg-white/90 p-1 text-xs text-slate-500 shadow-sm">
+      <button
+        type="button"
+        onClick={() => onChange("deployments")}
+        className={cn(
+          "rounded-lg px-3 py-1.5 transition-colors",
+          mode === "deployments" ? "bg-slate-900 text-white" : "hover:text-slate-700"
+        )}
+      >
+        部署数据
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("site")}
+        className={cn(
+          "rounded-lg px-3 py-1.5 transition-colors",
+          mode === "site" ? "bg-slate-900 text-white" : "hover:text-slate-700"
+        )}
+      >
+        站点数据
+      </button>
+    </div>
+  );
+}
+
+function SiteMetricTab({
+  label,
+  value,
+  active = false,
+}: {
+  label: string;
+  value: string;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "bg-white px-4 py-4 text-left transition-colors",
+        active ? "bg-slate-50" : "hover:bg-slate-50"
+      )}
+    >
+      <div className="text-[11px] uppercase tracking-[0.06em] text-slate-400">{label}</div>
+      <div className="mt-2 text-base font-semibold text-slate-900">{value}</div>
+    </button>
+  );
+}
+
+function AnalyticsPlaceholderCard({
+  title,
+  primaryLabel,
+  secondaryLabel,
+  rightControl,
+}: {
+  title: string;
+  primaryLabel: string;
+  secondaryLabel: string;
+  rightControl?: ReactNode;
+}) {
+  return (
+    <section className="flex h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm text-slate-600">{title}</div>
+        {rightControl}
+      </div>
+      <div className="mt-4 grid grid-cols-[1fr_auto] text-[11px] uppercase tracking-[0.04em] text-slate-400">
+        <span>{primaryLabel}</span>
+        <span className="text-right">{secondaryLabel}</span>
+      </div>
+      <div className="flex flex-1 items-center justify-center text-sm text-slate-400">没有数据</div>
+    </section>
+  );
+}
+
+function ConnectionInfoField({
+  label,
+  value,
+  copied,
+  onCopy,
+  sensitive = false,
+}: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+  sensitive?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs uppercase tracking-[0.08em] text-slate-500">{label}</div>
+        <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={onCopy}>
+          <Copy className="size-3.5" />
+          {copied ? "已复制" : "复制"}
+        </Button>
+      </div>
+      <div className="mt-2 break-all font-mono text-xs text-slate-700">
+        {sensitive ? value : value}
+      </div>
+    </div>
+  );
+}
+
+function DatabaseFieldEditor({
+  column,
+  value,
+  disabled,
+  onChange,
+}: {
+  column: TaskCreationDatabaseColumn;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const isLong =
+    column.dataType.includes("json") ||
+    column.dataType.includes("text") ||
+    column.dataType.includes("timestamp");
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <span className="font-medium text-slate-700">{column.name}</span>
+        <span>{column.dataType}</span>
+        {column.isPrimaryKey ? <KeyRound className="size-3.5" /> : null}
+      </div>
+      {isLong ? (
+        <Textarea
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          className="min-h-[88px] rounded-xl border-slate-200 bg-white text-xs"
+          placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
+        />
+      ) : (
+        <Input
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-9 rounded-xl border-slate-200 bg-white text-xs"
+          placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatDatabaseCell(value: unknown) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[object]";
+    }
+  }
+  return String(value);
+}
+
+function buildRowLocator(
+  row: Record<string, unknown>,
+  columns: TaskCreationDatabaseColumn[]
+): TaskCreationDatabaseRowLocator {
+  const primaryKeys = columns.filter((column) => column.isPrimaryKey);
+  if (primaryKeys.length) {
+    return {
+      primaryKey: Object.fromEntries(primaryKeys.map((column) => [column.name, row[column.name]])),
+    };
+  }
+  return {
+    ctid: typeof row._oneceo_ctid === "string" ? row._oneceo_ctid : undefined,
+  };
+}
+
+function matchRowLocator(
+  row: Record<string, unknown>,
+  locator: TaskCreationDatabaseRowLocator,
+  columns: TaskCreationDatabaseColumn[]
+) {
+  if (locator.ctid) {
+    return row._oneceo_ctid === locator.ctid;
+  }
+  const primaryKey = locator.primaryKey || {};
+  return columns
+    .filter((column) => column.isPrimaryKey)
+    .every((column) => String(row[column.name] ?? "") === String(primaryKey[column.name] ?? ""));
+}
+
+function buildEditorValues(
+  columns: TaskCreationDatabaseColumn[],
+  row?: Record<string, unknown>
+) {
+  return Object.fromEntries(
+    columns.map((column) => [
+      column.name,
+      row && row[column.name] !== undefined && row[column.name] !== null
+        ? typeof row[column.name] === "object"
+          ? JSON.stringify(row[column.name], null, 2)
+          : String(row[column.name])
+        : "",
+    ])
+  );
+}
+
+function buildMutationValues(
+  columns: TaskCreationDatabaseColumn[],
+  values: Record<string, string>
+) {
+  const result: Record<string, unknown> = {};
+  columns.forEach((column) => {
+    if (!(column.name in values)) return;
+    const raw = values[column.name];
+    if (!raw.trim()) {
+      if (!column.isPrimaryKey) {
+        result[column.name] = null;
+      }
+      return;
+    }
+    result[column.name] = raw;
+  });
+  return result;
 }
 
 function DeploymentStorageSection({
@@ -2047,13 +2922,13 @@ function DeploymentStorageSection({
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <DeploymentMetricCard
             title="存储状态"
-            value="未启用"
-            subtitle="当前静态资源仍跟随应用代码发布，用户上传与媒体文件存储尚未开通。"
+            value="保留入口"
+            subtitle="当前版本按文档约束保留前端位置，不进入真实后端能力开发。"
           />
           <DeploymentMetricCard
             title="推荐用途"
             value="用户上传 / 媒体资源"
-            subtitle="适合图片、附件、导出文件和大体积静态资源。"
+            subtitle="后续适合图片、附件、导出文件和大体积静态资源。"
           />
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
             <div className="text-sm font-semibold text-slate-900">当前可见状态</div>
@@ -2063,7 +2938,7 @@ function DeploymentStorageSection({
                 label="默认域名"
                 value={info?.domains.length ? "已生成" : "待发布"}
               />
-              <DeploymentMiniStatus label="对象存储" value="待接入" />
+              <DeploymentMiniStatus label="对象存储" value="后续规划" />
             </div>
           </div>
         </div>

@@ -219,6 +219,24 @@
     - 清理历史失败 deployment 在 UI 中的展示策略；
     - 为首次 deploy 增加更明确的“正在等待 Railway 自动部署”状态提示。
 
+## 2026-03-10 部署工作台数据库与仪表盘实现
+
+- 做了什么：
+  - 在 `apps/api/src/services/platform-deployment-account-service.ts` 中扩展平台部署账号配置，新增 PostgreSQL 服务/卷元数据，并增加 `ensureDatabaseResources(userId)`。
+  - 通过 Railway 官方 `postgres` 模板完成用户级数据库资源准备，自动拿到 `DATABASE_PUBLIC_URL / PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE`，并把 `DATABASE_URL` 等变量回填到应用服务。
+  - 新增 `apps/api/src/services/railway-database-service.ts`，接入真实 Railway Postgres 的表列表、连接信息、分页读表、插入、更新、删除。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 增加 `/deployment/database` 和 `/deployment/database/rows` 系列接口。
+  - 在 `apps/web/client/src/components/OpencodePreviewPanel.tsx` 实现仪表盘 `部署数据 / 站点数据` 右上切换，并把数据库页改成左侧表导航 + 中间数据表 + 右侧记录/连接信息面板的真实控制台。
+  - 新增 `apps/web/e2e/deployment-workbench-e2e.mjs`，覆盖部署工作台页面级验证。
+  - 清理了为探查 Railway schema 临时创建的 `dbprobe` 服务，避免在用户项目里遗留无效资源。
+- 遇到什么：
+  - Railway 项目级 token 对数据库变量查询权限不足，导致首版数据库总览返回 `Not Authorized`；后续改为平台管理 token 查询数据库元信息。
+  - 数据库更新接口首版存在 SQL 占位符偏移错误，`SET` 参数和主键定位参数混用时会出现 prepared statement 绑参数量不匹配。
+  - Playwright 页面脚本初版因为数据库页和仪表盘里有重复文本节点，出现 strict locator 冲突；后续改成更精确 locator 并补充强制点击。
+- 计划如何解决：
+  - 当前数据库页已经具备连接信息展示、表浏览和行级 CRUD。
+  - 下一步如果继续扩展数据库能力，可在现有 `railway-database-service.ts` 上补 DDL、索引/约束查看、备份恢复和审计日志。
+
 ## 2026-03-10 部署面板体验增强
 
 - 做了什么：

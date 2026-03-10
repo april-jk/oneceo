@@ -32,6 +32,10 @@ type DeploymentConfig = {
   githubRepoFullName?: string;
   githubRepoUrl?: string;
   githubDefaultBranch?: string;
+  databaseServiceId?: string;
+  databaseServiceName?: string;
+  databaseVolumeId?: string;
+  databaseVolumeName?: string;
 };
 
 type DeploymentAccountRow = {
@@ -55,6 +59,10 @@ export type UserPlatformDeploymentAccount = {
   githubRepoFullName?: string;
   githubRepoUrl?: string;
   githubDefaultBranch?: string;
+  databaseServiceId?: string;
+  databaseServiceName?: string;
+  databaseVolumeId?: string;
+  databaseVolumeName?: string;
 };
 
 function asText(value: unknown): string {
@@ -105,6 +113,10 @@ function buildServiceName() {
   return asText(process.env.RAILWAY_DEPLOYMENT_SERVICE_NAME) || 'app';
 }
 
+function buildDatabaseServiceName() {
+  return asText(process.env.RAILWAY_DATABASE_SERVICE_NAME) || 'Postgres';
+}
+
 function toDeploymentConfig(value: unknown): DeploymentConfig {
   const record = pickRecord(value);
   return {
@@ -123,6 +135,10 @@ function toDeploymentConfig(value: unknown): DeploymentConfig {
     githubRepoFullName: asText(record.githubRepoFullName) || undefined,
     githubRepoUrl: asText(record.githubRepoUrl) || undefined,
     githubDefaultBranch: asText(record.githubDefaultBranch) || undefined,
+    databaseServiceId: asText(record.databaseServiceId) || undefined,
+    databaseServiceName: asText(record.databaseServiceName) || undefined,
+    databaseVolumeId: asText(record.databaseVolumeId) || undefined,
+    databaseVolumeName: asText(record.databaseVolumeName) || undefined,
   };
 }
 
@@ -629,6 +645,214 @@ async function createProjectToken(
   };
 }
 
+async function getProjectService(adminToken: string, projectId: string, serviceName: string) {
+  const result = await executeRailwayGraphql<{
+    project?: {
+      services?: {
+        edges?: Array<{
+          node?: {
+            id?: string;
+            name?: string;
+          };
+        }>;
+      };
+    } | null;
+  }>(
+    adminToken,
+    `
+      query FindProjectServiceByName($projectId: String!) {
+        project(id: $projectId) {
+          services {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    `,
+    {
+      projectId,
+    }
+  );
+
+  return (
+    result.project?.services?.edges
+      ?.map((edge) => ({
+        id: asText(edge?.node?.id),
+        name: asText(edge?.node?.name),
+      }))
+      .find((item) => item.id && item.name === serviceName) || null
+  );
+}
+
+async function getPostgresTemplate(adminToken: string) {
+  const result = await executeRailwayGraphql<{
+    template?: {
+      id?: string;
+      serializedConfig?: unknown;
+    } | null;
+  }>(
+    adminToken,
+    `
+      query GetPostgresTemplate {
+        template(code: "postgres") {
+          id
+          serializedConfig
+        }
+      }
+    `
+  );
+
+  const templateId = asText(result.template?.id);
+  if (!templateId || !result.template?.serializedConfig) {
+    throw new Error('获取 Railway Postgres 模板失败');
+  }
+  return {
+    templateId,
+    serializedConfig: result.template.serializedConfig,
+  };
+}
+
+async function deployPostgresTemplate(
+  adminToken: string,
+  projectId: string,
+  environmentId: string
+) {
+  const template = await getPostgresTemplate(adminToken);
+  await executeRailwayGraphql<{
+    templateDeployV2?: {
+      workflowId?: string;
+    } | null;
+  }>(
+    adminToken,
+    `
+      mutation DeployPostgresTemplate($input: TemplateDeployV2Input!) {
+        templateDeployV2(input: $input) {
+          workflowId
+        }
+      }
+    `,
+    {
+      input: {
+        templateId: template.templateId,
+        projectId,
+        environmentId,
+        serializedConfig: template.serializedConfig,
+      },
+    }
+  );
+}
+
+async function getServiceVariables(
+  token: string,
+  projectId: string,
+  environmentId: string,
+  serviceId: string
+) {
+  const result = await executeRailwayGraphql<{
+    variables?: Record<string, unknown> | null;
+  }>(
+    token,
+    `
+      query GetServiceVariables(
+        $projectId: String!,
+        $environmentId: String!,
+        $serviceId: String!
+      ) {
+        variables(
+          projectId: $projectId,
+          environmentId: $environmentId,
+          serviceId: $serviceId
+        )
+      }
+    `,
+    {
+      projectId,
+      environmentId,
+      serviceId,
+    }
+  );
+
+  return pickRecord(result.variables);
+}
+
+async function waitForDatabaseService(
+  adminToken: string,
+  projectId: string,
+  environmentId: string
+) {
+  const databaseServiceName = buildDatabaseServiceName();
+  const deadline = Date.now() + 120_000;
+  let lastServiceId = '';
+
+  while (Date.now() < deadline) {
+    const service = await getProjectService(adminToken, projectId, databaseServiceName);
+    if (service?.id) {
+      lastServiceId = service.id;
+      const variables = await getServiceVariables(adminToken, projectId, environmentId, service.id);
+      const publicUrl = asText(variables.DATABASE_PUBLIC_URL);
+      if (publicUrl) {
+        return {
+          serviceId: service.id,
+          serviceName: service.name || databaseServiceName,
+          variables,
+        };
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+  }
+
+  if (lastServiceId) {
+    const variables = await getServiceVariables(adminToken, projectId, environmentId, lastServiceId);
+    return {
+      serviceId: lastServiceId,
+      serviceName: databaseServiceName,
+      variables,
+    };
+  }
+
+  throw new Error('等待 PostgreSQL 服务准备超时');
+}
+
+async function wireApplicationDatabaseVariables(
+  adminToken: string,
+  projectId: string,
+  environmentId: string,
+  applicationServiceId: string,
+  databaseServiceName: string
+) {
+  const reference = (name: string) => `\${{${databaseServiceName}.${name}}}`;
+  await executeRailwayGraphql(
+    adminToken,
+    `
+      mutation AttachDatabaseVariables($input: VariableCollectionUpsertInput!) {
+        variableCollectionUpsert(input: $input)
+      }
+    `,
+    {
+      input: {
+        projectId,
+        environmentId,
+        serviceId: applicationServiceId,
+        skipDeploys: true,
+        replace: false,
+        variables: {
+          DATABASE_URL: reference('DATABASE_URL'),
+          DATABASE_PUBLIC_URL: reference('DATABASE_PUBLIC_URL'),
+          PGHOST: reference('PGHOST'),
+          PGPORT: reference('PGPORT'),
+          PGUSER: reference('PGUSER'),
+          PGPASSWORD: reference('PGPASSWORD'),
+          PGDATABASE: reference('PGDATABASE'),
+        },
+      },
+    }
+  );
+}
+
 function buildConfigFromState(input: {
   current?: DeploymentConfig;
   projectId: string;
@@ -640,6 +864,10 @@ function buildConfigFromState(input: {
   repo: ManagedDeploymentRepository;
   tokenId?: string;
   createdAt?: string;
+  databaseServiceId?: string;
+  databaseServiceName?: string;
+  databaseVolumeId?: string;
+  databaseVolumeName?: string;
 }): DeploymentConfig {
   return {
     provider: 'platform_managed',
@@ -657,6 +885,10 @@ function buildConfigFromState(input: {
     githubRepoFullName: input.repo.fullName,
     githubRepoUrl: input.repo.htmlUrl,
     githubDefaultBranch: input.repo.defaultBranch,
+    databaseServiceId: input.databaseServiceId || input.current?.databaseServiceId,
+    databaseServiceName: input.databaseServiceName || input.current?.databaseServiceName,
+    databaseVolumeId: input.databaseVolumeId || input.current?.databaseVolumeId,
+    databaseVolumeName: input.databaseVolumeName || input.current?.databaseVolumeName,
   };
 }
 
@@ -685,6 +917,10 @@ function toAccount(row: DeploymentAccountRow | null): UserPlatformDeploymentAcco
     githubRepoFullName: config.githubRepoFullName,
     githubRepoUrl: config.githubRepoUrl,
     githubDefaultBranch: config.githubDefaultBranch,
+    databaseServiceId: config.databaseServiceId,
+    databaseServiceName: config.databaseServiceName,
+    databaseVolumeId: config.databaseVolumeId,
+    databaseVolumeName: config.databaseVolumeName,
   };
 }
 
@@ -748,6 +984,71 @@ export class PlatformDeploymentAccountService {
     });
     this.inflight.set(normalizedUserId, pending);
     return pending;
+  }
+
+  async ensureDatabaseResources(userId: string): Promise<UserPlatformDeploymentAccount> {
+    const account = await this.ensureUserAccount(userId);
+    if (account.databaseServiceId) {
+      return account;
+    }
+
+    const row = await this.getAccountRow(userId);
+    if (!row) {
+      throw new Error('平台部署账号不存在');
+    }
+
+    const config = toDeploymentConfig(row.configJson);
+    const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+    const existingDatabaseService = await getProjectService(
+      adminToken,
+      account.projectId,
+      config.databaseServiceName || buildDatabaseServiceName()
+    );
+    if (!existingDatabaseService?.id) {
+      await deployPostgresTemplate(adminToken, account.projectId, account.environmentId);
+    }
+
+    const database = await waitForDatabaseService(adminToken, account.projectId, account.environmentId);
+    const variables = database.variables;
+    await wireApplicationDatabaseVariables(
+      adminToken,
+      account.projectId,
+      account.environmentId,
+      account.serviceId,
+      database.serviceName
+    );
+
+    await this.persistAccountRow(
+      userId,
+      buildConfigFromState({
+        current: config,
+        projectId: account.projectId,
+        projectName: account.projectName,
+        environmentId: account.environmentId,
+        environmentName: account.environmentName,
+        serviceId: account.serviceId,
+        serviceName: account.serviceName,
+        repo: {
+          owner: account.githubRepoOwner || '',
+          name: account.githubRepoName || '',
+          fullName: account.githubRepoFullName || '',
+          htmlUrl: account.githubRepoUrl || '',
+          defaultBranch: account.githubDefaultBranch || 'main',
+        },
+        tokenId: account.tokenId,
+        databaseServiceId: database.serviceId,
+        databaseServiceName: database.serviceName,
+        databaseVolumeId: asText(variables.RAILWAY_VOLUME_ID) || undefined,
+        databaseVolumeName: asText(variables.RAILWAY_VOLUME_NAME) || undefined,
+      }),
+      row.secretCiphertext
+    );
+
+    const updatedAccount = await this.getUserAccount(userId);
+    if (!updatedAccount?.databaseServiceId) {
+      throw new Error('平台数据库资源写入失败');
+    }
+    return updatedAccount;
   }
 
   private async repairExistingAccount(

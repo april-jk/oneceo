@@ -689,7 +689,7 @@ export default function OpencodePreviewPanel({
   return (
     <aside
       className={cn(
-        "w-full h-full shrink-0 border border-border/70 rounded-2xl bg-gradient-to-b from-white via-white to-slate-50 shadow-sm flex flex-col min-h-0",
+        "w-full h-full shrink-0 rounded-xl border border-border/70 bg-white flex flex-col min-h-0",
         className
       )}
     >
@@ -1568,7 +1568,7 @@ function DeploymentOverviewSection({
 }) {
   return (
     <>
-      <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white p-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-600">
@@ -1642,7 +1642,7 @@ function DeploymentOverviewSection({
           />
         </div>
 
-        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="mt-4 rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
@@ -1691,7 +1691,7 @@ function DeploymentOverviewSection({
                 href={value}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-3 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                className="rounded-md border border-slate-200/80 bg-slate-50/40 px-3 py-3 transition-colors hover:border-slate-300 hover:bg-slate-50"
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -1709,7 +1709,7 @@ function DeploymentOverviewSection({
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <section className="rounded-lg border border-slate-200/80 bg-white">
           <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
               <History className="size-4 text-slate-500" />
@@ -1736,7 +1736,7 @@ function DeploymentOverviewSection({
                       type="button"
                       onClick={() => onSelectDeployment(item.id)}
                       className={cn(
-                        "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                        "w-full rounded-md border px-3 py-3 text-left transition-colors",
                         itemSelected ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:bg-slate-50"
                       )}
                     >
@@ -1761,13 +1761,13 @@ function DeploymentOverviewSection({
                 })}
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+              <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
                 暂无发布记录
               </div>
             )}
 
             {currentDeployment ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
@@ -1807,7 +1807,7 @@ function DeploymentOverviewSection({
         </section>
 
         <div className="space-y-4">
-          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <section className="rounded-lg border border-slate-200/80 bg-white">
             <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
               <Server className="size-4 text-slate-500" />
               资源状态
@@ -1829,7 +1829,7 @@ function DeploymentOverviewSection({
                 title="环境"
                 value={info?.environmentName || info?.environmentId || "未配置"}
               />
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <div className="rounded-md border border-slate-200/80 bg-slate-50/40 p-3">
                 <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
                   <ShieldCheck className="size-4 text-slate-500" />
                   部署准备情况
@@ -1845,7 +1845,7 @@ function DeploymentOverviewSection({
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
             <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
               <ScrollText className="size-4 text-slate-500" />
               发布日志
@@ -1898,11 +1898,11 @@ function DeploymentDashboardSection({
     const primaryUrl = accessEntries[0]?.[1] || "";
     return (
       <div className="space-y-4">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-lg border border-slate-200/80 bg-white p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-3">
-                <div className="flex size-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 text-slate-700">
+                <div className="flex size-10 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-700">
                   <Globe2 className="size-4" />
                 </div>
                 <div className="min-w-0">
@@ -1941,7 +1941,7 @@ function DeploymentDashboardSection({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="rounded-lg border border-slate-200/80 bg-white p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
@@ -1962,22 +1962,22 @@ function DeploymentDashboardSection({
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <h3 className="text-base font-medium text-slate-900">分析</h3>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
                 <CalendarDays className="size-4" />
                 过去 24 小时
               </Button>
-              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
                 <Filter className="size-4" />
                 筛选器
               </Button>
-              <Button variant="outline" size="sm" className="h-9 rounded-xl text-xs">
+              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
                 <RefreshCw className="size-4" />
                 刷新
               </Button>
             </div>
           </div>
 
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
             <div className="grid gap-px border-b border-slate-200 bg-slate-200 sm:grid-cols-5">
               <SiteMetricTab label="页面浏览量" value="0" active />
               <SiteMetricTab label="访问量" value="0" />
@@ -2024,7 +2024,7 @@ function DeploymentDashboardSection({
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 p-4 sm:p-5">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2079,13 +2079,13 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
           <div className="text-sm font-semibold text-slate-900">当前线上版本</div>
           <div className="mt-1 text-xs text-slate-500">先看当前可访问版本，再决定是否继续发布、验证或回退。</div>
         </div>
         <div className="space-y-4 p-4 sm:p-5">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">版本说明</div>
@@ -2118,7 +2118,7 @@ function DeploymentDashboardSection({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="rounded-md border border-slate-200/80 p-4">
               <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">访问入口</div>
               <div className="mt-3 space-y-2">
                 {accessEntries.length ? (
@@ -2128,21 +2128,21 @@ function DeploymentDashboardSection({
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                      className="flex items-center justify-between gap-3 rounded-md border border-slate-200/80 bg-slate-50/60 px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
                     >
                       <span className="truncate">{label}</span>
                       <ExternalLink className="size-4 shrink-0 text-slate-400" />
                     </a>
                   ))
                 ) : (
-                  <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-sm text-slate-400">
+                  <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-sm text-slate-400">
                     暂无可访问入口
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="rounded-md border border-slate-200/80 p-4">
               <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">发布概览</div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <DashboardMiniStat label="成功版本" value={`${successCount}`} />
@@ -2155,7 +2155,7 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
           <div className="text-sm font-semibold text-slate-900">操作判断</div>
           <div className="mt-1 text-xs text-slate-500">把最重要的部署判断压缩成简短结论，减少在侧栏里反复找信息。</div>
@@ -2192,7 +2192,7 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="text-sm font-semibold text-slate-900">最近版本轨迹</div>
@@ -2222,7 +2222,7 @@ function DeploymentDashboardSection({
                       )}
                     />
                   </div>
-                  <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="flex flex-col gap-2 rounded-md border border-slate-200/80 bg-slate-50/60 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-slate-900">
                         {item.commitMessage || "由 OneCEO 触发的版本发布"}
@@ -2243,7 +2243,7 @@ function DeploymentDashboardSection({
               ))}
             </div>
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+            <div className="rounded-md border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
               暂无版本轨迹
             </div>
           )}
@@ -2462,7 +2462,7 @@ function DeploymentDatabaseSection({
 
   return (
     <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="relative flex h-full flex-col">
           <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200" />
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
@@ -2494,7 +2494,7 @@ function DeploymentDatabaseSection({
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
-              <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
+              <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
                 数据库已准备，但还没有业务表
               </div>
             ) : null}
@@ -2512,7 +2512,7 @@ function DeploymentDatabaseSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div>
             <div className="text-sm font-semibold text-slate-900">
@@ -2644,7 +2644,7 @@ function DeploymentDatabaseSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
           <div className="text-sm font-semibold text-slate-900">
             {panelMode === "settings" ? "连接信息" : panelMode === "insert" ? "新增记录" : "记录详情"}
@@ -2805,13 +2805,13 @@ function DashboardModeToggle({
   onChange: (mode: "deployments" | "site") => void;
 }) {
   return (
-    <div className="relative z-10 flex rounded-xl border border-slate-200 bg-white/90 p-1 text-xs text-slate-500 shadow-sm">
+    <div className="relative z-10 flex rounded-md border border-slate-200/80 bg-slate-50 p-1 text-xs text-slate-500">
       <button
         type="button"
         onClick={() => onChange("deployments")}
         className={cn(
-          "rounded-lg px-3 py-1.5 transition-colors",
-          mode === "deployments" ? "bg-slate-900 text-white" : "hover:text-slate-700"
+          "rounded-md px-3 py-1.5 transition-colors",
+          mode === "deployments" ? "bg-white text-slate-900 shadow-sm" : "hover:text-slate-700"
         )}
       >
         部署数据
@@ -2820,8 +2820,8 @@ function DashboardModeToggle({
         type="button"
         onClick={() => onChange("site")}
         className={cn(
-          "rounded-lg px-3 py-1.5 transition-colors",
-          mode === "site" ? "bg-slate-900 text-white" : "hover:text-slate-700"
+          "rounded-md px-3 py-1.5 transition-colors",
+          mode === "site" ? "bg-white text-slate-900 shadow-sm" : "hover:text-slate-700"
         )}
       >
         站点数据
@@ -2865,7 +2865,7 @@ function AnalyticsPlaceholderCard({
   rightControl?: ReactNode;
 }) {
   return (
-    <section className="flex h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="flex h-[320px] flex-col rounded-lg border border-slate-200/80 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-slate-600">{title}</div>
         {rightControl}
@@ -2909,7 +2909,7 @@ function DashboardMiniStat({
   return (
     <div
       className={cn(
-        "rounded-xl border px-3 py-3",
+        "rounded-md border px-3 py-3",
         subtle ? "border-slate-100 bg-slate-50/80" : "border-slate-200 bg-white"
       )}
     >
@@ -2934,7 +2934,7 @@ function InsightCard({
   description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
       <div className="text-sm font-medium text-slate-900">{title}</div>
       <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
     </div>
@@ -2955,7 +2955,7 @@ function ConnectionInfoField({
   sensitive?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs uppercase tracking-[0.08em] text-slate-500">{label}</div>
         <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={onCopy}>
@@ -2997,7 +2997,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="min-h-[88px] rounded-xl border-slate-200 bg-white text-xs"
+          className="min-h-[88px] rounded-md border-slate-200 bg-white text-xs"
           placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
         />
       ) : (
@@ -3005,7 +3005,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="h-9 rounded-xl border-slate-200 bg-white text-xs"
+          className="h-9 rounded-md border-slate-200 bg-white text-xs"
           placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
         />
       )}
@@ -3098,7 +3098,7 @@ function DeploymentStorageSection({
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
           存储桶
         </div>
@@ -3113,7 +3113,7 @@ function DeploymentStorageSection({
             value="用户上传 / 媒体资源"
             subtitle="后续适合图片、附件、导出文件和大体积静态资源。"
           />
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
+          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4 md:col-span-2">
             <div className="text-sm font-semibold text-slate-900">当前可见状态</div>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
               <DeploymentMiniStatus label="应用访问" value={statusMeta.label} />
@@ -3127,7 +3127,7 @@ function DeploymentStorageSection({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
           场景规划
         </div>
@@ -3169,7 +3169,7 @@ function DeploymentSettingsSectionPanel({
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
           设置
         </div>
@@ -3212,7 +3212,7 @@ function DeploymentSettingsSectionPanel({
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
           {settingsSection === "general" ? "通用" : null}
           {settingsSection === "domain" ? "域名" : null}
@@ -3415,10 +3415,10 @@ function DeploymentMenuButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
+        "inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
         active
-          ? "border-slate-900 bg-slate-900 text-white"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          ? "border-slate-200 bg-slate-100 text-slate-900"
+          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50"
       )}
     >
       <Icon className="size-3.5" />
@@ -3441,10 +3441,10 @@ function DeploymentSettingsButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-xl border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
+        "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
         active
-          ? "border-slate-900 bg-slate-900 text-white"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          ? "border-slate-200 bg-slate-100 text-slate-900"
+          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50"
       )}
     >
       {label}
@@ -3464,7 +3464,7 @@ function DeploymentMetricCard({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-xl border border-slate-200 bg-white/90 p-3", className)}>
+    <div className={cn("rounded-md border border-slate-200/80 bg-slate-50/40 p-3", className)}>
       <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
       <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
       {subtitle ? <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div> : null}
@@ -3484,7 +3484,7 @@ function DeploymentInfoCard({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
       <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
       <div className={cn("mt-2 text-sm font-medium text-slate-900 break-all", mono ? "font-mono text-[12px]" : "")}>
         {value}
@@ -3496,7 +3496,7 @@ function DeploymentInfoCard({
 
 function DeploymentMiniStatus({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+    <div className="rounded-md border border-slate-200/80 bg-slate-50/30 px-3 py-3">
       <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
       <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
     </div>
@@ -3511,7 +3511,7 @@ function DeploymentPlaceholderCard({
   description: string;
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-4">
+    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/40 p-4">
       <div className="text-sm font-semibold text-slate-900">{title}</div>
       <div className="mt-1 text-sm leading-6 text-slate-600">{description}</div>
     </div>

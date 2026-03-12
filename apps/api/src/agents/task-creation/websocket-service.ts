@@ -14,6 +14,8 @@ import { randomUUID } from 'crypto';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { taskCreationSessionDAO } from '../../db/dao';
+import { directModeEntryService } from '../../services/direct-mode-entry-service';
+import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
 
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
@@ -630,6 +632,82 @@ export class TaskCreationWebSocketService {
           });
         } catch (error) {
           console.warn('[OPENCODE_INPUT_MESSAGE_DB_FAILED]', error);
+        }
+      }
+
+      const entryDecision = await directModeEntryService.decide({
+        content: message.content || '',
+      });
+      if (entryDecision.action === 'platform_capability') {
+        const capabilityLabel = directModeEntryService.getCapabilityDisplayName(entryDecision);
+        this.sendToClient(clientId, {
+          type: 'status_update' as any,
+          sessionId: taskSessionId,
+          content: `已识别为${capabilityLabel}请求，正在调用平台服务...`,
+          tone: 'system' as any,
+          metadata: {
+            directModeIntercepted: true,
+            capabilityId: entryDecision.capabilityId,
+            decisionReason: entryDecision.reason,
+            interceptSource: entryDecision.source,
+            executionMode: 'direct_platform_capability',
+          },
+        });
+
+        try {
+          const capabilityResult = await directModeEntryService.execute(entryDecision, {
+            taskSessionId,
+            content: message.content || '',
+            orchestratorSessionId: orchestratorSessionId || undefined,
+            workspacePath: workspacePath || undefined,
+          });
+
+          this.sendToClient(clientId, {
+            type: 'agent_message' as any,
+            agent: 'system',
+            sessionId: taskSessionId,
+            content: capabilityResult.message,
+            tone: 'system' as any,
+            metadata: {
+              ...(capabilityResult.metadata || {}),
+              directModeIntercepted: true,
+              capabilityId: capabilityResult.capabilityId,
+              decisionReason: entryDecision.reason,
+              interceptSource: entryDecision.source,
+              executionMode: 'direct_platform_capability',
+            },
+          });
+
+          this.sendToClient(clientId, {
+            type: 'status_update' as any,
+            sessionId: taskSessionId,
+            content: `${capabilityLabel}已完成`,
+            tone: 'system' as any,
+            metadata: {
+              directModeIntercepted: true,
+              capabilityId: capabilityResult.capabilityId,
+              outcome: 'completed',
+              executionMode: 'direct_platform_capability',
+            },
+          });
+          return;
+        } catch (error) {
+          const errorMessage = getPublicErrorMessage(getDirectModeDeploymentErrorMessage(error));
+          this.sendToClient(clientId, {
+            type: 'status_update' as any,
+            sessionId: taskSessionId,
+            content: errorMessage,
+            tone: 'error' as any,
+            metadata: {
+              directModeIntercepted: true,
+              capabilityId: entryDecision.capabilityId,
+              outcome: 'failed',
+              decisionReason: entryDecision.reason,
+              interceptSource: entryDecision.source,
+              executionMode: 'direct_platform_capability',
+            },
+          });
+          return;
         }
       }
 

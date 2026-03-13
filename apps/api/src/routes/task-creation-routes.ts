@@ -388,9 +388,15 @@ async function buildSessionSummaryFromDb(limit: number) {
   const sessions = await taskCreationSessionDAO.getRecentSessions(limit);
   const result: any[] = [];
   for (const session of sessions) {
-    const description = await taskCreationSessionDAO.getTaskDescription(session.id);
+    const [description, messages] = await Promise.all([
+      taskCreationSessionDAO.getTaskDescription(session.id),
+      taskCreationSessionDAO.getMessages(session.id),
+    ]);
+    const firstUserMessage =
+      messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
     const title =
       description?.title ||
+      String(firstUserMessage).trim().slice(0, 80) ||
       `任务会话 ${String(session.id).slice(-6)}`;
     result.push({
       id: session.id,

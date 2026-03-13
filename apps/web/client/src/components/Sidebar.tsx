@@ -68,6 +68,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
     sessionId: string;
     title: string;
     status: string;
+    updatedAt?: string;
   }>>([]);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
@@ -85,11 +86,28 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       try {
         const list = await listTaskCreationSessions('all');
         if (disposed) return;
-        const mapped = list.map((session: any) => ({
-          sessionId: session.id,
-          title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
-          status: session.status || "in_progress",
-        }));
+        const mapped = list
+          .map((session: any, index: number) => ({
+            sessionId: session.id,
+            title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+            status: session.status || "in_progress",
+            updatedAt:
+              typeof session.updatedAt === "string" && session.updatedAt.trim()
+                ? session.updatedAt
+                : undefined,
+            originalIndex: index,
+          }))
+          .sort((left, right) => {
+            const leftTime = Date.parse(left.updatedAt || "");
+            const rightTime = Date.parse(right.updatedAt || "");
+            const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+            const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+            if (safeRightTime !== safeLeftTime) {
+              return safeRightTime - safeLeftTime;
+            }
+            return left.originalIndex - right.originalIndex;
+          })
+          .map(({ originalIndex, ...session }) => session);
         setSessionTasks(mapped);
         lastListFetchRef.current = Date.now();
       } catch {
@@ -198,8 +216,25 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       managers: []
     },
   ];
-  const sessionPreviewList = sessionTasks.slice(0, SESSION_PREVIEW_COUNT);
-  const hiddenSessionCount = Math.max(sessionTasks.length - SESSION_PREVIEW_COUNT, 0);
+  const activeSessionId = React.useMemo(() => {
+    const matched = location.match(/^\/session\/([^/?]+)/);
+    return matched?.[1] || null;
+  }, [location]);
+  const orderedSessionTasks = React.useMemo(() => {
+    if (!activeSessionId) {
+      return sessionTasks;
+    }
+    const activeIndex = sessionTasks.findIndex((session) => session.sessionId === activeSessionId);
+    if (activeIndex <= 0) {
+      return sessionTasks;
+    }
+    const next = [...sessionTasks];
+    const [activeSession] = next.splice(activeIndex, 1);
+    next.unshift(activeSession);
+    return next;
+  }, [activeSessionId, sessionTasks]);
+  const sessionPreviewList = orderedSessionTasks.slice(0, SESSION_PREVIEW_COUNT);
+  const hiddenSessionCount = Math.max(orderedSessionTasks.length - SESSION_PREVIEW_COUNT, 0);
   const hasSessionOverflow = hiddenSessionCount > 0;
   const formatSessionStatus = (status: string) => {
     if (status === "completed") return "完成";
@@ -434,7 +469,7 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
             <FileText className="w-4 h-4" />
             <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
             <span className="ml-auto text-xs text-muted-foreground">
-              {sessionTasks.length}
+              {orderedSessionTasks.length}
             </span>
           </Button>
         </div>}
@@ -513,17 +548,17 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           <DialogHeader className="px-6 pt-6 pb-4 border-b">
             <DialogTitle>{t('sidebar.allTasks')}</DialogTitle>
             <DialogDescription>
-              {`共 ${sessionTasks.length} 个任务会话`}
+              {`共 ${orderedSessionTasks.length} 个任务会话`}
             </DialogDescription>
           </DialogHeader>
           <ScrollArea className="flex-1 min-h-0 px-4 py-4 pr-6">
-            {sessionTasks.length === 0 ? (
+            {orderedSessionTasks.length === 0 ? (
               <div className="text-sm text-muted-foreground px-2 py-6 text-center">
                 暂无任务会话
               </div>
             ) : (
               <div className="space-y-2">
-                {sessionTasks.map((session) => (
+                {orderedSessionTasks.map((session) => (
                 <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
                     <Button
                       variant="ghost"

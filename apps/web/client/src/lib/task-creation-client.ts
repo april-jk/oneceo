@@ -252,9 +252,9 @@ export async function createTaskCreationSession(
   const url = `${getApiBaseUrl()}/api/task-creation/sessions`;
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: buildClientIdentityHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(input || {}),
   });
   if (!response.ok) {
@@ -295,7 +295,16 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
 export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
-  const result = await fetchJson<{ data?: TaskCreationSessionDetail }>(url);
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionDetail };
   return result?.data || null;
 }
 

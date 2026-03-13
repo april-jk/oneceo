@@ -813,6 +813,9 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
   for (const item of list) {
     const messageType = asText(item?.messageType);
     const metadata = toRecord(item?.metadata);
+    if (messageType === 'session_started') {
+      continue;
+    }
     if (messageType === 'error' || messageType === 'opencode_error') {
       continue;
     }
@@ -1745,6 +1748,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const messageType = item?.messageType;
         const role = item?.role;
 
+        if (messageType === 'session_started') {
+          return null;
+        }
         if (messageType === 'opencode_agent_input') {
           return null;
         }

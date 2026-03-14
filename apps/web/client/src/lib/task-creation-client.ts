@@ -214,6 +214,7 @@ export type WorkspaceFile = {
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
+    cache: init?.cache || "no-store",
     headers: buildClientIdentityHeaders(init?.headers),
   });
   if (!response.ok) {

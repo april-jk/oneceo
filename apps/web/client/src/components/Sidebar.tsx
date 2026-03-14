@@ -121,8 +121,56 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
         void load(true);
       }
     };
-    const onSessionUpdated = () => {
+    const onSessionUpdated = (event: Event) => {
+      const detail =
+        event instanceof CustomEvent && event.detail && typeof event.detail === 'object'
+          ? (event.detail as {
+              sessionId?: string;
+              title?: string;
+              status?: string;
+            })
+          : null;
+      const patchedSessionId =
+        typeof detail?.sessionId === 'string' && detail.sessionId.trim()
+          ? detail.sessionId.trim()
+          : '';
+      const patchedTitle =
+        typeof detail?.title === 'string' && detail.title.trim() ? detail.title.trim() : '';
+      const patchedStatus =
+        typeof detail?.status === 'string' && detail.status.trim() ? detail.status.trim() : '';
+      if (patchedSessionId) {
+        setSessionTasks((prev) => {
+          const nowIso = new Date().toISOString();
+          const index = prev.findIndex((session) => session.sessionId === patchedSessionId);
+          if (index >= 0) {
+            const next = [...prev];
+            const current = next[index];
+            next[index] = {
+              ...current,
+              title: patchedTitle || current.title,
+              status: patchedStatus || current.status,
+              updatedAt: nowIso,
+            };
+            return next;
+          }
+          if (patchedTitle) {
+            return [
+              {
+                sessionId: patchedSessionId,
+                title: patchedTitle,
+                status: patchedStatus || "in_progress",
+                updatedAt: nowIso,
+              },
+              ...prev,
+            ];
+          }
+          return prev;
+        });
+      }
       void load(true);
+      window.setTimeout(() => {
+        void load(true);
+      }, 4000);
     };
     void load(true);
     const timer = window.setInterval(() => {

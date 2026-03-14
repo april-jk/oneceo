@@ -18,8 +18,8 @@ import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import {
+  listRecoveredOpencodeSessionIds,
   normalizeOpencodeNativeMessages,
-  pickRecoveredOpencodeSessionId,
 } from '../utils/opencode-history-recovery';
 import {
   buildOpencodeQuestionAnswers,
@@ -42,6 +42,7 @@ type OpencodeEventListenerPayload = {
 type OpencodeEventListener = (payload: OpencodeEventListenerPayload) => void | Promise<void>;
 
 type RuntimeBinding = {
+  generation?: number;
   orchestratorSessionId: string;
   opencodeSessionId?: string;
 };
@@ -58,6 +59,8 @@ type OpencodeTextStreamEntry = {
 
 type RunArtifact = {
   hasFileChange: boolean;
+  hasFailure: boolean;
+  failureMessage?: string;
   missingArtifactNudges: number;
   startedAt: number;
   promptedAt: number;
@@ -90,6 +93,44 @@ type QueuedDbMessage = {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableDirectInputError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('fetch failed') ||
+    normalized.includes('network') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('other side closed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('eai_again') ||
+    normalized.includes('und_err_socket') ||
+    normalized.includes('aborted') ||
+    normalized.includes('timeout') ||
+    normalized.includes('opencode serve 启动失败') ||
+    normalized.includes('opencode 服务未就绪') ||
+    normalized.includes('opencode server not ready')
+  );
+}
+
+function isBenignOpencodeTerminationMessage(value: unknown): boolean {
+  const normalized = asString(value).toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized === 'terminated' ||
+    normalized === 'other side closed' ||
+    normalized === 'fetch failed' ||
+    normalized === 'connection closed' ||
+    normalized === 'stream closed'
+  );
 }
 
 function toPositiveInt(value: string | undefined): number | undefined {
@@ -813,9 +854,21 @@ function pickSessionIdFromEvent(event: Record<string, unknown>): string | null {
 function summarizeOpencodeEvent(eventType: string, payload: Record<string, unknown>): string {
   const event = toRecord(payload.event);
   const properties = normalizeRecord(event.properties);
+  const errorMessage = extractOpencodeErrorMessage(payload);
+
+  if (eventType === 'session.error' && errorMessage) {
+    return `OpenCode 执行失败：${errorMessage}`;
+  }
 
   if (eventType === 'message.updated') {
     const info = normalizeRecord(properties.info);
+    const infoErrorMessage =
+      errorMessage ||
+      asString(toRecord(info.error).message) ||
+      asString(toRecord(toRecord(info.error).data).message);
+    if (infoErrorMessage) {
+      return `OpenCode 执行失败：${infoErrorMessage}`;
+    }
     const state = asString(info.state) || asString(info.status) || asString(properties.state) || asString(properties.status);
     const role = asString(info.role) || asString(properties.role);
     if (state || role) {
@@ -989,6 +1042,19 @@ function detectOpencodeOutcome(
   return null;
 }
 
+function extractOpencodeErrorMessage(payload: Record<string, unknown>): string {
+  const event = toRecord(payload.event);
+  const properties = toRecord(event.properties);
+  const errorRecord = toRecord(properties.error);
+  const errorData = toRecord(errorRecord.data);
+  return (
+    asString(errorData.message) ||
+    asString(errorRecord.message) ||
+    asString(properties.message) ||
+    asString(payload.message)
+  );
+}
+
 async function resolveRuntimeBinding(
   taskSessionId: string,
   fallbackOrchestratorSessionId?: string
@@ -999,9 +1065,14 @@ async function resolveRuntimeBinding(
   const runtime = session.runtime || {};
   const orchestratorFromRuntime = asString(runtime.orchestratorSessionId);
   const opencodeSessionId = asString(runtime.opencodeSessionId) || undefined;
+  const generation =
+    typeof runtime.generation === 'number' && Number.isFinite(runtime.generation) && runtime.generation > 0
+      ? Math.floor(runtime.generation)
+      : undefined;
 
   if (orchestratorFromRuntime) {
     return {
+      generation,
       orchestratorSessionId: orchestratorFromRuntime,
       opencodeSessionId,
     };
@@ -1010,6 +1081,7 @@ async function resolveRuntimeBinding(
   const fallback = asString(fallbackOrchestratorSessionId);
   if (fallback) {
     return {
+      generation,
       orchestratorSessionId: fallback,
       opencodeSessionId,
     };
@@ -1073,6 +1145,7 @@ export class OpencodeRemoteService {
       const now = Date.now();
       record = {
         hasFileChange: false,
+        hasFailure: false,
         missingArtifactNudges: 0,
         startedAt: now,
         promptedAt: now,
@@ -1515,11 +1588,53 @@ export class OpencodeRemoteService {
     await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
       orchestratorSessionId: provision.sessionId,
     });
+    const rebound = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    const generation =
+      typeof rebound?.runtime?.generation === 'number' && Number.isFinite(rebound.runtime.generation)
+        ? Math.floor(rebound.runtime.generation)
+        : undefined;
 
     return {
+      generation,
       orchestratorSessionId: provision.sessionId,
       opencodeSessionId: undefined,
     };
+  }
+
+  private getExpectedOpencodeModelTarget(): { providerId: string; modelId: string } {
+    const providerId = (process.env.OPENCODE_PROVIDER_ID || 'openai').trim().toLowerCase() || 'openai';
+    const modelId = (process.env.OPENCODE_MODEL || 'claude-haiku-4-5-20251001').trim();
+    return { providerId, modelId };
+  }
+
+  private isRecoveredSessionCompatible(
+    sessionDetails: unknown,
+    expected: { providerId: string; modelId: string }
+  ): boolean {
+    const record = toRecord(sessionDetails);
+    const info = toRecord(record.info);
+    const model = toRecord(record.model);
+    const providerId = (
+      asString(record.providerID) ||
+      asString(record.providerId) ||
+      asString(info.providerID) ||
+      asString(info.providerId) ||
+      asString(model.providerID) ||
+      asString(model.providerId)
+    ).toLowerCase();
+    const modelId =
+      asString(record.modelID) ||
+      asString(record.modelId) ||
+      asString(info.modelID) ||
+      asString(info.modelId) ||
+      asString(model.modelID) ||
+      asString(model.modelId);
+
+    if (!providerId && !modelId) {
+      return true;
+    }
+
+    return providerId === expected.providerId && modelId === expected.modelId;
   }
 
   private async resolveRecoveredOpencodeSessionId(input: {
@@ -1529,6 +1644,7 @@ export class OpencodeRemoteService {
     preferredOpencodeSessionId?: string;
   }): Promise<string | null> {
     const preferred = asString(input.preferredOpencodeSessionId);
+    const expectedTarget = this.getExpectedOpencodeModelTarget();
 
     await osacAgentService.ensureOpencodeServer(input.orchestratorSessionId, {
       workspacePath: input.workspacePath || undefined,
@@ -1536,12 +1652,20 @@ export class OpencodeRemoteService {
 
     if (preferred) {
       try {
-        await osacAgentService.getSessionDetails(input.orchestratorSessionId, preferred);
-        await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+        const preferredDetails = await osacAgentService.getSessionDetails(input.orchestratorSessionId, preferred);
+        if (this.isRecoveredSessionCompatible(preferredDetails, expectedTarget)) {
+          await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+            orchestratorSessionId: input.orchestratorSessionId,
+            opencodeSessionId: preferred,
+          });
+          return preferred;
+        }
+        console.warn('[OPENCODE_RECOVER_SESSION_MODEL_MISMATCH]', {
+          taskSessionId: input.taskSessionId,
           orchestratorSessionId: input.orchestratorSessionId,
           opencodeSessionId: preferred,
+          expectedTarget,
         });
-        return preferred;
       } catch {
         // try recover from native session list
       }
@@ -1553,20 +1677,29 @@ export class OpencodeRemoteService {
         format: 'json',
       });
       const sessions = Array.isArray((response as any)?.sessions) ? (response as any).sessions : [];
-      const recovered = pickRecoveredOpencodeSessionId(
-        sessions,
-        input.workspacePath,
-        preferred || undefined
-      );
-      if (!recovered) {
-        return null;
+      const candidates = listRecoveredOpencodeSessionIds(sessions, input.workspacePath, preferred || undefined);
+      for (const candidate of candidates) {
+        try {
+          const details = await osacAgentService.getSessionDetails(input.orchestratorSessionId, candidate);
+          if (!this.isRecoveredSessionCompatible(details, expectedTarget)) {
+            continue;
+          }
+
+          await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+            orchestratorSessionId: input.orchestratorSessionId,
+            opencodeSessionId: candidate,
+          });
+          return candidate;
+        } catch {
+          continue;
+        }
       }
 
       await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
         orchestratorSessionId: input.orchestratorSessionId,
-        opencodeSessionId: recovered,
+        opencodeSessionId: '',
       });
-      return recovered;
+      return null;
     } catch (error) {
       console.warn('[OPENCODE_RECOVER_SESSION_ID_FAILED]', input.taskSessionId, error);
       return null;
@@ -1618,6 +1751,7 @@ export class OpencodeRemoteService {
         Array.isArray(rawMessages) ? rawMessages : [],
         {
           taskSessionId: taskId,
+          generation: runtime.generation,
           orchestratorSessionId: runtime.orchestratorSessionId,
           opencodeSessionId: recoveredOpencodeSessionId,
           workspacePath,
@@ -2291,6 +2425,21 @@ export class OpencodeRemoteService {
     }
   }
 
+  private async syncDbSessionStatus(
+    sessionId: string,
+    status: 'completed' | 'failed'
+  ) {
+    try {
+      await taskCreationSessionDAO.updateSessionStatus(sessionId, status);
+    } catch (error) {
+      console.warn('[OPENCODE_SESSION_STATUS_DB_SYNC_FAILED]', {
+        sessionId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async replyPendingQuestionIfAny(input: {
     taskSessionId: string;
     content: string;
@@ -2396,13 +2545,38 @@ export class OpencodeRemoteService {
     if (!runtime) {
       runtime = await this.recoverRuntime(taskSessionId);
     }
+    const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    const forceFreshOpencodeSession =
+      currentSession?.status === 'failed' ||
+      currentSession?.stage === 'failed' ||
+      currentSession?.status === 'completed' ||
+      currentSession?.stage === 'completed';
+    if (forceFreshOpencodeSession && runtime?.opencodeSessionId) {
+      await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        opencodeSessionId: '',
+      });
+      runtime = {
+        ...runtime,
+        opencodeSessionId: undefined,
+      };
+    }
 
     let orchestratorSessionId = runtime.orchestratorSessionId;
     const workspacePath = asString(input.workspacePath) || resolveOpencodeWorkspacePath(taskSessionId);
     const opencodeHost = asString(process.env.OPENCODE_SERVER_HOST) || undefined;
     const opencodePort = toPositiveInt(process.env.OPENCODE_SERVER_PORT);
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const maxAttempts = Math.max(
+      2,
+      Number(process.env.OPENCODE_DIRECT_INPUT_MAX_ATTEMPTS || 6)
+    );
+    const retryDelayMs = Math.max(
+      1000,
+      Number(process.env.OPENCODE_DIRECT_INPUT_RETRY_DELAY_MS || 3000)
+    );
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const runtimeStatus = await resolveRuntimeFromEnvironment(orchestratorSessionId);
       if (!runtimeStatus.ready) {
         runtime = await this.recoverRuntime(taskSessionId);
@@ -2419,8 +2593,8 @@ export class OpencodeRemoteService {
           });
           await this.ensureWorkspaceBaseline(taskSessionId, orchestratorSessionId, workspacePath || '');
 
-          let opencodeSessionId = runtime?.opencodeSessionId;
-          if (!opencodeSessionId) {
+          let opencodeSessionId = forceFreshOpencodeSession ? undefined : runtime?.opencodeSessionId;
+          if (!opencodeSessionId && !forceFreshOpencodeSession) {
             opencodeSessionId =
               (await this.resolveRecoveredOpencodeSessionId({
                 taskSessionId,
@@ -2499,10 +2673,28 @@ export class OpencodeRemoteService {
           };
         });
       } catch (error) {
-        if (isSandboxNotFoundError(error) && attempt < 2) {
+        if (isSandboxNotFoundError(error) && attempt < maxAttempts) {
           await markSandboxClosed(orchestratorSessionId);
           runtime = await this.recoverRuntime(taskSessionId);
           orchestratorSessionId = runtime.orchestratorSessionId;
+          await sleep(Math.min(10_000, retryDelayMs * attempt));
+          continue;
+        }
+
+        if (isRetryableDirectInputError(error) && attempt < maxAttempts) {
+          console.warn('[OPENCODE_DIRECT_INPUT_RETRY]', {
+            taskSessionId,
+            attempt,
+            maxAttempts,
+            orchestratorSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          const reboundRuntime = await resolveRuntimeBinding(taskSessionId, orchestratorSessionId);
+          if (reboundRuntime) {
+            runtime = reboundRuntime;
+            orchestratorSessionId = reboundRuntime.orchestratorSessionId;
+          }
+          await sleep(Math.min(10_000, retryDelayMs * attempt));
           continue;
         }
         throw error;
@@ -2526,6 +2718,7 @@ export class OpencodeRemoteService {
     const phaseAtStart = (session.phase as FlowPhase) || 'development';
     this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
       hasFileChange: false,
+      hasFailure: false,
       missingArtifactNudges: 0,
       startedAt: now,
       promptedAt: now,
@@ -2620,6 +2813,7 @@ export class OpencodeRemoteService {
         const phaseAtStart = (session.phase as FlowPhase) || 'development';
         this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
           hasFileChange: false,
+          hasFailure: false,
           missingArtifactNudges: 0,
           startedAt: now,
           promptedAt: now,
@@ -2683,6 +2877,18 @@ export class OpencodeRemoteService {
       const content = rawMessage;
       const opencodeSessionId = asString(payload.opencodeSessionId) || session.runtime?.opencodeSessionId;
       const runKey = opencodeSessionId ? this.buildRunKey(session.id, opencodeSessionId) : '';
+      if (
+        (runKey && this.finalizedRuns.has(runKey)) ||
+        (session.stage === 'completed' && isBenignOpencodeTerminationMessage(content))
+      ) {
+        if (opencodeSessionId) {
+          this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
+        }
+        if (runKey) {
+          this.runArtifacts.delete(runKey);
+        }
+        return;
+      }
       if (opencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
         this.finalizedRuns.add(runKey);
@@ -2698,6 +2904,7 @@ export class OpencodeRemoteService {
         status: 'failed',
         stage: 'failed',
       });
+      await this.syncDbSessionStatus(session.id, 'failed');
 
       await this.persistMessage(
         session.id,
@@ -2710,6 +2917,20 @@ export class OpencodeRemoteService {
           opencodeSessionId: opencodeSessionId || undefined,
         }
       );
+
+      await this.notify({
+        taskSessionId: session.id,
+        message: {
+          type: 'error',
+          content,
+          metadata: {
+            ...payload,
+            orchestratorSessionId,
+            opencodeSessionId: opencodeSessionId || undefined,
+            source: 'opencode_error',
+          },
+        },
+      });
 
       await this.notify({
         taskSessionId: session.id,
@@ -2776,7 +2997,22 @@ export class OpencodeRemoteService {
       await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
     }
 
-    const outcome = detectOpencodeOutcome(eventType, payload);
+    let outcome = detectOpencodeOutcome(eventType, payload);
+    let runArtifactForOutcome: RunArtifact | null = null;
+    if (opencodeSessionId) {
+      const runKey = this.buildRunKey(session.id, opencodeSessionId);
+      runArtifactForOutcome = this.getRunArtifact(runKey);
+      const errorMessage = extractOpencodeErrorMessage(payload);
+      if (eventType === 'session.error' || outcome === 'failed') {
+        runArtifactForOutcome.hasFailure = true;
+        if (errorMessage) {
+          runArtifactForOutcome.failureMessage = errorMessage;
+        }
+      }
+      if (outcome === 'completed' && runArtifactForOutcome.hasFailure) {
+        outcome = 'failed';
+      }
+    }
 
     const textStream = this.extractTextStreamPayload(payload, eventType);
     if (textStream) {
@@ -2912,6 +3148,15 @@ export class OpencodeRemoteService {
       event: eventPreview,
       rawPayload: buildRawPayloadPreview(eventType, eventPreview),
     };
+    if (runArtifactForOutcome?.failureMessage) {
+      metadata.errorMessage = runArtifactForOutcome.failureMessage;
+    }
+    if (
+      outcome === 'completed' &&
+      (runArtifactForOutcome?.hasFailure || asString(metadata.errorMessage))
+    ) {
+      outcome = 'failed';
+    }
 
     if (opencodeSessionId) {
       const runKey = this.buildRunKey(session.id, opencodeSessionId);
@@ -3021,6 +3266,7 @@ export class OpencodeRemoteService {
           stage: 'completed',
           phase: session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery',
         });
+        await this.syncDbSessionStatus(session.id, 'completed');
         await this.persistMessage(
           session.id,
           'agent',
@@ -3381,6 +3627,7 @@ export class OpencodeRemoteService {
         stage: 'completed',
         phase: session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery',
       });
+      await this.syncDbSessionStatus(session.id, 'completed');
       this.runArtifacts.delete(runKey);
       if (orchestratorSessionId) {
         try {
@@ -3424,6 +3671,8 @@ export class OpencodeRemoteService {
       }
       if (this.isDirectSession(session)) {
         this.finalizedRuns.add(runKey);
+        const errorDetail = asString(metadata.errorMessage);
+        const errorContent = errorDetail ? `OpenCode 执行失败：${errorDetail}` : 'OpenCode 执行失败';
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
@@ -3437,11 +3686,12 @@ export class OpencodeRemoteService {
           status: 'failed',
           stage: 'failed',
         });
+        await this.syncDbSessionStatus(session.id, 'failed');
         await this.persistMessage(
           session.id,
           'agent',
           'opencode_error',
-          'OpenCode 执行失败',
+          errorContent,
           {
             ...metadata,
             outcome,
@@ -3449,6 +3699,18 @@ export class OpencodeRemoteService {
           }
         );
         await this.flushPersistenceBarrier('direct_failed');
+        await this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'error',
+            content: errorContent,
+            metadata: {
+              ...metadata,
+              outcome,
+              source: 'direct_failed',
+            },
+          },
+        });
         await this.notify({
           taskSessionId: session.id,
           message: {
@@ -3481,6 +3743,7 @@ export class OpencodeRemoteService {
         status: 'failed',
         stage: 'failed',
       });
+      await this.syncDbSessionStatus(session.id, 'failed');
       this.runArtifacts.delete(runKey);
       if (orchestratorSessionId) {
         try {
@@ -3490,7 +3753,8 @@ export class OpencodeRemoteService {
         }
       }
 
-      const errorContent = 'OpenCode 执行失败';
+      const errorDetail = asString(metadata.errorMessage);
+      const errorContent = errorDetail ? `OpenCode 执行失败：${errorDetail}` : 'OpenCode 执行失败';
       await this.persistMessage(
         session.id,
         'agent',

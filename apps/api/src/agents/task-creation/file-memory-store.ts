@@ -20,6 +20,7 @@ export interface FileSessionRecord {
   mode?: 'altus' | 'sandbox';
   executor?: 'opencode' | 'claudecode' | 'codex' | string;
   runtime?: {
+    generation?: number;
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
     updatedAt?: string;
@@ -444,7 +445,7 @@ class TaskCreationFileMemoryStore {
 
   async updateRuntimeBinding(
     sessionId: string,
-    runtime: { orchestratorSessionId?: string; opencodeSessionId?: string }
+    runtime: { generation?: number; orchestratorSessionId?: string; opencodeSessionId?: string }
   ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -452,16 +453,40 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
 
       const current = session.runtime || {};
+      const currentOrchestrator = current.orchestratorSessionId || undefined;
       const nextOrchestrator =
         runtime.orchestratorSessionId !== undefined
           ? runtime.orchestratorSessionId || undefined
-          : current.orchestratorSessionId;
+          : currentOrchestrator;
+      const orchestratorChanged =
+        runtime.orchestratorSessionId !== undefined && nextOrchestrator !== currentOrchestrator;
       const nextOpencode =
         runtime.opencodeSessionId !== undefined
           ? runtime.opencodeSessionId || undefined
-          : current.opencodeSessionId;
+          : orchestratorChanged
+            ? undefined
+            : current.opencodeSessionId;
+      const currentGeneration =
+        typeof current.generation === 'number' && Number.isFinite(current.generation)
+          ? Math.max(0, Math.floor(current.generation))
+          : currentOrchestrator
+            ? 1
+            : 0;
+      const requestedGeneration =
+        typeof runtime.generation === 'number' && Number.isFinite(runtime.generation) && runtime.generation > 0
+          ? Math.floor(runtime.generation)
+          : 0;
+      const nextGeneration =
+        nextOrchestrator
+          ? requestedGeneration > 0
+            ? requestedGeneration
+            : orchestratorChanged
+              ? Math.max(1, currentGeneration + 1)
+              : Math.max(1, currentGeneration)
+          : 0;
 
       session.runtime = {
+        generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
         opencodeSessionId: nextOpencode,
         updatedAt: new Date().toISOString(),
@@ -561,6 +586,14 @@ class TaskCreationFileMemoryStore {
         ...seqAttached.metadata,
         timestamp: effectiveTimestamp,
       };
+      if (
+        messageMetadata.runtimeGeneration === undefined &&
+        typeof session.runtime?.generation === 'number' &&
+        Number.isFinite(session.runtime.generation) &&
+        session.runtime.generation > 0
+      ) {
+        messageMetadata.runtimeGeneration = Math.floor(session.runtime.generation);
+      }
       session.messages.push({
         id: this.createId('msg'),
         role,
@@ -617,6 +650,14 @@ class TaskCreationFileMemoryStore {
           ...seqAttached.metadata,
           timestamp: itemTimestamp,
         };
+        if (
+          messageMetadata.runtimeGeneration === undefined &&
+          typeof session.runtime?.generation === 'number' &&
+          Number.isFinite(session.runtime.generation) &&
+          session.runtime.generation > 0
+        ) {
+          messageMetadata.runtimeGeneration = Math.floor(session.runtime.generation);
+        }
         session.messages.push({
           id: this.createId('msg'),
           role: item.role,

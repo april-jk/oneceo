@@ -261,6 +261,47 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
    - 优先从 OpenCode `GET /session/:id/message` 读取完整历史
    - 平台历史只作为兜底，不作为优先来源
 
+补充约束（2026-03-14）：
+
+- 同一个 `taskSessionId` 在用户多次进入、长时间中断、Sandbox 生命周期结束后，可能经历多次 Sandbox 重建。
+- 因此 runtime 不能被理解为“固定 sandbox”，而应理解为“当前生效的一次 sandbox 世代”。
+- 一个任务会话会存在：
+  - 稳定主键：`taskSessionId`
+  - 多个短生命周期 sandbox 世代：`orchestratorSessionId#1 / #2 / #3 ...`
+  - 每个世代都可能从归档恢复出 OpenCode 数据目录，并重新定位到一个可继续的 `opencodeSessionId`
+
+实现约束：
+
+1. 当 `orchestratorSessionId` 发生变化时，必须立即清空内存态中的旧 `opencodeSessionId`
+   - 因为旧 `opencodeSessionId` 只是“待验证恢复线索”，不能在新 sandbox 中默认视为可用
+2. 只有在新 sandbox 中通过 OpenCode API 验证成功后，才允许把 `opencodeSessionId` 写回当前 runtime
+3. 前端不得再从旧历史消息反推当前 runtime
+   - 当前 runtime 只能以后端当前返回的 authoritative runtime 为准
+4. 历史消息允许跨多次 sandbox 世代保留，但不能反向污染当前世代的 runtime 绑定
+5. 对旧 sandbox 环境记录缺失 `opencodeBaseUrl/opencodeHost/opencodePort/opencodeWorkspaceRoot` 的情况
+   - 后端必须支持按当前 E2B host 回填 metadata
+   - 不能要求用户先手动重建 sandbox 或清空旧会话后才能继续续写
+
+推荐最小数据模型：
+
+```json
+{
+  "taskSessionId": "...",
+  "runtime": {
+    "generation": 3,
+    "orchestratorSessionId": "sandbox-current",
+    "opencodeSessionId": "session-restored-and-validated",
+    "updatedAt": "..."
+  }
+}
+```
+
+其中：
+
+- `generation` 表示当前已进入第几次 sandbox 世代
+- `orchestratorSessionId` 表示当前世代的 sandbox
+- `opencodeSessionId` 仅在“恢复并验证成功”后才允许存在
+
 ## 6.7 页面读取策略
 
 页面重新进入时，建议改成：
@@ -270,6 +311,11 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
    - 优先从 OpenCode 拉历史消息
 3. 若 OpenCode 不可用
    - 再退回平台侧历史消息
+
+补充保护（2026-03-14）：
+
+- 若 OpenCode native history 只恢复出 `opencode_user_input`，但没有任何可显示的 assistant/tool 回复，则 `/api/task-creation/sessions/:id/messages` 必须回退到平台已落盘消息。
+- 原因：当前部分 OpenCode session 在新建直通对话或恢复早期，只能从 native history 读到用户输入；若此时仍强制 native 优先，会把平台侧已收到的 `opencode_event` 回复遮掉，导致用户只看到自己的提问，看不到 OpenCode 回复。
 
 ## 7. 已落地实现
 
@@ -379,16 +425,35 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 
 - 恢复后自动解析 `opencodeSessionId`
 - 让平台知道应该向哪个 OpenCode session 拉历史
+- 平台 runtime 改为 generation-aware：
+  - 新 sandbox 创建后先只写新的 `orchestratorSessionId`
+  - 清空旧 `opencodeSessionId`
+  - 只有在新 sandbox 内验证旧 session 已恢复成功后，才回填新的 `opencodeSessionId`
+  - 历史消息与流式事件都要带 `runtimeGeneration`
 
 ### Phase 3：页面历史切换为 OpenCode 优先
 
 - 页面进入时优先从 OpenCode 拉历史消息
 - 平台历史降级为 fallback
+- 同一 task session 的多次 sandbox 重建必须保留 generation 边界
+- 前端历史合并和流式去重 key 必须纳入 `runtimeGeneration`，避免旧新世代文本串流错误拼接
 
 ### Phase 4：导出导入兜底
 
 - 如果发现 `.opencode/` 模式在部分版本下不稳定
 - 再补 `opencode export/import` 作为灾备方案
+
+## 9.1 运行中补充约束
+
+- 归档恢复后不只要恢复 `.opencode/opencode.db` 等状态文件，还必须覆盖恢复工作区里的本地配置文件：
+  - `~/.config/opencode/opencode.json`
+  - `{workspace}/.opencode/opencode.json`
+- 因为 OpenCode 启动时会优先读取工作区内的 `.opencode/opencode.json`，如果这个文件仍是旧 provider/model，就会在新 sandbox 中继续沿用旧模型。
+- `runtime/start` 在复用现有 sandbox 时，也必须重新执行一次配置同步与 `opencode serve` 重启，不能只做 health-check 复用旧进程。
+- “恢复旧 session” 必须校验 provider/model 兼容性：
+  - 如果恢复出的 `opencodeSessionId` 绑定的是旧 provider/model，而当前平台配置已经切换，则不能继续复用该 session。
+  - 这种情况下应清空 `opencodeSessionId`，保留当前 sandbox/runtime，然后创建新的 OpenCode session。
+- 当 task session 当前状态已经是 `failed/completed` 时，新的用户输入默认不复用旧 `opencodeSessionId`。
 
 ## 10. 验收标准
 
@@ -397,6 +462,12 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 - 恢复后 OpenCode `GET /session/:id/message` 能返回完整历史
 - 页面在“重新进入会话”时，优先使用 OpenCode 原生历史
 - 不依赖平台侧历史消息，也能完成主要会话恢复
+- 多次 sandbox 重建后：
+  - 当前 runtime 不会被旧世代 `opencodeSessionId` 污染
+  - 历史消息时间线中能看出 generation 切换
+  - 文本流不会跨 generation 错误合并
+- 对旧会话做“恢复后继续对话”时：
+  - 即使 sandbox 环境记录缺失 `opencodeBaseUrl`，首次续写也能自动回填并成功继续
 
 ## 11. 本次建议结论
 

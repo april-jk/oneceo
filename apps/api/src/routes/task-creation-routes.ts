@@ -202,6 +202,9 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     taskCreationSessionDAO.getTaskDescription(sessionId),
     taskCreationSessionDAO.getMessages(sessionId),
   ]);
+  const hasOpencodeHistory = Array.isArray(messages)
+    ? messages.some((message) => asText(message.messageType).startsWith('opencode_'))
+    : false;
   const titleCandidate =
     taskDescription?.title ||
     messages?.find((m) => m.role === 'user')?.content ||
@@ -228,6 +231,8 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
     status,
     stage,
+    mode: hasOpencodeHistory ? 'sandbox' : undefined,
+    executor: hasOpencodeHistory ? 'opencode' : undefined,
     runtime: orchestratorSessionId
       ? {
           orchestratorSessionId,
@@ -1270,7 +1275,19 @@ router.get('/sessions/:sessionId', async (req, res) => {
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    let messages = await taskCreationFileMemoryStore.getMessages(sessionId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    const shouldPreferOpencodeNativeHistory =
+      asText(session?.mode) === 'sandbox' &&
+      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+
+    let messages =
+      shouldPreferOpencodeNativeHistory
+        ? await opencodeRemoteService.loadNativeMessageHistory(sessionId, { allowProvision: true })
+        : null;
+
+    if (!messages || messages.length === 0) {
+      messages = await taskCreationFileMemoryStore.getMessages(sessionId);
+    }
     if (!messages || messages.length === 0) {
       const fallback = await taskCreationSessionDAO.getMessages(sessionId);
       messages = Array.isArray(fallback)

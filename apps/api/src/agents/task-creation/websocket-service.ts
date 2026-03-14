@@ -17,6 +17,24 @@ import { taskCreationSessionDAO } from '../../db/dao';
 import { directModeEntryService } from '../../services/direct-mode-entry-service';
 import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
 
+function normalizeDirectOpencodeErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  const normalized = raw.toLowerCase();
+  if (
+    normalized.includes('fetch failed') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('und_err_socket') ||
+    normalized.includes('timeout') ||
+    normalized.includes('network')
+  ) {
+    return getPublicErrorMessage('执行环境启动较慢，请稍后再试');
+  }
+  return raw || getPublicErrorMessage('OpenCode 执行失败');
+}
+
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
   private clients: Map<string, WebSocket> = new Map();
@@ -758,7 +776,7 @@ export class TaskCreationWebSocketService {
 
       // 直通模式不注入额外状态消息，避免污染 OpenCode 原始对话流。
     } catch (error) {
-      const errText = error instanceof Error ? error.message : 'OpenCode 执行失败';
+      const errText = normalizeDirectOpencodeErrorMessage(error);
       this.sendToClient(clientId, {
         type: 'error' as any,
         sessionId: taskSessionId,

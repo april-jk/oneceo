@@ -155,6 +155,7 @@ export type TaskCreationSessionDetail = {
   stage?: string;
   phase?: string;
   runtime?: {
+    generation?: number;
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
     updatedAt?: string;

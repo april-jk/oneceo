@@ -14,6 +14,7 @@ import {
 import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
+import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
@@ -192,29 +193,14 @@ export class SessionConnectorService {
     if (!target) return null;
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(target);
     if (!environment || environment.status !== 'ready') return null;
-    const metadata = (environment.metadata || {}) as Record<string, unknown>;
-    const opencodeMeta =
-      metadata.opencode && typeof metadata.opencode === 'object'
-        ? (metadata.opencode as Record<string, unknown>)
-        : {};
-    const e2bMeta =
-      metadata.e2b && typeof metadata.e2b === 'object'
-        ? (metadata.e2b as Record<string, unknown>)
-        : {};
-    const baseUrl =
-      asText(metadata.opencodeBaseUrl) ||
-      asText(opencodeMeta.baseUrl) ||
-      asText(metadata.osacEndpoint);
-    if (!baseUrl) {
+    const ensured = await ensureSandboxRuntimeMetadata(target, { taskSessionId });
+    if (!ensured?.baseUrl) {
       throw new Error('未找到 OpenCode baseUrl');
     }
     return {
       orchestratorSessionId: target,
-      baseUrl,
-      trafficAccessToken:
-        asText(e2bMeta.trafficAccessToken) ||
-        asText(metadata.trafficAccessToken) ||
-        undefined,
+      baseUrl: ensured.baseUrl,
+      trafficAccessToken: ensured.trafficAccessToken || undefined,
     };
   }
 

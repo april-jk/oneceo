@@ -221,10 +221,13 @@ function buildOpencodeConfig(
   const apiKeyEnv =
     (envs.OPENAI_API_KEY && 'OPENAI_API_KEY') || (envs.OPENCODE_API_KEY && 'OPENCODE_API_KEY') || 'OPENAI_API_KEY';
 
+  const resolvedBaseUrl = (envs[baseUrlEnv] || '').trim();
+  const resolvedApiKey = (envs[apiKeyEnv] || '').trim();
+
   const providerBase: Record<string, unknown> = {
     options: {
-      baseURL: `{env:${baseUrlEnv}}`,
-      apiKey: `{env:${apiKeyEnv}}`,
+      baseURL: resolvedBaseUrl || `{env:${baseUrlEnv}}`,
+      apiKey: resolvedApiKey || `{env:${apiKeyEnv}}`,
     },
     models: {
       [modelId]: {
@@ -262,15 +265,32 @@ function buildOpencodeConfig(
 async function writeOpencodeConfig(
   sessionId: string,
   envs: Record<string, string>,
+  workspaceRoot?: string | null,
   extraMcpEntries: Record<string, unknown> = {}
 ) {
   const config = buildOpencodeConfig(envs, extraMcpEntries);
   const configDir = '$HOME/.config/opencode';
   const configPath = `${configDir}/opencode.json`;
-  const command = `mkdir -p ${configDir}
-cat <<'EOF' > ${configPath}
-${config}
-EOF`;
+  const workspaceConfigDir = workspaceRoot ? `${workspaceRoot.replace(/\/+$/, '')}/.opencode` : '';
+  const workspaceConfigPath = workspaceConfigDir ? `${workspaceConfigDir}/opencode.json` : '';
+  const commandLines = [
+    `mkdir -p ${configDir}`,
+    `rm -f ${configDir}/opencode.jsonc`,
+    `cat <<'EOF' > ${configPath}`,
+    config,
+    'EOF',
+  ];
+  if (workspaceConfigDir && workspaceConfigPath) {
+    commandLines.push(
+      `mkdir -p ${shellEscape(workspaceConfigDir)}`,
+      `rm -f ${shellEscape(`${workspaceConfigDir}/opencode.jsonc`)}`,
+      `cat <<'EOF' > ${shellEscape(workspaceConfigPath)}`,
+      config,
+      'EOF'
+    );
+  }
+  const command = `${commandLines.join('\n')}
+`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
 }
 
@@ -537,7 +557,12 @@ export class SandboxAgentProvisionService {
       ...baseEnvs,
       ...connectorBootstrap.processEnvs,
     };
-    await writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries);
+    await writeOpencodeConfig(
+      sessionId,
+      opencodeEnvs,
+      resolveOpencodeWorkspacePath(input.taskSessionId || ''),
+      connectorBootstrap.mcpEntries
+    );
     await restartOpencodeServer(
       sessionId,
       baseUrl,
@@ -626,10 +651,12 @@ export class SandboxAgentProvisionService {
     };
 
     await runStep('opencode_config', () =>
-      writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
+      writeOpencodeConfig(sessionId, opencodeEnvs, workspaceRoot, connectorBootstrap.mcpEntries)
     );
     await runStep('opencode_start', () =>
-      startOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
+      isReused
+        ? restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
+        : startOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
     );
     await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
     await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));

@@ -20,7 +20,7 @@
 1. 已有可用 session（VM 运行中，已绑定）。
 2. VM 内已下发 `opencode` 二进制（路径：`/opt/.altus/opencode/opencode`）。
 3. 已准备可用的上游参数：
-- `OPENAI_BASE_URL`（例如 `https://hone.vvvv.ee/v1`）
+- `OPENAI_BASE_URL`（例如 `https://ai.hvmz.cn/v1`）
 - `OPENAI_API_KEY`
 - `model`（推荐显式 `provider/model` 格式）
 
@@ -41,13 +41,22 @@ pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; test -x /opt/.altu
 3. `baseURL` 与 `apiKey`
 4. 模型映射（如 `claude-haiku-4-5-20251001`）
 
-模型建议统一使用：`hone/claude-haiku-4-5-20251001`  
+当前已验证可兼容 OpenCode `1.2.6` 工具调用链路的上游组合：
+
+1. `provider=openai`
+2. `baseURL=https://ai.hvmz.cn/v1`
+3. `model=openai/gpt-5.2`
+
+模型建议统一使用：`provider/model` 格式，例如 `openai/gpt-5.2`。  
 避免只写裸模型名导致 `ProviderModelNotFoundError`。
+
+补充：当前 OpenCode `1.2.6` 在部分执行路径下对 `opencode.json` 中的 `{env:OPENAI_BASE_URL}` / `{env:OPENAI_API_KEY}` 解析不稳定。
+如果由平台在 Sandbox 内自动生成 `opencode.json`，应优先直接写入字面 `baseURL` / `apiKey`，不要只依赖 `{env:...}` 占位。
 
 ### 步骤 3：执行最小烟测
 
 ```bash
-pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; OPENAI_BASE_URL='<OPENAI_BASE_URL>' OPENAI_API_KEY='<OPENAI_API_KEY>' /opt/.altus/opencode/opencode run --format json -m 'hone/claude-haiku-4-5-20251001' 'Reply with exactly: OK'"
+pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; OPENAI_BASE_URL='<OPENAI_BASE_URL>' OPENAI_API_KEY='<OPENAI_API_KEY>' opencode run --format json -m 'openai/gpt-5.2' 'Reply with exactly: OK'"
 ```
 
 通过标准：输出中出现文本 `OK`。
@@ -71,7 +80,7 @@ pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; OPENAI_BASE_URL='<
 原因：模型格式或 provider 映射不正确。  
 处理：
 
-1. 改用 `provider/model`（例如 `hone/claude-haiku-4-5-20251001`）。
+1. 改用 `provider/model`（例如 `openai/gpt-5.2`）。
 2. 检查 `opencode.json` 是否存在且为合法 JSON。
 3. 确认 provider 下已声明该 model。
 
@@ -106,4 +115,3 @@ pnpm exec tsx scripts/_tmp_exec_once.ts <session_id> "set -e; OPENAI_BASE_URL='<
 1. 打开 `OSAC_EXECUTION_ENABLED`。
 2. 根据目标链路决定是否打开 `OSAC_LLM_PROXY_ENABLE`。
 3. 回归测试要覆盖：连接建立、模型解析、首 token 延迟、重连稳定性。
-

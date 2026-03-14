@@ -9,6 +9,7 @@ type HistoryMessage = {
 
 type RecoveryContext = {
   taskSessionId: string;
+  generation?: number;
   orchestratorSessionId: string;
   opencodeSessionId: string;
   workspacePath: string;
@@ -105,6 +106,7 @@ function buildToolMetadata(part: Record<string, unknown>, context: RecoveryConte
     asText(toRecord(part.call).name) ||
     'tool';
   return {
+    runtimeGeneration: context.generation,
     orchestratorSessionId: context.orchestratorSessionId,
     opencodeSessionId: context.opencodeSessionId,
     workspacePath: context.workspacePath,
@@ -131,6 +133,7 @@ function buildToolMetadata(part: Record<string, unknown>, context: RecoveryConte
 
 function buildAssistantTextMetadata(partId: string | undefined, context: RecoveryContext) {
   return {
+    runtimeGeneration: context.generation,
     orchestratorSessionId: context.orchestratorSessionId,
     opencodeSessionId: context.opencodeSessionId,
     workspacePath: context.workspacePath,
@@ -157,6 +160,14 @@ export function pickRecoveredOpencodeSessionId(
   workspacePath: string,
   preferredSessionId?: string
 ): string | null {
+  return listRecoveredOpencodeSessionIds(sessions, workspacePath, preferredSessionId)[0] || null;
+}
+
+export function listRecoveredOpencodeSessionIds(
+  sessions: unknown[],
+  workspacePath: string,
+  preferredSessionId?: string
+): string[] {
   const normalizedWorkspace = normalizePath(workspacePath);
   const preferred = asText(preferredSessionId);
   const records = sessions
@@ -166,7 +177,16 @@ export function pickRecoveredOpencodeSessionId(
   if (preferred) {
     const preferredHit = records.find((record) => resolveSessionId(record) === preferred);
     if (preferredHit) {
-      return preferred;
+      const rest = records
+        .map((record) => ({
+          id: resolveSessionId(record),
+          workspace: resolveSessionWorkspace(record),
+          timestamp: resolveMessageTimestamp(record),
+        }))
+        .filter((item) => item.id && item.id !== preferred && (!normalizedWorkspace || item.workspace === normalizedWorkspace))
+        .sort((left, right) => right.timestamp - left.timestamp)
+        .map((item) => item.id);
+      return [preferred, ...rest];
     }
   }
 
@@ -177,9 +197,10 @@ export function pickRecoveredOpencodeSessionId(
       timestamp: resolveMessageTimestamp(record),
     }))
     .filter((item) => item.id && (!normalizedWorkspace || item.workspace === normalizedWorkspace))
-    .sort((left, right) => right.timestamp - left.timestamp);
+    .sort((left, right) => right.timestamp - left.timestamp)
+    .map((item) => item.id);
 
-  return matched[0]?.id || null;
+  return matched;
 }
 
 export function normalizeOpencodeNativeMessages(
@@ -238,6 +259,7 @@ export function normalizeOpencodeNativeMessages(
           createdAtMs,
           sequence++,
           {
+            runtimeGeneration: context.generation,
             orchestratorSessionId: context.orchestratorSessionId,
             opencodeSessionId: context.opencodeSessionId,
             workspacePath: context.workspacePath,
@@ -293,4 +315,18 @@ export function normalizeOpencodeNativeMessages(
     });
 
   return result;
+}
+
+export function hasRenderableAssistantReply(
+  messages: Array<Pick<HistoryMessage, 'role' | 'messageType' | 'content'> | null | undefined>
+): boolean {
+  return messages.some((message) => {
+    if (!message) return false;
+    const content = asText(message.content);
+    if (!content) return false;
+    if (message.role === 'agent' || message.role === 'system') {
+      return true;
+    }
+    return message.messageType !== 'opencode_user_input' && message.messageType.startsWith('opencode_');
+  });
 }

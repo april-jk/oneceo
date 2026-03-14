@@ -662,6 +662,16 @@ export class TaskCreationWebSocketService {
             workspacePath: workspacePath || undefined,
           });
 
+          await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+            status: 'completed',
+            stage: 'completed',
+          });
+          try {
+            await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'completed');
+          } catch (error) {
+            console.warn('[DIRECT_CAPABILITY_STATUS_DB_COMPLETE_FAILED]', error);
+          }
+
           this.sendToClient(clientId, {
             type: 'agent_message' as any,
             agent: 'system',
@@ -682,6 +692,7 @@ export class TaskCreationWebSocketService {
             type: 'status_update' as any,
             sessionId: taskSessionId,
             content: `${capabilityLabel}已完成`,
+            stage: 'completed' as any,
             tone: 'system' as any,
             metadata: {
               directModeIntercepted: true,
@@ -693,10 +704,20 @@ export class TaskCreationWebSocketService {
           return;
         } catch (error) {
           const errorMessage = getPublicErrorMessage(getDirectModeDeploymentErrorMessage(error));
+          await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+            status: 'failed',
+            stage: 'failed',
+          });
+          try {
+            await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'failed');
+          } catch (dbError) {
+            console.warn('[DIRECT_CAPABILITY_STATUS_DB_FAILED_FAILED]', dbError);
+          }
           this.sendToClient(clientId, {
             type: 'status_update' as any,
             sessionId: taskSessionId,
             content: errorMessage,
+            stage: 'failed' as any,
             tone: 'error' as any,
             metadata: {
               directModeIntercepted: true,

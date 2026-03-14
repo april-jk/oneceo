@@ -1518,6 +1518,27 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const message: AgentMessage = JSON.parse(event.data);
         console.log('[TaskCreationAgent] 收到消息:', message);
         const altusMode = readAltusMode();
+        const dispatchSessionUpdated = (
+          targetSessionId: string,
+          detail?: {
+            title?: string;
+            status?: string;
+          }
+        ) => {
+          try {
+            window.dispatchEvent(
+              new CustomEvent('task-creation-session-updated', {
+                detail: {
+                  sessionId: targetSessionId,
+                  ...(detail?.title ? { title: detail.title } : {}),
+                  ...(detail?.status ? { status: detail.status } : {}),
+                },
+              })
+            );
+          } catch {
+            // ignore dispatch failures
+          }
+        };
         if (message.type === 'error') {
           const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
           setIsProcessing(false);
@@ -1541,21 +1562,31 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         const messageSessionId = message.sessionId || message.metadata?.sessionId;
         if (messageSessionId) {
+          let nextStatus: string | undefined;
+          if (message.type === 'status_update') {
+            if (message.stage === 'completed') {
+              nextStatus = 'completed';
+            } else if (message.stage === 'failed') {
+              nextStatus = 'failed';
+            } else if (message.stage === 'clarifying') {
+              nextStatus = 'waiting_user';
+            } else {
+              const outcome =
+                typeof message.metadata?.outcome === 'string' ? message.metadata.outcome.trim() : '';
+              if (outcome === 'completed' || outcome === 'failed') {
+                nextStatus = outcome;
+              }
+            }
+          }
           bindSessionId(messageSessionId);
 
           if (startRuntimeOnNextSessionRef.current && autoRuntime) {
             startRuntimeOnNextSessionRef.current = false;
             void ensureRuntimeRef.current();
           }
-          try {
-            window.dispatchEvent(
-              new CustomEvent('task-creation-session-updated', {
-                detail: { sessionId: messageSessionId },
-              })
-            );
-          } catch {
-            // ignore dispatch failures
-          }
+          dispatchSessionUpdated(messageSessionId, {
+            status: nextStatus,
+          });
         }
         const orchestratorId = extractOrchestratorSessionId(message);
         if (orchestratorId) {
@@ -1570,6 +1601,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setMessages((prev) => mergeRealtimeMessage(prev, message, WELCOME_MESSAGE));
         if (shouldStopProcessingForMessage(message)) {
           setIsProcessing(false);
+          if (messageSessionId) {
+            window.setTimeout(() => {
+              dispatchSessionUpdated(messageSessionId, {
+                status:
+                  message.type === 'status_update' && message.stage === 'completed'
+                    ? 'completed'
+                    : message.type === 'status_update' && message.stage === 'failed'
+                      ? 'failed'
+                      : undefined,
+              });
+            }, 3500);
+          }
         }
 
         switch (message.type) {
@@ -2179,7 +2222,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           try {
             window.dispatchEvent(
               new CustomEvent('task-creation-session-updated', {
-                detail: { sessionId: activeSessionId },
+                detail: {
+                  sessionId: activeSessionId,
+                  title: text.slice(0, 80),
+                  status: 'in_progress',
+                },
               })
             );
           } catch {

@@ -108,6 +108,24 @@ OpenCode 官方仓库 README 示例配置里包含：
 
 这点非常关键，因为它意味着我们不一定要归档 `~/.local/share/opencode/project/...` 这种全局目录；也可以直接把 OpenCode 的项目数据目录落到工作区内的 `.opencode/`，使其天然被 oneceo 现有工作区归档覆盖。
 
+### 4.5 当前集成版本兼容性结论
+
+2026-03-13 在 oneceo 当前 Sandbox 环境实测时，OpenCode `v1.2.6` 启动日志明确报错：
+
+- `Configuration is invalid at /home/user/.config/opencode/opencode.json`
+- `Unrecognized key: "data"`
+
+这说明：
+
+- 官方 README 中出现过的 `data.directory` 示例，并不兼容 oneceo 当前 Sandbox 内实际运行的 OpenCode 版本。
+- 因此本次落地不能直接依赖 `opencode.json.data.directory`。
+- 但 OpenCode 仍然遵循 XDG 数据目录规则，实测 `XDG_DATA_HOME=<workspace>/.opencode` 后，`opencode.db` 和 log 会被写入工作区内。
+
+结论：
+
+- 方案 C 的“项目内数据目录”目标仍然成立；
+- 具体实现应从“配置字段重定向”调整为“启动时注入 `XDG_DATA_HOME`”。
+
 ## 5. 方案选型
 
 ### 方案 A：继续只依赖平台侧消息落盘
@@ -139,7 +157,7 @@ OpenCode 官方仓库 README 示例配置里包含：
 ### 方案 C：把 OpenCode 项目数据目录落到工作区内，并随工作区一起归档恢复
 
 - 做法：
-  - 在 OpenCode 配置里设置 `data.directory=".opencode"`
+  - 启动 `opencode serve` 时注入 `XDG_DATA_HOME=<workspace>/.opencode`
   - 让 OpenCode 会话状态文件写到：
     - `/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode`
   - Sandbox 归档时直接随工作区 tar 包一起保存
@@ -151,7 +169,7 @@ OpenCode 官方仓库 README 示例配置里包含：
   - 不需要额外保存全局 `~/.local/share/opencode`，可避免把全局 auth/log 数据一起打包
   - 历史消息、会话树、summary、内部 session 数据恢复更完整
 - 缺点：
-  - 需要验证 oneceo 当前写入的 `opencode.json` 是否已启用该配置
+  - 需要保证所有 OpenCode server 启动路径都统一注入相同的 `XDG_DATA_HOME`
   - 需要在恢复后增加一次“恢复会话绑定”的逻辑
 
 结论：推荐采用，作为主方案。
@@ -184,23 +202,18 @@ OpenCode 官方仓库 README 示例配置里包含：
 
 ## 6.3 启动配置调整
 
-当前 oneceo 会在 Sandbox 内重写 `~/.config/opencode/opencode.json`。
+当前 oneceo 会在 Sandbox 内重写 `~/.config/opencode/opencode.json`，但当前 OpenCode 版本不接受 `data.directory`。
 
-建议新增或强制写入：
+因此实际落地调整为：
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "data": {
-    "directory": ".opencode"
-  }
-}
+- 保持 `opencode.json` 只写当前版本支持的 provider / model / mcp 配置
+- 在所有 `opencode serve` 启动路径统一注入：
+
+```bash
+XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 ```
 
-注意：
-
-- `data.directory` 应是相对当前项目目录的路径
-- 由于我们每个任务会话已有独立工作区，因此 `.opencode` 不会串会话
+这样 OpenCode 的 SQLite、日志和 session storage 会落到工作区内，同时不需要依赖当前版本不支持的配置键。
 
 ## 6.4 销毁前保存策略
 
@@ -225,8 +238,8 @@ OpenCode 官方仓库 README 示例配置里包含：
 
 1. 恢复工作区 tar 包
 2. 确认 `.opencode/` 已恢复
-3. 重写 `opencode.json`，保证仍启用 `data.directory=".opencode"`
-4. 启动 `opencode serve`
+3. 重写 `opencode.json`
+4. 重新启动 `opencode serve`，并注入 `XDG_DATA_HOME=<workspace>/.opencode`
 5. 通过 OpenCode API 校验会话是否可见：
    - `GET /session`
    - `GET /session/:id`
@@ -257,6 +270,40 @@ OpenCode 官方仓库 README 示例配置里包含：
    - 优先从 OpenCode 拉历史消息
 3. 若 OpenCode 不可用
    - 再退回平台侧历史消息
+
+## 7. 已落地实现
+
+截至 2026-03-13，已完成以下实现：
+
+- `sandbox-agent-provision-service.ts`
+  - 移除不兼容的 `opencode.json.data.directory`
+  - 在 OpenCode server 启动与重启时注入工作区级 `XDG_DATA_HOME`
+- `osac-agent-service.ts`
+  - 在按需补拉起 OpenCode server 时，同样注入工作区级 `XDG_DATA_HOME`
+- `opencode-remote-service.ts`
+  - 恢复后优先从 OpenCode `/session` / `/session/:id/message` 重建绑定与读取历史
+- `task-creation-routes.ts`
+  - `GET /sessions/:id/messages` 优先走 OpenCode 原生历史，平台侧消息退为兜底
+- `opencode-history-recovery.ts`
+  - 新增会话恢复选择与原生消息归一化工具
+
+## 8. 已完成验证
+
+- 单测通过：
+  - `tests/opencode-history-recovery.test.ts`
+  - `tests/direct-capability-intercept-agent.test.ts`
+  - `tests/direct-mode-entry.service.test.ts`
+- OpenCode 直通 API 场景套件通过：
+  - `tests/opencode-sandbox-direct/run-direct-mode-tests.ts`
+  - 包含 `01_session_bootstrap`
+  - 包含 `02_session_continuation`
+  - 包含 `03_sse_realtime_incremental`
+  - 包含 `04_persistence_refresh_consistency`
+  - 包含 `05_completion_signal`
+
+额外说明：
+
+- 现有 Web Playwright 用例 `direct-mode-refresh-consistency.playwright.spec.ts` 本轮未通过，但失败原因是测试自身超时后 `request context disposed`，不是本次 OpenCode 恢复链路的后端回归。
 
 这样最终页面展示的是 OpenCode 原生历史。
 

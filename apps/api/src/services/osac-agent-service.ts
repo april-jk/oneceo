@@ -44,6 +44,12 @@ function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknow
   return resolveOpencodeWorkspacePath(sessionId);
 }
 
+function resolveOpencodeDataHome(workspaceRoot?: string | null): string | null {
+  const normalized = asString(workspaceRoot);
+  if (!normalized) return null;
+  return `${normalized.replace(/\/+$/, '')}/.opencode`;
+}
+
 async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
@@ -128,7 +134,9 @@ async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
     // start server if not ready
   }
 
-  const command = `nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
+  const opencodeDataHome = resolveOpencodeDataHome(runtime.workspaceRoot);
+  const envPrefix = opencodeDataHome ? `XDG_DATA_HOME=${shellEscape(opencodeDataHome)} ` : '';
+  const command = `${envPrefix}nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
 
   const maxAttempts = Math.max(5, Number(process.env.OPENCODE_SERVER_START_ATTEMPTS || 20));
@@ -457,6 +465,23 @@ PY`;
       runtime.trafficAccessToken || undefined
     );
     return JSON.parse(response.body || '{}');
+  }
+
+  async getSessionMessages(
+    sessionId: string,
+    input: { opencodeSessionId: string; workspacePath?: string }
+  ) {
+    await touchSandbox(sessionId, 'sdk_get_session_messages');
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    return opencodeHttpClient.getSessionMessages(
+      runtime.baseUrl,
+      {
+        sessionId: input.opencodeSessionId,
+        directory: input.workspacePath || runtime.workspaceRoot,
+      },
+      runtime.trafficAccessToken || undefined
+    );
   }
 
   async getSessionDiff(sessionId: string, opencodeSessionId: string) {

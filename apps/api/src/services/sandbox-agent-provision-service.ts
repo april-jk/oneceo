@@ -288,6 +288,12 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
+function resolveOpencodeDataHome(workspaceRoot?: string | null): string | null {
+  const normalized = pickString(workspaceRoot);
+  if (!normalized) return null;
+  return `${normalized.replace(/\/+$/, '')}/.opencode`;
+}
+
 function buildSandboxVerifyScript(): string {
   const lines = [
     '#!/usr/bin/env bash',
@@ -454,6 +460,7 @@ async function startOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
+  workspaceRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   try {
@@ -463,7 +470,12 @@ async function startOpencodeServer(
     // proceed to start server
   }
 
-  const inlineEnv = Object.entries(envs)
+  const inlineEnv = Object.entries({
+    ...envs,
+    ...(resolveOpencodeDataHome(workspaceRoot)
+      ? { XDG_DATA_HOME: resolveOpencodeDataHome(workspaceRoot)! }
+      : {}),
+  })
     .map(([key, value]) => `${key}=${shellEscape(value)}`)
     .join(' ');
   const command = `${inlineEnv} opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1`;
@@ -501,11 +513,12 @@ async function restartOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
+  workspaceRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   await stopOpencodeServer(sessionId);
   await new Promise((resolve) => setTimeout(resolve, 500));
-  await startOpencodeServer(sessionId, baseUrl, envs, trafficAccessToken);
+  await startOpencodeServer(sessionId, baseUrl, envs, workspaceRoot, trafficAccessToken);
 }
 
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
@@ -525,7 +538,13 @@ export class SandboxAgentProvisionService {
       ...connectorBootstrap.processEnvs,
     };
     await writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries);
-    await restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken);
+    await restartOpencodeServer(
+      sessionId,
+      baseUrl,
+      opencodeEnvs,
+      resolveOpencodeWorkspacePath(input.taskSessionId || ''),
+      trafficAccessToken
+    );
     return {
       baseUrl,
       trafficAccessToken,
@@ -610,7 +629,7 @@ export class SandboxAgentProvisionService {
       writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
     );
     await runStep('opencode_start', () =>
-      startOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken)
+      startOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
     );
     await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
     await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));

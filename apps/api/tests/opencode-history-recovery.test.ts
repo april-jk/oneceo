@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  hasRenderableAssistantReply,
   normalizeOpencodeNativeMessages,
   pickRecoveredOpencodeSessionId,
 } from '../src/utils/opencode-history-recovery';
@@ -157,4 +158,35 @@ test('normalizeOpencodeNativeMessages falls back to content when assistant messa
   assert.equal(messages[0]?.messageType, 'opencode_event');
   assert.equal(messages[0]?.content, '这是回放的最终文本');
   assert.equal(messages[0]?.metadata?.eventType, 'message.final');
+});
+
+test('hasRenderableAssistantReply returns false for native history with only user input', () => {
+  assert.equal(
+    hasRenderableAssistantReply([
+      {
+        role: 'user',
+        messageType: 'opencode_user_input',
+        content: '帮我开发2048小游戏',
+      },
+    ]),
+    false
+  );
+});
+
+test('hasRenderableAssistantReply returns true when assistant text is present', () => {
+  assert.equal(
+    hasRenderableAssistantReply([
+      {
+        role: 'user',
+        messageType: 'opencode_user_input',
+        content: '帮我开发2048小游戏',
+      },
+      {
+        role: 'agent',
+        messageType: 'opencode_event',
+        content: '我会先搭建基础 HTML/CSS/JS 文件。',
+      },
+    ]),
+    true
+  );
 });

@@ -95,6 +95,7 @@ export default function Home() {
   } = useTaskCreationAgent({
     autoRuntime: !isHistoryView,
     compactHistory: false,
+    runtimeLogPollingEnabled: showRuntimeDrawer,
     onPlanGenerated: (plan) => {
       console.log("计划生成:", plan);
       // TODO: 跳转到项目详情页面或更新左侧项目列表

@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -32,6 +33,10 @@ START_RETRY_LIMIT = 2
 STOP_GRACE_SECONDS = 3.0
 LOG_TAIL_CHARS = 8000
 LOG_REFRESH_INTERVAL_MS = 1200
+STATUS_PARALLELISM = 4
+ACTION_EXECUTOR_WORKERS = 4
+REFRESH_EXECUTOR_WORKERS = 3
+BACKGROUND_REFRESH_PAUSE_SECONDS = 4.0
 
 
 @dataclass(frozen=True)
@@ -120,6 +125,13 @@ class ServiceController:
         self.pnpm_prefix = self._resolve_pnpm_prefix()
         self.services = self._build_services()
         self.service_map = {service.key: service for service in self.services}
+        self.status_executor = ThreadPoolExecutor(
+            max_workers=max(2, min(STATUS_PARALLELISM, len(self.services))),
+            thread_name_prefix="oneceo-status",
+        )
+
+    def close(self) -> None:
+        self.status_executor.shutdown(wait=False, cancel_futures=True)
 
     def _build_runtime_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -393,11 +405,13 @@ class ServiceController:
 
     def all_statuses(self) -> dict[str, ServiceStatus]:
         snapshot: dict[str, ServiceStatus] = {}
-        for service in self.services:
+        futures = {self.status_executor.submit(self.status, service.key): service.key for service in self.services}
+        for future in as_completed(futures):
+            service_key = futures[future]
             try:
-                snapshot[service.key] = self.status(service.key)
+                snapshot[service_key] = future.result()
             except Exception as exc:
-                snapshot[service.key] = ServiceStatus("error", "检测失败", str(exc), "-")
+                snapshot[service_key] = ServiceStatus("error", "检测失败", str(exc), "-")
         return snapshot
 
     def log_tail(self, service_key: str, max_chars: int = LOG_TAIL_CHARS) -> str:
@@ -557,6 +571,14 @@ class ServiceManagerApp:
         self.root = root
         self.controller = controller
         self.queue: Queue[tuple[str, Any]] = Queue()
+        self.refresh_executor = ThreadPoolExecutor(
+            max_workers=REFRESH_EXECUTOR_WORKERS,
+            thread_name_prefix="oneceo-refresh",
+        )
+        self.action_executor = ThreadPoolExecutor(
+            max_workers=max(2, min(ACTION_EXECUTOR_WORKERS, len(self.controller.services))),
+            thread_name_prefix="oneceo-action",
+        )
         self.status_vars: dict[str, dict[str, tk.StringVar]] = {}
         self.state_labels: dict[str, ttk.Label] = {}
         self.service_action_buttons: dict[str, list[ttk.Button]] = {}
@@ -575,16 +597,25 @@ class ServiceManagerApp:
         self.log_lock = threading.Lock()
         self.priority_count = 0
         self.priority_lock = threading.Lock()
+        self.status_request_seq = 0
+        self.log_request_seq = 0
+        self.pending_status_refresh = False
+        self.pending_status_refresh_force = False
+        self.pending_log_refresh = False
+        self.pending_log_refresh_force = False
+        self.background_refresh_paused_until = 0.0
+        self.closed = False
 
         self.root.title("OneCEO 服务控制台")
         self.root.geometry("1220x820")
         self.root.minsize(1080, 700)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_ui()
         self._schedule_status_refresh()
         self._schedule_log_refresh()
-        self._request_status_refresh()
-        self._request_log_refresh()
+        self._request_status_refresh(force=True)
+        self._request_log_refresh(force=True)
         self._poll_queue()
 
     def _build_ui(self) -> None:
@@ -615,7 +646,7 @@ class ServiceManagerApp:
                 ("全部启动", lambda: self._run_all("start")),
                 ("全部停止", lambda: self._run_all("stop")),
                 ("全部重启", lambda: self._run_all("restart")),
-                ("刷新状态", self._request_status_refresh),
+                ("刷新状态", lambda: self._request_status_refresh(force=True)),
             )
         ):
             button = ttk.Button(toolbar, text=label, command=action)
@@ -717,9 +748,13 @@ class ServiceManagerApp:
             width=18,
         )
         log_selector.grid(row=0, column=1, sticky="w", padx=(8, 12))
-        log_selector.bind("<<ComboboxSelected>>", lambda _event: self._request_log_refresh())
+        log_selector.bind("<<ComboboxSelected>>", lambda _event: self._request_log_refresh(force=True))
 
-        refresh_log_button = ttk.Button(log_frame, text="刷新日志", command=self._request_log_refresh)
+        refresh_log_button = ttk.Button(
+            log_frame,
+            text="刷新日志",
+            command=lambda: self._request_log_refresh(force=True),
+        )
         refresh_log_button.grid(row=0, column=2, sticky="w")
         self.log_refresh_button = refresh_log_button
 
@@ -778,10 +813,34 @@ class ServiceManagerApp:
         with self.priority_lock:
             return self.priority_count > 0
 
+    def _pause_background_refresh(self, seconds: float = BACKGROUND_REFRESH_PAUSE_SECONDS) -> None:
+        self.background_refresh_paused_until = max(self.background_refresh_paused_until, time.time() + seconds)
+
+    def _background_refresh_paused(self) -> bool:
+        return time.time() < self.background_refresh_paused_until
+
+    def _submit_to_executor(self, executor: ThreadPoolExecutor, task: Callable[[], None]) -> bool:
+        if self.closed:
+            return False
+        try:
+            executor.submit(task)
+            return True
+        except RuntimeError:
+            return False
+
+    def _on_close(self) -> None:
+        self.closed = True
+        self.refresh_executor.shutdown(wait=False, cancel_futures=True)
+        self.action_executor.shutdown(wait=False, cancel_futures=True)
+        self.controller.close()
+        self.root.destroy()
+
     def _schedule_status_refresh(self) -> None:
         self.root.after(2000, self._on_status_timer)
 
     def _on_status_timer(self) -> None:
+        if self.closed:
+            return
         self._request_status_refresh()
         self._schedule_status_refresh()
 
@@ -789,10 +848,17 @@ class ServiceManagerApp:
         self.root.after(LOG_REFRESH_INTERVAL_MS, self._on_log_timer)
 
     def _on_log_timer(self) -> None:
+        if self.closed:
+            return
         self._request_log_refresh()
         self._schedule_log_refresh()
 
-    def _apply_status_snapshot(self, snapshot: dict[str, ServiceStatus]) -> None:
+    def _apply_status_snapshot(self, payload: dict[str, Any]) -> None:
+        request_id = int(payload["request_id"])
+        if request_id != self.status_request_seq:
+            return
+
+        snapshot: dict[str, ServiceStatus] = payload["snapshot"]
         for service in self.controller.services:
             status = snapshot.get(service.key)
             if status is None:
@@ -815,7 +881,11 @@ class ServiceManagerApp:
             else:
                 widget.configure(foreground="#64748b")
 
-    def _apply_log_payload(self, payload: dict[str, str]) -> None:
+    def _apply_log_payload(self, payload: dict[str, Any]) -> None:
+        request_id = int(payload["request_id"])
+        if request_id != self.log_request_seq:
+            return
+
         if payload["service_key"] != self._selected_log_service_key():
             return
 
@@ -867,13 +937,28 @@ class ServiceManagerApp:
                         else:
                             hint_var.set(self._policy_hint_text())
                         self.log_service_var.set(self.controller.service_map[service_key].label)
-                        self._request_log_refresh()
+                        self._request_log_refresh(force=True)
+
+                    if target_type in {"service", "global", "port"}:
+                        self._request_status_refresh(force=True)
 
                     self.message_var.set(message)
                     if error:
                         messagebox.showerror("操作失败", message)
                 elif kind == "service-busy":
                     self._set_service_busy(payload["service_key"], payload["busy"])
+                elif kind == "status-finished":
+                    if self.pending_status_refresh:
+                        force = self.pending_status_refresh_force
+                        self.pending_status_refresh = False
+                        self.pending_status_refresh_force = False
+                        self._request_status_refresh(force=force)
+                elif kind == "log-finished":
+                    if self.pending_log_refresh:
+                        force = self.pending_log_refresh_force
+                        self.pending_log_refresh = False
+                        self.pending_log_refresh_force = False
+                        self._request_log_refresh(force=force)
                 elif kind == "log-busy":
                     self._set_log_busy(bool(payload))
                 elif kind == "message":
@@ -881,41 +966,77 @@ class ServiceManagerApp:
         except Empty:
             pass
 
-        self.root.after(200, self._poll_queue)
+        if self.closed:
+            return
 
-    def _request_status_refresh(self) -> None:
-        if self._priority_actions_running():
+        try:
+            self.root.after(200, self._poll_queue)
+        except tk.TclError:
+            pass
+
+    def _request_status_refresh(self, force: bool = False) -> None:
+        if not force and (self._priority_actions_running() or self._background_refresh_paused()):
             return
         if not self.status_lock.acquire(blocking=False):
+            self.pending_status_refresh = True
+            self.pending_status_refresh_force = self.pending_status_refresh_force or force
             return
 
+        self.status_request_seq += 1
+        request_id = self.status_request_seq
+
         def worker() -> None:
+            snapshot: dict[str, ServiceStatus] | None = None
             try:
                 snapshot = self.controller.all_statuses()
-                self.queue.put(("status", snapshot))
             finally:
                 self.status_lock.release()
+                self.queue.put(("status-finished", None))
 
-        threading.Thread(target=worker, daemon=True).start()
+            if snapshot is not None:
+                self.queue.put(("status", {"request_id": request_id, "snapshot": snapshot}))
 
-    def _request_log_refresh(self) -> None:
+        if not self._submit_to_executor(self.refresh_executor, worker):
+            self.status_lock.release()
+            self.queue.put(("status-finished", None))
+
+    def _request_log_refresh(self, force: bool = False) -> None:
+        if not force and self._background_refresh_paused():
+            return
         if not self.log_lock.acquire(blocking=False):
+            self.pending_log_refresh = True
+            self.pending_log_refresh_force = self.pending_log_refresh_force or force
             return
 
         service_key = self._selected_log_service_key()
+        self.log_request_seq += 1
+        request_id = self.log_request_seq
         self._set_log_busy(True)
 
         def worker() -> None:
+            payload: dict[str, Any] | None = None
             try:
                 content = self.controller.log_tail(service_key)
                 service = self.controller.service_map[service_key]
                 meta = f"{service.label} 日志：{service.log_file} | {time.strftime('%H:%M:%S')}"
-                self.queue.put(("log", {"service_key": service_key, "content": content, "meta": meta}))
+                payload = {
+                    "request_id": request_id,
+                    "service_key": service_key,
+                    "content": content,
+                    "meta": meta,
+                }
             finally:
                 self.log_lock.release()
+                self.queue.put(("log-finished", None))
                 self.queue.put(("log-busy", False))
 
-        threading.Thread(target=worker, daemon=True).start()
+            if payload is not None:
+                self.queue.put(("log", payload))
+
+        if not self._submit_to_executor(self.refresh_executor, worker):
+            self.log_lock.release()
+            self.queue.put(("log-finished", None))
+            self.queue.put(("log-busy", False))
 
     def _submit_operation(
         self,
@@ -924,7 +1045,7 @@ class ServiceManagerApp:
         busy_handler: Callable[[bool], None],
         func: Callable[[], str],
         action_name: str,
-    ) -> None:
+    ) -> bool:
         busy_handler(True)
         self._set_priority_busy(True)
 
@@ -960,7 +1081,11 @@ class ServiceManagerApp:
                     )
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        if not self._submit_to_executor(self.action_executor, worker):
+            busy_handler(False)
+            self._set_priority_busy(False)
+            return False
+        return True
 
     def _run_service(self, action: str, service_key: str) -> None:
         service = self.controller.service_map[service_key]
@@ -974,8 +1099,9 @@ class ServiceManagerApp:
         self.status_vars[service_key]["hint"].set(
             f"执行中：按钮操作优先；{action_text} 超时会自动重试；必要时会强制释放端口"
         )
+        self._pause_background_refresh()
         self.log_service_var.set(service.label)
-        self._request_log_refresh()
+        self._request_log_refresh(force=True)
 
         def runner() -> str:
             try:
@@ -983,13 +1109,15 @@ class ServiceManagerApp:
             finally:
                 lock.release()
 
-        self._submit_operation(
+        submitted = self._submit_operation(
             "service",
             service_key,
             lambda busy: self._set_service_busy(service_key, busy),
             runner,
             action,
         )
+        if not submitted:
+            lock.release()
 
     def _run_all(self, action: str) -> None:
         if not self.global_action_lock.acquire(blocking=False):
@@ -998,6 +1126,7 @@ class ServiceManagerApp:
 
         text_map = {"start": "全部启动", "stop": "全部停止", "restart": "全部重启"}
         self.message_var.set(f"{text_map[action]} 中...")
+        self._pause_background_refresh()
 
         def runner() -> str:
             messages: list[str] = []
@@ -1029,7 +1158,9 @@ class ServiceManagerApp:
             finally:
                 self.global_action_lock.release()
 
-        self._submit_operation("global", action, self._set_global_busy, runner, action)
+        submitted = self._submit_operation("global", action, self._set_global_busy, runner, action)
+        if not submitted:
+            self.global_action_lock.release()
 
     def _kill_port(self) -> None:
         raw_port = self.port_var.get().strip()
@@ -1043,6 +1174,7 @@ class ServiceManagerApp:
 
         port = int(raw_port)
         self.message_var.set(f"强杀端口 {port} 中...")
+        self._pause_background_refresh()
 
         def runner() -> str:
             try:
@@ -1050,7 +1182,9 @@ class ServiceManagerApp:
             finally:
                 self.port_lock.release()
 
-        self._submit_operation("port", str(port), self._set_port_busy, runner, "kill-port")
+        submitted = self._submit_operation("port", str(port), self._set_port_busy, runner, "kill-port")
+        if not submitted:
+            self.port_lock.release()
 
 
 def run_cli(controller: ServiceController, args: argparse.Namespace) -> int:
@@ -1111,14 +1245,17 @@ def main() -> int:
         root.destroy()
         return 1
 
-    if args.self_check or args.action or args.kill_port is not None:
-        return run_cli(controller, args)
+    try:
+        if args.self_check or args.action or args.kill_port is not None:
+            return run_cli(controller, args)
 
-    root = tk.Tk()
-    app = ServiceManagerApp(root, controller)
-    _ = app
-    root.mainloop()
-    return 0
+        root = tk.Tk()
+        app = ServiceManagerApp(root, controller)
+        _ = app
+        root.mainloop()
+        return 0
+    finally:
+        controller.close()
 
 
 if __name__ == "__main__":

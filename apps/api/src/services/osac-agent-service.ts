@@ -10,6 +10,7 @@ import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { auditOsacAction } from '../utils/osac-audit';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { sessionConnectorService } from './session-connector-service';
+import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 
 type OpencodePartInput = {
   type: string;
@@ -52,24 +53,16 @@ function resolveOpencodeDataHome(workspaceRoot?: string | null): string | null {
 
 async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-  const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-  if (!environment) {
+  const ensured = await ensureSandboxRuntimeMetadata(sessionId);
+  if (!ensured) {
     throw new Error(`未找到执行环境: ${sessionId}`);
   }
-  const metadata = (environment.metadata || {}) as Record<string, unknown>;
-  const baseUrl =
-    asString(metadata.opencodeBaseUrl) ||
-    asString((metadata.opencode as Record<string, unknown>)?.baseUrl) ||
-    asString(metadata.osacEndpoint);
-  if (!baseUrl) {
-    throw new Error('未找到 OpenCode baseUrl（metadata.opencodeBaseUrl）');
-  }
-  const trafficAccessToken =
-    asString((metadata.e2b as Record<string, unknown>)?.trafficAccessToken) ||
-    asString(metadata.trafficAccessToken) ||
-    null;
-  const workspaceRoot = resolveWorkspaceRoot(sessionId, metadata);
-  return { baseUrl, trafficAccessToken, workspaceRoot };
+  const workspaceRoot = resolveWorkspaceRoot(sessionId, ensured.metadata);
+  return {
+    baseUrl: ensured.baseUrl,
+    trafficAccessToken: ensured.trafficAccessToken,
+    workspaceRoot,
+  };
 }
 
 function buildSyntheticMessage(

@@ -18,6 +18,10 @@ import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import {
+  normalizeOpencodeNativeMessages,
+  pickRecoveredOpencodeSessionId,
+} from '../utils/opencode-history-recovery';
+import {
   buildOpencodeQuestionAnswers,
   findPendingOpencodeQuestion,
   type OpencodePendingQuestion,
@@ -1518,6 +1522,114 @@ export class OpencodeRemoteService {
     };
   }
 
+  private async resolveRecoveredOpencodeSessionId(input: {
+    taskSessionId: string;
+    orchestratorSessionId: string;
+    workspacePath: string;
+    preferredOpencodeSessionId?: string;
+  }): Promise<string | null> {
+    const preferred = asString(input.preferredOpencodeSessionId);
+
+    await osacAgentService.ensureOpencodeServer(input.orchestratorSessionId, {
+      workspacePath: input.workspacePath || undefined,
+    });
+
+    if (preferred) {
+      try {
+        await osacAgentService.getSessionDetails(input.orchestratorSessionId, preferred);
+        await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+          orchestratorSessionId: input.orchestratorSessionId,
+          opencodeSessionId: preferred,
+        });
+        return preferred;
+      } catch {
+        // try recover from native session list
+      }
+    }
+
+    try {
+      const response = await osacAgentService.getSessionList(input.orchestratorSessionId, {
+        maxCount: 50,
+        format: 'json',
+      });
+      const sessions = Array.isArray((response as any)?.sessions) ? (response as any).sessions : [];
+      const recovered = pickRecoveredOpencodeSessionId(
+        sessions,
+        input.workspacePath,
+        preferred || undefined
+      );
+      if (!recovered) {
+        return null;
+      }
+
+      await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+        orchestratorSessionId: input.orchestratorSessionId,
+        opencodeSessionId: recovered,
+      });
+      return recovered;
+    } catch (error) {
+      console.warn('[OPENCODE_RECOVER_SESSION_ID_FAILED]', input.taskSessionId, error);
+      return null;
+    }
+  }
+
+  async loadNativeMessageHistory(
+    taskSessionId: string,
+    options?: { allowProvision?: boolean }
+  ): Promise<
+    Array<{
+      id: string;
+      role: 'user' | 'agent' | 'system';
+      messageType: string;
+      content: string;
+      metadata?: Record<string, unknown>;
+      createdAt: string;
+    }> | null
+  > {
+    const taskId = asString(taskSessionId);
+    if (!taskId) return null;
+
+    let runtime = await resolveRuntimeBinding(taskId);
+    if (!runtime) {
+      if (!options?.allowProvision) {
+        return null;
+      }
+      runtime = await this.recoverRuntime(taskId);
+    }
+
+    const workspacePath = resolveOpencodeWorkspacePath(taskId);
+    const recoveredOpencodeSessionId = await this.resolveRecoveredOpencodeSessionId({
+      taskSessionId: taskId,
+      orchestratorSessionId: runtime.orchestratorSessionId,
+      workspacePath,
+      preferredOpencodeSessionId: runtime.opencodeSessionId,
+    });
+
+    if (!recoveredOpencodeSessionId) {
+      return null;
+    }
+
+    try {
+      const rawMessages = await osacAgentService.getSessionMessages(runtime.orchestratorSessionId, {
+        opencodeSessionId: recoveredOpencodeSessionId,
+        workspacePath,
+      });
+      const normalized = normalizeOpencodeNativeMessages(
+        Array.isArray(rawMessages) ? rawMessages : [],
+        {
+          taskSessionId: taskId,
+          orchestratorSessionId: runtime.orchestratorSessionId,
+          opencodeSessionId: recoveredOpencodeSessionId,
+          workspacePath,
+        }
+      );
+      return normalized.length > 0 ? normalized : null;
+    } catch (error) {
+      console.warn('[OPENCODE_LOAD_NATIVE_HISTORY_FAILED]', taskId, error);
+      return null;
+    }
+  }
+
   private async emitPhaseStatus(params: {
     sessionId: string;
     phase: FlowPhase;
@@ -2308,6 +2420,14 @@ export class OpencodeRemoteService {
           await this.ensureWorkspaceBaseline(taskSessionId, orchestratorSessionId, workspacePath || '');
 
           let opencodeSessionId = runtime?.opencodeSessionId;
+          if (!opencodeSessionId) {
+            opencodeSessionId =
+              (await this.resolveRecoveredOpencodeSessionId({
+                taskSessionId,
+                orchestratorSessionId,
+                workspacePath,
+              })) || undefined;
+          }
           if (!opencodeSessionId) {
             const created = await osacAgentService.createOpencodeSession(orchestratorSessionId, {
               workspacePath: workspacePath || undefined,

@@ -32,11 +32,13 @@ START_READY_TIMEOUT_SECONDS = 35.0
 START_RETRY_LIMIT = 2
 STOP_GRACE_SECONDS = 3.0
 LOG_TAIL_CHARS = 8000
+STATUS_REFRESH_INTERVAL_MS = 5000
 LOG_REFRESH_INTERVAL_MS = 1200
 STATUS_PARALLELISM = 4
 ACTION_EXECUTOR_WORKERS = 4
 REFRESH_EXECUTOR_WORKERS = 3
 BACKGROUND_REFRESH_PAUSE_SECONDS = 4.0
+AUTO_LOG_REFRESH_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -789,18 +791,17 @@ class ServiceManagerApp:
             button.state(["disabled"] if busy else ["!disabled"])
 
     def _set_service_busy(self, service_key: str, busy: bool) -> None:
-        self._set_buttons_state(self.service_action_buttons.get(service_key, []), busy)
+        _ = service_key
+        _ = busy
 
     def _set_global_busy(self, busy: bool) -> None:
-        self._set_buttons_state(self.global_action_buttons[:3], busy)
+        _ = busy
 
     def _set_port_busy(self, busy: bool) -> None:
-        if self.port_kill_button is not None:
-            self._set_buttons_state([self.port_kill_button], busy)
+        _ = busy
 
     def _set_log_busy(self, busy: bool) -> None:
-        if self.log_refresh_button is not None:
-            self._set_buttons_state([self.log_refresh_button], busy)
+        _ = busy
 
     def _set_priority_busy(self, busy: bool) -> None:
         with self.priority_lock:
@@ -836,7 +837,7 @@ class ServiceManagerApp:
         self.root.destroy()
 
     def _schedule_status_refresh(self) -> None:
-        self.root.after(2000, self._on_status_timer)
+        self.root.after(STATUS_REFRESH_INTERVAL_MS, self._on_status_timer)
 
     def _on_status_timer(self) -> None:
         if self.closed:
@@ -845,6 +846,8 @@ class ServiceManagerApp:
         self._schedule_status_refresh()
 
     def _schedule_log_refresh(self) -> None:
+        if not AUTO_LOG_REFRESH_ENABLED:
+            return
         self.root.after(LOG_REFRESH_INTERVAL_MS, self._on_log_timer)
 
     def _on_log_timer(self) -> None:
@@ -943,8 +946,6 @@ class ServiceManagerApp:
                         self._request_status_refresh(force=True)
 
                     self.message_var.set(message)
-                    if error:
-                        messagebox.showerror("操作失败", message)
                 elif kind == "service-busy":
                     self._set_service_busy(payload["service_key"], payload["busy"])
                 elif kind == "status-finished":
@@ -1011,7 +1012,6 @@ class ServiceManagerApp:
         service_key = self._selected_log_service_key()
         self.log_request_seq += 1
         request_id = self.log_request_seq
-        self._set_log_busy(True)
 
         def worker() -> None:
             payload: dict[str, Any] | None = None
@@ -1028,7 +1028,6 @@ class ServiceManagerApp:
             finally:
                 self.log_lock.release()
                 self.queue.put(("log-finished", None))
-                self.queue.put(("log-busy", False))
 
             if payload is not None:
                 self.queue.put(("log", payload))
@@ -1036,7 +1035,6 @@ class ServiceManagerApp:
         if not self._submit_to_executor(self.refresh_executor, worker):
             self.log_lock.release()
             self.queue.put(("log-finished", None))
-            self.queue.put(("log-busy", False))
 
     def _submit_operation(
         self,
@@ -1091,13 +1089,13 @@ class ServiceManagerApp:
         service = self.controller.service_map[service_key]
         lock = self.service_locks[service_key]
         if not lock.acquire(blocking=False):
-            messagebox.showwarning("操作冲突", f"{service.label} 正在执行其他操作。")
+            self.message_var.set(f"{service.label} 已有指令在后台执行，忽略本次点击。")
             return
 
         action_text = {"start": "启动", "stop": "停止", "restart": "重启"}[action]
-        self.message_var.set(f"{action_text} {service.label} 中...")
+        self.message_var.set(f"已下发{action_text}指令：{service.label}，后台执行中...")
         self.status_vars[service_key]["hint"].set(
-            f"执行中：按钮操作优先；{action_text} 超时会自动重试；必要时会强制释放端口"
+            f"已下发{action_text}指令：后台执行中；如需新状态可稍后手动刷新"
         )
         self._pause_background_refresh()
         self.log_service_var.set(service.label)
@@ -1121,11 +1119,11 @@ class ServiceManagerApp:
 
     def _run_all(self, action: str) -> None:
         if not self.global_action_lock.acquire(blocking=False):
-            messagebox.showwarning("操作冲突", "批量操作正在执行，请稍后。")
+            self.message_var.set("批量指令已在后台执行，忽略本次点击。")
             return
 
         text_map = {"start": "全部启动", "stop": "全部停止", "restart": "全部重启"}
-        self.message_var.set(f"{text_map[action]} 中...")
+        self.message_var.set(f"已下发{text_map[action]}指令，后台执行中...")
         self._pause_background_refresh()
 
         def runner() -> str:
@@ -1165,15 +1163,15 @@ class ServiceManagerApp:
     def _kill_port(self) -> None:
         raw_port = self.port_var.get().strip()
         if not raw_port.isdigit():
-            messagebox.showwarning("输入错误", "请输入有效端口号。")
+            self.message_var.set("请输入有效端口号。")
             return
 
         if not self.port_lock.acquire(blocking=False):
-            messagebox.showwarning("操作冲突", "端口强杀任务正在执行，请稍后。")
+            self.message_var.set("端口强杀指令已在后台执行，忽略本次点击。")
             return
 
         port = int(raw_port)
-        self.message_var.set(f"强杀端口 {port} 中...")
+        self.message_var.set(f"已下发强杀端口 {port} 指令，后台执行中...")
         self._pause_background_refresh()
 
         def runner() -> str:

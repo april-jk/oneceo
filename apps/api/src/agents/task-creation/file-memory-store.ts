@@ -340,20 +340,35 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
 
       const terminal = session.status === 'completed' || session.status === 'failed';
-      if (terminal && !payload.status) {
+      const requestedStatus = payload.status;
+      const requestedStage = payload.stage;
+      const requestedPhase = payload.phase;
+      const forceTerminal = requestedStatus === 'completed' || requestedStatus === 'failed';
+      const allowBackward = forceTerminal || Boolean(payload.allowBackward);
+
+      if (terminal && !allowBackward && !requestedStatus) {
         return;
       }
-      if (terminal && payload.status && payload.status !== session.status) {
+      if (terminal && requestedStatus && requestedStatus !== session.status && !allowBackward) {
         return;
       }
 
-      let nextStatus: TaskStatus = payload.status || session.status;
-      let nextPhase: TaskPhase | undefined = payload.phase || session.phase;
-      let nextStage: TaskStage | undefined = payload.stage || session.stage;
-      const forceTerminal = nextStatus === 'completed' || nextStatus === 'failed';
-      const allowBackward = forceTerminal || Boolean(payload.allowBackward);
+      let nextStatus: TaskStatus = requestedStatus || session.status;
+      let nextPhase: TaskPhase | undefined = requestedPhase || session.phase;
+      let nextStage: TaskStage | undefined = requestedStage || session.stage;
       const currentPhase = session.phase as TaskPhase | undefined;
       const currentStage = session.stage as TaskStage | undefined;
+
+      const reopeningFromTerminal =
+        allowBackward &&
+        terminal &&
+        nextStatus === session.status &&
+        ((nextStage && nextStage !== 'completed' && nextStage !== 'failed') ||
+          (nextPhase && nextPhase !== 'delivery'));
+
+      if (reopeningFromTerminal) {
+        nextStatus = 'in_progress';
+      }
 
       if (nextStatus === 'waiting_user') {
         nextStage = 'clarifying';

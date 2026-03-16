@@ -389,12 +389,6 @@ export default function Home() {
     const baseText = trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!baseText) return;
 
-    if (!isConnected) {
-      pendingInputRef.current = rawInput;
-      setMode('chat');
-      return;
-    }
-
     try {
       let activeSessionId = (sessionId || "").trim();
       if (hasAttachments && !activeSessionId) {

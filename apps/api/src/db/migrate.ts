@@ -70,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth
 `;
 
 const createTablesSQL = `
+CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
 -- 任务创建会话表
 CREATE TABLE IF NOT EXISTS task_creation_sessions (
   id UUID PRIMARY KEY,
@@ -84,11 +86,31 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
 CREATE TABLE IF NOT EXISTS conversation_messages (
   id UUID PRIMARY KEY,
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  message_key TEXT,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
   message_type TEXT,
   metadata JSONB,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  timeline_cursor BIGINT DEFAULT nextval('conversation_message_timeline_cursor_seq'),
+  runtime_generation INTEGER,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 会话最近消息热缓存表
+CREATE TABLE IF NOT EXISTS task_session_recent_messages (
+  id UUID PRIMARY KEY,
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  message_id UUID,
+  message_key TEXT,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  message_type TEXT,
+  metadata JSONB,
+  timeline_cursor BIGINT,
+  runtime_generation INTEGER,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- 意图识别结果表
@@ -161,6 +183,10 @@ CREATE TABLE IF NOT EXISTS sandbox_execution_environments (
 
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_session_id ON conversation_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_id
+  ON task_session_recent_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_created_at
+  ON task_session_recent_messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_intent_recognition_results_session_id ON intent_recognition_results(session_id);
 CREATE INDEX IF NOT EXISTS idx_task_descriptions_session_id ON task_descriptions(session_id);
 CREATE INDEX IF NOT EXISTS idx_execution_plans_session_id ON execution_plans(session_id);
@@ -170,6 +196,150 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
 ${connectorTablesSQL}
+`;
+
+const backfillMessageStorageSQL = `
+CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
+ALTER TABLE conversation_messages
+  ADD COLUMN IF NOT EXISTS message_key TEXT,
+  ADD COLUMN IF NOT EXISTS timeline_cursor BIGINT,
+  ADD COLUMN IF NOT EXISTS runtime_generation INTEGER,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE task_session_recent_messages
+  ADD COLUMN IF NOT EXISTS message_id UUID,
+  ADD COLUMN IF NOT EXISTS message_key TEXT,
+  ADD COLUMN IF NOT EXISTS timeline_cursor BIGINT,
+  ADD COLUMN IF NOT EXISTS runtime_generation INTEGER,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+UPDATE conversation_messages
+SET message_key = COALESCE(NULLIF(metadata->>'messageKey', ''), 'db:' || id::text)
+WHERE message_key IS NULL;
+
+UPDATE conversation_messages
+SET runtime_generation = CASE
+  WHEN metadata ? 'runtimeGeneration' AND (metadata->>'runtimeGeneration') ~ '^[0-9]+$'
+    THEN (metadata->>'runtimeGeneration')::INTEGER
+  ELSE runtime_generation
+END
+WHERE runtime_generation IS NULL;
+
+WITH ranked_duplicates AS (
+  SELECT
+    id,
+    ROW_NUMBER() OVER (
+      PARTITION BY session_id, message_key
+      ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC, id DESC
+    ) AS rn
+  FROM conversation_messages
+  WHERE message_key IS NOT NULL
+)
+DELETE FROM conversation_messages cm
+USING ranked_duplicates rd
+WHERE cm.id = rd.id
+  AND rd.rn > 1;
+
+WITH ranked AS (
+  SELECT
+    id,
+    COALESCE(
+      CASE WHEN metadata ? 'timelineCursor' AND (metadata->>'timelineCursor') ~ '^[0-9]+$'
+        THEN (metadata->>'timelineCursor')::BIGINT END,
+      CASE WHEN metadata ? 'sessionEventSeq' AND (metadata->>'sessionEventSeq') ~ '^[0-9]+$'
+        THEN (metadata->>'sessionEventSeq')::BIGINT END,
+      ((EXTRACT(EPOCH FROM created_at) * 1000000)::BIGINT
+        + ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at ASC, id ASC))
+    ) AS resolved_cursor
+  FROM conversation_messages
+)
+UPDATE conversation_messages cm
+SET timeline_cursor = ranked.resolved_cursor
+FROM ranked
+WHERE cm.id = ranked.id
+  AND cm.timeline_cursor IS NULL;
+
+ALTER TABLE conversation_messages
+  ALTER COLUMN message_key SET NOT NULL,
+  ALTER COLUMN timeline_cursor SET NOT NULL,
+  ALTER COLUMN timeline_cursor SET DEFAULT nextval('conversation_message_timeline_cursor_seq');
+
+SELECT setval(
+  'conversation_message_timeline_cursor_seq',
+  COALESCE((SELECT MAX(timeline_cursor) FROM conversation_messages), 1),
+  true
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_session_id ON conversation_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_session_timeline
+  ON conversation_messages(session_id, timeline_cursor);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_session_message_key
+  ON conversation_messages(session_id, message_key);
+
+DELETE FROM task_session_recent_messages;
+
+INSERT INTO task_session_recent_messages (
+  id,
+  session_id,
+  message_id,
+  message_key,
+  role,
+  content,
+  message_type,
+  metadata,
+  timeline_cursor,
+  runtime_generation,
+  created_at,
+  updated_at
+)
+SELECT
+  gen_random_uuid(),
+  ranked.session_id,
+  ranked.id,
+  ranked.message_key,
+  ranked.role,
+  ranked.content,
+  ranked.message_type,
+  ranked.metadata,
+  ranked.timeline_cursor,
+  ranked.runtime_generation,
+  ranked.created_at,
+  COALESCE(ranked.updated_at, NOW())
+FROM (
+  SELECT
+    cm.*,
+    ROW_NUMBER() OVER (PARTITION BY cm.session_id ORDER BY cm.timeline_cursor DESC, cm.created_at DESC, cm.id DESC) AS rn
+  FROM conversation_messages cm
+) ranked
+WHERE ranked.rn <= 50;
+
+UPDATE task_session_recent_messages
+SET
+  message_id = COALESCE(message_id, id),
+  message_key = COALESCE(message_key, 'db:' || id::text),
+  timeline_cursor = COALESCE(
+    timeline_cursor,
+    CASE WHEN metadata ? 'timelineCursor' AND (metadata->>'timelineCursor') ~ '^[0-9]+$'
+      THEN (metadata->>'timelineCursor')::BIGINT END,
+    CASE WHEN metadata ? 'sessionEventSeq' AND (metadata->>'sessionEventSeq') ~ '^[0-9]+$'
+      THEN (metadata->>'sessionEventSeq')::BIGINT END,
+    (EXTRACT(EPOCH FROM created_at) * 1000000)::BIGINT
+  );
+
+ALTER TABLE task_session_recent_messages
+  ALTER COLUMN message_id SET NOT NULL,
+  ALTER COLUMN message_key SET NOT NULL,
+  ALTER COLUMN timeline_cursor SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_id
+  ON task_session_recent_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_timeline
+  ON task_session_recent_messages(session_id, timeline_cursor);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_message_key
+  ON task_session_recent_messages(session_id, message_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_created_at
+  ON task_session_recent_messages(session_id, created_at);
 `;
 
 /**
@@ -182,11 +352,13 @@ export async function runMigration() {
     
     // 执行创建表的 SQL
     await db.execute(sql.raw(createTablesSQL));
+    await db.execute(sql.raw(backfillMessageStorageSQL));
     
     console.log('✅ 数据库迁移完成！');
     console.log('已创建以下表：');
     console.log('  - task_creation_sessions');
     console.log('  - conversation_messages');
+    console.log('  - task_session_recent_messages');
     console.log('  - intent_recognition_results');
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
@@ -228,6 +400,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS task_descriptions CASCADE;
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
+      DROP TABLE IF EXISTS task_session_recent_messages CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;

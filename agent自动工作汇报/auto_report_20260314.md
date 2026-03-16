@@ -80,3 +80,30 @@
 - 计划如何解决：
   - 重启 API 进程后，用同一个 Playwright 会话再次发送续写消息，确认旧 session 能直接恢复并继续执行。
   - 如果修复后仍感到“不流畅”，继续针对前端高频轮询链路做第二轮收敛，减少重复请求。
+
+- 做了什么：
+  - 针对“会话页首屏完全依赖远程 sandbox/OpenCode 历史”的体验问题，新增设计文档 `docs/agent研发文档/直通模式最近50条消息热缓存与增量历史加载设计.md`。
+  - 文档明确了三层消息模型：数据库 recent cache、上滑触发的 older history backfill、底部 live tail。
+  - 文档同时补充了页面刷新/重连后的查看进度保持方案，包括 sessionStorage view cache 与 scroll anchor 恢复。
+- 遇到什么：
+  - 现有实现把“首屏消息恢复”“用户上滑加载的更老历史”“底部实时消息”混在一个数组里，天然容易在重连或刷新后发生整体替换。
+  - 单纯依赖 OpenCode 原生历史会放大 sandbox 启停对用户的可见影响，不适合作为会话首屏唯一来源。
+- 计划如何解决：
+  - 等用户审核并确认该设计后，再按 Phase A-D 顺序开发：
+    - recent cache 表与接口
+    - 首屏 recent cache 优先
+    - older history 增量加载
+    - 刷新后查看进度恢复
+
+- 做了什么：
+  - 在 `apps/api/src/db/schema.ts`、`apps/api/src/db/migrate.ts` 新增 `task_session_recent_messages`，用于保存每个会话最近 50 条热缓存消息。
+  - 在 `apps/api/src/db/dao/task-creation-session.dao.ts` 把最近消息缓存接入 `addMessage/addMessages`，并在每次写入后自动 trim 到 50 条。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 新增 `/messages/recent` 与 `/messages/history`，并抽出统一的历史解析 helper，保留现有 `/messages` 兼容。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 增加 recent bootstrap、older history 分页、sessionStorage 视图缓存与重连后历史合并逻辑。
+  - 在 `apps/web/client/src/pages/Home.tsx` 接入滚动容器管理：顶部触发 older history、prepend 后保持 scrollTop、刷新后恢复滚动位置。
+- 遇到什么：
+  - 前端历史加载原来是单路 `/messages` 全量替换，需要先拆出可复用的历史归一化逻辑，否则 recent/history 两条新接口接入后会继续造成重连重置。
+  - 本地后端模块导入默认强依赖 `DATABASE_URL`，验证时需要使用占位连接串，只做路由模块装载而不做真实 DB 联调。
+- 计划如何解决：
+  - 下一轮直接用 Playwright 走真实前台流程，检查“点击会话秒开最近消息”“上滑触发 older history”“刷新后保留查看进度”三个场景是否都成立。
+  - 如发现 older/history 与 live tail 仍有串扰，再继续收敛消息去重 key 和前端滚动恢复策略。

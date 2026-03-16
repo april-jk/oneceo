@@ -453,7 +453,16 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 - “恢复旧 session” 必须校验 provider/model 兼容性：
   - 如果恢复出的 `opencodeSessionId` 绑定的是旧 provider/model，而当前平台配置已经切换，则不能继续复用该 session。
   - 这种情况下应清空 `opencodeSessionId`，保留当前 sandbox/runtime，然后创建新的 OpenCode session。
-- 当 task session 当前状态已经是 `failed/completed` 时，新的用户输入默认不复用旧 `opencodeSessionId`。
+- 当 task session 当前状态已经是 `failed` 时，新的用户输入默认不复用旧 `opencodeSessionId`。
+- `completed` 只表示上一轮执行结束，不能作为强制新建 OpenCode session 的条件。
+- 同一 `taskSessionId` 下的连续用户对话，只要以下条件未变化，就应继续复用同一个 `opencodeSessionId`：
+  - `orchestratorSessionId` 未切换
+  - provider/model 未切换
+  - 旧 `opencodeSessionId` 在当前 sandbox 内仍能通过 OpenCode API 验证可用
+- 如果 `orchestratorSessionId` 已切换，但当前发送链路是“在新 sandbox 中恢复旧会话后继续续聊”，则恢复逻辑必须显式携带“上一代已验证可用的 `opencodeSessionId`”作为 preferred 值。
+  - 否则 `resolveRecoveredOpencodeSessionId()` 会退化为“从 workspace session 列表中选择一个最新候选”，从而把同一 task session 的第二轮对话错误切到新的 OpenCode session。
+- `runtime/touch`、sandbox 活跃度标记、归档脏标记这类辅助链路必须把数据库瞬时异常视为可降级故障，不能因为心跳或 metadata 写入失败导致 API 进程退出。
+- `opencode/events` 在 runtime 未就绪、sandbox 已关闭或恢复中的阶段，应优先返回短生命周期 SSE bridge 信号，而不是直接返回 `409` JSON；前端应按 SSE 重连节奏平滑恢复。
 
 ## 10. 验收标准
 

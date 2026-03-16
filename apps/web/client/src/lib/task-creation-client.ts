@@ -20,11 +20,30 @@ export type CreateTaskCreationSessionInput = {
 };
 
 export type TaskCreationHistoryMessage = {
+  id?: string;
+  messageKey?: string;
   role?: string;
   content?: string;
   messageType?: string;
   metadata?: Record<string, unknown>;
   createdAt?: string;
+};
+
+export type TaskCreationHistoryRecentPage = {
+  messages: TaskCreationHistoryMessage[];
+  oldestCursor: number | null;
+  newestCursor: number | null;
+  hasOlderHistory: boolean;
+  source?: string;
+};
+
+export type TaskCreationHistoryOlderPage = {
+  messages: TaskCreationHistoryMessage[];
+  oldestCursor: number | null;
+  newestCursor: number | null;
+  nextBeforeCursor: number | null;
+  hasMore: boolean;
+  source?: string;
 };
 
 export type TaskCreationRuntimeStatus = {
@@ -271,6 +290,46 @@ export async function listTaskCreationMessages(sessionId: string): Promise<TaskC
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages`;
   const result = await fetchJson<{ data?: TaskCreationHistoryMessage[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationRecentMessages(sessionId: string): Promise<TaskCreationHistoryRecentPage> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/recent`;
+  const result = await fetchJson<{ data?: TaskCreationHistoryRecentPage }>(url);
+  return (
+    result?.data || {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+      hasOlderHistory: false,
+    }
+  );
+}
+
+export async function getTaskCreationOlderMessages(
+  sessionId: string,
+  options?: { before?: number | null; limit?: number }
+): Promise<TaskCreationHistoryOlderPage> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (typeof options?.before === 'number' && Number.isFinite(options.before) && options.before > 0) {
+    params.set('before', String(Math.floor(options.before)));
+  }
+  if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+    params.set('limit', String(Math.floor(options.limit)));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/history${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationHistoryOlderPage }>(url);
+  return (
+    result?.data || {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+      nextBeforeCursor: null,
+      hasMore: false,
+    }
+  );
 }
 
 export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {

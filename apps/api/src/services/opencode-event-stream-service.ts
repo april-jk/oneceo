@@ -789,6 +789,23 @@ export class OpencodeEventStreamService {
     info: { partType: string },
     content: string
   ): boolean {
+    const lowerEventType = String(eventType || '').trim().toLowerCase();
+    const lowerPartType = String(info.partType || '').trim().toLowerCase();
+
+    // 文本消息的正式持久化由 opencode-remote-service 的 final aggregate 负责。
+    // 这里不再把 SSE 过程态事件写入正式消息存储，避免 recent/history 被 delta、message.updated、
+    // reasoning/step-start 等临时片段污染。
+    if (lowerEventType === 'message.updated') return false;
+    if (lowerEventType === 'message.final' || lowerEventType === 'message.completed' || lowerEventType === 'message.done') {
+      return false;
+    }
+    if (lowerEventType === 'message.part.updated' || lowerEventType === 'message.part.delta') {
+      if (lowerPartType === 'tool' || lowerPartType === 'file') {
+        return Boolean(content);
+      }
+      return false;
+    }
+
     if (content) return true;
     if (eventType.startsWith('file.')) return true;
     if (eventType.startsWith('pty.')) return true;

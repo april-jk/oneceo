@@ -4,7 +4,8 @@
  * 使用 Drizzle ORM 定义数据库表结构
  */
 
-import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint } from 'drizzle-orm/pg-core';
 
 /**
  * 任务创建会话表
@@ -28,12 +29,62 @@ export const taskCreationSessions = pgTable('task_creation_sessions', {
 export const conversationMessages = pgTable('conversation_messages', {
   id: uuid('id').primaryKey(),
   sessionId: uuid('session_id').notNull().references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+  messageKey: text('message_key').notNull(),
   role: text('role').notNull(), // user, agent, system
   content: text('content').notNull(),
   messageType: text('message_type'), // layer1_result, layer2_result, layer3_result, clarification, etc.
   metadata: jsonb('metadata'), // 存储额外的元数据
+  timelineCursor: bigint('timeline_cursor', { mode: 'number' })
+    .notNull()
+    .default(sql`nextval('conversation_message_timeline_cursor_seq')`),
+  runtimeGeneration: integer('runtime_generation'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (table) => ({
+  sessionMessageKeyUnique: uniqueIndex('idx_conversation_messages_session_message_key').on(
+    table.sessionId,
+    table.messageKey
+  ),
+  sessionTimelineIdx: index('idx_conversation_messages_session_timeline').on(table.sessionId, table.timelineCursor),
+  sessionIdIdx: index('idx_conversation_messages_session_id').on(table.sessionId),
+}));
+
+/**
+ * 会话最近消息热缓存表
+ *
+ * 为直通模式提供首屏秒开能力，仅保留每个会话最近可渲染消息窗口。
+ */
+export const taskSessionRecentMessages = pgTable(
+  'task_session_recent_messages',
+  {
+    id: uuid('id').primaryKey(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').notNull(),
+    messageKey: text('message_key').notNull(),
+    role: text('role').notNull(),
+    content: text('content').notNull(),
+    messageType: text('message_type'),
+    metadata: jsonb('metadata'),
+    timelineCursor: bigint('timeline_cursor', { mode: 'number' }).notNull(),
+    runtimeGeneration: integer('runtime_generation'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionMessageKeyUnique: uniqueIndex('idx_task_session_recent_messages_session_message_key').on(
+      table.sessionId,
+      table.messageKey
+    ),
+    sessionIdIdx: index('idx_task_session_recent_messages_session_id').on(table.sessionId),
+    sessionTimelineIdx: index('idx_task_session_recent_messages_session_timeline').on(
+      table.sessionId,
+      table.timelineCursor
+    ),
+    sessionCreatedAtIdx: index('idx_task_session_recent_messages_session_created_at').on(table.sessionId, table.createdAt),
+  })
+);
 
 /**
  * 意图识别结果表
@@ -199,6 +250,9 @@ export type NewTaskCreationSession = typeof taskCreationSessions.$inferInsert;
 
 export type ConversationMessage = typeof conversationMessages.$inferSelect;
 export type NewConversationMessage = typeof conversationMessages.$inferInsert;
+
+export type TaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferSelect;
+export type NewTaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferInsert;
 
 export type IntentRecognitionResult = typeof intentRecognitionResults.$inferSelect;
 export type NewIntentRecognitionResult = typeof intentRecognitionResults.$inferInsert;

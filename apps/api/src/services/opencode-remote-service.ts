@@ -1465,6 +1465,7 @@ export class OpencodeRemoteService {
       stream: true,
       streamDelta: false,
       streamKey,
+      partId: entry.partId,
       timestamp: Date.now(),
       source: 'stream_checkpoint',
       rawPayload: {
@@ -1473,14 +1474,6 @@ export class OpencodeRemoteService {
         source: 'stream_checkpoint',
       },
     };
-
-    await this.persistMessage(
-      taskSessionId,
-      'agent',
-      'opencode_event',
-      content,
-      metadata
-    );
 
     // 立刻广播 checkpoint，确保 SSE 实时可见（避免仅落盘但前端无更新）。
     await this.notify({
@@ -2123,6 +2116,8 @@ export class OpencodeRemoteService {
       eventType: 'message.final',
       stream: false,
       source: 'stream_aggregate',
+      streamKey: this.buildTextStreamKey(latest.taskSessionId, latest.opencodeSessionId, latest.partId),
+      partId: latest.partId,
       rawPayload: {
         eventType: 'message.final',
         text: latestContent,
@@ -2548,9 +2543,10 @@ export class OpencodeRemoteService {
     const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
     const forceFreshOpencodeSession =
       currentSession?.status === 'failed' ||
-      currentSession?.stage === 'failed' ||
-      currentSession?.status === 'completed' ||
-      currentSession?.stage === 'completed';
+      currentSession?.stage === 'failed';
+    let preferredRecoveredOpencodeSessionId = !forceFreshOpencodeSession
+      ? asString(runtime?.opencodeSessionId) || asString(currentSession?.runtime?.opencodeSessionId) || undefined
+      : undefined;
     if (forceFreshOpencodeSession && runtime?.opencodeSessionId) {
       await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
         orchestratorSessionId: runtime.orchestratorSessionId,
@@ -2600,6 +2596,7 @@ export class OpencodeRemoteService {
                 taskSessionId,
                 orchestratorSessionId,
                 workspacePath,
+                preferredOpencodeSessionId: preferredRecoveredOpencodeSessionId,
               })) || undefined;
           }
           if (!opencodeSessionId) {
@@ -2619,6 +2616,7 @@ export class OpencodeRemoteService {
               orchestratorSessionId,
             });
           }
+          preferredRecoveredOpencodeSessionId = opencodeSessionId;
 
           const answeredPendingQuestion = await this.replyPendingQuestionIfAny({
             taskSessionId,
@@ -2641,6 +2639,22 @@ export class OpencodeRemoteService {
             parts: [{ type: 'text', text: content }],
           });
           await this.initRunArtifactsForPrompt(taskSessionId, orchestratorSessionId, opencodeSessionId);
+          await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+            status: 'in_progress',
+            stage: 'executing',
+            phase: currentSession?.phase ? (currentSession.phase as FlowPhase) : 'development',
+            allowBackward: true,
+          });
+          try {
+            await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'in_progress');
+          } catch (error) {
+            console.warn('[OPENCODE_SESSION_STATUS_DB_RESUME_FAILED]', {
+              taskSessionId,
+              orchestratorSessionId,
+              opencodeSessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
 
           const role = input.source === 'agent' ? 'agent' : 'user';
           const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';

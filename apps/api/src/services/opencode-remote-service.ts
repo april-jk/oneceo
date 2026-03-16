@@ -15,12 +15,18 @@ import type { ExecutionPlan, TaskDescription } from '../agents/task-creation/typ
 import { executionReviewAgent } from '../agents/task-creation/layers/execution-review-agent';
 import { playwrightTestDetectionAgent } from '../agents/task-creation/layers/playwright-test-detection-agent';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
+import { archiveSandboxWorkspace } from './sandbox-archive-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import {
+  hasRenderableAssistantReply,
   listRecoveredOpencodeSessionIds,
   normalizeOpencodeNativeMessages,
 } from '../utils/opencode-history-recovery';
+import {
+  buildTimelineMessageKey,
+  normalizeMessageTimelineMetadata,
+} from '../utils/task-message-identity';
 import {
   buildOpencodeQuestionAnswers,
   findPendingOpencodeQuestion,
@@ -76,6 +82,8 @@ type RunArtifact = {
   fileEvents: number;
   textEvents: number;
   lastText?: string;
+  assistantResponseObserved: boolean;
+  nativeHistoryPollAttempts: number;
   toolsUsed: Set<string>;
 };
 
@@ -118,6 +126,24 @@ function isRetryableDirectInputError(error: unknown): boolean {
     normalized.includes('opencode serve 启动失败') ||
     normalized.includes('opencode 服务未就绪') ||
     normalized.includes('opencode server not ready')
+  );
+}
+
+function isRecoverableEventSubscribeError(payload: Record<string, unknown>, rawMessage: string): boolean {
+  const code = asString(payload.code).toLowerCase();
+  const stage = asString(payload.stage).toLowerCase();
+  const normalized = rawMessage.trim().toLowerCase();
+  if (code !== 'event_stream_error' || stage !== 'event_subscribe') {
+    return false;
+  }
+  return (
+    normalized === 'terminated' ||
+    normalized.includes('sandbox port is not open') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('other side closed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('etimedout')
   );
 }
 
@@ -1113,6 +1139,12 @@ export class OpencodeRemoteService {
   private streamCheckpointContent = new Map<string, string>();
   private streamCheckpointIntervalMs =
     toNonNegativeInt(process.env.OPENCODE_STREAM_CHECKPOINT_INTERVAL_MS) ?? 8000;
+  private nativeHistoryPollTimers = new Map<string, NodeJS.Timeout>();
+  private nativeHistoryPollInFlight = new Set<string>();
+  private nativeHistoryPollDelayMs =
+    toNonNegativeInt(process.env.OPENCODE_NATIVE_HISTORY_POLL_DELAY_MS) ?? 2500;
+  private nativeHistoryPollMaxAttempts =
+    toPositiveInt(process.env.OPENCODE_NATIVE_HISTORY_POLL_MAX_ATTEMPTS) ?? 12;
   private sessionArtifactsSeen = new Set<string>();
   private sessionArtifactRevision = new Map<string, number>();
   private sessionTestedRevision = new Map<string, number>();
@@ -1158,6 +1190,8 @@ export class OpencodeRemoteService {
         todoEvents: 0,
         fileEvents: 0,
         textEvents: 0,
+        assistantResponseObserved: false,
+        nativeHistoryPollAttempts: 0,
         toolsUsed: new Set<string>(),
       };
       this.runArtifacts.set(runKey, record);
@@ -1699,6 +1733,63 @@ export class OpencodeRemoteService {
     }
   }
 
+  private async ensureUsableOpencodeSessionId(input: {
+    taskSessionId: string;
+    orchestratorSessionId: string;
+    workspacePath: string;
+    currentOpencodeSessionId?: string;
+    preferredRecoveredOpencodeSessionId?: string;
+  }): Promise<string> {
+    const current = asString(input.currentOpencodeSessionId);
+    if (current) {
+      try {
+        const details = await osacAgentService.getSessionDetails(input.orchestratorSessionId, current);
+        if (this.isRecoveredSessionCompatible(details, this.getExpectedOpencodeModelTarget())) {
+          await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+            orchestratorSessionId: input.orchestratorSessionId,
+            opencodeSessionId: current,
+          });
+          return current;
+        }
+      } catch (error) {
+        console.warn('[OPENCODE_VALIDATE_SESSION_FAILED]', {
+          taskSessionId: input.taskSessionId,
+          orchestratorSessionId: input.orchestratorSessionId,
+          opencodeSessionId: current,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+        orchestratorSessionId: input.orchestratorSessionId,
+        opencodeSessionId: '',
+      });
+    }
+
+    const recovered = await this.resolveRecoveredOpencodeSessionId({
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId: input.orchestratorSessionId,
+      workspacePath: input.workspacePath,
+      preferredOpencodeSessionId: input.preferredRecoveredOpencodeSessionId || current || undefined,
+    });
+    if (recovered) {
+      return recovered;
+    }
+
+    const created = await osacAgentService.createOpencodeSession(input.orchestratorSessionId, {
+      workspacePath: input.workspacePath || undefined,
+    });
+    const opencodeSessionId = asString(created.opencodeSessionId);
+    if (!opencodeSessionId) {
+      throw new Error('创建 OpenCode 会话失败：缺少 opencodeSessionId');
+    }
+    await taskCreationFileMemoryStore.updateRuntimeBinding(input.taskSessionId, {
+      orchestratorSessionId: input.orchestratorSessionId,
+      opencodeSessionId,
+    });
+    return opencodeSessionId;
+  }
+
   async loadNativeMessageHistory(
     taskSessionId: string,
     options?: { allowProvision?: boolean }
@@ -1952,6 +2043,207 @@ export class OpencodeRemoteService {
       this.clearStreamCheckpoint(key);
       this.streamCheckpointContent.delete(key);
     }
+  }
+
+  private clearNativeHistoryPoll(runKey: string) {
+    const timer = this.nativeHistoryPollTimers.get(runKey);
+    if (timer) {
+      clearTimeout(timer);
+      this.nativeHistoryPollTimers.delete(runKey);
+    }
+    this.nativeHistoryPollInFlight.delete(runKey);
+  }
+
+  private scheduleNativeHistoryPoll(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string,
+    delayMs?: number
+  ) {
+    if (!opencodeSessionId || opencodeSessionId === 'unknown') return;
+    const runKey = this.buildRunKey(taskSessionId, opencodeSessionId);
+    if (this.finalizedRuns.has(runKey)) return;
+    if (this.nativeHistoryPollTimers.has(runKey)) return;
+
+    const timer = setTimeout(() => {
+      this.nativeHistoryPollTimers.delete(runKey);
+      void this.runNativeHistoryPoll(taskSessionId, orchestratorSessionId, opencodeSessionId, runKey);
+    }, Math.max(0, delayMs ?? this.nativeHistoryPollDelayMs));
+    if (typeof (timer as any).unref === 'function') {
+      (timer as any).unref();
+    }
+    this.nativeHistoryPollTimers.set(runKey, timer);
+  }
+
+  private async runNativeHistoryPoll(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    opencodeSessionId: string,
+    runKey: string
+  ) {
+    if (this.nativeHistoryPollInFlight.has(runKey)) {
+      return;
+    }
+    this.nativeHistoryPollInFlight.add(runKey);
+    try {
+      if (this.finalizedRuns.has(runKey)) {
+        return;
+      }
+      const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
+      if (!session) {
+        return;
+      }
+      if (session.stage === 'completed' || session.stage === 'failed') {
+        return;
+      }
+
+      const artifact = this.getRunArtifact(runKey);
+      artifact.nativeHistoryPollAttempts += 1;
+
+      const syncResult = await this.syncNativeHistoryDelta({
+        taskSessionId,
+        orchestratorSessionId,
+        opencodeSessionId,
+        promptedAt: artifact.promptedAt,
+      });
+
+      if (syncResult.assistantObserved) {
+        artifact.assistantResponseObserved = true;
+        const syntheticMessage: OsacMessage = {
+          type: 'OPENCODE_EVENT',
+          payload: {
+            seq: Date.now(),
+            timestamp: Date.now(),
+            eventType: 'session.idle',
+            orchestratorSessionId,
+            opencodeSessionId,
+            event: {
+              type: 'session.idle',
+              directory: resolveOpencodeWorkspacePath(taskSessionId) || undefined,
+              properties: {
+                sessionID: opencodeSessionId,
+                status: 'idle',
+                source: 'native_history_poll',
+              },
+            },
+          },
+        };
+        await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+        return;
+      }
+
+      if (artifact.nativeHistoryPollAttempts < this.nativeHistoryPollMaxAttempts) {
+        this.scheduleNativeHistoryPoll(taskSessionId, orchestratorSessionId, opencodeSessionId);
+      }
+    } catch (error) {
+      console.warn('[OPENCODE_NATIVE_HISTORY_POLL_FAILED]', {
+        taskSessionId,
+        orchestratorSessionId,
+        opencodeSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const artifact = this.getRunArtifact(runKey);
+      if (artifact.nativeHistoryPollAttempts < this.nativeHistoryPollMaxAttempts) {
+        this.scheduleNativeHistoryPoll(taskSessionId, orchestratorSessionId, opencodeSessionId);
+      }
+    } finally {
+      this.nativeHistoryPollInFlight.delete(runKey);
+    }
+  }
+
+  private buildStoredMessageKey(message: {
+    id?: string;
+    messageType?: string | null;
+    metadata?: Record<string, unknown>;
+    createdAt?: string;
+  }): string {
+    const metadata = normalizeMessageTimelineMetadata(message.metadata, message.createdAt, 0);
+    return buildTimelineMessageKey({
+      id: message.id,
+      messageType: message.messageType,
+      metadata,
+      createdAt: message.createdAt,
+    });
+  }
+
+  private async syncNativeHistoryDelta(input: {
+    taskSessionId: string;
+    orchestratorSessionId: string;
+    opencodeSessionId: string;
+    promptedAt: number;
+  }): Promise<{ assistantObserved: boolean; persistedCount: number }> {
+    if (!input.opencodeSessionId || input.opencodeSessionId === 'unknown') {
+      return { assistantObserved: false, persistedCount: 0 };
+    }
+    const workspacePath = resolveOpencodeWorkspacePath(input.taskSessionId);
+    const runtime = await resolveRuntimeBinding(input.taskSessionId, input.orchestratorSessionId);
+    const rawMessages = await osacAgentService.getSessionMessages(input.orchestratorSessionId, {
+      opencodeSessionId: input.opencodeSessionId,
+      workspacePath: workspacePath || undefined,
+    });
+    const normalized = normalizeOpencodeNativeMessages(Array.isArray(rawMessages) ? rawMessages : [], {
+      taskSessionId: input.taskSessionId,
+      generation: runtime?.generation,
+      orchestratorSessionId: input.orchestratorSessionId,
+      opencodeSessionId: input.opencodeSessionId,
+      workspacePath: workspacePath || '',
+    });
+
+    const promptedAt = Number.isFinite(input.promptedAt) ? input.promptedAt : 0;
+    const candidateMessages = normalized.filter((message) => {
+      const createdAt = Date.parse(message.createdAt);
+      if (promptedAt > 0 && Number.isFinite(createdAt) && createdAt + 1000 < promptedAt) {
+        return false;
+      }
+      return message.role === 'agent' || message.role === 'system';
+    });
+
+    if (candidateMessages.length === 0) {
+      return { assistantObserved: false, persistedCount: 0 };
+    }
+
+    const existingMessages = await taskCreationFileMemoryStore.getMessages(input.taskSessionId);
+    const existingKeys = new Set(
+      existingMessages.map((message) =>
+        this.buildStoredMessageKey({
+          id: message.id,
+          messageType: message.messageType,
+          metadata: message.metadata,
+          createdAt: message.createdAt,
+        })
+      )
+    );
+
+    let persistedCount = 0;
+    for (const message of candidateMessages) {
+      const messageKey = this.buildStoredMessageKey({
+        id: message.id,
+        messageType: message.messageType,
+        metadata: message.metadata,
+        createdAt: message.createdAt,
+      });
+      if (existingKeys.has(messageKey)) {
+        continue;
+      }
+      existingKeys.add(messageKey);
+      persistedCount += 1;
+      await this.persistMessage(
+        input.taskSessionId,
+        message.role,
+        message.messageType,
+        message.content,
+        {
+          ...(message.metadata || {}),
+          source: 'opencode_native_history_sync',
+          recoveredVia: 'native_history_poll',
+        }
+      );
+    }
+
+    return {
+      assistantObserved: hasRenderableAssistantReply(candidateMessages),
+      persistedCount,
+    };
   }
 
   private clearStreamBroadcast(streamKey: string) {
@@ -2435,6 +2727,32 @@ export class OpencodeRemoteService {
     }
   }
 
+  private async archiveCompletedTurn(input: {
+    taskSessionId: string;
+    orchestratorSessionId?: string;
+    opencodeSessionId?: string;
+    source: 'direct_completed' | 'managed_completed';
+  }): Promise<void> {
+    const orchestratorSessionId = asString(input.orchestratorSessionId);
+    if (!orchestratorSessionId) {
+      return;
+    }
+    try {
+      await archiveSandboxWorkspace(
+        orchestratorSessionId,
+        `opencode_turn_completed:${input.taskSessionId}:${input.source}:${input.opencodeSessionId || 'unknown'}`
+      );
+    } catch (error) {
+      console.warn('[OPENCODE_TURN_ARCHIVE_FAILED]', {
+        taskSessionId: input.taskSessionId,
+        orchestratorSessionId,
+        opencodeSessionId: input.opencodeSessionId || undefined,
+        source: input.source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async replyPendingQuestionIfAny(input: {
     taskSessionId: string;
     content: string;
@@ -2541,22 +2859,8 @@ export class OpencodeRemoteService {
       runtime = await this.recoverRuntime(taskSessionId);
     }
     const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
-    const forceFreshOpencodeSession =
-      currentSession?.status === 'failed' ||
-      currentSession?.stage === 'failed';
-    let preferredRecoveredOpencodeSessionId = !forceFreshOpencodeSession
-      ? asString(runtime?.opencodeSessionId) || asString(currentSession?.runtime?.opencodeSessionId) || undefined
-      : undefined;
-    if (forceFreshOpencodeSession && runtime?.opencodeSessionId) {
-      await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-        orchestratorSessionId: runtime.orchestratorSessionId,
-        opencodeSessionId: '',
-      });
-      runtime = {
-        ...runtime,
-        opencodeSessionId: undefined,
-      };
-    }
+    let preferredRecoveredOpencodeSessionId =
+      asString(runtime?.opencodeSessionId) || asString(currentSession?.runtime?.opencodeSessionId) || undefined;
 
     let orchestratorSessionId = runtime.orchestratorSessionId;
     const workspacePath = asString(input.workspacePath) || resolveOpencodeWorkspacePath(taskSessionId);
@@ -2589,33 +2893,13 @@ export class OpencodeRemoteService {
           });
           await this.ensureWorkspaceBaseline(taskSessionId, orchestratorSessionId, workspacePath || '');
 
-          let opencodeSessionId = forceFreshOpencodeSession ? undefined : runtime?.opencodeSessionId;
-          if (!opencodeSessionId && !forceFreshOpencodeSession) {
-            opencodeSessionId =
-              (await this.resolveRecoveredOpencodeSessionId({
-                taskSessionId,
-                orchestratorSessionId,
-                workspacePath,
-                preferredOpencodeSessionId: preferredRecoveredOpencodeSessionId,
-              })) || undefined;
-          }
-          if (!opencodeSessionId) {
-            const created = await osacAgentService.createOpencodeSession(orchestratorSessionId, {
-              workspacePath: workspacePath || undefined,
-            });
-            opencodeSessionId = asString(created.opencodeSessionId);
-            if (!opencodeSessionId) {
-              throw new Error('创建 OpenCode 会话失败：缺少 opencodeSessionId');
-            }
-            await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-              orchestratorSessionId,
-              opencodeSessionId,
-            });
-          } else {
-            await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-              orchestratorSessionId,
-            });
-          }
+          const opencodeSessionId = await this.ensureUsableOpencodeSessionId({
+            taskSessionId,
+            orchestratorSessionId,
+            workspacePath,
+            currentOpencodeSessionId: runtime?.opencodeSessionId,
+            preferredRecoveredOpencodeSessionId,
+          });
           preferredRecoveredOpencodeSessionId = opencodeSessionId;
 
           const answeredPendingQuestion = await this.replyPendingQuestionIfAny({
@@ -2744,10 +3028,13 @@ export class OpencodeRemoteService {
       todoEvents: 0,
       fileEvents: 0,
       textEvents: 0,
+      assistantResponseObserved: false,
+      nativeHistoryPollAttempts: 0,
       toolsUsed: new Set<string>(),
       phaseAtStart,
       cycleAtStart: session.phaseCycle ?? 0,
     });
+    this.clearNativeHistoryPoll(this.buildRunKey(session.id, opencodeSessionId));
     this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
   }
 
@@ -2839,11 +3126,17 @@ export class OpencodeRemoteService {
           todoEvents: 0,
           fileEvents: 0,
           textEvents: 0,
+          assistantResponseObserved: false,
+          nativeHistoryPollAttempts: 0,
           toolsUsed: new Set<string>(),
           phaseAtStart,
           cycleAtStart: session.phaseCycle ?? 0,
         });
+        this.clearNativeHistoryPoll(this.buildRunKey(session.id, opencodeSessionId));
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
+        if (this.isDirectSession(session)) {
+          this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, opencodeSessionId);
+        }
       }
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'in_progress',
@@ -2888,6 +3181,39 @@ export class OpencodeRemoteService {
         await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
         return;
       }
+      if (isRecoverableEventSubscribeError(payload, rawMessage)) {
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'in_progress',
+          stage: 'executing',
+          phase: session.phase ? (session.phase as any) : 'development',
+          allowBackward: true,
+        });
+        await this.notify({
+          taskSessionId: session.id,
+          message: {
+            type: 'status_update',
+            content: `正在连接智能体...`,
+            stage: 'executing',
+            tone: 'execution',
+            metadata: {
+              ...payload,
+              orchestratorSessionId,
+              opencodeSessionId: asString(payload.opencodeSessionId) || session.runtime?.opencodeSessionId || undefined,
+              source: 'opencode_event_stream_retry',
+            },
+          },
+        });
+        void osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+          workspacePath: resolveOpencodeWorkspacePath(session.id) || undefined,
+        }).catch((error) => {
+          console.warn('[OPENCODE_EVENT_STREAM_RESTART_FAILED]', {
+            sessionId: session.id,
+            orchestratorSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        return;
+      }
       const content = rawMessage;
       const opencodeSessionId = asString(payload.opencodeSessionId) || session.runtime?.opencodeSessionId;
       const runKey = opencodeSessionId ? this.buildRunKey(session.id, opencodeSessionId) : '';
@@ -2899,6 +3225,7 @@ export class OpencodeRemoteService {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
         }
         if (runKey) {
+          this.clearNativeHistoryPoll(runKey);
           this.runArtifacts.delete(runKey);
         }
         return;
@@ -2906,6 +3233,7 @@ export class OpencodeRemoteService {
       if (opencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, opencodeSessionId));
         this.finalizedRuns.add(runKey);
+        this.clearNativeHistoryPoll(runKey);
       }
       await this.flushTextStreams(
         session.id,
@@ -2972,7 +3300,6 @@ export class OpencodeRemoteService {
     const opencodeSessionId =
       asString(payload.opencodeSessionId) ||
       pickSessionIdFromEvent(event) ||
-      session.runtime?.opencodeSessionId ||
       '';
     if (opencodeSessionId) {
       this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
@@ -3066,6 +3393,7 @@ export class OpencodeRemoteService {
         artifact.textEvents += 1;
         if (stream.text) {
           artifact.lastText = stream.text.slice(-800);
+          artifact.assistantResponseObserved = true;
         }
       }
 
@@ -3195,6 +3523,10 @@ export class OpencodeRemoteService {
       if (eventType === 'command.executed' || eventType.startsWith('pty.')) {
         artifact.commandEvents += 1;
       }
+      if (eventType === 'message.final' && summary && !summary.startsWith('[OpenCode]')) {
+        artifact.assistantResponseObserved = true;
+        artifact.lastText = summary.slice(-800);
+      }
       if (eventType === 'session.diff') {
         artifact.diffEvents += 1;
       }
@@ -3271,10 +3603,50 @@ export class OpencodeRemoteService {
       );
       if (isDirect) {
         const artifact = this.getRunArtifact(runKey);
+        if (aggregated) {
+          artifact.assistantResponseObserved = true;
+        }
+        if (!artifact.assistantResponseObserved) {
+          const syncResult = await this.syncNativeHistoryDelta({
+            taskSessionId: session.id,
+            orchestratorSessionId,
+            opencodeSessionId: runOpencodeSessionId,
+            promptedAt: artifact.promptedAt,
+          });
+          if (syncResult.assistantObserved) {
+            artifact.assistantResponseObserved = true;
+          }
+        }
+        if (!artifact.assistantResponseObserved) {
+          artifact.completionInProgress = false;
+          this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, runOpencodeSessionId, 1000);
+          await this.notify({
+            taskSessionId: session.id,
+            message: {
+              type: 'status_update',
+              content: '正在同步智能体回复...',
+              stage: 'executing',
+              tone: 'execution',
+              metadata: {
+                ...metadata,
+                outcome,
+                source: 'direct_waiting_native_history',
+              },
+            },
+          });
+          return;
+        }
         this.finalizedRuns.add(runKey);
+        this.clearNativeHistoryPoll(runKey);
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
+        await this.archiveCompletedTurn({
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+          source: 'direct_completed',
+        });
         await taskCreationFileMemoryStore.updateSessionState(session.id, {
           status: 'completed',
           stage: 'completed',
@@ -3314,6 +3686,9 @@ export class OpencodeRemoteService {
       const currentPhase = (session.phase as FlowPhase) || 'development';
       let phaseForReview: FlowPhase = currentPhase;
       const artifact = this.getRunArtifact(runKey);
+      if (aggregated) {
+        artifact.assistantResponseObserved = true;
+      }
       if (!artifact.hasPlaywrightUsage && aggregated) {
         const lower = aggregated.toLowerCase();
         if (lower.includes('playwright') || lower.includes('自动化测试')) {
@@ -3425,6 +3800,7 @@ export class OpencodeRemoteService {
           }
 
           this.finalizedRuns.add(runKey);
+          this.clearNativeHistoryPoll(runKey);
           if (runOpencodeSessionId) {
             this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
           }
@@ -3447,6 +3823,7 @@ export class OpencodeRemoteService {
         const lastDispatchedRevision = this.sessionTestDispatchedRevision.get(session.id) ?? -1;
         if (!artifact.hasPlaywrightUsage && hasArtifacts && revision > testedRevision && lastDispatchedRevision !== revision) {
           this.finalizedRuns.add(runKey);
+          this.clearNativeHistoryPoll(runKey);
           if (runOpencodeSessionId) {
             this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
           }
@@ -3519,6 +3896,7 @@ export class OpencodeRemoteService {
       }
 
       this.finalizedRuns.add(runKey);
+      this.clearNativeHistoryPoll(runKey);
       if (runOpencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
       }
@@ -3636,6 +4014,12 @@ export class OpencodeRemoteService {
         });
       }
 
+      await this.archiveCompletedTurn({
+        taskSessionId: session.id,
+        orchestratorSessionId,
+        opencodeSessionId: runOpencodeSessionId,
+        source: 'managed_completed',
+      });
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'completed',
         stage: 'completed',
@@ -3685,6 +4069,7 @@ export class OpencodeRemoteService {
       }
       if (this.isDirectSession(session)) {
         this.finalizedRuns.add(runKey);
+        this.clearNativeHistoryPoll(runKey);
         const errorDetail = asString(metadata.errorMessage);
         const errorContent = errorDetail ? `OpenCode 执行失败：${errorDetail}` : 'OpenCode 执行失败';
         if (runOpencodeSessionId) {
@@ -3743,6 +4128,7 @@ export class OpencodeRemoteService {
         return;
       }
       this.finalizedRuns.add(runKey);
+      this.clearNativeHistoryPoll(runKey);
       if (runOpencodeSessionId) {
         this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
       }

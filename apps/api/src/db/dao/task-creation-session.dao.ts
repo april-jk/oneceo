@@ -52,6 +52,7 @@ type RecentMessageSnapshotInput = {
 export class TaskCreationSessionDAO {
   private static readonly RECENT_MESSAGE_LIMIT = 50;
   private readonly recentStoragePrunedAt = new Map<string, number>();
+  private readonly recentMetadataCompactedAt = new Map<string, number>();
 
   private createId(id?: string) {
     return id ?? randomUUID();
@@ -63,6 +64,110 @@ export class TaskCreationSessionDAO {
 
   private asRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  }
+
+  private sanitizeTimelineMetadataForStorage(metadataRaw: unknown): Record<string, unknown> {
+    const metadata = this.asRecord(metadataRaw);
+    const slim: Record<string, unknown> = {};
+
+    for (const key of [
+      'messageKey',
+      'timestamp',
+      'sessionEventSeq',
+      'timelineCursor',
+      'runtimeGeneration',
+      'runtimeGenerationBoundary',
+      'orchestratorSessionId',
+      'opencodeSessionId',
+      'workspacePath',
+      'stage',
+      'tone',
+      'streamKey',
+      'partId',
+      'eventType',
+      'toolName',
+      'partType',
+      'eventRole',
+      'eventState',
+    ]) {
+      if (metadata[key] !== undefined) {
+        slim[key] = metadata[key];
+      }
+    }
+
+    const eventFromMeta = this.asRecord(metadata.event);
+    const rawPayload = this.asRecord(metadata.rawPayload);
+    const eventFromPayload = this.asRecord(rawPayload.event);
+    const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+    const properties = this.asRecord(event.properties);
+    const part = this.asRecord(properties.part);
+
+    const toolName =
+      this.asText(slim.toolName) ||
+      this.asText(part.tool) ||
+      this.asText(part.name) ||
+      this.asText(properties.tool) ||
+      this.asText(properties.name);
+    if (toolName) {
+      slim.toolName = toolName;
+    }
+
+    const partType = this.asText(slim.partType) || this.asText(part.type);
+    if (partType) {
+      slim.partType = partType;
+    }
+
+    const eventRole = this.asText(slim.eventRole) || this.asText(part.role);
+    if (eventRole) {
+      slim.eventRole = eventRole;
+    }
+
+    const eventState =
+      this.asText(slim.eventState) ||
+      this.asText(this.asRecord(properties.state).state) ||
+      this.asText(properties.state) ||
+      this.asText(properties.status);
+    if (eventState) {
+      slim.eventState = eventState;
+    }
+
+    const resolvedPartId =
+      this.asText(slim.partId) ||
+      this.asText(part.id) ||
+      this.asText(part.callID) ||
+      this.asText(properties.partId) ||
+      this.asText(properties.callID);
+    if (resolvedPartId) {
+      slim.partId = resolvedPartId;
+    }
+
+    if (Object.keys(event).length > 0) {
+      const slimProps: Record<string, unknown> = {};
+      const slimPart: Record<string, unknown> = {};
+      for (const key of ['id', 'callID', 'type', 'role', 'tool', 'name']) {
+        const value = this.asText(part[key]);
+        if (value) {
+          slimPart[key] = value;
+        }
+      }
+      if (Object.keys(slimPart).length > 0) {
+        slimProps.part = slimPart;
+      }
+      for (const key of ['tool', 'name', 'partId', 'callID', 'status']) {
+        const value = this.asText(properties[key]);
+        if (value) {
+          slimProps[key] = value;
+        }
+      }
+      if (eventState) {
+        slimProps.state = { state: eventState };
+      }
+      if (Object.keys(slimProps).length > 0) {
+        slim.event = { properties: slimProps };
+      }
+    }
+
+    return slim;
   }
 
   private isUuid(value: unknown): value is string {
@@ -250,13 +355,118 @@ export class TaskCreationSessionDAO {
     };
   }
 
+  private async compactRecentMessageMetadata(sessionId: string) {
+    const normalizedSessionId = this.asText(sessionId);
+    if (!normalizedSessionId) return;
+    const now = Date.now();
+    const lastCompactedAt = this.recentMetadataCompactedAt.get(normalizedSessionId) ?? 0;
+    if (now - lastCompactedAt < 60_000) {
+      return;
+    }
+
+    await db.execute(sql`
+      update ${taskSessionRecentMessages}
+      set metadata = jsonb_strip_nulls(
+        jsonb_build_object(
+          'messageKey', metadata->>'messageKey',
+          'timestamp', metadata->'timestamp',
+          'sessionEventSeq', metadata->'sessionEventSeq',
+          'timelineCursor', metadata->'timelineCursor',
+          'runtimeGeneration', metadata->'runtimeGeneration',
+          'runtimeGenerationBoundary', metadata->'runtimeGenerationBoundary',
+          'orchestratorSessionId', metadata->>'orchestratorSessionId',
+          'opencodeSessionId', metadata->>'opencodeSessionId',
+          'workspacePath', metadata->>'workspacePath',
+          'stage', metadata->>'stage',
+          'tone', metadata->>'tone',
+          'streamKey', metadata->>'streamKey',
+          'partId', coalesce(
+            metadata->>'partId',
+            metadata#>>'{event,properties,part,id}',
+            metadata#>>'{event,properties,part,callID}',
+            metadata#>>'{event,properties,partId}',
+            metadata#>>'{event,properties,callID}'
+          ),
+          'eventType', metadata->>'eventType',
+          'toolName', coalesce(
+            metadata->>'toolName',
+            metadata#>>'{event,properties,part,tool}',
+            metadata#>>'{event,properties,part,name}',
+            metadata#>>'{event,properties,tool}',
+            metadata#>>'{event,properties,name}'
+          ),
+          'partType', coalesce(
+            metadata->>'partType',
+            metadata#>>'{event,properties,part,type}'
+          ),
+          'eventRole', coalesce(
+            metadata->>'eventRole',
+            metadata#>>'{event,properties,part,role}'
+          ),
+          'eventState', coalesce(
+            metadata->>'eventState',
+            metadata#>>'{event,properties,state,state}',
+            metadata#>>'{event,properties,state}',
+            metadata#>>'{event,properties,status}'
+          ),
+          'event', jsonb_strip_nulls(
+            jsonb_build_object(
+              'properties', jsonb_strip_nulls(
+                jsonb_build_object(
+                  'part', jsonb_strip_nulls(
+                    jsonb_build_object(
+                      'id', metadata#>>'{event,properties,part,id}',
+                      'callID', metadata#>>'{event,properties,part,callID}',
+                      'type', metadata#>>'{event,properties,part,type}',
+                      'role', metadata#>>'{event,properties,part,role}',
+                      'tool', metadata#>>'{event,properties,part,tool}',
+                      'name', metadata#>>'{event,properties,part,name}'
+                    )
+                  ),
+                  'tool', metadata#>>'{event,properties,tool}',
+                  'name', metadata#>>'{event,properties,name}',
+                  'partId', metadata#>>'{event,properties,partId}',
+                  'callID', metadata#>>'{event,properties,callID}',
+                  'status', metadata#>>'{event,properties,status}',
+                  'state', case
+                    when coalesce(
+                      metadata#>>'{event,properties,state,state}',
+                      metadata#>>'{event,properties,state}',
+                      metadata#>>'{event,properties,status}'
+                    ) is not null
+                    then jsonb_build_object(
+                      'state',
+                      coalesce(
+                        metadata#>>'{event,properties,state,state}',
+                        metadata#>>'{event,properties,state}',
+                        metadata#>>'{event,properties,status}'
+                      )
+                    )
+                    else null
+                  end
+                )
+              )
+            )
+          )
+        )
+      )
+      where ${taskSessionRecentMessages.sessionId} = ${normalizedSessionId}
+        and pg_column_size(metadata) > 65536
+    `);
+    this.recentMetadataCompactedAt.set(normalizedSessionId, now);
+  }
+
   private prepareConversationMessage(
     data: ConversationMessageWriteInput,
     seed: number
   ) {
     const storageId = this.createId();
     const sourceId = data.id;
-    const metadata = normalizeMessageTimelineMetadata(data.metadata, data.createdAt, seed);
+    const metadata = normalizeMessageTimelineMetadata(
+      this.sanitizeTimelineMetadataForStorage(data.metadata),
+      data.createdAt,
+      seed
+    );
     const runtimeGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
     if (runtimeGeneration !== null) {
       metadata.runtimeGeneration = runtimeGeneration;
@@ -346,19 +556,20 @@ export class TaskCreationSessionDAO {
               ? new Date(message.createdAt)
               : null;
         const metadata = normalizeMessageTimelineMetadata(message.metadata, message.createdAt, index);
-        const runtimeGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+        const sanitizedMetadata = this.sanitizeTimelineMetadataForStorage(metadata);
+        const runtimeGeneration = normalizeRuntimeGenerationValue(sanitizedMetadata.runtimeGeneration);
         if (runtimeGeneration !== null) {
-          metadata.runtimeGeneration = runtimeGeneration;
+          sanitizedMetadata.runtimeGeneration = runtimeGeneration;
         }
         const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
-          metadata,
+          metadata: sanitizedMetadata,
           createdAt: message.createdAt,
         });
-        metadata.messageKey = messageKey;
+        sanitizedMetadata.messageKey = messageKey;
         const timelineCursor = this.resolveMessageOrderCursor({
-          metadata,
+          metadata: sanitizedMetadata,
           createdAt: message.createdAt,
         });
         return {
@@ -369,7 +580,7 @@ export class TaskCreationSessionDAO {
           role: message.role,
           content: message.content,
           messageType: message.messageType || null,
-          metadata,
+          metadata: sanitizedMetadata,
           timelineCursor: timelineCursor || Date.now() * 1000 + index,
           runtimeGeneration,
           ...(createdAt && !Number.isNaN(createdAt.getTime()) ? { createdAt } : {}),
@@ -554,7 +765,6 @@ export class TaskCreationSessionDAO {
    * 获取会话的所有消息
    */
   async getMessages(sessionId: string) {
-    await this.pruneConversationStorageNoise(sessionId);
     const messages = await db
       .select()
       .from(conversationMessages)
@@ -570,7 +780,7 @@ export class TaskCreationSessionDAO {
   async getRecentMessages(sessionId: string, limit = TaskCreationSessionDAO.RECENT_MESSAGE_LIMIT) {
     const safeLimit = Math.max(1, Math.min(limit, TaskCreationSessionDAO.RECENT_MESSAGE_LIMIT));
     try {
-      await this.pruneConversationStorageNoise(sessionId);
+      await this.compactRecentMessageMetadata(sessionId);
       const recent = await db
         .select()
         .from(taskSessionRecentMessages)

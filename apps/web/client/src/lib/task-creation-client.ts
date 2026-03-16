@@ -231,12 +231,30 @@ export type WorkspaceFile = {
   binaryTooLarge?: boolean;
 };
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    cache: init?.cache || "no-store",
-    headers: buildClientIdentityHeaders(init?.headers),
-  });
+async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = options?.timeoutMs;
+  const controller =
+    typeof AbortController !== "undefined" && timeoutMs && timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId =
+    controller && timeoutMs
+      ? window.setTimeout(() => {
+          controller.abort(new DOMException("request timeout", "AbortError"));
+        }, timeoutMs)
+      : null;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: controller?.signal ?? init?.signal,
+      cache: init?.cache || "no-store",
+      headers: buildClientIdentityHeaders(init?.headers),
+    });
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -295,7 +313,7 @@ export async function listTaskCreationMessages(sessionId: string): Promise<TaskC
 export async function getTaskCreationRecentMessages(sessionId: string): Promise<TaskCreationHistoryRecentPage> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/recent`;
-  const result = await fetchJson<{ data?: TaskCreationHistoryRecentPage }>(url);
+  const result = await fetchJson<{ data?: TaskCreationHistoryRecentPage }>(url, undefined, { timeoutMs: 2500 });
   return (
     result?.data || {
       messages: [],
@@ -320,7 +338,7 @@ export async function getTaskCreationOlderMessages(
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/history${suffix}`;
-  const result = await fetchJson<{ data?: TaskCreationHistoryOlderPage }>(url);
+  const result = await fetchJson<{ data?: TaskCreationHistoryOlderPage }>(url, undefined, { timeoutMs: 4000 });
   return (
     result?.data || {
       messages: [],

@@ -58,8 +58,62 @@ import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
 type PageMode = 'input' | 'chat';
+type PersistedMessageScrollAnchor = {
+  anchorMessageKey: string | null;
+  anchorOffsetTop: number;
+  scrollTop: number;
+  savedAt: number;
+};
+
+function escapeMessageKeySelector(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+function readPersistedScrollAnchor(raw: string | null): PersistedMessageScrollAnchor | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PersistedMessageScrollAnchor;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.scrollTop === "number" &&
+      Number.isFinite(parsed.scrollTop)
+    ) {
+      return {
+        anchorMessageKey:
+          typeof parsed.anchorMessageKey === "string" && parsed.anchorMessageKey.trim()
+            ? parsed.anchorMessageKey.trim()
+            : null,
+        anchorOffsetTop:
+          typeof parsed.anchorOffsetTop === "number" && Number.isFinite(parsed.anchorOffsetTop)
+            ? parsed.anchorOffsetTop
+            : 0,
+        scrollTop: parsed.scrollTop,
+        savedAt:
+          typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+            ? parsed.savedAt
+            : Date.now(),
+      };
+    }
+  } catch {
+    const legacy = Number(raw);
+    if (Number.isFinite(legacy) && legacy >= 0) {
+      return {
+        anchorMessageKey: null,
+        anchorOffsetTop: 0,
+        scrollTop: legacy,
+        savedAt: Date.now(),
+      };
+    }
+  }
+  return null;
+}
 
 export default function Home() {
+  const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const [location] = useLocation();
   const search = useSearch();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -72,7 +126,13 @@ export default function Home() {
   const [previewTab, setPreviewTab] = useState<"files" | "changes" | "debug" | "deployment">("files");
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageScrollRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
+  const prependRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
+  const historyPaginationInFlightRef = useRef(false);
+  const scrollRestoreDoneRef = useRef<string | null>(null);
+  const stickToBottomRef = useRef(true);
+  const olderHistoryIntentRef = useRef(false);
   const sessionIdFromPath = useMemo(() => {
     const match = location.match(/^\/session\/([^/?#]+)/);
     return match ? decodeURIComponent(match[1]) : null;
@@ -82,16 +142,81 @@ export default function Home() {
     return params.get("view") === "history";
   }, [search]);
 
+  const persistScrollAnchor = () => {
+    const container = messageScrollRef.current;
+    if (!sessionId || !container) return;
+    try {
+      const containerRect = container.getBoundingClientRect();
+      const messageNodes = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-message-key]")
+      );
+      const firstVisible =
+        messageNodes.find((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.bottom > containerRect.top + 1;
+        }) || null;
+      const payload: PersistedMessageScrollAnchor = {
+        anchorMessageKey: firstVisible?.dataset.messageKey || null,
+        anchorOffsetTop: firstVisible
+          ? Math.max(0, firstVisible.getBoundingClientRect().top - containerRect.top)
+          : 0,
+        scrollTop: Math.max(0, Math.floor(container.scrollTop)),
+        savedAt: Date.now(),
+      };
+      window.sessionStorage.setItem(
+        `${MESSAGE_SCROLL_CACHE_PREFIX}${sessionId}`,
+        JSON.stringify(payload)
+      );
+    } catch {
+      // ignore storage failures
+    }
+  };
+
+  const restoreScrollAnchor = (targetSessionId: string) => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    try {
+      const raw = window.sessionStorage.getItem(`${MESSAGE_SCROLL_CACHE_PREFIX}${targetSessionId}`);
+      const persisted = readPersistedScrollAnchor(raw);
+      if (!persisted) return;
+      const applyFallbackScrollTop = () => {
+        container.scrollTop = Math.max(0, persisted.scrollTop);
+      };
+      if (!persisted.anchorMessageKey) {
+        applyFallbackScrollTop();
+        stickToBottomRef.current =
+          container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+        return;
+      }
+      const selector = `[data-message-key="${escapeMessageKeySelector(persisted.anchorMessageKey)}"]`;
+      const anchorNode = container.querySelector<HTMLElement>(selector);
+      if (!anchorNode) {
+        applyFallbackScrollTop();
+        stickToBottomRef.current =
+          container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+        return;
+      }
+      container.scrollTop = Math.max(0, anchorNode.offsetTop - persisted.anchorOffsetTop);
+      stickToBottomRef.current =
+        container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+    } catch {
+      // ignore restore failures
+    }
+  };
+
   const {
     isConnected,
     isProcessing,
     messages,
+    hasOlderHistory,
+    isLoadingOlderHistory,
     sessionId,
     currentQuestion,
     runtime,
     sendChatInput,
     answerQuestion,
     ensureSession,
+    loadOlderHistory,
   } = useTaskCreationAgent({
     autoRuntime: !isHistoryView,
     compactHistory: false,
@@ -107,10 +232,30 @@ export default function Home() {
 
   // 自动滚动到最新消息
   useEffect(() => {
-    if (mode === 'chat') {
+    const container = messageScrollRef.current;
+    if (mode !== 'chat' || !container) {
+      return;
+    }
+    if (stickToBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, mode]);
+  }, [messages, mode, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !messages.length) return;
+    if (scrollRestoreDoneRef.current === sessionId) return;
+    const container = messageScrollRef.current;
+    if (!container) return;
+    window.requestAnimationFrame(() => {
+      restoreScrollAnchor(sessionId);
+    });
+    scrollRestoreDoneRef.current = sessionId;
+  }, [messages.length, sessionId]);
+
+  useEffect(() => {
+    scrollRestoreDoneRef.current = null;
+    olderHistoryIntentRef.current = false;
+  }, [sessionId]);
 
   // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
   useEffect(() => {
@@ -178,6 +323,63 @@ export default function Home() {
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const restorePrependedHistoryScroll = async () => {
+    const snapshot = prependRestoreRef.current;
+    if (!snapshot) return;
+    let target = messageScrollRef.current;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      target = messageScrollRef.current;
+      if (target && target.scrollHeight > snapshot.scrollHeight) {
+        break;
+      }
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    if (!target) {
+      prependRestoreRef.current = null;
+      return;
+    }
+    const nextScrollTop = Math.max(0, target.scrollHeight - snapshot.scrollHeight + snapshot.scrollTop);
+    target.scrollTop = nextScrollTop;
+    stickToBottomRef.current =
+      target.scrollHeight - target.clientHeight - target.scrollTop < 80;
+    persistScrollAnchor();
+    prependRestoreRef.current = null;
+  };
+
+  const handleMessageScroll = async () => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    if (historyPaginationInFlightRef.current) {
+      return;
+    }
+    stickToBottomRef.current =
+      container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+    persistScrollAnchor();
+    if (
+      container.scrollTop > 80 ||
+      !olderHistoryIntentRef.current ||
+      !hasOlderHistory ||
+      isLoadingOlderHistory
+    ) {
+      return;
+    }
+    prependRestoreRef.current = {
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+    };
+    historyPaginationInFlightRef.current = true;
+    try {
+      const loaded = await loadOlderHistory();
+      if (loaded) {
+        await restorePrependedHistoryScroll();
+      } else {
+        prependRestoreRef.current = null;
+      }
+    } finally {
+      historyPaginationInFlightRef.current = false;
+    }
   };
 
   async function submitPrompt(rawInput: string) {
@@ -564,12 +766,37 @@ export default function Home() {
                           </Button>
                         </div>
                       </div>
-                      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+                      <div
+                        ref={messageScrollRef}
+                        onWheelCapture={(event) => {
+                          if (event.deltaY < 0) {
+                            olderHistoryIntentRef.current = true;
+                          }
+                        }}
+                        onPointerDownCapture={() => {
+                          olderHistoryIntentRef.current = true;
+                        }}
+                        onTouchStart={() => {
+                          olderHistoryIntentRef.current = true;
+                        }}
+                        onScroll={() => {
+                          void handleMessageScroll();
+                        }}
+                        className="flex-1 min-h-0 overflow-y-auto px-6 py-5"
+                      >
                         <div
                           className={`mx-auto w-full ${
                             previewOpen ? "max-w-3xl" : "max-w-5xl"
                           } space-y-4`}
                         >
+                          {isLoadingOlderHistory && (
+                            <NoticeMessage
+                              tone="info"
+                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                              text="正在加载更早历史..."
+                            />
+                          )}
+
                           {!isConnected && (
                             <NoticeMessage
                               tone="warning"
@@ -590,7 +817,11 @@ export default function Home() {
 
                           <AnimatePresence>
                             {chatItems.map((item, index) => (
-                              <MessageBubble key={index} item={item} onOpenDiffPreview={openDiffPreview} />
+                              <MessageBubble
+                                key={item.messageKey || `chat-item-${index}`}
+                                item={item}
+                                onOpenDiffPreview={openDiffPreview}
+                              />
                             ))}
                           </AnimatePresence>
 
@@ -805,15 +1036,16 @@ function NoticeMessage({
 }
 
 export type ChatItem =
-  | { kind: "user"; text: string; attachments?: UploadedTaskAttachment[] }
-  | { kind: "agent"; markdown: string }
-  | { kind: "agent_plain"; text: string; author?: string }
+  | { kind: "user"; text: string; attachments?: UploadedTaskAttachment[]; messageKey?: string }
+  | { kind: "agent"; markdown: string; messageKey?: string }
+  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string }
   | {
       kind: "capsule";
       label: string;
       tone: "system" | "intent" | "planning" | "execution" | "review" | "error";
       loading?: boolean;
       segments?: string[];
+      messageKey?: string;
     }
   | {
       kind: "opencode_tool";
@@ -823,13 +1055,14 @@ export type ChatItem =
       metadata?: Record<string, unknown>;
       messageIndex: number;
       diffId?: string;
+      messageKey?: string;
     };
 
 type CapsuleTone = "system" | "intent" | "planning" | "execution" | "review" | "error";
 
 export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
-  let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean } | null = null;
+  let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean; messageKey?: string } | null = null;
   const seenDiffs = new Set<string>();
   const seenFinalMessages = new Set<string>();
   const normalizeForDedup = (value: string): string => value.replace(/\r\n/g, "\n").trim();
@@ -863,10 +1096,13 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
-  const pushUser = (text: string, attachments?: UploadedTaskAttachment[]) => {
+  const pushUser = (text: string, attachments?: UploadedTaskAttachment[], messageKey?: string) => {
     const normalized = normalizeForDedup(text);
     if (!normalized && (!attachments || attachments.length === 0)) return;
     const last = items[items.length - 1];
+    if (messageKey && last?.messageKey === messageKey) {
+      return;
+    }
     if (
       last?.kind === "user" &&
       normalizeForDedup(last.text) === normalized &&
@@ -878,6 +1114,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       kind: "user",
       text,
       attachments,
+      messageKey,
     });
   };
 
@@ -899,23 +1136,30 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       .filter((item) => item.name || item.path);
   };
 
-  const pushAgentMarkdown = (markdown: string) => {
+  const pushAgentMarkdown = (markdown: string, messageKey?: string) => {
     const normalized = normalizeForDedup(markdown);
     if (!normalized) return;
     const last = items[items.length - 1];
+    if (messageKey && last?.messageKey === messageKey) {
+      return;
+    }
     if (last?.kind === "agent" && normalizeForDedup(last.markdown) === normalized) {
       return;
     }
     items.push({
       kind: "agent",
       markdown,
+      messageKey,
     });
   };
 
-  const pushAgentPlain = (text: string, author?: string) => {
+  const pushAgentPlain = (text: string, author?: string, messageKey?: string) => {
     const normalized = normalizeForDedup(text);
     if (!normalized) return;
     const last = items[items.length - 1];
+    if (messageKey && last?.messageKey === messageKey) {
+      return;
+    }
     if (
       last?.kind === "agent_plain" &&
       normalizeForDedup(last.text) === normalized &&
@@ -927,6 +1171,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       kind: "agent_plain",
       text,
       author,
+      messageKey,
     });
   };
 
@@ -953,15 +1198,17 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       label: progressBuffer.label,
       tone: progressBuffer.tone,
       loading: progressBuffer.loading,
+      messageKey: progressBuffer.messageKey,
     });
     progressBuffer = null;
   };
 
-  const pushProgress = (label: string, tone: CapsuleTone) => {
+  const pushProgress = (label: string, tone: CapsuleTone, messageKey?: string) => {
     progressBuffer = {
       label,
       tone,
       loading: isProgressLoadingLabel(label),
+      messageKey,
     };
   };
 
@@ -972,7 +1219,8 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       pushUser(
         asText(metadata.originalInput) || message.content || "",
-        extractUserAttachments(metadata)
+        extractUserAttachments(metadata),
+        message.messageKey
       );
       continue;
     }
@@ -981,7 +1229,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
-          pushProgress(parsed.label, getCapsuleTone(parsed.label));
+          pushProgress(parsed.label, getCapsuleTone(parsed.label), message.messageKey);
           continue;
         }
         flushProgress();
@@ -989,15 +1237,16 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           kind: "capsule",
           label: parsed.label,
           tone: getCapsuleTone(parsed.label),
+          messageKey: message.messageKey,
         });
         if (parsed.rest.trim()) {
-          pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${parsed.rest}`);
+          pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${parsed.rest}`, message.messageKey);
         }
         continue;
       }
 
       flushProgress();
-      pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${message.content || ""}`);
+      pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${message.content || ""}`, message.messageKey);
       continue;
     }
 
@@ -1005,13 +1254,14 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const label = message.content || "状态更新";
       const tone = message.tone || getCapsuleTone(label);
       if (isProgressStatusLabel(label)) {
-        pushProgress(label, tone);
+        pushProgress(label, tone, message.messageKey);
       } else {
         flushProgress();
         items.push({
           kind: "capsule",
           label,
           tone,
+          messageKey: message.messageKey,
         });
       }
       continue;
@@ -1046,7 +1296,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         }
         seenFinalMessages.add(normalizedContent);
         if (content) {
-          pushAgentMarkdown(`**OpenCode**\n\n${content}`);
+          pushAgentMarkdown(`**OpenCode**\n\n${content}`, message.messageKey);
         }
       } else if (eventInfo.partType === "text") {
         if (partId && finalizedPartIds.has(partId)) {
@@ -1056,7 +1306,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           continue;
         }
         if (content) {
-          pushAgentPlain(content, "OpenCode");
+          pushAgentPlain(content, "OpenCode", message.messageKey);
         }
       } else if (eventInfo.partType === "tool") {
         const toolName = eventInfo.toolName.toLowerCase();
@@ -1069,6 +1319,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
             metadata,
             messageIndex: index,
             diffId,
+            messageKey: message.messageKey,
           });
         }
       } else if (
@@ -1084,6 +1335,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           metadata,
           messageIndex: index,
           diffId,
+          messageKey: message.messageKey,
         });
       } else if (content.startsWith("[Tool]")) {
         items.push({
@@ -1094,6 +1346,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           metadata,
           messageIndex: index,
           diffId,
+          messageKey: message.messageKey,
         });
       }
       continue;
@@ -1101,7 +1354,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "error") {
       flushProgress();
-      pushAgentMarkdown(`**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`);
+      pushAgentMarkdown(`**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`, message.messageKey);
       continue;
     }
 
@@ -1111,13 +1364,13 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         message.options && message.options.length > 0
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
           : "";
-      pushAgentMarkdown(`**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`);
+      pushAgentMarkdown(`**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`, message.messageKey);
       continue;
     }
 
     if (message.type === "plan_generated") {
       flushProgress();
-      pushAgentMarkdown(`**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`);
+      pushAgentMarkdown(`**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`, message.messageKey);
     }
   }
 
@@ -1143,6 +1396,7 @@ function MessageBubble({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
         className="w-full"
+        data-message-key={item.messageKey}
       >
         <div
           className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass} ${
@@ -1175,6 +1429,7 @@ function MessageBubble({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
         className="w-full flex justify-end"
+        data-message-key={item.messageKey}
       >
         <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
           {item.text ? (
@@ -1189,7 +1444,11 @@ function MessageBubble({
   }
 
   if (item.kind === "opencode_tool") {
-    return <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />;
+    return (
+      <div data-message-key={item.messageKey}>
+        <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />
+      </div>
+    );
   }
 
   if (item.kind === "agent_plain") {
@@ -1199,6 +1458,7 @@ function MessageBubble({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
         className="w-full"
+        data-message-key={item.messageKey}
       >
         <div className="space-y-1.5 text-sm text-foreground">
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
@@ -1216,6 +1476,7 @@ function MessageBubble({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
       className="w-full"
+      data-message-key={item.messageKey}
     >
       <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold">
         <Streamdown>{item.markdown}</Streamdown>

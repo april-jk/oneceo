@@ -310,6 +310,84 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
   };
 }
 
+async function buildLightweightFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
+  const session = await taskCreationSessionDAO.getSession(sessionId);
+  if (!session) return null;
+
+  let taskDescription: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
+  let recentMessages: Awaited<ReturnType<typeof taskCreationSessionDAO.getRecentMessages>> = [];
+  try {
+    [taskDescription, recentMessages] = await Promise.all([
+      taskCreationSessionDAO.getTaskDescription(sessionId),
+      taskCreationSessionDAO.getRecentMessages(sessionId, 50),
+    ]);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_DB_LIGHTWEIGHT_PARTIAL]', { sessionId, error });
+  }
+
+  const env = await findEnvironmentByTaskSessionId(sessionId);
+  const orchestratorSessionId = env?.sessionId;
+  const normalizedRecentMessages = Array.isArray(recentMessages)
+    ? annotateRuntimeGenerations(
+        recentMessages.map((message, idx) => ({
+          id: String(message.id),
+          role: (message.role as any) || 'agent',
+          messageType: message.messageType || 'message',
+          content: message.content || '',
+          metadata: normalizeMessageTimelineMetadata(message.metadata, message.createdAt, idx),
+          createdAt: toIso(message.createdAt as any),
+        })),
+        { orchestratorSessionId }
+      )
+    : [];
+
+  const inferredRuntime = inferRuntimeFromMessages(normalizedRecentMessages, orchestratorSessionId);
+  const hasOpencodeSignals =
+    Boolean(orchestratorSessionId) ||
+    Boolean(inferredRuntime.opencodeSessionId) ||
+    normalizedRecentMessages.some((message) => asText(message.messageType).startsWith('opencode_'));
+  const titleCandidate =
+    taskDescription?.title ||
+    normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content ||
+    '新建任务会话';
+
+  const status: FileSessionRecord['status'] =
+    session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
+      ? session.status
+      : 'in_progress';
+  const stage: NonNullable<FileSessionRecord['stage']> =
+    status === 'completed'
+      ? 'completed'
+      : status === 'failed'
+        ? 'failed'
+        : status === 'waiting_user'
+          ? 'clarifying'
+          : 'executing';
+
+  return {
+    id: session.id,
+    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    status,
+    stage,
+    mode: hasOpencodeSignals ? 'sandbox' : undefined,
+    executor: hasOpencodeSignals ? 'opencode' : undefined,
+    runtime: orchestratorSessionId
+      ? {
+          generation: inferredRuntime.generation,
+          orchestratorSessionId,
+          opencodeSessionId: inferredRuntime.opencodeSessionId,
+          updatedAt: toIso(env?.updatedAt as any),
+        }
+      : undefined,
+    createdAt: toIso(session.createdAt as any),
+    updatedAt: toIso(session.updatedAt as any),
+    messages: [],
+  };
+}
+
 async function hydrateFileSessionFromDb(sessionId: string) {
   const record = await buildFileSessionFromDb(sessionId);
   if (!record) return null;
@@ -331,6 +409,17 @@ async function resolveTaskSessionRecord(sessionId: string) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
   return session;
+}
+
+async function resolveTaskSessionMeta(sessionId: string) {
+  const session = await taskCreationFileMemoryStore.getSession(sessionId);
+  if (session) {
+    return {
+      ...session,
+      messages: [],
+    };
+  }
+  return buildLightweightFileSessionFromDb(sessionId);
 }
 
 async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
@@ -791,6 +880,74 @@ function normalizeRuntimeGenerationValue(value: unknown): number | null {
   return null;
 }
 
+function resolveOpencodePartId(metadataRaw: unknown): string {
+  const metadata = pickRecord(metadataRaw);
+  const explicit =
+    asText(metadata.partId) ||
+    asText(metadata.streamKey);
+  if (explicit) {
+    return explicit;
+  }
+  const rawPayload = pickRecord(metadata.rawPayload);
+  const eventFromMeta = pickRecord(metadata.event);
+  const eventFromPayload = pickRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const properties = pickRecord(event.properties);
+  const part = pickRecord(properties.part);
+  return (
+    asText(part.id) ||
+    asText(part.callID) ||
+    asText(properties.partId) ||
+    asText(properties.callID)
+  );
+}
+
+function buildTimelineMessageKey(input: {
+  id?: string | number | null;
+  messageType?: string | null;
+  metadata?: unknown;
+  createdAt?: unknown;
+}): string {
+  const metadata = pickRecord(input.metadata);
+  const explicit = asText(metadata.messageKey);
+  if (explicit) {
+    return explicit;
+  }
+
+  const messageType = asText(input.messageType) || 'message';
+  const runtimeGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+  const generationSegment = runtimeGeneration ?? 'na';
+  const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
+  const timelineCursor =
+    sessionEventSeq ??
+    asTimelineCursor(metadata.timestamp) ??
+    asTimelineCursor(input.createdAt) ??
+    0;
+
+  if (metadata.runtimeGenerationBoundary === true) {
+    return `boundary:${generationSegment}:${timelineCursor || 'na'}`;
+  }
+
+  const opencodeSessionId = asText(metadata.opencodeSessionId);
+  const partId = resolveOpencodePartId(metadata);
+  if (opencodeSessionId && partId) {
+    return `stream:${generationSegment}:${opencodeSessionId}:${partId}`;
+  }
+
+  if (sessionEventSeq !== null) {
+    return `runtime:${generationSegment}:${sessionEventSeq}:${messageType}`;
+  }
+
+  const id = input.id !== undefined && input.id !== null ? String(input.id).trim() : '';
+  if (id) {
+    return id.startsWith('db:') || id.startsWith('boundary:') || id.startsWith('stream:') || id.startsWith('runtime:')
+      ? id
+      : `db:${id}`;
+  }
+
+  return `runtime:${generationSegment}:${timelineCursor || 'na'}:${messageType}`;
+}
+
 function annotateRuntimeGenerations<T extends { metadata?: Record<string, unknown>; createdAt?: string }>(
   messages: T[],
   runtime?: { generation?: number; orchestratorSessionId?: string | null } | null
@@ -885,6 +1042,7 @@ function inferRuntimeFromMessages(
 function injectRuntimeGenerationBoundaries<
   T extends {
     id?: string;
+    messageKey?: string;
     role?: string;
     messageType?: string;
     content?: string;
@@ -914,10 +1072,12 @@ function injectRuntimeGenerationBoundaries<
       const timelineCursor = resolveMessageTimelineCursor(item);
       result.push({
         id: `runtime-generation-boundary-${runtimeGeneration}-${timelineCursor || Date.now()}`,
+        messageKey: `boundary:${runtimeGeneration}:${timelineCursor || Date.now()}`,
         role: 'system',
         messageType: 'status_update',
         content: `已切换到第 ${runtimeGeneration} 代执行环境，以下内容来自新的 sandbox 恢复。`,
         metadata: {
+          messageKey: `boundary:${runtimeGeneration}:${timelineCursor || Date.now()}`,
           runtimeGeneration,
           runtimeGenerationBoundary: true,
           stage: 'executing',
@@ -935,6 +1095,172 @@ function injectRuntimeGenerationBoundaries<
     result.push(item);
   }
   return result;
+}
+
+type TimelineMessage = {
+  id: string;
+  messageKey: string;
+  role: 'user' | 'agent' | 'system';
+  messageType: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
+function mapStoredMessagesToTimeline(
+  messages: Array<{
+    id: string | number;
+    role?: string | null;
+    messageType?: string | null;
+    content?: string | null;
+    metadata?: unknown;
+    createdAt?: unknown;
+  }>
+): TimelineMessage[] {
+  return Array.isArray(messages)
+    ? messages.map((message, idx) => ({
+        id: String(message.id),
+        messageKey: buildTimelineMessageKey({
+          id: message.id,
+          messageType: message.messageType,
+          metadata: message.metadata,
+          createdAt: message.createdAt,
+        }),
+        role: (message.role as any) || 'agent',
+        messageType: message.messageType || 'message',
+        content: message.content || '',
+        metadata: {
+          ...normalizeMessageTimelineMetadata(message.metadata, message.createdAt, idx),
+          messageKey: buildTimelineMessageKey({
+            id: message.id,
+            messageType: message.messageType,
+            metadata: message.metadata,
+            createdAt: message.createdAt,
+          }),
+        },
+        createdAt: toIso(message.createdAt as any),
+      }))
+    : [];
+}
+
+function attachTimelineMessageKeys(
+  messages: Array<{
+    id: string;
+    role: 'user' | 'agent' | 'system';
+    messageType: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    createdAt: string;
+  }>
+): TimelineMessage[] {
+  return Array.isArray(messages)
+    ? messages.map((message) => {
+        const messageKey = buildTimelineMessageKey({
+          id: message.id,
+          messageType: message.messageType,
+          metadata: message.metadata,
+          createdAt: message.createdAt,
+        });
+        return {
+          ...message,
+          messageKey,
+          metadata: {
+            ...pickRecord(message.metadata),
+            messageKey,
+          },
+        };
+      })
+    : [];
+}
+
+async function resolveRenderableTimelineMessages(
+  sessionId: string,
+  session?: any
+): Promise<TimelineMessage[]> {
+  const shouldPreferOpencodeNativeHistory =
+    asText(session?.mode) === 'sandbox' &&
+    (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+
+  let persistedMessages: TimelineMessage[] | null = null;
+  const loadPersistedMessages = async () => {
+    if (persistedMessages) return persistedMessages;
+    persistedMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
+    return persistedMessages;
+  };
+
+  let messages: TimelineMessage[] | null = null;
+  if (shouldPreferOpencodeNativeHistory) {
+    const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(sessionId, {
+      allowProvision: true,
+    });
+    const normalizedNativeMessages = nativeMessages ? attachTimelineMessageKeys(nativeMessages) : null;
+    if (normalizedNativeMessages && normalizedNativeMessages.length > 0) {
+      if (hasRenderableAssistantReply(normalizedNativeMessages)) {
+        messages = normalizedNativeMessages;
+      } else {
+        const fallbackMessages = await loadPersistedMessages();
+        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : normalizedNativeMessages;
+      }
+    }
+  }
+
+  if (!messages || messages.length === 0) {
+    messages = await loadPersistedMessages();
+  }
+  if (!messages || messages.length === 0) {
+    const fallback = await taskCreationSessionDAO.getMessages(sessionId);
+    messages = mapStoredMessagesToTimeline(fallback);
+  }
+
+  messages = annotateRuntimeGenerations(messages, session?.runtime);
+  messages = injectRuntimeGenerationBoundaries(messages);
+  messages.sort((a, b) => {
+    const ta = resolveMessageTimelineCursor(a);
+    const tb = resolveMessageTimelineCursor(b);
+    if (ta !== tb) return ta - tb;
+
+    const sa = asPositiveInt(pickRecord(a?.metadata).sessionEventSeq) || 0;
+    const sb = asPositiveInt(pickRecord(b?.metadata).sessionEventSeq) || 0;
+    if (sa !== sb) return sa - sb;
+
+    const ca = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
+    const cb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+    if (ca !== cb) return ca - cb;
+    return 0;
+  });
+
+  return messages;
+}
+
+function buildTimelinePage(messages: TimelineMessage[]) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+    };
+  }
+  return {
+    messages,
+    oldestCursor: resolveMessageTimelineCursor(messages[0]) || null,
+    newestCursor: resolveMessageTimelineCursor(messages[messages.length - 1]) || null,
+  };
+}
+
+function hasLegacyRecentNoise(messages: TimelineMessage[]) {
+  return messages.some((message) => {
+    const content = asText(message?.content);
+    if (message?.messageType !== 'opencode_event') {
+      return false;
+    }
+    if (!content) {
+      return true;
+    }
+    if (content.startsWith('[Message] ')) {
+      return true;
+    }
+    return false;
+  });
 }
 
 function pickRecord(value: unknown): Record<string, unknown> {
@@ -1123,6 +1449,23 @@ function writeSse(res: express.Response, payload: unknown, eventName?: string, e
   if (typeof (res as any).flush === 'function') {
     (res as any).flush();
   }
+}
+
+function respondEphemeralSseBridge(
+  res: express.Response,
+  payload: Record<string, unknown>,
+  options?: { retryMs?: number }
+) {
+  const retryMs = Math.max(1000, Number(options?.retryMs || 5000));
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  res.write(`retry: ${retryMs}\n`);
+  writeSse(res, payload, 'bridge');
+  res.end();
 }
 
 type SseClientRuntimeState = {
@@ -1471,7 +1814,7 @@ router.post('/sessions/draft', async (req, res) => {
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const sessionData = await resolveTaskSessionRecord(sessionId);
+    const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
       return res.status(404).json({
@@ -1480,41 +1823,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
       });
     }
 
-    let hydratedRuntime = sessionData.runtime;
-    if (sessionData.runtime?.orchestratorSessionId) {
-      let runtimeMessages = await taskCreationFileMemoryStore.getMessages(sessionId);
-      if (!runtimeMessages || runtimeMessages.length === 0) {
-        try {
-          const fallbackMessages = await taskCreationSessionDAO.getMessages(sessionId);
-          runtimeMessages = Array.isArray(fallbackMessages)
-            ? fallbackMessages.map((message, idx) => ({
-                id: String(message.id),
-                role: (message.role as any) || 'agent',
-                messageType: message.messageType || 'message',
-                content: message.content || '',
-                metadata: normalizeMessageTimelineMetadata(message.metadata, message.createdAt, idx),
-                createdAt: toIso(message.createdAt as any),
-              }))
-            : [];
-        } catch (error) {
-          if (!isTransientDatabaseError(error)) {
-            throw error;
-          }
-          runtimeMessages = runtimeMessages || [];
-        }
-      }
-
-      const inferredRuntime = inferRuntimeFromMessages(runtimeMessages || [], sessionData.runtime.orchestratorSessionId);
-      if (inferredRuntime.generation || inferredRuntime.opencodeSessionId) {
-        hydratedRuntime = {
-          ...sessionData.runtime,
-          generation: inferredRuntime.generation || sessionData.runtime.generation,
-          opencodeSessionId: inferredRuntime.opencodeSessionId || sessionData.runtime.opencodeSessionId,
-        };
-      }
-    }
-
-    const runtimeStatus = await resolveRuntimeStatus(hydratedRuntime?.orchestratorSessionId);
+    const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
     let connectorsSummary: ReturnType<typeof sessionConnectorService.summarizeStatuses> | null = null;
     const currentUser = currentUserResolver.resolve(req);
     if (currentUser?.userId) {
@@ -1530,7 +1839,6 @@ router.get('/sessions/:sessionId', async (req, res) => {
       success: true,
       data: {
         ...sessionData,
-        runtime: hydratedRuntime,
         runtimeStatus,
         connectorsSummary,
       },
@@ -1548,81 +1856,121 @@ router.get('/sessions/:sessionId', async (req, res) => {
 });
 
 /**
+ * GET /api/task-creation/sessions/:sessionId/messages/recent
+ * 首屏最近消息热缓存，仅依赖数据库
+ */
+router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionMeta(sessionId);
+    let cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
+    let recentMessages = injectRuntimeGenerationBoundaries(
+      annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
+    );
+
+    const shouldHydrateFromNativeHistory =
+      asText(session?.mode) === 'sandbox' &&
+      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId)) &&
+      (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
+
+    if (shouldHydrateFromNativeHistory) {
+      const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(sessionId, {
+        allowProvision: true,
+      });
+      if (nativeMessages && nativeMessages.length > 0) {
+        await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+          sessionId,
+          nativeMessages.slice(-50).map((message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            messageType: message.messageType,
+            metadata: message.metadata,
+            createdAt: message.createdAt,
+          }))
+        );
+        cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
+        recentMessages = injectRuntimeGenerationBoundaries(
+          annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
+        );
+      }
+    }
+
+    const page = buildTimelinePage(recentMessages);
+    const mayHaveOlderHistory =
+      recentMessages.length >= 50 ||
+      asText(session?.runtime?.opencodeSessionId).length > 0 ||
+      asText(session?.executor) === 'opencode';
+
+    res.json({
+      success: true,
+      data: {
+        ...page,
+        hasOlderHistory: mayHaveOlderHistory,
+        source: 'recent_cache',
+      },
+    });
+  } catch (error: any) {
+    console.error('获取最近消息缓存失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取最近消息缓存失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/messages/history
+ * 按 cursor 增量加载更老历史
+ */
+router.get('/sessions/:sessionId/messages/history', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionMeta(sessionId);
+    const beforeCursor = asTimelineCursor(req.query.before);
+    const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
+
+    const fullTimeline = await resolveRenderableTimelineMessages(sessionId, session);
+    const olderMessages =
+      beforeCursor !== null
+        ? fullTimeline.filter((item) => resolveMessageTimelineCursor(item) < beforeCursor)
+        : fullTimeline;
+    const pageMessages = olderMessages.slice(Math.max(olderMessages.length - limit, 0));
+    const page = buildTimelinePage(pageMessages);
+
+    res.json({
+      success: true,
+      data: {
+        ...page,
+        hasMore: olderMessages.length > pageMessages.length,
+        nextBeforeCursor: page.oldestCursor,
+        source: 'resolved_history',
+      },
+    });
+  } catch (error: any) {
+    console.error('获取增量历史失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取增量历史失败，请稍后重试'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/messages
  * 获取会话的对话消息
  */
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const session = await resolveTaskSessionRecord(sessionId);
-    const shouldPreferOpencodeNativeHistory =
-      asText(session?.mode) === 'sandbox' &&
-      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
-    let persistedMessages:
-      | Array<{
-          id: string;
-          role: 'user' | 'agent' | 'system';
-          messageType: string;
-          content: string;
-          metadata?: Record<string, unknown>;
-          createdAt: string;
-        }>
-      | null = null;
-    const loadPersistedMessages = async () => {
-      if (persistedMessages) return persistedMessages;
-      persistedMessages = await taskCreationFileMemoryStore.getMessages(sessionId);
-      return persistedMessages;
-    };
-
-    let messages = null;
-    if (shouldPreferOpencodeNativeHistory) {
-      const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(sessionId, {
-        allowProvision: true,
-      });
-      if (nativeMessages && nativeMessages.length > 0) {
-        if (hasRenderableAssistantReply(nativeMessages)) {
-          messages = nativeMessages;
-        } else {
-          const fallbackMessages = await loadPersistedMessages();
-          messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : nativeMessages;
-        }
-      }
-    }
-
-    if (!messages || messages.length === 0) {
-      messages = await loadPersistedMessages();
-    }
-    if (!messages || messages.length === 0) {
-      const fallback = await taskCreationSessionDAO.getMessages(sessionId);
-      messages = Array.isArray(fallback)
-        ? fallback.map((m, idx) => ({
-            id: String(m.id),
-            role: (m.role as any) || 'agent',
-            messageType: m.messageType || 'message',
-            content: m.content || '',
-            metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
-            createdAt: toIso(m.createdAt as any),
-          }))
-        : [];
-    }
-
-    messages = annotateRuntimeGenerations(messages, session?.runtime);
-    messages = injectRuntimeGenerationBoundaries(messages);
-
-    messages.sort((a, b) => {
-      const ta = resolveMessageTimelineCursor(a);
-      const tb = resolveMessageTimelineCursor(b);
-      if (ta !== tb) return ta - tb;
-
-      const sa = asPositiveInt(pickRecord(a?.metadata).sessionEventSeq) || 0;
-      const sb = asPositiveInt(pickRecord(b?.metadata).sessionEventSeq) || 0;
-      if (sa !== sb) return sa - sb;
-
-      const ca = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
-      const cb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
-      if (ca !== cb) return ca - cb;
-      return 0;
-    });
+    const session = await resolveTaskSessionMeta(sessionId);
+    const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
     res.json({
       success: true,
@@ -2902,9 +3250,12 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   const orchestratorSessionId = session.runtime?.orchestratorSessionId;
   if (!orchestratorSessionId) {
-    return res.status(409).json({
-      success: false,
-      error: getPublicErrorMessage('执行环境未就绪，无法订阅事件流'),
+    return respondEphemeralSseBridge(res, {
+      status: 'runtime_unavailable',
+      reason: 'missing_orchestrator_session',
+      sessionId,
+      retryAfterMs: 5000,
+      relay: 'backend_only',
     });
   }
   opencodeEventStreamService.bindSession(orchestratorSessionId, sessionId, session.mode);
@@ -2923,9 +3274,13 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     });
   }
   if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
-    return res.status(409).json({
-      success: false,
-      error: getPublicErrorMessage('执行环境未启动，无法订阅事件流'),
+    return respondEphemeralSseBridge(res, {
+      status: 'runtime_not_ready',
+      reason: runtimeStatus.status,
+      sessionId,
+      orchestratorSessionId,
+      retryAfterMs: 5000,
+      relay: 'backend_only',
     });
   }
 
@@ -2968,9 +3323,13 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   } catch (error: any) {
     if (isSandboxNotFoundError(error)) {
       await markSandboxClosed(orchestratorSessionId);
-      return res.status(409).json({
-        success: false,
-        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      return respondEphemeralSseBridge(res, {
+        status: 'runtime_closed',
+        reason: 'sandbox_not_found',
+        sessionId,
+        orchestratorSessionId,
+        retryAfterMs: 5000,
+        relay: 'backend_only',
       });
     }
     return res.status(502).json({
@@ -3105,11 +3464,21 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           (Number.isFinite(timestampEventId) && timestampEventId > 0 ? timestampEventId : undefined) ??
           (Number.isFinite(createdAtEventId) && createdAtEventId > 0 ? createdAtEventId : undefined) ??
           (Number.isFinite(seqEventId) && seqEventId > 0 ? seqEventId : undefined);
+        const messageKey = buildTimelineMessageKey({
+          id: item.id,
+          messageType: item.messageType,
+          metadata: item.metadata,
+          createdAt: item.createdAt,
+        });
         writeSse(res, {
           sessionId,
           type: item.messageType,
           content: item.content,
-          metadata: item.metadata,
+          metadata: {
+            ...pickRecord(item.metadata),
+            messageKey,
+          },
+          messageKey,
           createdAt: item.createdAt,
         }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
         if (Number.isFinite(eventId as number) && (eventId as number) > 0) {
@@ -3136,6 +3505,16 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       sessionEventSeq: payload.sessionEventSeq,
     });
     const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
+    const messageKey = buildTimelineMessageKey({
+      messageType: projected.type,
+      metadata: {
+        ...pickRecord(projected.metadata),
+        opencodeSessionId: msgOpencodeSessionId || undefined,
+        sessionEventSeq: payload.sessionEventSeq,
+        timestamp: payload.timestamp,
+      },
+      createdAt,
+    });
     const liveEventId =
       (typeof payload.sessionEventSeq === 'number' &&
       Number.isFinite(payload.sessionEventSeq) &&
@@ -3154,10 +3533,15 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       {
         sessionId,
         ...projected,
+        messageKey,
         opencodeSessionId: msgOpencodeSessionId || undefined,
         eventType: payload.eventType,
         event: payload.event,
         createdAt,
+        metadata: {
+          ...pickRecord(projected.metadata),
+          messageKey,
+        },
       },
       undefined,
       Number.isFinite(liveEventId as number) ? (liveEventId as number) : undefined
@@ -3179,6 +3563,11 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       return;
     }
     const createdAt = new Date().toISOString();
+    const messageKey = buildTimelineMessageKey({
+      messageType: message.type,
+      metadata: message.metadata,
+      createdAt,
+    });
     const liveEventId =
       asPositiveInt(metadata.sessionEventSeq) ??
       asTimelineCursor(metadata.timestamp) ??
@@ -3189,7 +3578,11 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
         sessionId,
         type: message.type,
         content: message.content,
-        metadata: message.metadata,
+        metadata: {
+          ...metadata,
+          messageKey,
+        },
+        messageKey,
         stage: message.stage,
         phase: message.phase,
         tone: message.tone,

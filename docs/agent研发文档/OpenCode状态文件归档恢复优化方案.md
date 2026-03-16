@@ -232,6 +232,39 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 - 这里记录 `opencodeSessionId` 只是“恢复定位索引”，不是消息主存
 - 消息内容仍以 `.opencode/` 内 OpenCode 原生状态为准
 
+新增强制约束（2026-03-16）：
+
+- 不能只依赖“空闲超时归档”作为唯一持久化时机。
+  - 真实回归中，旧 sandbox `i14oflbla6udtk0kf6axv` 在关闭时 `archive_status = missing`，导致下一代 sandbox 虽然恢复了工作区目录，但恢复出的 OpenCode 数据里没有旧 session，只能新建 session。
+  - 这说明“等到 sandbox 即将被关闭时再归档”并不可靠，尤其在 E2B 直接回收、异常关闭、心跳缺失时会丢状态。
+- 直通会话每一轮对话完成后，都必须主动归档当前工作区。
+  - 实现位置在 `opencode-remote-service.ts` 的 direct / managed `completed` 分支。
+  - 归档动作必须发生在会话状态回写为 `completed` 之前，避免用户看到“已完成”但 `.opencode` 尚未落盘。
+- 当用户在同一对话框继续发送消息，而当前 `runtimeStatus=closed` / `terminated` / `failed` 时，前端不得直接沿用旧 `orchestratorSessionId` 发送 `opencode_input`。
+  - 必须先把消息放入 pending 队列，再触发 `runtime/start`。
+  - 只有 runtime 恢复到可发送状态后，才允许自动补发到旧 `opencodeSessionId`。
+  - 触发点至少包括：
+    1. 本轮收到 assistant 最终可渲染回复
+    2. 平台准备把本轮 `status/stage` 推进到 `completed`
+    3. 本轮进入 `waiting_user`
+  - 归档内容必须包含：
+    - 工作区文件
+    - `.opencode/opencode.db*`
+    - `.opencode/opencode/snapshot/*`
+    - 其它 OpenCode 本地状态文件
+- 主动归档必须是“成功后再收敛完成态”的一部分。
+  - 平台不能先写 `completed`，再异步尝试归档。
+  - 正确顺序应为：
+    1. 本轮 assistant 回复确认完成
+    2. 触发工作区归档
+    3. 归档成功后写 `completed/waiting_user`
+  - 如果归档失败：
+    - 不应清空当前 runtime 绑定
+    - 但必须把失败写入 metadata / 日志，供下一次恢复诊断
+- 对纯文本轮次也必须归档。
+  - 因为即使没有代码文件变化，OpenCode 的 session/message 仍然会写入 `.opencode/opencode.db`
+  - 如果只在“检测到工作区文件变化”时归档，纯对话会话仍会丢失原 session
+
 ## 6.5 恢复后启动策略
 
 恢复流程建议调整为：
@@ -453,20 +486,64 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
 - “恢复旧 session” 必须校验 provider/model 兼容性：
   - 如果恢复出的 `opencodeSessionId` 绑定的是旧 provider/model，而当前平台配置已经切换，则不能继续复用该 session。
   - 这种情况下应清空 `opencodeSessionId`，保留当前 sandbox/runtime，然后创建新的 OpenCode session。
-- 当 task session 当前状态已经是 `failed` 时，新的用户输入默认不复用旧 `opencodeSessionId`。
+- `failed` 不能被直接等同于“旧 `opencodeSessionId` 不可恢复”。
+  - 很多失败只是网络中断、bridge 终止、sandbox 切换中的暂态错误。
+  - 新的用户输入应先尝试恢复并验证旧 `opencodeSessionId`；只有恢复失败或兼容性校验失败时，才创建新的 OpenCode session。
 - `completed` 只表示上一轮执行结束，不能作为强制新建 OpenCode session 的条件。
+- 对“恢复后继续对话”的状态回写，`completed/failed` 也不能被视为不可逆终局。
+  - 只要新的用户输入已经成功命中同一个 `opencodeSessionId`，平台侧 `status/stage` 必须先回写为 `in_progress/executing`。
+  - 文件态状态机不能因为当前是 `completed/failed` 就拒绝这次回写；否则会出现“消息已经继续产生，但会话详情仍停在 failed/completed”的假终局。
+  - 如果恢复期只拿到了非终局 `stage/phase`，但没有显式 `status`，也应自动推断回 `in_progress`，避免出现 stage 已恢复而 status 仍是 terminal 的不一致状态。
+- 前端发送链路也必须遵守同一语义。
+  - 进入“继续对话”时，不能仅因为当前详情接口返回 `completed/failed`，就主动清空 `opencodeSessionId` 或强制调用 `runtime/start`。
+  - 前端应优先复用 authoritative runtime 中已有的 `orchestratorSessionId/opencodeSessionId`，让后端决定是否恢复旧 session 或新建 session。
+  - 否则会出现：后端本可直接续写旧会话，但前端先重启 runtime，导致 SSE bridge 端口抖动、`sandbox port is not open`、以及 `status/stage` 与真实执行链路再次失配。
 - 同一 `taskSessionId` 下的连续用户对话，只要以下条件未变化，就应继续复用同一个 `opencodeSessionId`：
   - `orchestratorSessionId` 未切换
   - provider/model 未切换
   - 旧 `opencodeSessionId` 在当前 sandbox 内仍能通过 OpenCode API 验证可用
+- 每次真正调用 `sendPrompt` 前，后端都必须再次校验本次要使用的 `opencodeSessionId` 在“当前 orchestrator 对应的 OpenCode 实例”里确实存在。
+  - 不能仅因为文件态 `runtime.opencodeSessionId` 有值，就直接认为它可发消息。
+  - 如果校验失败，必须先清空这个 runtime 绑定，再走“恢复旧 session -> 找不到则新建 session”的标准流程。
+- `OPENCODE_PROMPT_ACCEPTED` 只能证明“桥接层认为 prompt 已被接收”，不能证明目标 `opencodeSessionId` 一定真实存在。
+  - 因此它不能作为“恢复成功”或“session 一定有效”的唯一依据。
 - 如果 `orchestratorSessionId` 已切换，但当前发送链路是“在新 sandbox 中恢复旧会话后继续续聊”，则恢复逻辑必须显式携带“上一代已验证可用的 `opencodeSessionId`”作为 preferred 值。
   - 否则 `resolveRecoveredOpencodeSessionId()` 会退化为“从 workspace session 列表中选择一个最新候选”，从而把同一 task session 的第二轮对话错误切到新的 OpenCode session。
+- OpenCode 内部状态目录 `.opencode/`、`.git/`、`node_modules/` 这类内部路径产生的 `session.diff` / `file.*` / log 变更，不应进入用户时间线持久化。
+  - 它们既不是用户可读对话，也不应作为任务完成、文件变更、recent/history 热缓存的依据。
+  - 尤其 `.opencode/opencode/log/*` 的 diff 体积可能非常大，会拖慢事件桥接、recent/history 读取与前端收敛。
 - `runtime/touch`、sandbox 活跃度标记、归档脏标记这类辅助链路必须把数据库瞬时异常视为可降级故障，不能因为心跳或 metadata 写入失败导致 API 进程退出。
 - `opencode/events` 在 runtime 未就绪、sandbox 已关闭或恢复中的阶段，应优先返回短生命周期 SSE bridge 信号，而不是直接返回 `409` JSON；前端应按 SSE 重连节奏平滑恢复。
+- 续聊 prompt 派发默认应优先走 OpenCode HTTP 接口，而不是 sandbox 内部 fire-and-forget socket 派发。
+  - fire-and-forget 适合作为 fallback，不适合作为主路径，因为它只能证明“请求字节已写入 socket”，不能证明“OpenCode session 已真正接收并开始处理该 prompt”。
+  - 对“同一 session 继续对话”这种场景，主路径必须使用可确认响应的派发方式，否则平台会出现 `opencode_input` 已审计、但 OpenCode Web 中没有新消息、前台持续显示处理中 的假执行状态。
+- 新会话首条消息不得因为 runtime 慢启动而直接失败。
+  - 当前端拿到“执行环境启动较慢”“OpenCode 服务未就绪”“sandbox port is not open”这类暂态错误时，应把这条输入保留为待补发消息，而不是要求用户手动重发。
+  - 待补发消息必须保留原始 `messageKey`、`sessionId`、`prePersistedUserInput` 元信息。
+  - 在 runtime ready 且 `orchestratorSessionId` 稳定后，前端自动补发同一条 `opencode_input`。
+  - 补发成功前，前端可以显示“启动中/连接中”，但不能把这条输入转成终态失败。
+- 续聊场景下，前端的 `isProcessing` 不能只依赖实时 SSE 终态事件清除。
+  - 如果 `message.final` / `session.status=idle` / `status_update(completed|failed)` 是通过 `recent/history` 回补进来的，前端也必须同步结束“智能体正在处理...”状态。
+  - 当 SSE 桥接抖动、前端漏掉终态实时事件时，客户端应周期性用最近消息缓存做 reconciliation。
+  - reconciliation 发现终态消息或待回答问题后，必须清除 `isProcessing`，避免同一会话已经完成但前端永久卡在处理中。
+- 续聊输入不能再额外依赖页面层的 `isConnected` 门控。
+  - WebSocket 是否已连上，只应影响“立即发送”还是“排队后重发”，不应阻止用户提交消息。
+  - 页面层若在调用 `sendChatInput()` 前因为 `isConnected=false` 直接返回，会造成“输入框已清空、标题已更新、但后端没有收到任何 `opencode_input`”的假发送状态。
+  - 正确行为应是始终进入 `sendChatInput()`，由底层 `sendOrQueueMessage()` 负责排队和重连。
+- 对直通续聊链路，`session.idle` 不能单独作为“本轮已完成”的充分条件。
+  - 平台必须先确认本轮已经收到可渲染的 assistant 回复，来源可以是实时 `message.final` / 文本流聚合，或 native history 回补。
+  - 如果只收到 `OPENCODE_PROMPT_ACCEPTED`、`server.connected`、`project.updated`、`session.idle` 这类桥接事件，但本轮还没有 assistant 回复，则会话仍应保持 `in_progress/executing`。
+  - 此时后端必须主动从 OpenCode native history 拉取当前 `opencodeSessionId` 的最新消息，补齐缺失的 assistant 回复，再决定是否写入 `completed`。
+- 直通模式下，`OPENCODE_PROMPT_ACCEPTED` 之后必须存在“回复确认”补偿链路。
+  - 如果在一段短时间内没有收到本轮 assistant 文本，后端应以同一个 `opencodeSessionId` 轮询 native history，而不是新建 session。
+  - native history 回补拿到的新 assistant 回复，必须按正常消息写入平台存储，并使用稳定 `messageKey` 去重。
+  - 只有当同一轮 prompt 已确认产生 assistant 回复后，才允许补发 `OpenCode 执行完成` 或推进 `status/stage -> completed`。
 
 ## 10. 验收标准
 
 - Sandbox 销毁前归档后，恢复出的工作区中存在 `.opencode/`
+- 每一轮对话完成后，sandbox metadata 中可看到最近一次主动归档痕迹
+- 旧 sandbox 被关闭后，`archive_status` 不能再是 `missing`
 - 恢复后 OpenCode `GET /session` 能看到旧 session
 - 恢复后 OpenCode `GET /session/:id/message` 能返回完整历史
 - 页面在“重新进入会话”时，优先使用 OpenCode 原生历史

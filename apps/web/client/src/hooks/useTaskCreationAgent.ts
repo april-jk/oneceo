@@ -76,6 +76,14 @@ type SendInputOptions = {
   sessionId?: string;
 };
 
+type PendingSandboxPrompt = {
+  sessionId: string;
+  content: string;
+  messageKey: string;
+  metadata: Record<string, unknown>;
+  prePersistedUserInput: boolean;
+};
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
@@ -624,6 +632,18 @@ function shouldDisplayErrorText(value: string): boolean {
   );
 }
 
+function isRuntimeStartupTransientError(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('执行环境启动较慢') ||
+    normalized.includes('opencode 服务未就绪') ||
+    normalized.includes('sandbox port is not open') ||
+    normalized.includes('runtime_not_ready') ||
+    normalized.includes('runtime unavailable')
+  );
+}
+
 function isReadyRuntimeStatus(status: string | null | undefined): boolean {
   const normalized = normalizeRuntimeStatus(status);
   return (
@@ -632,6 +652,15 @@ function isReadyRuntimeStatus(status: string | null | undefined): boolean {
     normalized === 'executing' ||
     normalized === 'in_progress' ||
     normalized === 'waiting_user'
+  );
+}
+
+function isSendableRuntimeStatus(status: string | null | undefined): boolean {
+  const normalized = normalizeRuntimeStatus(status);
+  return !(
+    normalized === 'closed' ||
+    normalized === 'stopped' ||
+    normalized === 'terminated'
   );
 }
 
@@ -1351,6 +1380,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [sseReplayHint, setSseReplayHint] = useState(0);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
+  const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();
   const search = useSearch();
 
@@ -1387,6 +1417,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const isLoadingOlderHistoryRef = useRef(false);
   const loadHistoryRequestRef = useRef<{ sessionId: string; promise: Promise<void> } | null>(null);
   const historyExpandedRef = useRef(false);
+  const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -1408,6 +1439,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     isLoadingOlderHistoryRef.current = false;
     loadHistoryRequestRef.current = null;
     historyExpandedRef.current = false;
+    pendingSandboxPromptRef.current = null;
     sseCursorRef.current = 0;
     sseCursorKindRef.current = null;
     sseStreamSeqRef.current.clear();
@@ -1421,6 +1453,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
     }
   }, [autoRuntime]);
+
+  const setPendingSandboxPrompt = useCallback((nextPrompt: PendingSandboxPrompt | null) => {
+    pendingSandboxPromptRef.current = nextPrompt;
+    setPendingSandboxPromptVersion((value) => value + 1);
+  }, []);
 
   const bindSessionId = useCallback((nextSessionId: string) => {
     if (!nextSessionId) return;
@@ -1686,6 +1723,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (!shouldDisplayErrorText(errorText)) {
           return;
         }
+        const errorSessionId = (payload.sessionId || sessionId || '').trim();
+        const pendingPrompt = pendingSandboxPromptRef.current;
+        if (
+          pendingPrompt &&
+          pendingPrompt.sessionId === errorSessionId &&
+          isRuntimeStartupTransientError(errorText)
+        ) {
+          setRuntimeError(errorText);
+          void refreshRuntimeStatus(errorSessionId);
+          return;
+        }
         setIsProcessing(false);
         setMessages((prev) =>
           mergeRealtimeMessage(
@@ -1780,7 +1828,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     if (shouldStopProcessingForMessage(message)) {
       setIsProcessing(false);
     }
-  }, [sessionId, WELCOME_MESSAGE]);
+  }, [sessionId, WELCOME_MESSAGE, refreshRuntimeStatus]);
 
   const openSse = useCallback(
     (targetSessionId: string, targetOpencodeSessionId?: string) => {
@@ -1994,6 +2042,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           setIsProcessing(false);
           return;
         }
+        const errorSessionId = (message.sessionId || sessionId || '').trim();
+        const pendingPrompt = pendingSandboxPromptRef.current;
+        if (
+          pendingPrompt &&
+          pendingPrompt.sessionId === errorSessionId &&
+          isRuntimeStartupTransientError(errorText)
+        ) {
+          setRuntimeError(errorText);
+          void refreshRuntimeStatus(errorSessionId);
+          return;
+        }
         setIsProcessing(false);
         setMessages((prev) =>
           mergeRealtimeMessage(
@@ -2120,7 +2179,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
 
     wsRef.current = ws;
-  }, [autoRuntime, bindSessionId, clearReconnectTimer, scheduleReconnect]);
+  }, [autoRuntime, bindSessionId, clearReconnectTimer, scheduleReconnect, refreshRuntimeStatus]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -2268,6 +2327,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   );
 
   const syncQuestionAndRuntimeState = useCallback((normalized: AgentMessage[]) => {
+    const lastStopMessage = [...normalized]
+      .reverse()
+      .find((msg) => shouldStopProcessingForMessage(msg));
     const lastTerminalMessage = [...normalized]
       .reverse()
       .find(
@@ -2277,6 +2339,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       );
     if (lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed') {
       setRuntimeStatus(lastTerminalMessage.stage);
+    }
+    if (lastStopMessage) {
+      setIsProcessing(false);
     }
 
     const lastClarificationIndex = [...normalized]
@@ -2297,6 +2362,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
     const clarification = normalized[lastClarificationIndex];
     if (clarification.question) {
+      setIsProcessing(false);
       setCurrentQuestion({
         question: clarification.question,
         options: clarification.options,
@@ -2336,7 +2402,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistory = useCallback(async (
     historySessionId: string,
     options?: {
-      reason?: 'initial' | 'replay';
+      reason?: 'initial' | 'replay' | 'reconcile';
     }
   ) => {
     const reason = options?.reason ?? 'initial';
@@ -2362,6 +2428,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     try {
       const recent = await getTaskCreationRecentMessages(historySessionId);
       const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
+      const shouldFallbackToHistory =
+        normalizedRecent.length === 0 && (!cached || cached.messages.length === 0);
+      if (shouldFallbackToHistory) {
+        throw new Error('recent cache empty');
+      }
       const merged = cached
         ? mergeHistoryAgentMessages(cached.messages, normalizedRecent)
         : normalizedRecent;
@@ -2504,6 +2575,27 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const ensureRuntime = useCallback(async () => {
     const sid = (sessionId || '').trim();
     if (!sid || runtimeStarting || runtimeReady) return;
+    try {
+      const detail = await getTaskCreationSession(sid);
+      const authoritativeOrchestrator = (detail?.runtime?.orchestratorSessionId || '').trim();
+      const authoritativeOpencode = (detail?.runtime?.opencodeSessionId || '').trim();
+      const authoritativeStatus =
+        normalizeRuntimeStatus(detail?.runtimeStatus?.status) ||
+        (authoritativeOrchestrator ? 'ready' : null);
+      const authoritativeRuntimeSendable =
+        Boolean(authoritativeOrchestrator) && isSendableRuntimeStatus(authoritativeStatus);
+      if (authoritativeOrchestrator) {
+        setOrchestratorSessionId(authoritativeOrchestrator);
+        setOpencodeSessionId(authoritativeOpencode || null);
+        setRuntimeStatus(authoritativeStatus);
+        setRuntimeError(null);
+        if (authoritativeRuntimeSendable) {
+          return;
+        }
+      }
+    } catch (error) {
+      console.warn('[TaskCreationAgent] ensureRuntime 预检失败，继续尝试启动:', error);
+    }
     if (!runtimeEnabled) {
       setRuntimeEnabled(true);
     }
@@ -2604,10 +2696,103 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [sseReplayHint, sessionId, loadHistory]);
 
   useEffect(() => {
+    if (!sessionId || !isProcessing || readAltusMode() !== 'sandbox') {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadHistory(sessionId, { reason: 'reconcile' });
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isProcessing, loadHistory, sessionId]);
+
+  useEffect(() => {
     if (sessionId) {
       void refreshRuntimeStatus(sessionId);
     }
   }, [sessionId, refreshRuntimeStatus]);
+
+  useEffect(() => {
+    const pendingPrompt = pendingSandboxPromptRef.current;
+    if (!pendingPrompt || !sessionId || pendingPrompt.sessionId !== sessionId || !runtimeEnabled) {
+      return;
+    }
+    if (runtimeReady && orchestratorSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      void refreshRuntimeStatus(pendingPrompt.sessionId);
+      if (autoRuntime && !runtimeStarting) {
+        void ensureRuntimeRef.current();
+      }
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    autoRuntime,
+    orchestratorSessionId,
+    pendingSandboxPromptVersion,
+    refreshRuntimeStatus,
+    runtimeEnabled,
+    runtimeReady,
+    runtimeStarting,
+    sessionId,
+  ]);
+
+  useEffect(() => {
+    const pendingPrompt = pendingSandboxPromptRef.current;
+    if (
+      !pendingPrompt ||
+      !sessionId ||
+      pendingPrompt.sessionId !== sessionId ||
+      !runtimeEnabled ||
+      !runtimeReady ||
+      !orchestratorSessionId
+    ) {
+      return;
+    }
+
+    setRuntimeStatus('executing');
+    setRuntimeError(null);
+    sendOrQueueMessage({
+      type: 'opencode_input',
+      content: pendingPrompt.content,
+      sessionId: pendingPrompt.sessionId,
+      metadata: {
+        ...pendingPrompt.metadata,
+        orchestratorSessionId,
+        ...(opencodeSessionId ? { opencodeSessionId } : undefined),
+        altusMode: 'sandbox',
+        executor: readExecutor(),
+        ...(pendingPrompt.prePersistedUserInput ? { prePersistedUserInput: true } : undefined),
+      },
+    });
+    setPendingSandboxPrompt(null);
+    window.setTimeout(() => {
+      void refreshRuntimeStatus(pendingPrompt.sessionId);
+    }, 400);
+  }, [
+    opencodeSessionId,
+    orchestratorSessionId,
+    pendingSandboxPromptVersion,
+    refreshRuntimeStatus,
+    runtimeEnabled,
+    runtimeReady,
+    sendOrQueueMessage,
+    sessionId,
+    setPendingSandboxPrompt,
+  ]);
 
   useEffect(() => {
     sseCursorRef.current = 0;
@@ -2768,12 +2953,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
       }
       let nextOrchestratorId = (orchestratorSessionId || '').trim();
-      let nextOpencodeId = runtimeReady ? (opencodeSessionId || '').trim() : '';
+      let hasBoundRuntime = Boolean(orchestratorSessionId);
+      let nextRuntimeSendable =
+        runtimeEnabled && hasBoundRuntime && isSendableRuntimeStatus(normalizedRuntimeStatus);
+      let nextOpencodeId = hasBoundRuntime ? (opencodeSessionId || '').trim() : '';
       let nextRuntimeStatus = normalizedRuntimeStatus;
-      let nextRuntimeReady = runtimeReady;
-      let shouldRestartRuntime =
-        Boolean(activeSessionId && autoRuntime && runtimeEnabled && !runtimeReady && !runtimeStarting);
-
       if (activeSessionId && autoRuntime && runtimeEnabled) {
         try {
           const detail = await getTaskCreationSession(activeSessionId);
@@ -2782,68 +2966,27 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           const authoritativeRuntimeStatus =
             normalizeRuntimeStatus(detail?.runtimeStatus?.status) ||
             (authoritativeOrchestratorId ? 'ready' : null);
-          const sessionTerminal =
-            detail?.status === 'failed' ||
-            detail?.stage === 'failed' ||
-            detail?.status === 'completed' ||
-            detail?.stage === 'completed';
 
           nextOrchestratorId = authoritativeOrchestratorId || nextOrchestratorId;
           nextRuntimeStatus = authoritativeRuntimeStatus;
-          nextRuntimeReady = runtimeEnabled && Boolean(nextOrchestratorId) && isReadyRuntimeStatus(authoritativeRuntimeStatus);
+          hasBoundRuntime = Boolean(nextOrchestratorId);
+          nextRuntimeSendable =
+            runtimeEnabled &&
+            hasBoundRuntime &&
+            isSendableRuntimeStatus(authoritativeRuntimeStatus);
 
           setOrchestratorSessionId(nextOrchestratorId || null);
           setRuntimeStatus(authoritativeRuntimeStatus);
 
-          if (sessionTerminal) {
-            nextOpencodeId = '';
-            setOpencodeSessionId(null);
-            shouldRestartRuntime =
-              Boolean(activeSessionId) && autoRuntime && runtimeEnabled && !runtimeStarting;
-          } else {
-            nextOpencodeId = nextRuntimeReady ? authoritativeOpencodeId : '';
-            setOpencodeSessionId(nextOpencodeId || null);
-          }
-
-          if (!sessionTerminal) {
-            shouldRestartRuntime =
-              Boolean(activeSessionId) &&
-              autoRuntime &&
-              runtimeEnabled &&
-              !runtimeStarting &&
-              (!nextRuntimeReady || !nextOrchestratorId);
-          }
+          nextOpencodeId = hasBoundRuntime ? authoritativeOpencodeId : '';
+          setOpencodeSessionId(nextOpencodeId || null);
         } catch (error) {
           console.warn('[TaskCreationAgent] sandbox runtime 预检失败，继续使用本地状态:', error);
         }
       }
-
-      if (shouldRestartRuntime && activeSessionId) {
-        setRuntimeStarting(true);
-        try {
-          const result = await startTaskCreationRuntime(activeSessionId);
-          const restartedOrchestratorId = (result?.orchestratorSessionId || '').trim();
-          if (restartedOrchestratorId) {
-            nextOrchestratorId = restartedOrchestratorId;
-            setOrchestratorSessionId(restartedOrchestratorId);
-          }
-          setOpencodeSessionId(null);
-          nextOpencodeId = '';
-          nextRuntimeStatus = normalizeRuntimeStatus(result?.status) || 'ready';
-          nextRuntimeReady = runtimeEnabled && Boolean(nextOrchestratorId) && isReadyRuntimeStatus(nextRuntimeStatus);
-          setRuntimeStatus(nextRuntimeStatus);
-          if (nextOrchestratorId) {
-            await syncRuntime(nextOrchestratorId);
-          }
-        } catch (error) {
-          console.warn('[TaskCreationAgent] sandbox runtime 重启失败，继续尝试发送:', error);
-        } finally {
-          setRuntimeStarting(false);
-        }
-      }
       // 直通模式：直接发送给后端的 opencode_input，后端仅负责桥接与落盘，
       // 不触发 Altus 编排（澄清/规划/执行计划等）。
-      if (activeSessionId && nextOrchestratorId && runtimeEnabled && nextRuntimeReady) {
+      if (activeSessionId && nextOrchestratorId && runtimeEnabled) {
         setRuntimeStatus('executing');
       }
       const messageKey = generateClientMessageKey('user');
@@ -2866,6 +3009,37 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           WELCOME_MESSAGE
         )
       );
+      if (!nextOrchestratorId || !runtimeEnabled) {
+        setPendingSandboxPrompt({
+          sessionId: activeSessionId,
+          content: text,
+          messageKey,
+          metadata: messageMetadata,
+          prePersistedUserInput,
+        });
+        setRuntimeError(null);
+        if (activeSessionId) {
+          void refreshRuntimeStatus(activeSessionId);
+        }
+        return;
+      }
+      if (!nextRuntimeSendable) {
+        setPendingSandboxPrompt({
+          sessionId: activeSessionId,
+          content: text,
+          messageKey,
+          metadata: messageMetadata,
+          prePersistedUserInput,
+        });
+        setRuntimeError(null);
+        if (activeSessionId) {
+          void refreshRuntimeStatus(activeSessionId);
+        }
+        if (autoRuntime && !runtimeStarting) {
+          void ensureRuntimeRef.current();
+        }
+        return;
+      }
       sendOrQueueMessage({
         type: 'opencode_input',
         content: text,
@@ -2879,6 +3053,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           ...(prePersistedUserInput ? { prePersistedUserInput: true } : undefined),
         },
       });
+      setPendingSandboxPrompt(null);
       if (activeSessionId) {
         window.setTimeout(() => {
           void refreshRuntimeStatus(activeSessionId);
@@ -2905,6 +3080,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sessionId,
     syncRuntime,
     autoRuntime,
+    runtimeEnabled,
+    setPendingSandboxPrompt,
   ]);
 
   const ensureSession = useCallback(async (title?: string) => {

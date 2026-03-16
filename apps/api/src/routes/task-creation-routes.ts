@@ -118,6 +118,7 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   'application/x-sh',
   'application/sql',
 ]);
+const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
 
 function clampNumber(value: number, min: number, max: number) {
@@ -281,7 +282,7 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
           role: (m.role as any) || 'agent',
           messageType: m.messageType || 'message',
           content: m.content || '',
-          metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
+          metadata: normalizeMessageTimelineMetadata(sanitizeTimelineMetadataForClient(m.metadata), m.createdAt, idx),
           createdAt: toIso(m.createdAt as any),
         })),
         { orchestratorSessionId }
@@ -337,7 +338,11 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
           role: (message.role as any) || 'agent',
           messageType: message.messageType || 'message',
           content: message.content || '',
-          metadata: normalizeMessageTimelineMetadata(message.metadata, message.createdAt, idx),
+          metadata: normalizeMessageTimelineMetadata(
+            sanitizeTimelineMetadataForClient(message.metadata),
+            message.createdAt,
+            idx
+          ),
           createdAt: toIso(message.createdAt as any),
         })),
         { orchestratorSessionId }
@@ -867,6 +872,106 @@ function normalizeMessageTimelineMetadata(
   return metadata;
 }
 
+function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string, unknown> {
+  const metadata = pickRecord(metadataRaw);
+  const slim: Record<string, unknown> = {};
+
+  for (const key of [
+    'messageKey',
+    'timestamp',
+    'sessionEventSeq',
+    'timelineCursor',
+    'runtimeGeneration',
+    'runtimeGenerationBoundary',
+    'orchestratorSessionId',
+    'opencodeSessionId',
+    'workspacePath',
+    'stage',
+    'tone',
+    'streamKey',
+    'partId',
+    'eventType',
+  ]) {
+    if (metadata[key] !== undefined) {
+      slim[key] = metadata[key];
+    }
+  }
+
+  const eventFromMeta = pickRecord(metadata.event);
+  const rawPayload = pickRecord(metadata.rawPayload);
+  const eventFromPayload = pickRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const properties = pickRecord(event.properties);
+  const part = pickRecord(properties.part);
+
+  const toolName =
+    asText(metadata.toolName) ||
+    asText(part.tool) ||
+    asText(part.name) ||
+    asText(properties.tool) ||
+    asText(properties.name);
+  if (toolName) {
+    slim.toolName = toolName;
+  }
+
+  const partType = asText(metadata.partType) || asText(part.type);
+  if (partType) {
+    slim.partType = partType;
+  }
+
+  const eventRole = asText(metadata.eventRole) || asText(part.role);
+  if (eventRole) {
+    slim.eventRole = eventRole;
+  }
+
+  const eventState =
+    asText(metadata.eventState) ||
+    asText(pickRecord(properties.state).state) ||
+    asText(properties.state) ||
+    asText(properties.status);
+  if (eventState) {
+    slim.eventState = eventState;
+  }
+
+  const resolvedPartId =
+    asText(slim.partId) ||
+    asText(part.id) ||
+    asText(part.callID) ||
+    asText(properties.partId) ||
+    asText(properties.callID);
+  if (resolvedPartId) {
+    slim.partId = resolvedPartId;
+  }
+
+  if (Object.keys(event).length > 0) {
+    const slimProps: Record<string, unknown> = {};
+    const slimPart: Record<string, unknown> = {};
+    for (const key of ['id', 'callID', 'type', 'role', 'tool', 'name']) {
+      const value = asText(part[key]);
+      if (value) {
+        slimPart[key] = value;
+      }
+    }
+    if (Object.keys(slimPart).length > 0) {
+      slimProps.part = slimPart;
+    }
+    for (const key of ['tool', 'name', 'partId', 'callID', 'status']) {
+      const value = asText(properties[key]);
+      if (value) {
+        slimProps[key] = value;
+      }
+    }
+    if (eventState) {
+      slimProps.state = { state: eventState };
+    }
+    if (Object.keys(slimProps).length > 0) {
+      slim.event = { properties: slimProps };
+    }
+  }
+
+  return slim;
+}
+
 function normalizeRuntimeGenerationValue(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
@@ -1130,11 +1235,15 @@ function mapStoredMessagesToTimeline(
         messageType: message.messageType || 'message',
         content: message.content || '',
         metadata: {
-          ...normalizeMessageTimelineMetadata(message.metadata, message.createdAt, idx),
+          ...normalizeMessageTimelineMetadata(
+            sanitizeTimelineMetadataForClient(message.metadata),
+            message.createdAt,
+            idx
+          ),
           messageKey: buildTimelineMessageKey({
             id: message.id,
             messageType: message.messageType,
-            metadata: message.metadata,
+            metadata: sanitizeTimelineMetadataForClient(message.metadata),
             createdAt: message.createdAt,
           }),
         },
@@ -1155,17 +1264,18 @@ function attachTimelineMessageKeys(
 ): TimelineMessage[] {
   return Array.isArray(messages)
     ? messages.map((message) => {
+        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
         const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
-          metadata: message.metadata,
+          metadata: sanitizedMetadata,
           createdAt: message.createdAt,
         });
         return {
           ...message,
           messageKey,
           metadata: {
-            ...pickRecord(message.metadata),
+            ...sanitizedMetadata,
             messageKey,
           },
         };
@@ -1261,6 +1371,42 @@ function hasLegacyRecentNoise(messages: TimelineMessage[]) {
     }
     return false;
   });
+}
+
+function scheduleRecentHistoryHydration(sessionId: string) {
+  const taskId = asText(sessionId);
+  if (!taskId || recentHistoryHydrationInFlight.has(taskId)) {
+    return;
+  }
+
+  const task = (async () => {
+    try {
+      const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(taskId, {
+        allowProvision: true,
+      });
+      if (!nativeMessages || nativeMessages.length === 0) {
+        return;
+      }
+
+      await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+        taskId,
+        nativeMessages.slice(-50).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          messageType: message.messageType,
+          metadata: message.metadata,
+          createdAt: message.createdAt,
+        }))
+      );
+    } catch (error) {
+      console.warn('[RECENT_HISTORY_HYDRATION_FAILED]', { sessionId: taskId, error });
+    } finally {
+      recentHistoryHydrationInFlight.delete(taskId);
+    }
+  })();
+
+  recentHistoryHydrationInFlight.set(taskId, task);
 }
 
 function pickRecord(value: unknown): Record<string, unknown> {
@@ -1863,8 +2009,8 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const session = await resolveTaskSessionMeta(sessionId);
-    let cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-    let recentMessages = injectRuntimeGenerationBoundaries(
+    const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
+    const recentMessages = injectRuntimeGenerationBoundaries(
       annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
     );
 
@@ -1874,26 +2020,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
 
     if (shouldHydrateFromNativeHistory) {
-      const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(sessionId, {
-        allowProvision: true,
-      });
-      if (nativeMessages && nativeMessages.length > 0) {
-        await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
-          sessionId,
-          nativeMessages.slice(-50).map((message) => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            messageType: message.messageType,
-            metadata: message.metadata,
-            createdAt: message.createdAt,
-          }))
-        );
-        cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-        recentMessages = injectRuntimeGenerationBoundaries(
-          annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
-        );
-      }
+      scheduleRecentHistoryHydration(sessionId);
     }
 
     const page = buildTimelinePage(recentMessages);

@@ -114,7 +114,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 function preferSandboxPromptDispatch(): boolean {
-  return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'true')
+  return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'false')
     .trim()
     .toLowerCase() !== 'false';
 }

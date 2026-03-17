@@ -321,13 +321,13 @@ export default function Sidebar({
       <div
         className={`h-14 flex items-center ${collapsed ? "px-3 justify-center" : "px-4 justify-between"} border-b border-sidebar-border relative`}
       >
-        <Link href="/">
+        <Link href="/" className="min-w-0 flex-1">
           <div
-            className={`flex items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer shrink-0`}
+            className={`flex min-w-0 items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer`}
           >
             <img src="/logo.png" alt="oneceo" className="w-8 h-8 rounded-xl" />
             {!collapsed && (
-              <span className="font-semibold text-sidebar-foreground text-base">
+              <span className="truncate font-semibold text-sidebar-foreground text-base">
                 oneceo
               </span>
             )}
@@ -351,7 +351,9 @@ export default function Sidebar({
 
       {/* Navigation */}
       <ScrollArea className="flex-1">
-        <div className={`p-3 space-y-1 ${collapsed ? "items-center" : ""}`}>
+        <div
+          className={`space-y-1 p-2.5 ${collapsed ? "items-center" : "pr-3"}`}
+        >
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = location === item.href;
@@ -412,12 +414,12 @@ export default function Sidebar({
 
         {/* Projects Section */}
         {!collapsed && (
-          <div className="px-3 pb-3">
-            <div className="flex items-center justify-between mb-2 px-3">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          <div className="px-2.5 pb-2.5 pr-3">
+            <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
+              <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 {t("sidebar.projects").toUpperCase()}
               </span>
-              <Button variant="ghost" size="icon" className="h-6 w-6">
+              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
                 <PlusCircle className="w-4 h-4" />
               </Button>
             </div>
@@ -522,10 +524,10 @@ export default function Sidebar({
             {hasSessionOverflow && (
               <Button
                 variant="ghost"
-                className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
+                className="mt-1 h-8 w-full min-w-0 justify-start gap-2 overflow-hidden px-3 text-muted-foreground hover:text-sidebar-foreground"
                 onClick={() => setTasksDialogOpen(true)}
               >
-                <span className="text-sm">
+                <span className="truncate text-sm">
                   {t("sidebar.viewMore")} ({hiddenSessionCount})
                 </span>
               </Button>
@@ -540,13 +542,13 @@ export default function Sidebar({
                   >
                     <Button
                       variant="ghost"
-                      className="w-full min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      className="grid h-7 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
                     >
-                      <FileText className="w-3.5 h-3.5" />
+                      <FileText className="h-3.5 w-3.5" />
                       <span className="text-xs truncate flex-1 min-w-0 text-left">
                         {session.title}
                       </span>
-                      <span className="text-[10px] text-muted-foreground shrink-0">
+                      <span className="w-9 truncate text-right text-[10px] text-muted-foreground">
                         {formatSessionStatus(session.status)}
                       </span>
                     </Button>
@@ -561,17 +563,17 @@ export default function Sidebar({
 
         {/* All Tasks */}
         {!collapsed && (
-          <div className="px-3 pb-3">
+          <div className="px-2.5 pb-2.5 pr-3">
             <Button
               variant="ghost"
-              className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+              className="grid h-9 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden rounded-xl px-3 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
               onClick={() => setTasksDialogOpen(true)}
             >
-              <FileText className="w-4 h-4" />
-              <span className="text-sm font-medium">
+              <FileText className="h-4 w-4" />
+              <span className="truncate text-sm font-medium text-left">
                 {t("sidebar.allTasks")}
               </span>
-              <span className="ml-auto text-xs text-muted-foreground">
+              <span className="truncate text-right text-xs text-muted-foreground">
                 {orderedSessionTasks.length}
               </span>
             </Button>
@@ -581,7 +583,7 @@ export default function Sidebar({
 
       {/* Bottom Section */}
       <div
-        className="border-t border-sidebar-border p-3"
+        className="border-t border-sidebar-border p-2.5"
         onMouseEnter={() => setSettingsMenuOpen(true)}
         onMouseLeave={() => setSettingsMenuOpen(false)}
       >

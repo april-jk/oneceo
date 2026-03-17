@@ -342,6 +342,46 @@ export default function Home() {
     setAttachments(merged.attachments);
   }, []);
 
+  useEffect(() => {
+    const shouldLockViewport = !selectedProjectId && mode === "chat";
+    const html = document.documentElement;
+    const body = document.body;
+    const root = document.getElementById("root");
+    const targets = [html, body, root].filter((node): node is HTMLElement =>
+      Boolean(node),
+    );
+
+    if (!targets.length) {
+      return;
+    }
+
+    const previousStyles = targets.map((node) => ({
+      node,
+      overflow: node.style.overflow,
+      height: node.style.height,
+      maxHeight: node.style.maxHeight,
+      overscrollBehavior: node.style.overscrollBehavior,
+    }));
+
+    if (shouldLockViewport) {
+      targets.forEach((node) => {
+        node.style.overflow = "hidden";
+        node.style.height = "100%";
+        node.style.maxHeight = "100vh";
+        node.style.overscrollBehavior = "none";
+      });
+    }
+
+    return () => {
+      previousStyles.forEach((entry) => {
+        entry.node.style.overflow = entry.overflow;
+        entry.node.style.height = entry.height;
+        entry.node.style.maxHeight = entry.maxHeight;
+        entry.node.style.overscrollBehavior = entry.overscrollBehavior;
+      });
+    };
+  }, [mode, selectedProjectId]);
+
   const exitHistoryView = () => {
     if (!isHistoryView) return;
     const base = sessionId
@@ -863,6 +903,7 @@ export default function Home() {
   return (
     <WorkspaceLayout
       fluid={!selectedProjectId && mode === "chat"}
+      lockViewport={!selectedProjectId && mode === "chat"}
       selectedProjectId={selectedProjectId}
       onProjectSelect={setSelectedProjectId}
     >
@@ -875,7 +916,7 @@ export default function Home() {
         <div
           className={
             mode === "chat"
-              ? "flex h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden"
+              ? "flex h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden overscroll-none"
               : "flex min-h-[calc(100vh-2rem)] flex-col"
           }
         >
@@ -1097,7 +1138,7 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
-                className="flex h-full flex-1 min-h-0 overflow-hidden"
+                className="flex h-full flex-1 min-h-0 overflow-hidden overscroll-none"
               >
                 {showDesktopPreview ? (
                   <ResizablePanelGroup
@@ -1105,15 +1146,15 @@ export default function Home() {
                     autoSaveId="task-creation-chat-layout"
                     className="h-full min-h-0"
                   >
-                    <ResizablePanel defaultSize={64} minSize={40}>
-                      <div className="h-full min-h-0 pr-4">{chatPanel}</div>
+                    <ResizablePanel defaultSize={66} minSize={42}>
+                      <div className="h-full min-h-0 pr-2">{chatPanel}</div>
                     </ResizablePanel>
                     <ResizableHandle
                       withHandle
-                      className="w-3 bg-transparent after:w-2 after:rounded-full after:bg-border/40 hover:after:bg-border data-[resize-handle-active]:after:bg-border"
+                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
                     />
-                    <ResizablePanel defaultSize={36} minSize={24} maxSize={52}>
-                      <div className="h-full min-h-0 pl-4">{previewPanel}</div>
+                    <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
+                      <div className="h-full min-h-0 pl-2">{previewPanel}</div>
                     </ResizablePanel>
                   </ResizablePanelGroup>
                 ) : (

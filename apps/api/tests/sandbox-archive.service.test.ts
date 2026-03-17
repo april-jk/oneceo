@@ -66,6 +66,7 @@ beforeEach(() => {
       return value;
     },
     resolveOpencodeWorkspacePath: (taskSessionId: string) => `/workspace/${taskSessionId}`,
+    resolveOpencodeStatePath: (taskSessionId: string) => `/state/${taskSessionId}`,
     clearSandboxDirty: async (sessionId: string, patch?: Record<string, unknown>) => {
       const env = envMap.get(sessionId);
       if (!env) return;
@@ -111,15 +112,25 @@ test('archives and uploads when workspace content changed', async () => {
   const result = await archiveSandboxWorkspace(sandboxId, 'idle_timeout');
   assert.equal(result.uploaded, true);
   assert.equal(result.taskSessionId, 'task-archive-1');
+  assert.equal(result.stateRoot, '/state/task-archive-1');
 
   assert.ok(uploadLog.some((item) => item.key === 'sessions/task-archive-1/workspace.tar.gz'));
   assert.ok(uploadLog.some((item) => item.key.startsWith('sessions/task-archive-1/snapshots/')));
   assert.ok(uploadLog.some((item) => item.key === 'sessions/task-archive-1/metadata.json'));
+  assert.ok(
+    commandLog.some(
+      (item) =>
+        item.command.includes('ln -s') &&
+        item.command.includes('workspace state') &&
+        item.command.includes('tar -chzf')
+    )
+  );
 
   const env = envMap.get(sandboxId)?.metadata || {};
   assert.equal(env.archiveStatus, 'archived');
   assert.equal(env.pendingArchiveUpdate, false);
   assert.equal(env.r2ArchiveSha256, sha256(archivePayload));
+  assert.equal(env.opencodeStateRoot, '/state/task-archive-1');
 });
 
 test('skips archive upload when hash unchanged and archive already exists', async () => {
@@ -166,9 +177,11 @@ test('restores workspace from archived object and executes restore command', asy
     metadataKey,
     Buffer.from(
       JSON.stringify({
-        version: 2,
+        version: 3,
         sandboxId,
         taskSessionId: 'task-archive-3',
+        workspaceRoot: '/workspace/task-archive-3',
+        stateRoot: '/state/task-archive-3',
         archiveKey,
       }),
       'utf8'
@@ -181,8 +194,47 @@ test('restores workspace from archived object and executes restore command', asy
   assert.equal(writeLog.length, 1);
   assert.ok(commandLog.some((item) => item.command.includes('find') && item.command.includes('-exec rm -rf')));
   assert.ok(commandLog.some((item) => item.command.includes('tar -xzf')));
+  assert.ok(commandLog.some((item) => item.command.includes('/state/task-archive-3')));
 
   const env = envMap.get(sandboxId)?.metadata || {};
   assert.equal(env.restoreStatus, 'restored');
   assert.equal(env.r2RestoreSourceKey, archiveKey);
+  assert.equal(env.opencodeStateRoot, '/state/task-archive-3');
+});
+
+test('restores legacy v2 archive and migrates workspace .opencode into state root', async () => {
+  const sandboxId = 'sandbox-archive-service-4';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      taskSessionId: 'task-archive-4',
+      opencodeWorkspaceRoot: '/workspace/task-archive-4',
+    },
+  });
+
+  const metadataKey = 'sessions/task-archive-4/metadata.json';
+  const archiveKey = 'sessions/task-archive-4/workspace.tar.gz';
+  r2Map.set(
+    metadataKey,
+    Buffer.from(
+      JSON.stringify({
+        version: 2,
+        sandboxId,
+        taskSessionId: 'task-archive-4',
+        archiveKey,
+      }),
+      'utf8'
+    )
+  );
+  r2Map.set(archiveKey, Buffer.from('legacy-archive-content', 'utf8'));
+
+  const restored = await restoreWorkspaceIfArchived(sandboxId);
+  assert.equal(restored, true);
+  assert.ok(
+    commandLog.some(
+      (item) =>
+        item.command.includes('/workspace/task-archive-4/.opencode') &&
+        item.command.includes('/state/task-archive-4')
+    )
+  );
 });

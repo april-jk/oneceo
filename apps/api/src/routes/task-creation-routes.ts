@@ -1324,6 +1324,7 @@ async function resolveRenderableTimelineMessages(
 
   messages = annotateRuntimeGenerations(messages, session?.runtime);
   messages = injectRuntimeGenerationBoundaries(messages);
+  messages = filterLegacyTimelineNoise(messages);
   messages.sort((a, b) => {
     const ta = resolveMessageTimelineCursor(a);
     const tb = resolveMessageTimelineCursor(b);
@@ -1360,16 +1361,33 @@ function buildTimelinePage(messages: TimelineMessage[]) {
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
   return messages.some((message) => {
     const content = asText(message?.content);
-    if (message?.messageType !== 'opencode_event') {
+    if (message?.messageType === 'opencode_event') {
+      if (!content) {
+        return true;
+      }
+      if (content.startsWith('[Message] ')) {
+        return true;
+      }
       return false;
     }
-    if (!content) {
-      return true;
-    }
-    if (content.startsWith('[Message] ')) {
+    if (message?.messageType === 'status_update' && !content) {
       return true;
     }
     return false;
+  });
+}
+
+function filterLegacyTimelineNoise<T extends { messageType?: string; content?: string }>(messages: T[]): T[] {
+  return messages.filter((message) => {
+    const content = asText(message?.content);
+    if (message?.messageType === 'opencode_event') {
+      if (!content) return false;
+      if (content.startsWith('[Message] ')) return false;
+    }
+    if (message?.messageType === 'status_update' && !content) {
+      return false;
+    }
+    return true;
   });
 }
 
@@ -1390,7 +1408,7 @@ function scheduleRecentHistoryHydration(sessionId: string) {
 
       await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
         taskId,
-        nativeMessages.slice(-50).map((message) => ({
+        filterLegacyTimelineNoise(nativeMessages).slice(-50).map((message) => ({
           id: message.id,
           role: message.role,
           content: message.content,
@@ -2010,8 +2028,10 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
     const { sessionId } = req.params;
     const session = await resolveTaskSessionMeta(sessionId);
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-    const recentMessages = injectRuntimeGenerationBoundaries(
-      annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
+    const recentMessages = filterLegacyTimelineNoise(
+      injectRuntimeGenerationBoundaries(
+        annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
+      )
     );
 
     const shouldHydrateFromNativeHistory =

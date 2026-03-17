@@ -1,7 +1,7 @@
 import { e2bConnector } from '../connectors/e2b-connector';
 import { e2bConfig } from '../config/e2b-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import { resolveOpencodeStatePath, resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -20,6 +20,7 @@ export type EnsuredSandboxRuntimeMetadata = {
   port: number;
   trafficAccessToken: string | null;
   workspaceRoot: string;
+  stateRoot: string;
   metadata: Record<string, unknown>;
 };
 
@@ -36,6 +37,9 @@ export async function ensureSandboxRuntimeMetadata(
   const workspaceRoot =
     asText(metadata.opencodeWorkspaceRoot) ||
     resolveOpencodeWorkspacePath(boundTaskSessionId || orchestratorSessionId);
+  const stateRoot =
+    asText(metadata.opencodeStateRoot) ||
+    resolveOpencodeStatePath(boundTaskSessionId || orchestratorSessionId);
   const trafficAccessToken =
     asText(e2bMeta.trafficAccessToken) || asText(metadata.trafficAccessToken) || null;
 
@@ -64,6 +68,9 @@ export async function ensureSandboxRuntimeMetadata(
   if (asText(metadata.opencodeWorkspaceRoot) !== workspaceRoot) {
     needsMetadataUpdate = true;
   }
+  if (asText(metadata.opencodeStateRoot) !== stateRoot) {
+    needsMetadataUpdate = true;
+  }
   if (Number(metadata.opencodePort) !== e2bConfig.opencodePort) {
     needsMetadataUpdate = true;
   }
@@ -76,6 +83,7 @@ export async function ensureSandboxRuntimeMetadata(
         opencodeHost: host || undefined,
         opencodePort: e2bConfig.opencodePort,
         opencodeWorkspaceRoot: workspaceRoot || undefined,
+        opencodeStateRoot: stateRoot || undefined,
         e2b: {
           ...e2bMeta,
           sandboxId: asText(e2bMeta.sandboxId) || orchestratorSessionId,
@@ -96,6 +104,7 @@ export async function ensureSandboxRuntimeMetadata(
     port: e2bConfig.opencodePort,
     trafficAccessToken,
     workspaceRoot,
+    stateRoot,
     metadata: nextMetadata,
   };
 }

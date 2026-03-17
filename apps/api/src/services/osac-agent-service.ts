@@ -6,7 +6,11 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { e2bConfig } from '../config/e2b-config';
 import { osacConnectionManager } from './osac-connection-manager';
 import { opencodeEventStreamService } from './opencode-event-stream-service';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { auditOsacAction } from '../utils/osac-audit';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { sessionConnectorService } from './session-connector-service';
@@ -31,6 +35,7 @@ type RuntimeInfo = {
   baseUrl: string;
   trafficAccessToken?: string | null;
   workspaceRoot?: string;
+  stateRoot?: string;
 };
 
 function asString(value: unknown): string {
@@ -45,10 +50,13 @@ function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknow
   return resolveOpencodeWorkspacePath(sessionId);
 }
 
-function resolveOpencodeDataHome(workspaceRoot?: string | null): string | null {
-  const normalized = asString(workspaceRoot);
-  if (!normalized) return null;
-  return `${normalized.replace(/\/+$/, '')}/.opencode`;
+function resolveStateRoot(sessionId: string, metadata: Record<string, unknown>, workspaceRoot?: string) {
+  const explicit = asString(metadata.opencodeStateRoot);
+  if (explicit) return explicit;
+  const taskSessionId = asString(metadata.taskSessionId);
+  if (taskSessionId) return resolveOpencodeStatePath(taskSessionId);
+  const legacy = resolveLegacyOpencodeStatePath(workspaceRoot);
+  return legacy || resolveOpencodeStatePath(sessionId);
 }
 
 async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
@@ -58,10 +66,12 @@ async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
     throw new Error(`未找到执行环境: ${sessionId}`);
   }
   const workspaceRoot = resolveWorkspaceRoot(sessionId, ensured.metadata);
+  const stateRoot = resolveStateRoot(sessionId, ensured.metadata, workspaceRoot);
   return {
     baseUrl: ensured.baseUrl,
     trafficAccessToken: ensured.trafficAccessToken,
     workspaceRoot,
+    stateRoot,
   };
 }
 
@@ -127,7 +137,7 @@ async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
     // start server if not ready
   }
 
-  const opencodeDataHome = resolveOpencodeDataHome(runtime.workspaceRoot);
+  const opencodeDataHome = asString(runtime.stateRoot);
   const envPrefix = opencodeDataHome ? `XDG_DATA_HOME=${shellEscape(opencodeDataHome)} ` : '';
   const command = `${envPrefix}nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });

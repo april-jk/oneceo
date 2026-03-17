@@ -186,51 +186,106 @@ OpenCode 官方仓库 README 示例配置里包含：
 - 平台只保存最小必要映射，不保存历史消息副本作为主来源
 - 恢复后优先从 OpenCode API 重读历史，而不是平台侧拼装
 
-## 6.2 目标目录结构
+### 2026-03-16 性能修正结论
 
-每个直通任务会话对应独立工作区：
+上述“项目内 `.opencode` 数据目录”方案已经证明会带来严重性能副作用，需要修正。
+
+根因：
+
+- 当前实现把 `XDG_DATA_HOME` 指到工作区内部：
+  - [sandbox-agent-provision-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/sandbox-agent-provision-service.ts)
+  - [osac-agent-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/osac-agent-service.ts)
+- 工作区根路径当前是：
+  - [opencode-workspace.ts](/Users/watson/codingProj/oneceo/apps/api/src/utils/opencode-workspace.ts)
+  - `/opt/.altus/opencode/workspaces/{taskSessionId}`
+- 因此 OpenCode 的内部数据库、日志、snapshot、WAL 文件会写进：
+  - `{workspaceRoot}/.opencode/...`
+- 这些文件虽然在平台桥接层已经被过滤，不再进入用户时间线：
+  - [opencode-event-stream-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/opencode-event-stream-service.ts)
+- 但过滤发生在 OpenCode 产生事件之后。
+- 也就是说，OpenCode 进程自身仍然会把 `.opencode` 视为工作区的一部分，对自己的数据库/日志写入反复触发：
+  - `session.diff`
+  - `file.*`
+  - 文件扫描 / diff / watcher
+- 结果是：
+  - CPU 持续偏高
+  - 文件 diff 事件极多
+  - 会话越长，性能损耗越明显
+
+结论：
+
+- `.opencode` 不能放在工作区树内。
+- 平台层过滤 `.opencode` 事件只能减少展示噪音，不能解决 OpenCode 进程内部的性能消耗。
+- 后续方案必须把 OpenCode 状态目录迁出工作区，但仍保持可归档、可恢复。
+
+## 6.2 修正后的目标目录结构
+
+每个直通任务会话对应两套目录：
 
 ```text
-/opt/.altus/opencode/workspaces/{taskSessionId}/
-  ├── .opencode/
-  │   ├── ... OpenCode project storage ...
-  │   └── ... session / message / snapshot / summary ...
+/home/user/opencode/workspaces/{taskSessionId}/
   └── 项目文件...
+
+/home/user/opencode/state/{taskSessionId}/
+  ├── opencode.db
+  ├── opencode.db-wal
+  ├── opencode/
+  └── ... session / message / snapshot / summary ...
 ```
 
-这样现有工作区归档 tar 包会天然包含 `.opencode/`。
+语义：
+
+- `workspaceRoot` 只放用户项目文件
+- `stateRoot` 只放 OpenCode 内部状态文件
+- `stateRoot` 必须是 `workspaceRoot` 的兄弟目录，不能是其子目录，也不能通过软链接挂回工作区内
 
 ## 6.3 启动配置调整
 
 当前 oneceo 会在 Sandbox 内重写 `~/.config/opencode/opencode.json`，但当前 OpenCode 版本不接受 `data.directory`。
 
-因此实际落地调整为：
+因此修正后的实际落地调整为：
 
 - 保持 `opencode.json` 只写当前版本支持的 provider / model / mcp 配置
 - 在所有 `opencode serve` 启动路径统一注入：
 
 ```bash
-XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
+XDG_DATA_HOME=/home/user/opencode/state/{taskSessionId}
 ```
 
-这样 OpenCode 的 SQLite、日志和 session storage 会落到工作区内，同时不需要依赖当前版本不支持的配置键。
+这样 OpenCode 的 SQLite、日志和 session storage 会落到工作区外部的独立状态目录，同时不需要依赖当前版本不支持的配置键。
+
+新增约束：
+
+- 所有 `opencode serve`
+- 所有按需拉起 OpenCode server
+- 所有恢复后重启 OpenCode server 的路径
+
+都必须统一使用同一个 `stateRoot`，否则 session 无法恢复。
 
 ## 6.4 销毁前保存策略
 
-当前归档逻辑已会打包整个工作区根目录，因此只要 `.opencode/` 在工作区内，就无需新增单独的 OpenCode 归档动作。
+当前归档逻辑原本只打包工作区根目录；修正后不能再只归档 `workspaceRoot`。
+
+必须新增“工作区 + 状态目录”的双目录归档：
+
+- `workspaceRoot = {workspaceParent}/workspaces/{taskSessionId}`
+- `stateRoot = {workspaceParent}/state/{taskSessionId}`
+
+归档时两者必须一起进入同一个 tar 包。
 
 但需要补两项约束：
 
-1. 归档前不得清理 `.opencode/`
+1. 归档前不得清理 `stateRoot`
 2. 归档元数据中记录：
    - 当前 `taskSessionId`
    - 当前工作区路径
+   - 当前状态目录路径
    - 最近一次可用的 `opencodeSessionId`
 
 说明：
 
 - 这里记录 `opencodeSessionId` 只是“恢复定位索引”，不是消息主存
-- 消息内容仍以 `.opencode/` 内 OpenCode 原生状态为准
+- 消息内容仍以 `stateRoot` 内 OpenCode 原生状态为准
 
 新增强制约束（2026-03-16）：
 
@@ -239,30 +294,34 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
   - 这说明“等到 sandbox 即将被关闭时再归档”并不可靠，尤其在 E2B 直接回收、异常关闭、心跳缺失时会丢状态。
 - 直通会话每一轮对话完成后，都必须主动归档当前工作区。
   - 实现位置在 `opencode-remote-service.ts` 的 direct / managed `completed` 分支。
-  - 归档动作必须发生在会话状态回写为 `completed` 之前，避免用户看到“已完成”但 `.opencode` 尚未落盘。
+  - 归档动作必须在完成后立即触发，但不能阻塞 `completed` 状态回写；否则归档链路一旦抖动，前台会永久停留在“智能体正在处理...”。
+  - 当前修正后的语义是：先收敛内存/数据库/前台完成态，再后台触发归档；归档失败单独记录并交给补偿链路处理。
 - 当用户在同一对话框继续发送消息，而当前 `runtimeStatus=closed` / `terminated` / `failed` 时，前端不得直接沿用旧 `orchestratorSessionId` 发送 `opencode_input`。
   - 必须先把消息放入 pending 队列，再触发 `runtime/start`。
   - 只有 runtime 恢复到可发送状态后，才允许自动补发到旧 `opencodeSessionId`。
+- 如果本地已经把 runtime 判定为 terminal，而详情接口返回的仍是同一个 `orchestratorSessionId` 的旧 `ready` 快照，则必须优先信任本地 terminal 状态。
+  - 这种情况下不得直接发送到旧 sandbox。
+  - 必须继续走 pending + runtime 恢复流程，直到详情接口返回新的 sandbox，或同一 sandbox 被后端重新确认可发送。
   - 触发点至少包括：
     1. 本轮收到 assistant 最终可渲染回复
     2. 平台准备把本轮 `status/stage` 推进到 `completed`
     3. 本轮进入 `waiting_user`
   - 归档内容必须包含：
     - 工作区文件
-    - `.opencode/opencode.db*`
-    - `.opencode/opencode/snapshot/*`
+    - `stateRoot/opencode.db*`
+    - `stateRoot/opencode/snapshot/*`
     - 其它 OpenCode 本地状态文件
-- 主动归档必须是“成功后再收敛完成态”的一部分。
-  - 平台不能先写 `completed`，再异步尝试归档。
+- 主动归档必须是“完成后立即触发”的一部分，但不能卡住完成态。
+  - 平台允许先写 `completed`，再异步尝试归档。
   - 正确顺序应为：
     1. 本轮 assistant 回复确认完成
-    2. 触发工作区归档
-    3. 归档成功后写 `completed/waiting_user`
+    2. 先写 `completed/waiting_user`
+    3. 立即后台触发工作区归档
   - 如果归档失败：
     - 不应清空当前 runtime 绑定
     - 但必须把失败写入 metadata / 日志，供下一次恢复诊断
 - 对纯文本轮次也必须归档。
-  - 因为即使没有代码文件变化，OpenCode 的 session/message 仍然会写入 `.opencode/opencode.db`
+  - 因为即使没有代码文件变化，OpenCode 的 session/message 仍然会写入 `stateRoot/opencode.db`
   - 如果只在“检测到工作区文件变化”时归档，纯对话会话仍会丢失原 session
 
 ## 6.5 恢复后启动策略
@@ -526,6 +585,23 @@ XDG_DATA_HOME=/opt/.altus/opencode/workspaces/{taskSessionId}/.opencode
   - 如果 `message.final` / `session.status=idle` / `status_update(completed|failed)` 是通过 `recent/history` 回补进来的，前端也必须同步结束“智能体正在处理...”状态。
   - 当 SSE 桥接抖动、前端漏掉终态实时事件时，客户端应周期性用最近消息缓存做 reconciliation。
   - reconciliation 发现终态消息或待回答问题后，必须清除 `isProcessing`，避免同一会话已经完成但前端永久卡在处理中。
+- Direct 模式进入 `completionInProgress` 后，后端不能只依赖 native history 来补齐 assistant 最终回复。
+  - 如果 native history 还没返回，但当前 run 的 live text stream 仍保留在内存中，后端必须先做一次强制 `flushTextStreams()`。
+  - flush 成功后应立即补发 synthetic `session.idle`，推动本轮状态收敛到 `completed`，避免页面长期停在“正在同步智能体回复...”。
+- `OPENCODE_PROMPT_ACCEPTED` 只能作为“已确认 prompt 被接收”的补充事件，不能重置同一 run 已经建立的内存状态。
+  - 如果同一 `runKey(taskSessionId + opencodeSessionId)` 已经由发送链路初始化过，则 `OPENCODE_PROMPT_ACCEPTED` 不得再次清空 `textStreams`、重置 `promptedAt`、或覆盖已累计的 `textEvents`。
+  - 否则一旦 `PROMPT_ACCEPTED` 晚于流式文本事件到达，后端会把已经收到的 assistant 回复痕迹擦掉，最终长期停在“正在同步智能体回复...”。
+- 同一 `opencodeSessionId` 承载多轮对话时，`finalizedRuns` 不能跨轮残留。
+  - 每次 `OPENCODE_PROMPT_ACCEPTED` 到来，都必须先清除该 `runKey` 的 finalized/native-history poll 标记，再决定是否初始化新的 run artifact。
+  - 否则一旦这一轮的流式文本先到、`PROMPT_ACCEPTED` 后到，虽然不会再清空 `textStreams`，但上一轮的 finalized 标记仍会让本轮 `session.idle` 被直接短路，表现为 assistant 回复已在 OpenCode 完成、平台却只停在 `collecting`。
+- `promptedAt` 不能直接取晚到的 `OPENCODE_PROMPT_ACCEPTED` 时间。
+  - 如果当前进程里已经没有这一轮的 run artifact（例如进程重启、事件乱序、或 prompt accepted 晚到），重新建 artifact 时必须从最近一次已持久化的 `opencode_user_input/user_input` 推导 `promptedAt`。
+  - 否则 native history 回补会把“创建时间早于 late prompt accepted”的 assistant 回复全部过滤掉，导致平台明明能在 OpenCode 原生历史里看到回复，但 recent/detail 永远不落库。
+- late `OPENCODE_PROMPT_ACCEPTED` 不得把已经 completed 的直通会话重新打回 `in_progress/executing`。
+  - 如果同一 `runKey` 在 prompt accepted 到来前已经进入 finalized/completed，prompt accepted 只允许补 runtime 绑定，不允许回退 `status/stage`。
+  - 否则平台会出现 `message.final` 已落库、OpenCode 实际已完成，但 detail 仍显示 `collecting`、前台持续“智能体正在处理...”的假运行态。
+- 对“已 completed 的同一轮 late prompt accepted”，不仅不能回退状态，也不能清除 `finalizedRuns`。
+  - 如果先完成、后收到 prompt accepted，再把 finalized 标记清掉，会导致紧随其后的 `session.idle` 被当成新一轮未完成 run 再处理一次，重新进入 `collecting` 或再次触发 native-history poll。
 - 续聊输入不能再额外依赖页面层的 `isConnected` 门控。
   - WebSocket 是否已连上，只应影响“立即发送”还是“排队后重发”，不应阻止用户提交消息。
   - 页面层若在调用 `sendChatInput()` 前因为 `isConnected=false` 直接返回，会造成“输入框已清空、标题已更新、但后端没有收到任何 `opencode_input`”的假发送状态。

@@ -1382,6 +1382,9 @@ export class OpencodeRemoteService {
     content: string,
     metadata?: Record<string, unknown>
   ) {
+    if (messageType === 'opencode_event' && !asString(content)) {
+      return;
+    }
     await taskCreationFileMemoryStore.addMessage(taskSessionId, role, messageType, content, metadata);
     await this.enqueueDbMessage({
       id: randomUUID(),
@@ -1574,7 +1577,20 @@ export class OpencodeRemoteService {
       },
     };
 
-    await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+    try {
+      await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+    } catch (error) {
+      if (isSandboxNotFoundError(error)) {
+        await markSandboxClosed(orchestratorSessionId);
+        return;
+      }
+      console.warn('[OPENCODE_STREAM_IDLE_TIMEOUT_FAILED]', {
+        taskSessionId,
+        orchestratorSessionId,
+        opencodeSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private shellEscapeSingle(value: string): string {
@@ -2100,6 +2116,37 @@ export class OpencodeRemoteService {
       const artifact = this.getRunArtifact(runKey);
       artifact.nativeHistoryPollAttempts += 1;
 
+      const aggregated = await this.flushTextStreams(
+        taskSessionId,
+        orchestratorSessionId,
+        opencodeSessionId,
+        { persistMode: 'all' }
+      );
+      if (aggregated) {
+        artifact.assistantResponseObserved = true;
+        const syntheticMessage: OsacMessage = {
+          type: 'OPENCODE_EVENT',
+          payload: {
+            seq: Date.now(),
+            timestamp: Date.now(),
+            eventType: 'session.idle',
+            orchestratorSessionId,
+            opencodeSessionId,
+            event: {
+              type: 'session.idle',
+              directory: resolveOpencodeWorkspacePath(taskSessionId) || undefined,
+              properties: {
+                sessionID: opencodeSessionId,
+                status: 'idle',
+                source: 'native_history_poll_stream_flush',
+              },
+            },
+          },
+        };
+        await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+        return;
+      }
+
       const syncResult = await this.syncNativeHistoryDelta({
         taskSessionId,
         orchestratorSessionId,
@@ -2177,10 +2224,19 @@ export class OpencodeRemoteService {
     }
     const workspacePath = resolveOpencodeWorkspacePath(input.taskSessionId);
     const runtime = await resolveRuntimeBinding(input.taskSessionId, input.orchestratorSessionId);
-    const rawMessages = await osacAgentService.getSessionMessages(input.orchestratorSessionId, {
-      opencodeSessionId: input.opencodeSessionId,
-      workspacePath: workspacePath || undefined,
-    });
+    let rawMessages: unknown[] = [];
+    try {
+      rawMessages = await osacAgentService.getSessionMessages(input.orchestratorSessionId, {
+        opencodeSessionId: input.opencodeSessionId,
+        workspacePath: workspacePath || undefined,
+      });
+    } catch (error) {
+      if (isSandboxNotFoundError(error)) {
+        await markSandboxClosed(input.orchestratorSessionId);
+        return { assistantObserved: false, persistedCount: 0 };
+      }
+      throw error;
+    }
     const normalized = normalizeOpencodeNativeMessages(Array.isArray(rawMessages) ? rawMessages : [], {
       taskSessionId: input.taskSessionId,
       generation: runtime?.generation,
@@ -3012,7 +3068,7 @@ export class OpencodeRemoteService {
     if (!session) return;
     this.clearTextStreams(session.id, opencodeSessionId);
     this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
-    const now = Date.now();
+    const now = await this.resolvePromptedAtSeed(taskSessionId, opencodeSessionId);
     const phaseAtStart = (session.phase as FlowPhase) || 'development';
     this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
       hasFileChange: false,
@@ -3036,6 +3092,37 @@ export class OpencodeRemoteService {
     });
     this.clearNativeHistoryPoll(this.buildRunKey(session.id, opencodeSessionId));
     this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
+  }
+
+  private async resolvePromptedAtSeed(taskSessionId: string, opencodeSessionId?: string): Promise<number> {
+    const fallback = Date.now();
+    try {
+      const messages = await taskCreationFileMemoryStore.getMessages(taskSessionId);
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (
+          message.messageType !== 'opencode_user_input' &&
+          message.messageType !== 'user_input' &&
+          message.messageType !== 'user_response'
+        ) {
+          continue;
+        }
+        const metadata = toRecord(message.metadata);
+        const messageOpencodeSessionId = asString(metadata.opencodeSessionId);
+        if (opencodeSessionId && message.messageType === 'opencode_user_input' && messageOpencodeSessionId) {
+          if (messageOpencodeSessionId !== opencodeSessionId) {
+            continue;
+          }
+        }
+        const parsed = Date.parse(String(message.createdAt || ''));
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore and fall back to current time
+    }
+    return fallback;
   }
 
   private async handleOsacMessage(orchestratorSessionId: string, message: OsacMessage) {
@@ -3108,41 +3195,63 @@ export class OpencodeRemoteService {
           orchestratorSessionId,
           opencodeSessionId,
         });
-        this.clearTextStreams(session.id, opencodeSessionId);
-        this.finalizedRuns.delete(this.buildRunKey(session.id, opencodeSessionId));
-        const now = Date.now();
-        const phaseAtStart = (session.phase as FlowPhase) || 'development';
-        this.runArtifacts.set(this.buildRunKey(session.id, opencodeSessionId), {
-          hasFileChange: false,
-          hasFailure: false,
-          missingArtifactNudges: 0,
-          startedAt: now,
-          promptedAt: now,
-          completionInProgress: false,
-          hasPlaywrightUsage: false,
-          toolEvents: 0,
-          commandEvents: 0,
-          diffEvents: 0,
-          todoEvents: 0,
-          fileEvents: 0,
-          textEvents: 0,
-          assistantResponseObserved: false,
-          nativeHistoryPollAttempts: 0,
-          toolsUsed: new Set<string>(),
-          phaseAtStart,
-          cycleAtStart: session.phaseCycle ?? 0,
-        });
-        this.clearNativeHistoryPoll(this.buildRunKey(session.id, opencodeSessionId));
+        const runKey = this.buildRunKey(session.id, opencodeSessionId);
+        const hadFinalized = this.finalizedRuns.has(runKey);
+        const lateCompletionAck =
+          hadFinalized &&
+          (session.stage === 'completed' ||
+            session.status === 'completed');
+        if (lateCompletionAck) {
+          return;
+        }
+        // 同一 OpenCode session 会承载多轮对话。新一轮 prompt 被接受时，无论事件是否乱序，
+        // 都必须先清掉上一轮的 finalized 标记，否则后续 session.idle 会被直接短路。
+        this.finalizedRuns.delete(runKey);
+        this.clearNativeHistoryPoll(runKey);
+        const existingArtifact = this.runArtifacts.get(runKey);
+        if (!existingArtifact) {
+          this.clearTextStreams(session.id, opencodeSessionId);
+          const now = await this.resolvePromptedAtSeed(session.id, opencodeSessionId);
+          const phaseAtStart = (session.phase as FlowPhase) || 'development';
+          this.runArtifacts.set(runKey, {
+            hasFileChange: false,
+            hasFailure: false,
+            missingArtifactNudges: 0,
+            startedAt: now,
+            promptedAt: now,
+            completionInProgress: false,
+            hasPlaywrightUsage: false,
+            toolEvents: 0,
+            commandEvents: 0,
+            diffEvents: 0,
+            todoEvents: 0,
+            fileEvents: 0,
+            textEvents: 0,
+            assistantResponseObserved: false,
+            nativeHistoryPollAttempts: 0,
+            toolsUsed: new Set<string>(),
+            phaseAtStart,
+            cycleAtStart: session.phaseCycle ?? 0,
+          });
+        }
         this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
         if (this.isDirectSession(session)) {
           this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, opencodeSessionId);
         }
+        if (!hadFinalized) {
+          await taskCreationFileMemoryStore.updateSessionState(session.id, {
+            status: 'in_progress',
+            stage: 'executing',
+            phase: session.phase ? (session.phase as any) : 'development',
+          });
+        }
+      } else {
+        await taskCreationFileMemoryStore.updateSessionState(session.id, {
+          status: 'in_progress',
+          stage: 'executing',
+          phase: session.phase ? (session.phase as any) : 'development',
+        });
       }
-      await taskCreationFileMemoryStore.updateSessionState(session.id, {
-        status: 'in_progress',
-        stage: 'executing',
-        phase: session.phase ? (session.phase as any) : 'development',
-      });
 
       if (!this.isDirectSession(session)) {
         const content = 'OpenCode 已接收指令，正在执行并回传实时事件...';
@@ -3395,6 +3504,17 @@ export class OpencodeRemoteService {
           artifact.lastText = stream.text.slice(-800);
           artifact.assistantResponseObserved = true;
         }
+        console.info('[OPENCODE_TEXT_STREAM_EVENT]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: textStream.opencodeSessionId,
+          eventType,
+          partId: textStream.partId,
+          delta: textStream.delta || null,
+          text: stream.text.slice(-120),
+          textEvents: artifact.textEvents,
+          promptedAt: artifact.promptedAt,
+        });
       }
 
       const eventPreview = buildEventPreview(event);
@@ -3603,6 +3723,17 @@ export class OpencodeRemoteService {
       );
       if (isDirect) {
         const artifact = this.getRunArtifact(runKey);
+        console.info('[OPENCODE_DIRECT_COMPLETION_PRECHECK]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+          eventType,
+          outcome,
+          aggregated: aggregated ? aggregated.slice(-120) : null,
+          assistantResponseObserved: artifact.assistantResponseObserved,
+          textEvents: artifact.textEvents,
+          promptedAt: artifact.promptedAt,
+        });
         if (aggregated) {
           artifact.assistantResponseObserved = true;
         }
@@ -3616,6 +3747,13 @@ export class OpencodeRemoteService {
           if (syncResult.assistantObserved) {
             artifact.assistantResponseObserved = true;
           }
+          console.info('[OPENCODE_DIRECT_COMPLETION_NATIVE_SYNC]', {
+            taskSessionId: session.id,
+            orchestratorSessionId,
+            opencodeSessionId: runOpencodeSessionId,
+            assistantObserved: syncResult.assistantObserved,
+            persistedCount: syncResult.persistedCount,
+          });
         }
         if (!artifact.assistantResponseObserved) {
           artifact.completionInProgress = false;
@@ -3641,18 +3779,34 @@ export class OpencodeRemoteService {
         if (runOpencodeSessionId) {
           this.clearStreamIdleTimer(this.buildStreamIdleKey(session.id, runOpencodeSessionId));
         }
-        await this.archiveCompletedTurn({
+        void this.archiveCompletedTurn({
           taskSessionId: session.id,
           orchestratorSessionId,
           opencodeSessionId: runOpencodeSessionId,
           source: 'direct_completed',
+        }).then(() => {
+          console.info('[OPENCODE_DIRECT_COMPLETION_ARCHIVED]', {
+            taskSessionId: session.id,
+            orchestratorSessionId,
+            opencodeSessionId: runOpencodeSessionId,
+          });
         });
         await taskCreationFileMemoryStore.updateSessionState(session.id, {
           status: 'completed',
           stage: 'completed',
           phase: session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery',
         });
+        console.info('[OPENCODE_DIRECT_COMPLETION_MEMORY_STATE_UPDATED]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+        });
         await this.syncDbSessionStatus(session.id, 'completed');
+        console.info('[OPENCODE_DIRECT_COMPLETION_DB_STATE_UPDATED]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+        });
         await this.persistMessage(
           session.id,
           'agent',
@@ -3664,6 +3818,11 @@ export class OpencodeRemoteService {
             source: 'direct_completed',
           }
         );
+        console.info('[OPENCODE_DIRECT_COMPLETION_STATUS_PERSISTED]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+        });
         await this.flushPersistenceBarrier('direct_completed');
         await this.notify({
           taskSessionId: session.id,
@@ -4014,7 +4173,7 @@ export class OpencodeRemoteService {
         });
       }
 
-      await this.archiveCompletedTurn({
+      void this.archiveCompletedTurn({
         taskSessionId: session.id,
         orchestratorSessionId,
         opencodeSessionId: runOpencodeSessionId,

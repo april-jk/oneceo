@@ -40,12 +40,19 @@ import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
-import { motion, AnimatePresence } from "framer-motion";
-import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
-import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
-  uploadTaskCreationAttachment,
-} from "@/lib/task-creation-client";
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  useTaskCreationAgent,
+  type AgentMessage,
+} from "@/hooks/useTaskCreationAgent";
+import { useIsMobile } from "@/hooks/useMobile";
+import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
+import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
@@ -57,7 +64,7 @@ import {
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
-type PageMode = 'input' | 'chat';
+type PageMode = "input" | "chat";
 type PersistedMessageScrollAnchor = {
   anchorMessageKey: string | null;
   anchorOffsetTop: number;
@@ -72,7 +79,9 @@ function escapeMessageKeySelector(value: string): string {
   return value.replace(/["\\]/g, "\\$&");
 }
 
-function readPersistedScrollAnchor(raw: string | null): PersistedMessageScrollAnchor | null {
+function readPersistedScrollAnchor(
+  raw: string | null,
+): PersistedMessageScrollAnchor | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as PersistedMessageScrollAnchor;
@@ -84,11 +93,13 @@ function readPersistedScrollAnchor(raw: string | null): PersistedMessageScrollAn
     ) {
       return {
         anchorMessageKey:
-          typeof parsed.anchorMessageKey === "string" && parsed.anchorMessageKey.trim()
+          typeof parsed.anchorMessageKey === "string" &&
+          parsed.anchorMessageKey.trim()
             ? parsed.anchorMessageKey.trim()
             : null,
         anchorOffsetTop:
-          typeof parsed.anchorOffsetTop === "number" && Number.isFinite(parsed.anchorOffsetTop)
+          typeof parsed.anchorOffsetTop === "number" &&
+          Number.isFinite(parsed.anchorOffsetTop)
             ? parsed.anchorOffsetTop
             : 0,
         scrollTop: parsed.scrollTop,
@@ -116,19 +127,27 @@ export default function Home() {
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const [location] = useLocation();
   const search = useSearch();
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [mode, setMode] = useState<PageMode>('input');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null,
+  );
+  const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTab, setPreviewTab] = useState<"files" | "changes" | "debug" | "deployment">("files");
+  const [previewTab, setPreviewTab] = useState<
+    "files" | "changes" | "debug" | "deployment"
+  >("files");
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
-  const prependRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
+  const prependRestoreRef = useRef<{
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
   const historyPaginationInFlightRef = useRef(false);
   const scrollRestoreDoneRef = useRef<string | null>(null);
   const stickToBottomRef = useRef(true);
@@ -148,7 +167,7 @@ export default function Home() {
     try {
       const containerRect = container.getBoundingClientRect();
       const messageNodes = Array.from(
-        container.querySelectorAll<HTMLElement>("[data-message-key]")
+        container.querySelectorAll<HTMLElement>("[data-message-key]"),
       );
       const firstVisible =
         messageNodes.find((node) => {
@@ -158,14 +177,17 @@ export default function Home() {
       const payload: PersistedMessageScrollAnchor = {
         anchorMessageKey: firstVisible?.dataset.messageKey || null,
         anchorOffsetTop: firstVisible
-          ? Math.max(0, firstVisible.getBoundingClientRect().top - containerRect.top)
+          ? Math.max(
+              0,
+              firstVisible.getBoundingClientRect().top - containerRect.top,
+            )
           : 0,
         scrollTop: Math.max(0, Math.floor(container.scrollTop)),
         savedAt: Date.now(),
       };
       window.sessionStorage.setItem(
         `${MESSAGE_SCROLL_CACHE_PREFIX}${sessionId}`,
-        JSON.stringify(payload)
+        JSON.stringify(payload),
       );
     } catch {
       // ignore storage failures
@@ -176,7 +198,9 @@ export default function Home() {
     const container = messageScrollRef.current;
     if (!container) return;
     try {
-      const raw = window.sessionStorage.getItem(`${MESSAGE_SCROLL_CACHE_PREFIX}${targetSessionId}`);
+      const raw = window.sessionStorage.getItem(
+        `${MESSAGE_SCROLL_CACHE_PREFIX}${targetSessionId}`,
+      );
       const persisted = readPersistedScrollAnchor(raw);
       if (!persisted) return;
       const applyFallbackScrollTop = () => {
@@ -185,7 +209,10 @@ export default function Home() {
       if (!persisted.anchorMessageKey) {
         applyFallbackScrollTop();
         stickToBottomRef.current =
-          container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+          container.scrollHeight -
+            container.clientHeight -
+            container.scrollTop <
+          80;
         return;
       }
       const selector = `[data-message-key="${escapeMessageKeySelector(persisted.anchorMessageKey)}"]`;
@@ -193,12 +220,19 @@ export default function Home() {
       if (!anchorNode) {
         applyFallbackScrollTop();
         stickToBottomRef.current =
-          container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+          container.scrollHeight -
+            container.clientHeight -
+            container.scrollTop <
+          80;
         return;
       }
-      container.scrollTop = Math.max(0, anchorNode.offsetTop - persisted.anchorOffsetTop);
+      container.scrollTop = Math.max(
+        0,
+        anchorNode.offsetTop - persisted.anchorOffsetTop,
+      );
       stickToBottomRef.current =
-        container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+        container.scrollHeight - container.clientHeight - container.scrollTop <
+        80;
     } catch {
       // ignore restore failures
     }
@@ -233,7 +267,7 @@ export default function Home() {
   // 自动滚动到最新消息
   useEffect(() => {
     const container = messageScrollRef.current;
-    if (mode !== 'chat' || !container) {
+    if (mode !== "chat" || !container) {
       return;
     }
     if (stickToBottomRef.current) {
@@ -272,8 +306,11 @@ export default function Home() {
     }
 
     if (sessionInQuery) {
-      setMode('chat');
-      if (location.startsWith("/new-task") && sessionInQuery === params.get("sessionId")?.trim()) {
+      setMode("chat");
+      if (
+        location.startsWith("/new-task") &&
+        sessionInQuery === params.get("sessionId")?.trim()
+      ) {
         const nextUrl = `/session/${encodeURIComponent(sessionInQuery)}${isHistoryView ? "?view=history" : ""}`;
         window.history.replaceState(null, "", nextUrl);
       }
@@ -281,7 +318,7 @@ export default function Home() {
 
     if (input && location.startsWith("/new-task")) {
       pendingInputRef.current = input;
-      setMode('chat');
+      setMode("chat");
       const nextUrl = sessionInQuery
         ? `/session/${encodeURIComponent(sessionInQuery)}`
         : "/new-task";
@@ -334,13 +371,18 @@ export default function Home() {
       if (target && target.scrollHeight > snapshot.scrollHeight) {
         break;
       }
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
     }
     if (!target) {
       prependRestoreRef.current = null;
       return;
     }
-    const nextScrollTop = Math.max(0, target.scrollHeight - snapshot.scrollHeight + snapshot.scrollTop);
+    const nextScrollTop = Math.max(
+      0,
+      target.scrollHeight - snapshot.scrollHeight + snapshot.scrollTop,
+    );
     target.scrollTop = nextScrollTop;
     stickToBottomRef.current =
       target.scrollHeight - target.clientHeight - target.scrollTop < 80;
@@ -355,7 +397,8 @@ export default function Home() {
       return;
     }
     stickToBottomRef.current =
-      container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+      container.scrollHeight - container.clientHeight - container.scrollTop <
+      80;
     persistScrollAnchor();
     if (
       container.scrollTop > 80 ||
@@ -386,7 +429,8 @@ export default function Home() {
     const trimmed = rawInput.trim();
     const hasAttachments = attachments.length > 0;
     const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
-    const baseText = trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+    const baseText =
+      trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!baseText) return;
 
     try {
@@ -398,20 +442,25 @@ export default function Home() {
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (hasAttachments) {
         uploadedAttachments = await Promise.all(
-          attachments.map((item) => uploadTaskCreationAttachment(activeSessionId, item.file))
+          attachments.map((item) =>
+            uploadTaskCreationAttachment(activeSessionId, item.file),
+          ),
         );
       }
 
       exitHistoryView();
-      await sendChatInput(appendAttachmentsToPrompt(baseText, uploadedAttachments), {
-        sessionId: activeSessionId || undefined,
-        metadata: uploadedAttachments.length
-          ? {
-              attachments: uploadedAttachments,
-              originalInput: displayText,
-            }
-          : undefined,
-      });
+      await sendChatInput(
+        appendAttachmentsToPrompt(baseText, uploadedAttachments),
+        {
+          sessionId: activeSessionId || undefined,
+          metadata: uploadedAttachments.length
+            ? {
+                attachments: uploadedAttachments,
+                originalInput: displayText,
+              }
+            : undefined,
+        },
+      );
 
       if (uploadedAttachments.length) {
         setAttachments([]);
@@ -423,13 +472,13 @@ export default function Home() {
 
   const handleSend = () => {
     if (!message.trim() && attachments.length === 0) return;
-    setMode('chat');
+    setMode("chat");
     void submitPrompt(message);
     setMessage("");
   };
 
   const handleQuickAction = (action: string) => {
-    setMode('chat');
+    setMode("chat");
     void submitPrompt(action);
     setMessage("");
   };
@@ -450,7 +499,10 @@ export default function Home() {
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
   const normalizePath = (value: string) =>
-    value.replace(/\\+/g, "/").replace(/^\.\/+/, "").toLowerCase();
+    value
+      .replace(/\\+/g, "/")
+      .replace(/^\.\/+/, "")
+      .toLowerCase();
 
   const pathMatches = (left: string, right: string) => {
     const a = normalizePath(left);
@@ -470,8 +522,10 @@ export default function Home() {
     for (let i = diffItems.length - 1; i >= 0; i -= 1) {
       const item = diffItems[i];
       if (
-        item.files?.some((file) =>
-          pathMatches(file.file, filePath) || (fileName ? file.file.toLowerCase().includes(fileName) : false)
+        item.files?.some(
+          (file) =>
+            pathMatches(file.file, filePath) ||
+            (fileName ? file.file.toLowerCase().includes(fileName) : false),
         )
       ) {
         return item.id;
@@ -487,7 +541,9 @@ export default function Home() {
     return null;
   };
 
-  const findDiffIdForMessageIndex = (messageIndex: number | null | undefined) => {
+  const findDiffIdForMessageIndex = (
+    messageIndex: number | null | undefined,
+  ) => {
     if (typeof messageIndex !== "number" || !Number.isFinite(messageIndex)) {
       return null;
     }
@@ -515,21 +571,316 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
+  const showDesktopPreview = previewOpen && !isMobile;
+  const showMobilePreview = previewOpen && isMobile;
+
+  const previewPanel = previewOpen ? (
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
+      <OpencodePreviewPanel
+        messages={messages}
+        sessionId={sessionId}
+        open={previewOpen}
+        activeTab={previewTab}
+        onTabChange={setPreviewTab}
+        onToggle={() => setPreviewOpen(false)}
+        selectedDiffId={selectedDiffId}
+        onSelectDiff={(id) => setSelectedDiffId(id)}
+        runtimeReady={runtime.ready}
+        runtimeStarting={runtime.starting}
+        onEnsureRuntime={runtime.ensure}
+        className="h-full min-h-0 w-full"
+      />
+    </section>
+  ) : null;
+
+  const chatPanel = (
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+          <div className="min-w-0 space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+              Dialogue
+            </div>
+            <div className="truncate text-sm font-semibold text-foreground">
+              对话
+            </div>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            {runtime.orchestratorSessionId && runtime.ready ? (
+              <span className="truncate text-xs text-muted-foreground">
+                运行中 · {runtime.orchestratorSessionId}
+              </span>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              onClick={() => setPreviewOpen((prev) => !prev)}
+            >
+              {previewOpen ? "收起预览" : "显示预览"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-full"
+              onClick={() => setShowRuntimeDrawer(true)}
+              disabled={!runtime.orchestratorSessionId}
+            >
+              执行日志
+            </Button>
+          </div>
+        </div>
+        <div
+          ref={messageScrollRef}
+          onWheelCapture={(event) => {
+            if (event.deltaY < 0) {
+              olderHistoryIntentRef.current = true;
+            }
+          }}
+          onPointerDownCapture={() => {
+            olderHistoryIntentRef.current = true;
+          }}
+          onTouchStart={() => {
+            olderHistoryIntentRef.current = true;
+          }}
+          onScroll={() => {
+            void handleMessageScroll();
+          }}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5"
+        >
+          <div className="mx-auto w-full space-y-4">
+            {isLoadingOlderHistory && (
+              <NoticeMessage
+                tone="info"
+                icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                text="正在加载更早历史..."
+              />
+            )}
+
+            {!isConnected && (
+              <NoticeMessage
+                tone="warning"
+                icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                text="正在连接智能体..."
+              />
+            )}
+
+            {runtime.orchestratorSessionId && runtime.ready && (
+              <NoticeMessage
+                tone="info"
+                icon={
+                  <Loader2
+                    className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`}
+                  />
+                }
+                text={`执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`}
+              />
+            )}
+
+            <AnimatePresence>
+              {chatItems.map((item, index) => (
+                <MessageBubble
+                  key={item.messageKey || `chat-item-${index}`}
+                  item={item}
+                  onOpenDiffPreview={openDiffPreview}
+                />
+              ))}
+            </AnimatePresence>
+
+            {isProcessing && !currentQuestion && (
+              <NoticeMessage
+                tone="info"
+                icon={<Loader2 className="w-4 h-4 animate-spin" />}
+                text="智能体正在处理..."
+              />
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        <motion.div
+          initial={{ y: 100, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{
+            delay: 0.2,
+            duration: 0.4,
+            ease: "easeOut",
+          }}
+          className="mt-auto shrink-0 border-t border-border/70 bg-background/95 backdrop-blur"
+        >
+          <div className="px-6 py-3">
+            <div className="w-full rounded-3xl border-2 border-border bg-card shadow-lg transition-all duration-200 hover:shadow-xl">
+              <div className="space-y-3 p-4">
+                <Textarea
+                  placeholder={
+                    currentQuestion ? "请输入问题回答..." : "继续对话..."
+                  }
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (currentQuestion) {
+                        handleAnswerQuestion(message);
+                        setMessage("");
+                      } else {
+                        handleSend();
+                      }
+                    }
+                  }}
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base focus-visible:ring-0"
+                  rows={2}
+                />
+
+                {!currentQuestion ? (
+                  <AttachmentChipList
+                    attachments={attachments}
+                    onRemove={removeAttachment}
+                  />
+                ) : null}
+
+                <TooltipProvider>
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="flex items-center gap-1">
+                      <AttachmentPickerButton
+                        onSelectFiles={handleAttachmentSelect}
+                        disabled={Boolean(currentQuestion)}
+                      />
+
+                      <ConnectorDialog sessionId={sessionId} />
+
+                      <DropdownMenu>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-muted"
+                              >
+                                <Sparkles className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm text-muted-foreground">
+                                  {selectedModel}
+                                </span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Select AI model</p>
+                          </TooltipContent>
+                        </Tooltip>
+                        <DropdownMenuContent align="start" className="w-40">
+                          <DropdownMenuItem
+                            onClick={() => setSelectedModel("Agent Lite")}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">Agent Lite</span>
+                              <span className="text-xs text-muted-foreground">
+                                Fast & efficient
+                              </span>
+                            </div>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setSelectedModel("Agent Pro")}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">Agent Pro</span>
+                              <span className="text-xs text-muted-foreground">
+                                Balanced performance
+                              </span>
+                            </div>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setSelectedModel("Agent Max")}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">Agent Max</span>
+                              <span className="text-xs text-muted-foreground">
+                                Maximum capability
+                              </span>
+                            </div>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 rounded-xl transition-colors hover:bg-muted"
+                          >
+                            <Mic className="w-4 h-4 text-muted-foreground" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Voice input</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            onClick={() => {
+                              if (currentQuestion) {
+                                handleAnswerQuestion(message);
+                                setMessage("");
+                              } else {
+                                handleSend();
+                              }
+                            }}
+                            disabled={
+                              currentQuestion
+                                ? !message.trim()
+                                : !message.trim() && attachments.length === 0
+                            }
+                            size="icon"
+                            className="h-9 w-9 rounded-xl bg-foreground transition-colors hover:bg-foreground/90 disabled:opacity-50"
+                          >
+                            <Send className="w-4 h-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Send message</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </div>
+                </TooltipProvider>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  );
+
   return (
     <WorkspaceLayout
+      fluid={!selectedProjectId && mode === "chat"}
       selectedProjectId={selectedProjectId}
       onProjectSelect={setSelectedProjectId}
     >
       {selectedProjectId ? (
-        <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />
+        <ProjectDetail
+          projectId={selectedProjectId}
+          onBack={() => setSelectedProjectId(null)}
+        />
       ) : (
         <div
-          className={`flex flex-col min-h-[calc(100vh-2rem)] ${
-            mode === "chat" ? "h-[calc(100vh-2rem)] overflow-hidden" : ""
-          }`}
+          className={
+            mode === "chat"
+              ? "flex h-[calc(100vh-2rem)] min-h-0 flex-col overflow-hidden"
+              : "flex min-h-[calc(100vh-2rem)] flex-col"
+          }
         >
           <AnimatePresence mode="wait">
-            {mode === 'input' ? (
+            {mode === "input" ? (
               // 初始输入模式
               <motion.div
                 key="input-mode"
@@ -553,7 +904,9 @@ export default function Home() {
                       className="flex items-center justify-center gap-3"
                     >
                       <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
-                        <span className="text-background font-bold text-xl">M</span>
+                        <span className="text-background font-bold text-xl">
+                          M
+                        </span>
                       </div>
                       <h1 className="text-3xl font-semibold text-foreground tracking-tight">
                         AI Agent
@@ -603,7 +956,9 @@ export default function Home() {
                         <div className="flex items-center justify-between pt-2">
                           {/* Left Side Actions */}
                           <div className="flex items-center gap-1">
-                            <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
+                            <AttachmentPickerButton
+                              onSelectFiles={handleAttachmentSelect}
+                            />
 
                             <ConnectorDialog sessionId={sessionId} />
 
@@ -618,7 +973,9 @@ export default function Home() {
                                       className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
                                     >
                                       <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                      <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                                      <span className="text-sm text-muted-foreground">
+                                        {selectedModel}
+                                      </span>
                                     </Button>
                                   </DropdownMenuTrigger>
                                 </TooltipTrigger>
@@ -626,31 +983,52 @@ export default function Home() {
                                   <p>Select AI model</p>
                                 </TooltipContent>
                               </Tooltip>
-                              <DropdownMenuContent align="start" className="w-40">
-                                <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
+                              <DropdownMenuContent
+                                align="start"
+                                className="w-40"
+                              >
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("Agent Lite")}
+                                >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">Agent Lite</span>
-                                    <span className="text-xs text-muted-foreground">Fast & efficient</span>
+                                    <span className="font-medium">
+                                      Agent Lite
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      Fast & efficient
+                                    </span>
                                   </div>
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("Agent Pro")}
+                                >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">Agent Pro</span>
-                                    <span className="text-xs text-muted-foreground">Balanced performance</span>
+                                    <span className="font-medium">
+                                      Agent Pro
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      Balanced performance
+                                    </span>
                                   </div>
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
+                                <DropdownMenuItem
+                                  onClick={() => setSelectedModel("Agent Max")}
+                                >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">Agent Max</span>
-                                    <span className="text-xs text-muted-foreground">Maximum capability</span>
+                                    <span className="font-medium">
+                                      Agent Max
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">
+                                      Maximum capability
+                                    </span>
                                   </div>
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </div>
 
-                        {/* Right Side Actions */}
-                        <div className="flex items-center gap-1">
+                          {/* Right Side Actions */}
+                          <div className="flex items-center gap-1">
                             {/* Voice Input Button */}
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -672,7 +1050,9 @@ export default function Home() {
                               <TooltipTrigger asChild>
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!message.trim() && attachments.length === 0}
+                                  disabled={
+                                    !message.trim() && attachments.length === 0
+                                  }
                                   size="icon"
                                   className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
                                 >
@@ -717,277 +1097,35 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
-                className="flex-1 min-h-0 overflow-hidden"
+                className="flex h-full flex-1 min-h-0 overflow-hidden"
               >
-                <div
-                  className={`grid gap-4 h-full min-h-0 ${
-                    previewOpen ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
-                  }`}
-                >
-                  <section className="flex flex-col min-h-0 h-full">
-                    <div className="flex flex-1 flex-col min-h-0 h-full rounded-2xl border border-border/70 bg-white shadow-sm overflow-hidden">
-                      <div className="flex items-center justify-between px-4 py-3 border-b border-border/70">
-                        <div className="space-y-1">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                            Dialogue
-                          </div>
-                          <div className="text-sm font-semibold text-foreground">对话</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {runtime.orchestratorSessionId && runtime.ready ? (
-                            <span className="text-xs text-muted-foreground">
-                              运行中 · {runtime.orchestratorSessionId}
-                            </span>
-                          ) : null}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="rounded-full"
-                            onClick={() => setPreviewOpen((prev) => !prev)}
-                          >
-                            {previewOpen ? "收起预览" : "显示预览"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="rounded-full"
-                            onClick={() => setShowRuntimeDrawer(true)}
-                            disabled={!runtime.orchestratorSessionId}
-                          >
-                            执行日志
-                          </Button>
-                        </div>
+                {showDesktopPreview ? (
+                  <ResizablePanelGroup
+                    direction="horizontal"
+                    autoSaveId="task-creation-chat-layout"
+                    className="h-full min-h-0"
+                  >
+                    <ResizablePanel defaultSize={64} minSize={40}>
+                      <div className="h-full min-h-0 pr-4">{chatPanel}</div>
+                    </ResizablePanel>
+                    <ResizableHandle
+                      withHandle
+                      className="w-3 bg-transparent after:w-2 after:rounded-full after:bg-border/40 hover:after:bg-border data-[resize-handle-active]:after:bg-border"
+                    />
+                    <ResizablePanel defaultSize={36} minSize={24} maxSize={52}>
+                      <div className="h-full min-h-0 pl-4">{previewPanel}</div>
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                ) : (
+                  <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+                    <div className="flex-1 min-h-0">{chatPanel}</div>
+                    {showMobilePreview ? (
+                      <div className="h-[min(45vh,32rem)] min-h-[280px] shrink-0">
+                        {previewPanel}
                       </div>
-                      <div
-                        ref={messageScrollRef}
-                        onWheelCapture={(event) => {
-                          if (event.deltaY < 0) {
-                            olderHistoryIntentRef.current = true;
-                          }
-                        }}
-                        onPointerDownCapture={() => {
-                          olderHistoryIntentRef.current = true;
-                        }}
-                        onTouchStart={() => {
-                          olderHistoryIntentRef.current = true;
-                        }}
-                        onScroll={() => {
-                          void handleMessageScroll();
-                        }}
-                        className="flex-1 min-h-0 overflow-y-auto px-6 py-5"
-                      >
-                        <div
-                          className={`mx-auto w-full ${
-                            previewOpen ? "max-w-3xl" : "max-w-5xl"
-                          } space-y-4`}
-                        >
-                          {isLoadingOlderHistory && (
-                            <NoticeMessage
-                              tone="info"
-                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                              text="正在加载更早历史..."
-                            />
-                          )}
-
-                          {!isConnected && (
-                            <NoticeMessage
-                              tone="warning"
-                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                              text="正在连接智能体..."
-                            />
-                          )}
-
-                          {runtime.orchestratorSessionId && runtime.ready && (
-                            <NoticeMessage
-                              tone="info"
-                              icon={<Loader2 className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`} />}
-                              text={
-                                `执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`
-                              }
-                            />
-                          )}
-
-                          <AnimatePresence>
-                            {chatItems.map((item, index) => (
-                              <MessageBubble
-                                key={item.messageKey || `chat-item-${index}`}
-                                item={item}
-                                onOpenDiffPreview={openDiffPreview}
-                              />
-                            ))}
-                          </AnimatePresence>
-
-                          {isProcessing && !currentQuestion && (
-                            <NoticeMessage
-                              tone="info"
-                              icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                              text="智能体正在处理..."
-                            />
-                          )}
-
-                          <div ref={messagesEndRef} />
-                        </div>
-                      </div>
-
-                      <motion.div
-                        initial={{ y: 100, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        transition={{ delay: 0.2, duration: 0.4, ease: "easeOut" }}
-                        className="mt-auto sticky bottom-0 z-10 border-t border-border/70 bg-background/95 backdrop-blur"
-                      >
-                        <div className="px-6 py-3">
-                          <div
-                            className={`mx-auto w-full ${
-                              previewOpen ? "max-w-3xl" : "max-w-5xl"
-                            } bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200`}
-                          >
-                            <div className="p-4 space-y-3">
-                              <Textarea
-                                placeholder={currentQuestion ? "请输入问题回答..." : "继续对话..."}
-                                value={message}
-                                onChange={(e) => setMessage(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" && !e.shiftKey) {
-                                    e.preventDefault();
-                                    if (currentQuestion) {
-                                      handleAnswerQuestion(message);
-                                      setMessage("");
-                                    } else {
-                                      handleSend();
-                                    }
-                                  }
-                                }}
-                                className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[56px] px-0 py-0"
-                                rows={2}
-                              />
-
-                              {!currentQuestion ? (
-                                <AttachmentChipList
-                                  attachments={attachments}
-                                  onRemove={removeAttachment}
-                                />
-                              ) : null}
-
-                              <TooltipProvider>
-                                <div className="flex items-center justify-between pt-2">
-                                  <div className="flex items-center gap-1">
-                                    <AttachmentPickerButton
-                                      onSelectFiles={handleAttachmentSelect}
-                                      disabled={Boolean(currentQuestion)}
-                                    />
-
-                                    <ConnectorDialog sessionId={sessionId} />
-
-                                    <DropdownMenu>
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <DropdownMenuTrigger asChild>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
-                                            >
-                                              <Sparkles className="w-4 h-4 text-muted-foreground" />
-                                              <span className="text-sm text-muted-foreground">{selectedModel}</span>
-                                            </Button>
-                                          </DropdownMenuTrigger>
-                                        </TooltipTrigger>
-                                        <TooltipContent>
-                                          <p>Select AI model</p>
-                                        </TooltipContent>
-                                      </Tooltip>
-                                      <DropdownMenuContent align="start" className="w-40">
-                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
-                                          <div className="flex flex-col">
-                                            <span className="font-medium">Agent Lite</span>
-                                            <span className="text-xs text-muted-foreground">Fast & efficient</span>
-                                          </div>
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
-                                          <div className="flex flex-col">
-                                            <span className="font-medium">Agent Pro</span>
-                                            <span className="text-xs text-muted-foreground">Balanced performance</span>
-                                          </div>
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
-                                          <div className="flex flex-col">
-                                            <span className="font-medium">Agent Max</span>
-                                            <span className="text-xs text-muted-foreground">Maximum capability</span>
-                                          </div>
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  </div>
-
-                                  <div className="flex items-center gap-1">
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
-                                        >
-                                          <Mic className="w-4 h-4 text-muted-foreground" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>Voice input</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          onClick={() => {
-                                            if (currentQuestion) {
-                                              handleAnswerQuestion(message);
-                                              setMessage("");
-                                            } else {
-                                              handleSend();
-                                            }
-                                          }}
-                                          disabled={currentQuestion ? !message.trim() : (!message.trim() && attachments.length === 0)}
-                                          size="icon"
-                                          className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
-                                        >
-                                          <Send className="w-4 h-4" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>Send message</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </div>
-                                </div>
-                              </TooltipProvider>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    </div>
-                  </section>
-
-                  {previewOpen ? (
-                    <section className="flex flex-col min-h-0 h-full">
-                      <OpencodePreviewPanel
-                        messages={messages}
-                        sessionId={sessionId}
-                        open={previewOpen}
-                        activeTab={previewTab}
-                        onTabChange={setPreviewTab}
-                        onToggle={() => setPreviewOpen(false)}
-                        selectedDiffId={selectedDiffId}
-                        onSelectDiff={(id) => setSelectedDiffId(id)}
-                        runtimeReady={runtime.ready}
-                        runtimeStarting={runtime.starting}
-                        onEnsureRuntime={runtime.ensure}
-                        className="h-full min-h-0"
-                      />
-                    </section>
-                  ) : null}
-                </div>
+                    ) : null}
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -1014,8 +1152,7 @@ function NoticeMessage({
   icon: ReactNode;
   tone: "info" | "warning";
 }) {
-  const toneClass =
-    "border-border/70 bg-muted/50 text-foreground/80";
+  const toneClass = "border-border/70 bg-muted/50 text-foreground/80";
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
@@ -1030,7 +1167,12 @@ function NoticeMessage({
 }
 
 export type ChatItem =
-  | { kind: "user"; text: string; attachments?: UploadedTaskAttachment[]; messageKey?: string }
+  | {
+      kind: "user";
+      text: string;
+      attachments?: UploadedTaskAttachment[];
+      messageKey?: string;
+    }
   | { kind: "agent"; markdown: string; messageKey?: string }
   | { kind: "agent_plain"; text: string; author?: string; messageKey?: string }
   | {
@@ -1052,14 +1194,26 @@ export type ChatItem =
       messageKey?: string;
     };
 
-type CapsuleTone = "system" | "intent" | "planning" | "execution" | "review" | "error";
+type CapsuleTone =
+  | "system"
+  | "intent"
+  | "planning"
+  | "execution"
+  | "review"
+  | "error";
 
 export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
-  let progressBuffer: { label: string; tone: CapsuleTone; loading: boolean; messageKey?: string } | null = null;
+  let progressBuffer: {
+    label: string;
+    tone: CapsuleTone;
+    loading: boolean;
+    messageKey?: string;
+  } | null = null;
   const seenDiffs = new Set<string>();
   const seenFinalMessages = new Set<string>();
-  const normalizeForDedup = (value: string): string => value.replace(/\r\n/g, "\n").trim();
+  const normalizeForDedup = (value: string): string =>
+    value.replace(/\r\n/g, "\n").trim();
   const userTextSet = new Set<string>();
   const finalizedPartIds = new Set<string>();
 
@@ -1090,7 +1244,11 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
-  const pushUser = (text: string, attachments?: UploadedTaskAttachment[], messageKey?: string) => {
+  const pushUser = (
+    text: string,
+    attachments?: UploadedTaskAttachment[],
+    messageKey?: string,
+  ) => {
     const normalized = normalizeForDedup(text);
     if (!normalized && (!attachments || attachments.length === 0)) return;
     const last = items[items.length - 1];
@@ -1100,7 +1258,8 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     if (
       last?.kind === "user" &&
       normalizeForDedup(last.text) === normalized &&
-      JSON.stringify(last.attachments || []) === JSON.stringify(attachments || [])
+      JSON.stringify(last.attachments || []) ===
+        JSON.stringify(attachments || [])
     ) {
       return;
     }
@@ -1112,7 +1271,9 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   };
 
-  const extractUserAttachments = (metadata: unknown): UploadedTaskAttachment[] => {
+  const extractUserAttachments = (
+    metadata: unknown,
+  ): UploadedTaskAttachment[] => {
     const record = toRecord(metadata);
     const raw = Array.isArray(record.attachments) ? record.attachments : [];
     return raw
@@ -1137,7 +1298,10 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     if (messageKey && last?.messageKey === messageKey) {
       return;
     }
-    if (last?.kind === "agent" && normalizeForDedup(last.markdown) === normalized) {
+    if (
+      last?.kind === "agent" &&
+      normalizeForDedup(last.markdown) === normalized
+    ) {
       return;
     }
     items.push({
@@ -1147,7 +1311,11 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   };
 
-  const pushAgentPlain = (text: string, author?: string, messageKey?: string) => {
+  const pushAgentPlain = (
+    text: string,
+    author?: string,
+    messageKey?: string,
+  ) => {
     const normalized = normalizeForDedup(text);
     if (!normalized) return;
     const last = items[items.length - 1];
@@ -1169,7 +1337,9 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   };
 
-  const getDiffSignature = (payload: ReturnType<typeof extractDiffPayload>): string | null => {
+  const getDiffSignature = (
+    payload: ReturnType<typeof extractDiffPayload>,
+  ): string | null => {
     if (payload.kind === "structured") {
       if (payload.files.length === 0) return null;
       try {
@@ -1197,7 +1367,11 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     progressBuffer = null;
   };
 
-  const pushProgress = (label: string, tone: CapsuleTone, messageKey?: string) => {
+  const pushProgress = (
+    label: string,
+    tone: CapsuleTone,
+    messageKey?: string,
+  ) => {
     progressBuffer = {
       label,
       tone,
@@ -1214,7 +1388,7 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       pushUser(
         asText(metadata.originalInput) || message.content || "",
         extractUserAttachments(metadata),
-        message.messageKey
+        message.messageKey,
       );
       continue;
     }
@@ -1223,7 +1397,11 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
-          pushProgress(parsed.label, getCapsuleTone(parsed.label), message.messageKey);
+          pushProgress(
+            parsed.label,
+            getCapsuleTone(parsed.label),
+            message.messageKey,
+          );
           continue;
         }
         flushProgress();
@@ -1234,13 +1412,19 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
           messageKey: message.messageKey,
         });
         if (parsed.rest.trim()) {
-          pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${parsed.rest}`, message.messageKey);
+          pushAgentMarkdown(
+            `**${getAgentName(message.agent)}**\n\n${parsed.rest}`,
+            message.messageKey,
+          );
         }
         continue;
       }
 
       flushProgress();
-      pushAgentMarkdown(`**${getAgentName(message.agent)}**\n\n${message.content || ""}`, message.messageKey);
+      pushAgentMarkdown(
+        `**${getAgentName(message.agent)}**\n\n${message.content || ""}`,
+        message.messageKey,
+      );
       continue;
     }
 
@@ -1348,7 +1532,10 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "error") {
       flushProgress();
-      pushAgentMarkdown(`**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`, message.messageKey);
+      pushAgentMarkdown(
+        `**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`,
+        message.messageKey,
+      );
       continue;
     }
 
@@ -1358,13 +1545,19 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
         message.options && message.options.length > 0
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
           : "";
-      pushAgentMarkdown(`**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`, message.messageKey);
+      pushAgentMarkdown(
+        `**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`,
+        message.messageKey,
+      );
       continue;
     }
 
     if (message.type === "plan_generated") {
       flushProgress();
-      pushAgentMarkdown(`**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`, message.messageKey);
+      pushAgentMarkdown(
+        `**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`,
+        message.messageKey,
+      );
     }
   }
 
@@ -1377,11 +1570,16 @@ function MessageBubble({
   onOpenDiffPreview,
 }: {
   item: ChatItem;
-  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null; messageIndex?: number | null }) => void;
+  onOpenDiffPreview?: (options?: {
+    diffId?: string | null;
+    filePath?: string | null;
+    messageIndex?: number | null;
+  }) => void;
 }) {
   if (item.kind === "capsule") {
     const toneClass = "border-border/70 bg-muted/50 text-foreground/80";
-    const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
+    const segments =
+      item.segments && item.segments.length > 0 ? item.segments : [item.label];
     const lastIndex = segments.length - 1;
 
     return (
@@ -1406,7 +1604,9 @@ function MessageBubble({
               return (
                 <span key={`${segment}-${index}`} className={shimmer}>
                   {segment}
-                  {index < lastIndex ? <span className="px-1 text-slate-400">·</span> : null}
+                  {index < lastIndex ? (
+                    <span className="px-1 text-slate-400">·</span>
+                  ) : null}
                 </span>
               );
             })}
@@ -1458,7 +1658,9 @@ function MessageBubble({
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             {item.author || "OpenCode"}
           </div>
-          <div className="whitespace-pre-wrap break-words leading-6">{item.text}</div>
+          <div className="whitespace-pre-wrap break-words leading-6">
+            {item.text}
+          </div>
         </div>
       </motion.div>
     );
@@ -1479,7 +1681,9 @@ function MessageBubble({
   );
 }
 
-function extractCapsule(content: string): { label: string; rest: string } | null {
+function extractCapsule(
+  content: string,
+): { label: string; rest: string } | null {
   const text = content.trim();
   const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
   if (match) {
@@ -1518,7 +1722,13 @@ function extractCapsule(content: string): { label: string; rest: string } | null
   const fallbackLabels = ["意图识别", "任务规划", "执行计划", "系统", "错误"];
   for (const label of fallbackLabels) {
     if (text.startsWith(label)) {
-      return { label, rest: text.slice(label.length).replace(/^[:：\-\s]+/, "").trim() };
+      return {
+        label,
+        rest: text
+          .slice(label.length)
+          .replace(/^[:：\-\s]+/, "")
+          .trim(),
+      };
     }
   }
   return null;
@@ -1527,7 +1737,11 @@ function extractCapsule(content: string): { label: string; rest: string } | null
 function isProgressStatusLabel(label: string): boolean {
   const text = label.trim();
   if (!text) return false;
-  if (text.includes("错误") || text.includes("失败") || text.toLowerCase().includes("error")) {
+  if (
+    text.includes("错误") ||
+    text.includes("失败") ||
+    text.toLowerCase().includes("error")
+  ) {
     return false;
   }
   const keywords = [
@@ -1556,7 +1770,11 @@ function isProgressStatusLabel(label: string): boolean {
 function isProgressLoadingLabel(label: string): boolean {
   const text = label.trim();
   if (!text) return false;
-  if (text.includes("错误") || text.includes("失败") || text.toLowerCase().includes("error")) {
+  if (
+    text.includes("错误") ||
+    text.includes("失败") ||
+    text.toLowerCase().includes("error")
+  ) {
     return false;
   }
   const completeKeywords = ["完成", "已生成", "已就绪", "已接入", "成功"];
@@ -1614,7 +1832,8 @@ function parseStructString(value: string): Record<string, unknown> {
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object") return value as Record<string, unknown>;
+  if (value && typeof value === "object")
+    return value as Record<string, unknown>;
   if (typeof value === "string") {
     const parsed = parseStructString(value);
     if (Object.keys(parsed).length > 0) return parsed;
@@ -1635,16 +1854,20 @@ type OpencodeEventInfo = {
   toolName: string;
 };
 
-function getOpencodeEventInfo(metadata: Record<string, unknown>): OpencodeEventInfo {
+function getOpencodeEventInfo(
+  metadata: Record<string, unknown>,
+): OpencodeEventInfo {
   const rawPayload = toRecord(metadata.rawPayload);
   const eventFromMeta = toRecord(metadata.event);
   const eventFromPayload = toRecord(rawPayload.event);
-  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const event =
+    Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
   const eventType = asText(metadata.eventType) || asText(event.type);
   const properties = toRecord(event.properties);
   const part = toRecord(properties.part);
   const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
-  const toolName = asText(part.tool) || asText(part.name) || asText(properties.tool);
+  const toolName =
+    asText(part.tool) || asText(part.name) || asText(properties.tool);
   return {
     eventType,
     event,
@@ -1692,7 +1915,10 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
     case "read":
       return { title: "读取", subtitle: getFilename(asText(input.filePath)) };
     case "list":
-      return { title: "列出", subtitle: getDirectory(asText(input.path) || "/") };
+      return {
+        title: "列出",
+        subtitle: getDirectory(asText(input.path) || "/"),
+      };
     case "glob":
       return { title: "匹配", subtitle: asText(input.pattern) };
     case "grep":
@@ -1702,7 +1928,10 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
     case "task":
       return { title: "子任务", subtitle: asText(input.description) };
     case "bash":
-      return { title: "Shell", subtitle: asText(input.description) || asText(input.command) };
+      return {
+        title: "Shell",
+        subtitle: asText(input.description) || asText(input.command),
+      };
     case "edit":
       return { title: "编辑", subtitle: getFilename(asText(input.filePath)) };
     case "write":
@@ -1710,7 +1939,9 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
     case "apply_patch":
       return {
         title: "补丁",
-        subtitle: Array.isArray(input.files) ? `${input.files.length} 文件` : "",
+        subtitle: Array.isArray(input.files)
+          ? `${input.files.length} 文件`
+          : "",
       };
     case "todowrite":
       return { title: "待办" };
@@ -1726,10 +1957,15 @@ function OpencodeToolCard({
   onOpenDiffPreview,
 }: {
   item: Extract<ChatItem, { kind: "opencode_tool" }>;
-  onOpenDiffPreview?: (options?: { diffId?: string | null; filePath?: string | null; messageIndex?: number | null }) => void;
+  onOpenDiffPreview?: (options?: {
+    diffId?: string | null;
+    filePath?: string | null;
+    messageIndex?: number | null;
+  }) => void;
 }) {
   const metadata = item.metadata || {};
-  const { eventType, part, toolName, properties } = getOpencodeEventInfo(metadata);
+  const { eventType, part, toolName, properties } =
+    getOpencodeEventInfo(metadata);
   const toolState = toRecord(part.state);
   const rawInput = toolState.input ?? part.input;
   const input =
@@ -1737,9 +1973,15 @@ function OpencodeToolCard({
       ? { command: rawInput }
       : toRecord(rawInput);
   const metaInfo = toRecord(toolState.metadata);
-  let output = asText(toolState.output) || asText(properties.output) || asText(item.content);
+  let output =
+    asText(toolState.output) ||
+    asText(properties.output) ||
+    asText(item.content);
   const error = asText(toolState.error) || asText(properties.error);
-  const status = asText(toolState.status) || asText(properties.status) || (error ? "error" : "unknown");
+  const status =
+    asText(toolState.status) ||
+    asText(properties.status) ||
+    (error ? "error" : "unknown");
 
   const isDiffEvent = (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
@@ -1756,7 +1998,9 @@ function OpencodeToolCard({
     title?: string;
   }) => {
     const capsule = (
-      <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${capsuleTone}`}>
+      <span
+        className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${capsuleTone}`}
+      >
         <Icon className="w-3.5 h-3.5" />
         <span>{text}</span>
       </span>
@@ -1782,7 +2026,9 @@ function OpencodeToolCard({
         .filter(Boolean)
         .join(" ")
     : "";
-  const commandFromArgv = Array.isArray((properties as Record<string, unknown>).argv)
+  const commandFromArgv = Array.isArray(
+    (properties as Record<string, unknown>).argv,
+  )
     ? ((properties as Record<string, unknown>).argv as unknown[])
         .map((item) => (typeof item === "string" ? item : ""))
         .filter(Boolean)
@@ -1829,10 +2075,10 @@ function OpencodeToolCard({
 
   const showDetails = Boolean(
     output ||
-      error ||
-      status === "running" ||
-      Object.keys(input).length > 0 ||
-      Object.keys(metaInfo).length > 0
+    error ||
+    status === "running" ||
+    Object.keys(input).length > 0 ||
+    Object.keys(metaInfo).length > 0,
   );
   const summaryText = info.subtitle || "";
 
@@ -1846,7 +2092,12 @@ function OpencodeToolCard({
       >
         <button
           type="button"
-          onClick={() => onOpenDiffPreview?.({ diffId: item.diffId, messageIndex: item.messageIndex })}
+          onClick={() =>
+            onOpenDiffPreview?.({
+              diffId: item.diffId,
+              messageIndex: item.messageIndex,
+            })
+          }
           className="text-left"
         >
           <EventCapsule icon={FileDiff} text="Diff · 点击查看更改" />
@@ -1857,12 +2108,16 @@ function OpencodeToolCard({
 
   const extractTodos = (value: unknown): Array<Record<string, unknown>> => {
     if (Array.isArray(value)) {
-      return value.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+      return value.filter((item) => item && typeof item === "object") as Array<
+        Record<string, unknown>
+      >;
     }
     if (value && typeof value === "object") {
       const record = value as Record<string, unknown>;
       if (Array.isArray(record.todos)) {
-        return record.todos.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+        return record.todos.filter(
+          (item) => item && typeof item === "object",
+        ) as Array<Record<string, unknown>>;
       }
     }
     if (typeof value === "string" && value.trim()) {
@@ -1878,10 +2133,20 @@ function OpencodeToolCard({
 
   const todosFromInput = extractTodos((input as { todos?: unknown[] }).todos);
   const todosFromOutput = todosFromInput.length > 0 ? [] : extractTodos(output);
-  const todosFromProps = todosFromInput.length > 0 || todosFromOutput.length > 0 ? [] : extractTodos(properties.todos);
-  const todos = todosFromInput.length > 0 ? todosFromInput : todosFromOutput.length > 0 ? todosFromOutput : todosFromProps;
+  const todosFromProps =
+    todosFromInput.length > 0 || todosFromOutput.length > 0
+      ? []
+      : extractTodos(properties.todos);
+  const todos =
+    todosFromInput.length > 0
+      ? todosFromInput
+      : todosFromOutput.length > 0
+        ? todosFromOutput
+        : todosFromProps;
 
-  const extractQuestions = (value: unknown): Array<{ header: string; question: string; options: string[] }> => {
+  const extractQuestions = (
+    value: unknown,
+  ): Array<{ header: string; question: string; options: string[] }> => {
     const mapOptions = (raw: unknown): string[] => {
       if (!Array.isArray(raw)) return [];
       return raw
@@ -1889,7 +2154,11 @@ function OpencodeToolCard({
           if (typeof option === "string") return option.trim();
           if (option && typeof option === "object") {
             const record = option as Record<string, unknown>;
-            return asText(record.label) || asText(record.text) || asText(record.value);
+            return (
+              asText(record.label) ||
+              asText(record.text) ||
+              asText(record.value)
+            );
           }
           return "";
         })
@@ -1897,7 +2166,10 @@ function OpencodeToolCard({
     };
 
     const normalizeQuestionRecord = (record: Record<string, unknown>) => {
-      const question = asText(record.question) || asText(record.content) || asText(record.title);
+      const question =
+        asText(record.question) ||
+        asText(record.content) ||
+        asText(record.title);
       if (!question) return null;
       return {
         header: asText(record.header),
@@ -1908,8 +2180,17 @@ function OpencodeToolCard({
 
     if (Array.isArray(value)) {
       return value
-        .map((item) => (item && typeof item === "object" ? normalizeQuestionRecord(item as Record<string, unknown>) : null))
-        .filter((item): item is { header: string; question: string; options: string[] } => Boolean(item));
+        .map((item) =>
+          item && typeof item === "object"
+            ? normalizeQuestionRecord(item as Record<string, unknown>)
+            : null,
+        )
+        .filter(
+          (
+            item,
+          ): item is { header: string; question: string; options: string[] } =>
+            Boolean(item),
+        );
     }
 
     if (value && typeof value === "object") {
@@ -1932,10 +2213,15 @@ function OpencodeToolCard({
     return [];
   };
 
-  const questionsFromInput = extractQuestions((input as { questions?: unknown[] }).questions);
-  const questionsFromOutput = questionsFromInput.length > 0 ? [] : extractQuestions(output);
+  const questionsFromInput = extractQuestions(
+    (input as { questions?: unknown[] }).questions,
+  );
+  const questionsFromOutput =
+    questionsFromInput.length > 0 ? [] : extractQuestions(output);
   const questionsFromProps =
-    questionsFromInput.length > 0 || questionsFromOutput.length > 0 ? [] : extractQuestions(properties.questions);
+    questionsFromInput.length > 0 || questionsFromOutput.length > 0
+      ? []
+      : extractQuestions(properties.questions);
   const questions =
     questionsFromInput.length > 0
       ? questionsFromInput
@@ -1955,7 +2241,9 @@ function OpencodeToolCard({
         className="w-full"
       >
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">待办</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            待办
+          </div>
           {todos.length > 0 ? (
             <div className="mt-3 space-y-2">
               {todos.map((todo, index) => {
@@ -1975,15 +2263,24 @@ function OpencodeToolCard({
                       ? "bg-blue-50 text-blue-700 border-blue-200"
                       : "bg-slate-50 text-slate-600 border-slate-200";
                 return (
-                  <div key={`${content}-${index}`} className="flex items-center justify-between gap-3">
+                  <div
+                    key={`${content}-${index}`}
+                    className="flex items-center justify-between gap-3"
+                  >
                     <div className="text-sm text-slate-800">{content}</div>
                     <div className="flex items-center gap-2">
                       {priority ? (
                         <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
-                          {priority === "high" ? "高优先级" : priority === "medium" ? "中优先级" : "低优先级"}
+                          {priority === "high"
+                            ? "高优先级"
+                            : priority === "medium"
+                              ? "中优先级"
+                              : "低优先级"}
                         </span>
                       ) : null}
-                      <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[11px] ${statusTone}`}
+                      >
                         {statusLabel}
                       </span>
                     </div>
@@ -2009,14 +2306,23 @@ function OpencodeToolCard({
         className="w-full"
       >
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">待确认</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            待确认
+          </div>
           <div className="mt-3 space-y-3">
             {questions.map((question, index) => (
-              <div key={`${question.question}-${index}`} className="space-y-1.5">
+              <div
+                key={`${question.question}-${index}`}
+                className="space-y-1.5"
+              >
                 {question.header ? (
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{question.header}</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {question.header}
+                  </div>
                 ) : null}
-                <div className="text-sm text-slate-800">{question.question}</div>
+                <div className="text-sm text-slate-800">
+                  {question.question}
+                </div>
                 {question.options.length > 0 ? (
                   <ul className="list-disc pl-5 text-xs text-slate-600 space-y-1">
                     {question.options.map((option, optionIndex) => (
@@ -2026,7 +2332,9 @@ function OpencodeToolCard({
                 ) : null}
               </div>
             ))}
-            <div className="text-xs text-slate-500">请直接在输入框回复你的选择或补充信息。</div>
+            <div className="text-xs text-slate-500">
+              请直接在输入框回复你的选择或补充信息。
+            </div>
           </div>
         </div>
       </motion.div>
@@ -2035,7 +2343,10 @@ function OpencodeToolCard({
 
   if (toolKey === "write" || toolKey === "edit") {
     const filePath =
-      asText(input.filePath) || asText(input.path) || asText(properties.file) || asText(properties.path);
+      asText(input.filePath) ||
+      asText(input.path) ||
+      asText(properties.file) ||
+      asText(properties.path);
     const label = toolKey === "write" ? "写入文件" : "编辑文件";
     const fileName = getFilename(filePath) || "文件";
     const capsuleText = `${label} · ${fileName}`;
@@ -2050,23 +2361,39 @@ function OpencodeToolCard({
           <button
             type="button"
             onClick={() =>
-              onOpenDiffPreview?.({ filePath: filePath || null, messageIndex: item.messageIndex })
+              onOpenDiffPreview?.({
+                filePath: filePath || null,
+                messageIndex: item.messageIndex,
+              })
             }
             className="text-left"
           >
-            <EventCapsule icon={toolKey === "write" ? FilePlus : FilePenLine} text={capsuleText} />
+            <EventCapsule
+              icon={toolKey === "write" ? FilePlus : FilePenLine}
+              text={capsuleText}
+            />
           </button>
         ) : (
-          <EventCapsule icon={toolKey === "write" ? FilePlus : FilePenLine} text={capsuleText} />
+          <EventCapsule
+            icon={toolKey === "write" ? FilePlus : FilePenLine}
+            text={capsuleText}
+          />
         )}
       </motion.div>
     );
   }
 
   if (eventType === "command.executed") {
-    const commandText = asText(properties.command) || asText(input.command) || asText(properties.cmd);
+    const commandText =
+      asText(properties.command) ||
+      asText(input.command) ||
+      asText(properties.cmd);
     const rawOutput =
-      asText(properties.stdout) || asText(properties.output) || asText(properties.text) || output || error;
+      asText(properties.stdout) ||
+      asText(properties.output) ||
+      asText(properties.text) ||
+      output ||
+      error;
     const { text: outputText, truncated } = truncateText(rawOutput, 1200);
     return (
       <motion.div
@@ -2076,7 +2403,11 @@ function OpencodeToolCard({
         className="w-full"
       >
         <div className="space-y-2">
-          <EventCapsule icon={Terminal} text="Shell 执行" title={commandHint || undefined} />
+          <EventCapsule
+            icon={Terminal}
+            text="Shell 执行"
+            title={commandHint || undefined}
+          />
           {commandText ? (
             <div className="rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
               {commandText}
@@ -2088,7 +2419,9 @@ function OpencodeToolCard({
             </div>
           ) : null}
           {truncated ? (
-            <div className="text-[11px] text-slate-500">输出已截断，请查看日志</div>
+            <div className="text-[11px] text-slate-500">
+              输出已截断，请查看日志
+            </div>
           ) : null}
         </div>
       </motion.div>
@@ -2097,7 +2430,8 @@ function OpencodeToolCard({
 
   if (eventType.startsWith("file.")) {
     const filePath = asText(properties.file) || asText(properties.path);
-    const label = eventType === "file.watcher.updated" ? "文件监听" : "文件更新";
+    const label =
+      eventType === "file.watcher.updated" ? "文件监听" : "文件更新";
     return (
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -2109,14 +2443,23 @@ function OpencodeToolCard({
           <button
             type="button"
             onClick={() =>
-              onOpenDiffPreview?.({ filePath: filePath || null, messageIndex: item.messageIndex })
+              onOpenDiffPreview?.({
+                filePath: filePath || null,
+                messageIndex: item.messageIndex,
+              })
             }
             className="text-left"
           >
-            <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
+            <EventCapsule
+              icon={FileText}
+              text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+            />
           </button>
         ) : (
-          <EventCapsule icon={FileText} text={`${label} · ${getFilename(filePath) || "文件已更新"}`} />
+          <EventCapsule
+            icon={FileText}
+            text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+          />
         )}
       </motion.div>
     );

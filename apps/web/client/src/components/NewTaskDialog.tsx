@@ -35,7 +35,10 @@ interface NewTaskDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps) {
+export default function NewTaskDialog({
+  open,
+  onOpenChange,
+}: NewTaskDialogProps) {
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showAgentChat, setShowAgentChat] = useState(false);
@@ -75,15 +78,17 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
   return (
     <>
       <Dialog open={open} onOpenChange={handleDialogChange}>
-        <DialogContent className="max-w-3xl p-0 gap-0 border-2 max-h-[80vh] overflow-y-auto">
+        <DialogContent className="flex max-h-[80vh] max-w-5xl flex-col gap-0 overflow-hidden border-2 p-0 sm:max-w-5xl">
           {/* Dialog Header */}
-          <DialogHeader className="px-6 pt-6 pb-4">
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-foreground rounded-xl flex items-center justify-center">
                 <span className="text-background font-bold text-lg">M</span>
               </div>
               <div>
-                <DialogTitle className="text-2xl font-semibold">AI Agent</DialogTitle>
+                <DialogTitle className="text-2xl font-semibold">
+                  AI Agent
+                </DialogTitle>
                 <p className="text-sm text-muted-foreground mt-1">
                   What can I help you with today?
                 </p>
@@ -92,7 +97,7 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
           </DialogHeader>
 
           {/* Main Content */}
-          <div className="px-6 pb-6">
+          <div className="flex min-h-0 flex-1 flex-col px-6 pb-6">
             {!showAgentChat ? (
               <>
                 {/* Input Area */}
@@ -115,14 +120,19 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                       autoFocus
                     />
 
-                    <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+                    <AttachmentChipList
+                      attachments={attachments}
+                      onRemove={removeAttachment}
+                    />
 
                     {/* Bottom Action Bar */}
                     <TooltipProvider>
                       <div className="flex items-center justify-between pt-2">
                         {/* Left Side Actions */}
                         <div className="flex items-center gap-1">
-                          <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
+                          <AttachmentPickerButton
+                            onSelectFiles={handleAttachmentSelect}
+                          />
 
                           <ConnectorDialog />
                         </div>
@@ -150,7 +160,9 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                             <TooltipTrigger asChild>
                               <Button
                                 onClick={handleSend}
-                                disabled={!message.trim() && attachments.length === 0}
+                                disabled={
+                                  !message.trim() && attachments.length === 0
+                                }
                                 size="icon"
                                 className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
@@ -187,24 +199,24 @@ export default function NewTaskDialog({ open, onOpenChange }: NewTaskDialogProps
                 </div>
               </>
             ) : (
-              /* Agent Chat */
-              <TaskCreationChat
-                initialInput={initialAgentInput}
-                initialAttachments={initialAttachments}
-                onPlanGenerated={(plan) => {
-                  console.log("计划生成:", plan);
-                  onOpenChange(false);
-                  setShowAgentChat(false);
-                  setInitialAgentInput("");
-                  setInitialAttachments([]);
-                  // TODO: 跳转到项目详情页面
-                }}
-              />
+              <div className="min-h-0 flex-1 pt-2">
+                <TaskCreationChat
+                  initialInput={initialAgentInput}
+                  initialAttachments={initialAttachments}
+                  onPlanGenerated={(plan) => {
+                    console.log("计划生成:", plan);
+                    onOpenChange(false);
+                    setShowAgentChat(false);
+                    setInitialAgentInput("");
+                    setInitialAttachments([]);
+                    // TODO: 跳转到项目详情页面
+                  }}
+                />
+              </div>
             )}
           </div>
         </DialogContent>
       </Dialog>
-
     </>
   );
 }

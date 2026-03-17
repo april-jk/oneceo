@@ -1140,7 +1140,7 @@ type PersistedHistoryViewCache = {
 };
 
 const HISTORY_VIEW_CACHE_PREFIX = 'task_creation_history_view:';
-const HISTORY_VIEW_CACHE_VERSION = 3;
+const HISTORY_VIEW_CACHE_VERSION = 4;
 const HISTORY_VIEW_CACHE_LIMIT = 300;
 const HISTORY_PAGE_SIZE = 50;
 
@@ -1172,6 +1172,18 @@ function hasLegacyHistoryNoise(messages: AgentMessage[]): boolean {
     }
     return false;
   });
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+    return error.name === 'AbortError';
+  }
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') return true;
+    if ((error.message || '').includes('AbortError')) return true;
+  }
+  return false;
 }
 
 function readHistoryViewCache(sessionId: string): PersistedHistoryViewCache | null {
@@ -1306,11 +1318,15 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
   }
 
   if (messageType === 'opencode_event') {
+    const content = item?.content || '';
+    if (!content.trim()) {
+      return null;
+    }
     return {
       id,
       messageKey,
       type: 'opencode_event',
-      content: item?.content || '',
+      content,
       sessionId: historySessionId,
       metadata,
     };
@@ -2452,6 +2468,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         hasOlderHistory: recent.hasOlderHistory,
       });
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return;
+      }
       console.error('[TaskCreationAgent] 加载最近历史失败:', error);
       try {
         const page = await getTaskCreationOlderMessages(historySessionId, {
@@ -2477,6 +2496,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           hasOlderHistory: page.hasMore,
         });
       } catch (fallbackError) {
+        if (isAbortLikeError(fallbackError)) {
+          return;
+        }
         console.error('[TaskCreationAgent] recent 失败后回退 history 也失败:', fallbackError);
       }
     }
@@ -2953,6 +2975,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
       }
       let nextOrchestratorId = (orchestratorSessionId || '').trim();
+      const localOrchestratorId = nextOrchestratorId;
+      const localRuntimeStatus = normalizedRuntimeStatus;
       let hasBoundRuntime = Boolean(orchestratorSessionId);
       let nextRuntimeSendable =
         runtimeEnabled && hasBoundRuntime && isSendableRuntimeStatus(normalizedRuntimeStatus);
@@ -2966,17 +2990,24 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           const authoritativeRuntimeStatus =
             normalizeRuntimeStatus(detail?.runtimeStatus?.status) ||
             (authoritativeOrchestratorId ? 'ready' : null);
+          const staleTerminalRuntime =
+            Boolean(localOrchestratorId) &&
+            localOrchestratorId === authoritativeOrchestratorId &&
+            isTerminalRuntimeStatus(localRuntimeStatus) &&
+            !isTerminalRuntimeStatus(authoritativeRuntimeStatus);
 
           nextOrchestratorId = authoritativeOrchestratorId || nextOrchestratorId;
-          nextRuntimeStatus = authoritativeRuntimeStatus;
+          nextRuntimeStatus = staleTerminalRuntime
+            ? localRuntimeStatus
+            : authoritativeRuntimeStatus;
           hasBoundRuntime = Boolean(nextOrchestratorId);
           nextRuntimeSendable =
             runtimeEnabled &&
             hasBoundRuntime &&
-            isSendableRuntimeStatus(authoritativeRuntimeStatus);
+            isSendableRuntimeStatus(nextRuntimeStatus);
 
           setOrchestratorSessionId(nextOrchestratorId || null);
-          setRuntimeStatus(authoritativeRuntimeStatus);
+          setRuntimeStatus(nextRuntimeStatus);
 
           nextOpencodeId = hasBoundRuntime ? authoritativeOpencodeId : '';
           setOpencodeSessionId(nextOpencodeId || null);

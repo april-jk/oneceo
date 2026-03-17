@@ -84,6 +84,8 @@ type RunArtifact = {
   lastText?: string;
   assistantResponseObserved: boolean;
   nativeHistoryPollAttempts: number;
+  stableNativeHistoryPolls: number;
+  lastNativeAssistantSignature?: string;
   toolsUsed: Set<string>;
 };
 
@@ -97,6 +99,18 @@ type QueuedDbMessage = {
     messageType: string;
     metadata?: Record<string, unknown>;
   };
+};
+
+type ClientPromptDispatchRecord = {
+  orchestratorSessionId: string;
+  opencodeSessionId: string;
+  content: string;
+  dispatchedAt: number;
+};
+
+type OpencodeMessageRoleEntry = {
+  role: string;
+  updatedAt: number;
 };
 
 function asString(value: unknown): string {
@@ -180,8 +194,178 @@ function asScalar(value: unknown): string {
   return '';
 }
 
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return undefined;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function resolveNativeMessageTimestamp(record: Record<string, unknown>): number {
+  const info = toRecord(record.info);
+  const time = toRecord(record.time);
+  const infoTime = toRecord(info.time);
+  return (
+    asNumber(time.created) ||
+    asNumber(time.updated) ||
+    asNumber(infoTime.created) ||
+    asNumber(infoTime.updated) ||
+    asNumber(record.createdAt) ||
+    asNumber(record.updatedAt) ||
+    asNumber(record.timestamp) ||
+    Date.now()
+  );
+}
+
+function resolveNativeMessageRole(record: Record<string, unknown>): string {
+  const info = toRecord(record.info);
+  return (asString(record.role) || asString(info.role)).toLowerCase();
+}
+
+function inspectLatestAssistantTurn(
+  rawMessages: unknown[],
+  promptedAt: number
+): {
+  assistantObserved: boolean;
+  hasActiveAssistantParts: boolean;
+  latestAssistantSignature: string;
+  latestAssistantText: string;
+} {
+  const records = rawMessages
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => item as Record<string, unknown>)
+    .sort((left, right) => resolveNativeMessageTimestamp(left) - resolveNativeMessageTimestamp(right));
+
+  let latestAssistant: Record<string, unknown> | null = null;
+  for (const record of records) {
+    if (resolveNativeMessageRole(record) !== 'assistant') {
+      continue;
+    }
+    const createdAt = resolveNativeMessageTimestamp(record);
+    if (promptedAt > 0 && Number.isFinite(createdAt) && createdAt + 1000 < promptedAt) {
+      continue;
+    }
+    latestAssistant = record;
+  }
+
+  if (!latestAssistant) {
+    return {
+      assistantObserved: false,
+      hasActiveAssistantParts: false,
+      latestAssistantSignature: '',
+      latestAssistantText: '',
+    };
+  }
+
+  const info = toRecord(latestAssistant.info);
+  const messageTime = toRecord(latestAssistant.time);
+  const infoTime = toRecord(info.time);
+  const parts = Array.isArray(latestAssistant.parts) ? latestAssistant.parts : [];
+  const messageCompletedAt = asNumber(messageTime.completed) || asNumber(infoTime.completed) || 0;
+  const messageId = asString(latestAssistant.id) || asString(info.id) || 'assistant';
+
+  let assistantObserved = false;
+  let hasActiveAssistantParts = false;
+  let latestAssistantText = '';
+  const partSignatures: string[] = [];
+  let pendingStepCount = 0;
+
+  for (const rawPart of parts) {
+    const part = toRecord(rawPart);
+    const partType = asString(part.type).toLowerCase();
+    const partId = asString(part.id) || asString(part.callID) || '';
+
+    if (partType === 'text' || partType === 'reasoning') {
+      const text = asString(part.text) || asString(part.content);
+      const time = toRecord(part.time);
+      const start = asNumber(time.start) || 0;
+      const end = asNumber(time.end) || 0;
+      if (text) {
+        assistantObserved = true;
+        latestAssistantText = text;
+      }
+      if ((text || start > 0) && end <= 0) {
+        hasActiveAssistantParts = true;
+      }
+      partSignatures.push(`${partType}:${partId}:${text.length}:${start}:${end}`);
+      continue;
+    }
+
+    if (partType === 'tool') {
+      const toolName = asString(part.tool) || asString(part.name) || 'tool';
+      const state = toRecord(part.state);
+      const stateTime = toRecord(state.time);
+      const status = (asString(state.status) || asString(state.state) || asString(part.status)).toLowerCase();
+      assistantObserved = true;
+      if (status !== 'completed' && status !== 'error') {
+        hasActiveAssistantParts = true;
+      }
+      partSignatures.push(
+        `tool:${partId}:${toolName}:${status}:${asNumber(stateTime.start) || 0}:${asNumber(stateTime.end) || 0}`
+      );
+      continue;
+    }
+
+    if (partType === 'step-start') {
+      pendingStepCount += 1;
+      partSignatures.push(`step-start:${partId}`);
+      continue;
+    }
+
+    if (partType === 'step-finish') {
+      pendingStepCount = Math.max(0, pendingStepCount - 1);
+      partSignatures.push(`step-finish:${partId}:${asString(part.reason)}`);
+      continue;
+    }
+
+    if (partType) {
+      partSignatures.push(`${partType}:${partId}`);
+    }
+  }
+
+  if (!latestAssistantText) {
+    const content = asString(latestAssistant.content);
+    if (content) {
+      assistantObserved = true;
+      latestAssistantText = content;
+    }
+  }
+
+  if (!messageCompletedAt && (assistantObserved || parts.length > 0)) {
+    hasActiveAssistantParts = true;
+  }
+  if (pendingStepCount > 0) {
+    hasActiveAssistantParts = true;
+  }
+
+  return {
+    assistantObserved,
+    hasActiveAssistantParts,
+    latestAssistantText,
+    latestAssistantSignature: JSON.stringify({
+      id: messageId,
+      completedAt: messageCompletedAt,
+      active: hasActiveAssistantParts,
+      parts: partSignatures,
+      textLength: latestAssistantText.length,
+    }),
+  };
 }
 
 function parseStructString(value: string): Record<string, unknown> {
@@ -922,6 +1106,18 @@ function summarizeOpencodeEvent(eventType: string, payload: Record<string, unkno
       if (text) return compact(text, 320);
       return partState ? `[Text] ${partState}` : '[Text] updated';
     }
+    if (partType === 'reasoning') {
+      const text = asString(part.text) || asString(part.content) || asString(properties.text);
+      if (text) return compact(text, 320);
+      return partState ? `[Reasoning] ${partState}` : '[Reasoning] 思考中';
+    }
+    if (partType === 'step-start') {
+      return '[Step] 开始执行';
+    }
+    if (partType === 'step-finish') {
+      const reason = asString(part.reason) || asString(properties.reason);
+      return reason ? `[Step] ${reason}` : '[Step] 完成';
+    }
     if (partType === 'file') {
       const filePath = asString(part.path) || asString(properties.path);
       return filePath ? `[File] ${filePath}` : '[File] updated';
@@ -1121,7 +1317,9 @@ export class OpencodeRemoteService {
   private listeners = new Set<OpencodeEventListener>();
   private textStreams = new Map<string, OpencodeTextStreamEntry>();
   private finalizedRuns = new Set<string>();
+  private messageRoles = new Map<string, OpencodeMessageRoleEntry>();
   private runArtifacts = new Map<string, RunArtifact>();
+  private clientPromptDispatches = new Map<string, ClientPromptDispatchRecord>();
   private opencodeLocks = new Map<string, Promise<void>>();
   private workspaceGitInit = new Set<string>();
   private streamIdleTimers = new Map<string, NodeJS.Timeout>();
@@ -1171,6 +1369,103 @@ export class OpencodeRemoteService {
     return `${taskSessionId}::${opencodeSessionId}`;
   }
 
+  private buildClientPromptDispatchKey(taskSessionId: string, clientMessageKey: string): string {
+    return `${taskSessionId}::${clientMessageKey}`;
+  }
+
+  private pruneClientPromptDispatches(now = Date.now()) {
+    const ttlMs = 30 * 60 * 1000;
+    for (const [key, entry] of this.clientPromptDispatches.entries()) {
+      if (now - entry.dispatchedAt > ttlMs) {
+        this.clientPromptDispatches.delete(key);
+      }
+    }
+  }
+
+  private rememberClientPromptDispatch(
+    taskSessionId: string,
+    clientMessageKey: string,
+    dispatch: ClientPromptDispatchRecord
+  ) {
+    if (!taskSessionId || !clientMessageKey) {
+      return;
+    }
+    this.pruneClientPromptDispatches(dispatch.dispatchedAt);
+    this.clientPromptDispatches.set(
+      this.buildClientPromptDispatchKey(taskSessionId, clientMessageKey),
+      dispatch
+    );
+  }
+
+  private getRememberedClientPromptDispatch(
+    taskSessionId: string,
+    clientMessageKey: string,
+    content: string
+  ): ClientPromptDispatchRecord | null {
+    if (!taskSessionId || !clientMessageKey) {
+      return null;
+    }
+    this.pruneClientPromptDispatches();
+    const record = this.clientPromptDispatches.get(
+      this.buildClientPromptDispatchKey(taskSessionId, clientMessageKey)
+    );
+    if (!record) {
+      return null;
+    }
+    return record.content === content ? record : null;
+  }
+
+  private async findPersistedClientPromptDispatch(
+    taskSessionId: string,
+    clientMessageKey: string,
+    content: string
+  ): Promise<ClientPromptDispatchRecord | null> {
+    if (!taskSessionId || !clientMessageKey) {
+      return null;
+    }
+    try {
+      const messages = await taskCreationFileMemoryStore.getMessages(taskSessionId);
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        if (message.messageType !== 'opencode_user_input') {
+          continue;
+        }
+        if (String(message.content || '') !== content) {
+          continue;
+        }
+        const metadata = toRecord(message.metadata);
+        const persistedClientMessageKey = asString(metadata.clientMessageKey) || asString(metadata.messageKey);
+        if (persistedClientMessageKey !== clientMessageKey) {
+          continue;
+        }
+        const orchestratorSessionId = asString(metadata.orchestratorSessionId);
+        const opencodeSessionId = asString(metadata.opencodeSessionId);
+        if (!orchestratorSessionId || !opencodeSessionId) {
+          continue;
+        }
+        const dispatchedAt =
+          asNumber(metadata.timestamp) ||
+          (message.createdAt ? Date.parse(String(message.createdAt)) : 0) ||
+          Date.now();
+        const dispatch: ClientPromptDispatchRecord = {
+          orchestratorSessionId,
+          opencodeSessionId,
+          content,
+          dispatchedAt,
+        };
+        this.rememberClientPromptDispatch(taskSessionId, clientMessageKey, dispatch);
+        return dispatch;
+      }
+    } catch (error) {
+      console.warn('[OPENCODE_CLIENT_PROMPT_LOOKUP_FAILED]', {
+        taskSessionId,
+        clientMessageKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return null;
+  }
+
   private getRunArtifact(runKey: string) {
     let record = this.runArtifacts.get(runKey);
     if (!record) {
@@ -1192,6 +1487,7 @@ export class OpencodeRemoteService {
         textEvents: 0,
         assistantResponseObserved: false,
         nativeHistoryPollAttempts: 0,
+        stableNativeHistoryPolls: 0,
         toolsUsed: new Set<string>(),
       };
       this.runArtifacts.set(runKey, record);
@@ -1554,43 +1850,9 @@ export class OpencodeRemoteService {
     const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
     if (!session) return;
     if (session.stage === 'completed' || session.stage === 'failed') return;
-    if (this.finalizedRuns.has(this.buildRunKey(taskSessionId, opencodeSessionId))) return;
-
-    const workspacePath = resolveOpencodeWorkspacePath(taskSessionId);
-    const syntheticEvent: Record<string, unknown> = {
-      type: 'session.idle',
-      properties: {
-        sessionID: opencodeSessionId,
-        status: 'idle',
-      },
-      directory: workspacePath || undefined,
-    };
-    const syntheticMessage: OsacMessage = {
-      type: 'OPENCODE_EVENT',
-      payload: {
-        seq: Date.now(),
-        timestamp: Date.now(),
-        eventType: 'session.idle',
-        event: syntheticEvent,
-        orchestratorSessionId,
-        opencodeSessionId,
-      },
-    };
-
-    try {
-      await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
-    } catch (error) {
-      if (isSandboxNotFoundError(error)) {
-        await markSandboxClosed(orchestratorSessionId);
-        return;
-      }
-      console.warn('[OPENCODE_STREAM_IDLE_TIMEOUT_FAILED]', {
-        taskSessionId,
-        orchestratorSessionId,
-        opencodeSessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    const runKey = this.buildRunKey(taskSessionId, opencodeSessionId);
+    if (this.finalizedRuns.has(runKey)) return;
+    this.scheduleNativeHistoryPoll(taskSessionId, orchestratorSessionId, opencodeSessionId, 0);
   }
 
   private shellEscapeSingle(value: string): string {
@@ -1864,6 +2126,76 @@ export class OpencodeRemoteService {
     }
   }
 
+  async inspectNativeSessionProgress(
+    taskSessionId: string,
+    options?: { allowProvision?: boolean; promptedAt?: number }
+  ): Promise<{
+    orchestratorSessionId: string;
+    opencodeSessionId: string;
+    assistantObserved: boolean;
+    hasRenderableAssistantReply: boolean;
+    hasActiveAssistantParts: boolean;
+    latestAssistantSignature: string;
+    latestAssistantText: string;
+  } | null> {
+    const taskId = asString(taskSessionId);
+    if (!taskId) return null;
+
+    let runtime = await resolveRuntimeBinding(taskId);
+    if (!runtime) {
+      if (!options?.allowProvision) {
+        return null;
+      }
+      runtime = await this.recoverRuntime(taskId);
+    }
+
+    const workspacePath = resolveOpencodeWorkspacePath(taskId);
+    const recoveredOpencodeSessionId = await this.resolveRecoveredOpencodeSessionId({
+      taskSessionId: taskId,
+      orchestratorSessionId: runtime.orchestratorSessionId,
+      workspacePath,
+      preferredOpencodeSessionId: runtime.opencodeSessionId,
+    });
+
+    if (!recoveredOpencodeSessionId) {
+      return null;
+    }
+
+    try {
+      const response = await osacAgentService.getSessionMessages(runtime.orchestratorSessionId, {
+        opencodeSessionId: recoveredOpencodeSessionId,
+        workspacePath,
+      });
+      const rawMessages = Array.isArray(response) ? response : [];
+      const assistantState = inspectLatestAssistantTurn(rawMessages, Number(options?.promptedAt) || 0);
+      const normalized = normalizeOpencodeNativeMessages(rawMessages, {
+        taskSessionId: taskId,
+        generation: runtime.generation,
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        opencodeSessionId: recoveredOpencodeSessionId,
+        workspacePath,
+      });
+      const renderableAssistantReply = hasRenderableAssistantReply(normalized);
+
+      return {
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        opencodeSessionId: recoveredOpencodeSessionId,
+        assistantObserved: assistantState.assistantObserved || renderableAssistantReply,
+        hasRenderableAssistantReply: renderableAssistantReply,
+        hasActiveAssistantParts: assistantState.hasActiveAssistantParts,
+        latestAssistantSignature: assistantState.latestAssistantSignature,
+        latestAssistantText: assistantState.latestAssistantText,
+      };
+    } catch (error) {
+      if (isSandboxNotFoundError(error)) {
+        await markSandboxClosed(runtime.orchestratorSessionId);
+        return null;
+      }
+      console.warn('[OPENCODE_INSPECT_NATIVE_PROGRESS_FAILED]', taskId, error);
+      return null;
+    }
+  }
+
   private async emitPhaseStatus(params: {
     sessionId: string;
     phase: FlowPhase;
@@ -1941,12 +2273,12 @@ export class OpencodeRemoteService {
       return null;
     }
 
-    const event = toRecord(payload.event);
+    let event = toRecord(payload.event);
     const properties = normalizeRecord(event.properties);
     const part = normalizeRecord(properties.part);
     const message = normalizeRecord(properties.message);
     const partType = (asString(part.type) || asString(properties.type)).toLowerCase();
-    if (partType && partType !== 'text') {
+    if (partType && partType !== 'text' && partType !== 'reasoning') {
       return null;
     }
     const role =
@@ -1983,6 +2315,85 @@ export class OpencodeRemoteService {
       partId,
       text,
       delta,
+    };
+  }
+
+  private buildMessageRoleKey(
+    taskSessionId: string,
+    opencodeSessionId: string | undefined,
+    messageId: string
+  ) {
+    return `${taskSessionId}::${opencodeSessionId || ''}::${messageId}`;
+  }
+
+  private pruneMessageRoles() {
+    const maxEntries = 4000;
+    if (this.messageRoles.size <= maxEntries) return;
+    const entries = Array.from(this.messageRoles.entries()).sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+    const removeCount = entries.length - maxEntries;
+    for (let i = 0; i < removeCount; i += 1) {
+      this.messageRoles.delete(entries[i][0]);
+    }
+  }
+
+  private enrichEventRole(
+    taskSessionId: string,
+    opencodeSessionId: string | undefined,
+    event: Record<string, unknown>
+  ): Record<string, unknown> {
+    const eventType = asString(event.type);
+    const properties =
+      event.properties && typeof event.properties === 'object'
+        ? { ...(event.properties as Record<string, unknown>) }
+        : {};
+    const part =
+      properties.part && typeof properties.part === 'object'
+        ? { ...(properties.part as Record<string, unknown>) }
+        : {};
+    const info =
+      properties.info && typeof properties.info === 'object'
+        ? (properties.info as Record<string, unknown>)
+        : {};
+
+    const explicitRole =
+      (asString(properties.role) || asString(part.role) || asString(info.role)).toLowerCase();
+    const infoMessageId = asString(info.id);
+    const partMessageId = asString(part.messageID) || asString(part.messageId);
+
+    if (eventType === 'message.updated' && infoMessageId && explicitRole) {
+      this.messageRoles.set(
+        this.buildMessageRoleKey(taskSessionId, opencodeSessionId, infoMessageId),
+        { role: explicitRole, updatedAt: Date.now() }
+      );
+      this.pruneMessageRoles();
+      if (!properties.role) {
+        properties.role = explicitRole;
+      }
+      return {
+        ...event,
+        properties,
+      };
+    }
+
+    if (explicitRole || !partMessageId) {
+      return event;
+    }
+
+    const cached = this.messageRoles.get(
+      this.buildMessageRoleKey(taskSessionId, opencodeSessionId, partMessageId)
+    );
+    if (!cached?.role) {
+      return event;
+    }
+
+    properties.role = cached.role;
+    if (Object.keys(part).length > 0 && !part.role) {
+      part.role = cached.role;
+      properties.part = part;
+    }
+    return {
+      ...event,
+      properties,
     };
   }
 
@@ -2115,36 +2526,11 @@ export class OpencodeRemoteService {
 
       const artifact = this.getRunArtifact(runKey);
       artifact.nativeHistoryPollAttempts += 1;
-
-      const aggregated = await this.flushTextStreams(
-        taskSessionId,
-        orchestratorSessionId,
-        opencodeSessionId,
-        { persistMode: 'all' }
-      );
-      if (aggregated) {
+      const liveSnapshots = this.getLiveTextStreamSnapshots(taskSessionId, opencodeSessionId);
+      const livePreview = liveSnapshots[liveSnapshots.length - 1];
+      if (livePreview?.content) {
         artifact.assistantResponseObserved = true;
-        const syntheticMessage: OsacMessage = {
-          type: 'OPENCODE_EVENT',
-          payload: {
-            seq: Date.now(),
-            timestamp: Date.now(),
-            eventType: 'session.idle',
-            orchestratorSessionId,
-            opencodeSessionId,
-            event: {
-              type: 'session.idle',
-              directory: resolveOpencodeWorkspacePath(taskSessionId) || undefined,
-              properties: {
-                sessionID: opencodeSessionId,
-                status: 'idle',
-                source: 'native_history_poll_stream_flush',
-              },
-            },
-          },
-        };
-        await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
-        return;
+        artifact.lastText = livePreview.content.slice(-800);
       }
 
       const syncResult = await this.syncNativeHistoryDelta({
@@ -2156,27 +2542,55 @@ export class OpencodeRemoteService {
 
       if (syncResult.assistantObserved) {
         artifact.assistantResponseObserved = true;
-        const syntheticMessage: OsacMessage = {
-          type: 'OPENCODE_EVENT',
-          payload: {
-            seq: Date.now(),
-            timestamp: Date.now(),
-            eventType: 'session.idle',
-            orchestratorSessionId,
-            opencodeSessionId,
-            event: {
-              type: 'session.idle',
-              directory: resolveOpencodeWorkspacePath(taskSessionId) || undefined,
-              properties: {
-                sessionID: opencodeSessionId,
-                status: 'idle',
-                source: 'native_history_poll',
+        if (syncResult.latestAssistantText) {
+          artifact.lastText = syncResult.latestAssistantText.slice(-800);
+        }
+      }
+
+      if (syncResult.hasActiveAssistantParts) {
+        artifact.stableNativeHistoryPolls = 0;
+        artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
+      } else if (syncResult.assistantObserved) {
+        if (
+          syncResult.latestAssistantSignature &&
+          syncResult.latestAssistantSignature === artifact.lastNativeAssistantSignature
+        ) {
+          artifact.stableNativeHistoryPolls += 1;
+        } else {
+          artifact.stableNativeHistoryPolls = 1;
+          artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
+        }
+        if (artifact.stableNativeHistoryPolls >= 2) {
+          const completionPreview =
+            syncResult.latestAssistantText ||
+            livePreview?.content ||
+            artifact.lastText ||
+            'OpenCode 已产出回复';
+          const syntheticMessage: OsacMessage = {
+            type: 'OPENCODE_EVENT',
+            payload: {
+              seq: Date.now(),
+              timestamp: Date.now(),
+              eventType: 'message.final',
+              orchestratorSessionId,
+              opencodeSessionId,
+              event: {
+                type: 'message.final',
+                directory: resolveOpencodeWorkspacePath(taskSessionId) || undefined,
+                properties: {
+                  sessionID: opencodeSessionId,
+                  text: completionPreview,
+                  source: 'native_history_poll_stable',
+                },
               },
             },
-          },
-        };
-        await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
-        return;
+          };
+          await this.handleOsacMessage(orchestratorSessionId, syntheticMessage);
+          return;
+        }
+      } else {
+        artifact.stableNativeHistoryPolls = 0;
+        artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
       }
 
       if (artifact.nativeHistoryPollAttempts < this.nativeHistoryPollMaxAttempts) {
@@ -2218,25 +2632,45 @@ export class OpencodeRemoteService {
     orchestratorSessionId: string;
     opencodeSessionId: string;
     promptedAt: number;
-  }): Promise<{ assistantObserved: boolean; persistedCount: number }> {
+  }): Promise<{
+    assistantObserved: boolean;
+    persistedCount: number;
+    hasActiveAssistantParts: boolean;
+    latestAssistantSignature: string;
+    latestAssistantText: string;
+  }> {
     if (!input.opencodeSessionId || input.opencodeSessionId === 'unknown') {
-      return { assistantObserved: false, persistedCount: 0 };
+      return {
+        assistantObserved: false,
+        persistedCount: 0,
+        hasActiveAssistantParts: false,
+        latestAssistantSignature: '',
+        latestAssistantText: '',
+      };
     }
     const workspacePath = resolveOpencodeWorkspacePath(input.taskSessionId);
     const runtime = await resolveRuntimeBinding(input.taskSessionId, input.orchestratorSessionId);
     let rawMessages: unknown[] = [];
     try {
-      rawMessages = await osacAgentService.getSessionMessages(input.orchestratorSessionId, {
+      const response = await osacAgentService.getSessionMessages(input.orchestratorSessionId, {
         opencodeSessionId: input.opencodeSessionId,
         workspacePath: workspacePath || undefined,
       });
+      rawMessages = Array.isArray(response) ? response : [];
     } catch (error) {
       if (isSandboxNotFoundError(error)) {
         await markSandboxClosed(input.orchestratorSessionId);
-        return { assistantObserved: false, persistedCount: 0 };
+        return {
+          assistantObserved: false,
+          persistedCount: 0,
+          hasActiveAssistantParts: false,
+          latestAssistantSignature: '',
+          latestAssistantText: '',
+        };
       }
       throw error;
     }
+    const assistantState = inspectLatestAssistantTurn(rawMessages, input.promptedAt);
     const normalized = normalizeOpencodeNativeMessages(Array.isArray(rawMessages) ? rawMessages : [], {
       taskSessionId: input.taskSessionId,
       generation: runtime?.generation,
@@ -2255,7 +2689,13 @@ export class OpencodeRemoteService {
     });
 
     if (candidateMessages.length === 0) {
-      return { assistantObserved: false, persistedCount: 0 };
+      return {
+        assistantObserved: assistantState.assistantObserved,
+        persistedCount: 0,
+        hasActiveAssistantParts: assistantState.hasActiveAssistantParts,
+        latestAssistantSignature: assistantState.latestAssistantSignature,
+        latestAssistantText: assistantState.latestAssistantText,
+      };
     }
 
     const existingMessages = await taskCreationFileMemoryStore.getMessages(input.taskSessionId);
@@ -2297,8 +2737,11 @@ export class OpencodeRemoteService {
     }
 
     return {
-      assistantObserved: hasRenderableAssistantReply(candidateMessages),
+      assistantObserved: assistantState.assistantObserved || hasRenderableAssistantReply(candidateMessages),
       persistedCount,
+      hasActiveAssistantParts: assistantState.hasActiveAssistantParts,
+      latestAssistantSignature: assistantState.latestAssistantSignature,
+      latestAssistantText: assistantState.latestAssistantText,
     };
   }
 
@@ -2816,6 +3259,7 @@ export class OpencodeRemoteService {
     opencodeSessionId: string;
     workspacePath: string;
     source?: 'user' | 'agent';
+    clientMessageKey?: string;
   }): Promise<boolean> {
     if (!input.opencodeSessionId || input.source === 'agent') {
       return false;
@@ -2866,6 +3310,14 @@ export class OpencodeRemoteService {
     });
 
     const inputTimestamp = Date.now();
+    if (input.clientMessageKey) {
+      this.rememberClientPromptDispatch(input.taskSessionId, input.clientMessageKey, {
+        orchestratorSessionId: input.orchestratorSessionId,
+        opencodeSessionId: input.opencodeSessionId,
+        content: input.content,
+        dispatchedAt: inputTimestamp,
+      });
+    }
     await this.persistMessage(
       input.taskSessionId,
       'user',
@@ -2880,6 +3332,7 @@ export class OpencodeRemoteService {
         questionAnswers: answers,
         timestamp: inputTimestamp,
         sessionEventSeq: inputTimestamp * 1000,
+        ...(input.clientMessageKey ? { clientMessageKey: input.clientMessageKey } : {}),
       }
     );
 
@@ -2900,9 +3353,11 @@ export class OpencodeRemoteService {
     orchestratorSessionId?: string;
     workspacePath?: string;
     source?: 'user' | 'agent';
+    clientMessageKey?: string;
   }): Promise<{ orchestratorSessionId: string; opencodeSessionId: string }> {
     const taskSessionId = asString(input.taskSessionId);
     const content = String(input.content || '').trim();
+    const clientMessageKey = asString(input.clientMessageKey);
     if (!taskSessionId) {
       throw new Error('taskSessionId is required');
     }
@@ -2913,6 +3368,22 @@ export class OpencodeRemoteService {
     let runtime = await resolveRuntimeBinding(taskSessionId, input.orchestratorSessionId);
     if (!runtime) {
       runtime = await this.recoverRuntime(taskSessionId);
+    }
+    if (input.source !== 'agent' && clientMessageKey) {
+      const rememberedDispatch = this.getRememberedClientPromptDispatch(taskSessionId, clientMessageKey, content);
+      if (rememberedDispatch) {
+        return {
+          orchestratorSessionId: rememberedDispatch.orchestratorSessionId,
+          opencodeSessionId: rememberedDispatch.opencodeSessionId,
+        };
+      }
+      const persistedDispatch = await this.findPersistedClientPromptDispatch(taskSessionId, clientMessageKey, content);
+      if (persistedDispatch) {
+        return {
+          orchestratorSessionId: persistedDispatch.orchestratorSessionId,
+          opencodeSessionId: persistedDispatch.opencodeSessionId,
+        };
+      }
     }
     const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
     let preferredRecoveredOpencodeSessionId =
@@ -2965,6 +3436,7 @@ export class OpencodeRemoteService {
             opencodeSessionId,
             workspacePath,
             source: input.source,
+            clientMessageKey: clientMessageKey || undefined,
           });
           if (answeredPendingQuestion) {
             return {
@@ -2978,6 +3450,31 @@ export class OpencodeRemoteService {
             workspacePath: workspacePath || undefined,
             parts: [{ type: 'text', text: content }],
           });
+          const inputTimestamp = Date.now();
+          if (input.source !== 'agent' && clientMessageKey) {
+            this.rememberClientPromptDispatch(taskSessionId, clientMessageKey, {
+              orchestratorSessionId,
+              opencodeSessionId,
+              content,
+              dispatchedAt: inputTimestamp,
+            });
+          }
+          const role = input.source === 'agent' ? 'agent' : 'user';
+          const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
+          await this.persistMessage(
+            taskSessionId,
+            role,
+            messageType,
+            content,
+            {
+              orchestratorSessionId,
+              opencodeSessionId,
+              workspacePath,
+              timestamp: inputTimestamp,
+              sessionEventSeq: inputTimestamp * 1000,
+              ...(clientMessageKey ? { clientMessageKey } : {}),
+            }
+          );
           await this.initRunArtifactsForPrompt(taskSessionId, orchestratorSessionId, opencodeSessionId);
           await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
             status: 'in_progress',
@@ -2995,23 +3492,6 @@ export class OpencodeRemoteService {
               error: error instanceof Error ? error.message : String(error),
             });
           }
-
-          const role = input.source === 'agent' ? 'agent' : 'user';
-          const messageType = input.source === 'agent' ? 'opencode_agent_input' : 'opencode_user_input';
-          const inputTimestamp = Date.now();
-          await this.persistMessage(
-            taskSessionId,
-            role,
-            messageType,
-            content,
-            {
-              orchestratorSessionId,
-              opencodeSessionId,
-              workspacePath,
-              timestamp: inputTimestamp,
-              sessionEventSeq: inputTimestamp * 1000,
-            }
-          );
 
           auditOsacAction('OPENCODE_USER_INPUT', {
             taskSessionId,
@@ -3036,6 +3516,22 @@ export class OpencodeRemoteService {
         }
 
         if (isRetryableDirectInputError(error) && attempt < maxAttempts) {
+          if (input.source !== 'agent' && clientMessageKey) {
+            const rememberedDispatch = this.getRememberedClientPromptDispatch(taskSessionId, clientMessageKey, content);
+            if (rememberedDispatch) {
+              console.warn('[OPENCODE_DIRECT_INPUT_DUPLICATE_SUPPRESSED]', {
+                taskSessionId,
+                attempt,
+                orchestratorSessionId: rememberedDispatch.orchestratorSessionId,
+                opencodeSessionId: rememberedDispatch.opencodeSessionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return {
+                orchestratorSessionId: rememberedDispatch.orchestratorSessionId,
+                opencodeSessionId: rememberedDispatch.opencodeSessionId,
+              };
+            }
+          }
           console.warn('[OPENCODE_DIRECT_INPUT_RETRY]', {
             taskSessionId,
             attempt,
@@ -3086,6 +3582,7 @@ export class OpencodeRemoteService {
       textEvents: 0,
       assistantResponseObserved: false,
       nativeHistoryPollAttempts: 0,
+      stableNativeHistoryPolls: 0,
       toolsUsed: new Set<string>(),
       phaseAtStart,
       cycleAtStart: session.phaseCycle ?? 0,
@@ -3138,7 +3635,7 @@ export class OpencodeRemoteService {
     await touchSandbox(orchestratorSessionId, 'opencode_event');
 
     const payload = toRecord(message.payload);
-    const event = toRecord(payload.event);
+    let event = toRecord(payload.event);
     const session = await this.resolveTargetSession(orchestratorSessionId, payload, event, {
       requireOpencodeSessionId: message.type === 'OPENCODE_EVENT',
     });
@@ -3229,6 +3726,7 @@ export class OpencodeRemoteService {
             textEvents: 0,
             assistantResponseObserved: false,
             nativeHistoryPollAttempts: 0,
+            stableNativeHistoryPolls: 0,
             toolsUsed: new Set<string>(),
             phaseAtStart,
             cycleAtStart: session.phaseCycle ?? 0,
@@ -3410,6 +3908,13 @@ export class OpencodeRemoteService {
       asString(payload.opencodeSessionId) ||
       pickSessionIdFromEvent(event) ||
       '';
+    const enrichedEvent = this.enrichEventRole(
+      session.id,
+      opencodeSessionId || undefined,
+      event
+    );
+    payload.event = enrichedEvent;
+    event = enrichedEvent;
     if (opencodeSessionId) {
       this.touchStreamIdle(session.id, orchestratorSessionId, opencodeSessionId);
     }
@@ -3715,64 +4220,80 @@ export class OpencodeRemoteService {
       }
 
       const isDirect = this.isDirectSession(session);
-      const aggregated = await this.flushTextStreams(
-        session.id,
-        orchestratorSessionId,
-        opencodeSessionId || undefined,
-        { persistMode: 'all' }
-      );
+      let aggregated: string | null = null;
       if (isDirect) {
         const artifact = this.getRunArtifact(runKey);
+        const liveSnapshots = this.getLiveTextStreamSnapshots(session.id, opencodeSessionId || undefined);
+        const liveAggregated = liveSnapshots[liveSnapshots.length - 1]?.content || null;
         console.info('[OPENCODE_DIRECT_COMPLETION_PRECHECK]', {
           taskSessionId: session.id,
           orchestratorSessionId,
           opencodeSessionId: runOpencodeSessionId,
           eventType,
           outcome,
-          aggregated: aggregated ? aggregated.slice(-120) : null,
+          liveAggregated: liveAggregated ? liveAggregated.slice(-120) : null,
           assistantResponseObserved: artifact.assistantResponseObserved,
           textEvents: artifact.textEvents,
           promptedAt: artifact.promptedAt,
         });
-        if (aggregated) {
+        if (liveAggregated) {
+          artifact.assistantResponseObserved = true;
+          artifact.lastText = liveAggregated.slice(-800);
+        }
+        const syncResult = await this.syncNativeHistoryDelta({
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+          promptedAt: artifact.promptedAt,
+        });
+        if (syncResult.assistantObserved) {
           artifact.assistantResponseObserved = true;
         }
-        if (!artifact.assistantResponseObserved) {
-          const syncResult = await this.syncNativeHistoryDelta({
-            taskSessionId: session.id,
-            orchestratorSessionId,
-            opencodeSessionId: runOpencodeSessionId,
-            promptedAt: artifact.promptedAt,
-          });
-          if (syncResult.assistantObserved) {
-            artifact.assistantResponseObserved = true;
-          }
-          console.info('[OPENCODE_DIRECT_COMPLETION_NATIVE_SYNC]', {
-            taskSessionId: session.id,
-            orchestratorSessionId,
-            opencodeSessionId: runOpencodeSessionId,
-            assistantObserved: syncResult.assistantObserved,
-            persistedCount: syncResult.persistedCount,
-          });
+        if (syncResult.latestAssistantText) {
+          artifact.lastText = syncResult.latestAssistantText.slice(-800);
         }
-        if (!artifact.assistantResponseObserved) {
+        console.info('[OPENCODE_DIRECT_COMPLETION_NATIVE_SYNC]', {
+          taskSessionId: session.id,
+          orchestratorSessionId,
+          opencodeSessionId: runOpencodeSessionId,
+          assistantObserved: syncResult.assistantObserved,
+          hasActiveAssistantParts: syncResult.hasActiveAssistantParts,
+          persistedCount: syncResult.persistedCount,
+          latestAssistantSignature: syncResult.latestAssistantSignature || null,
+        });
+        if (syncResult.hasActiveAssistantParts) {
+          artifact.stableNativeHistoryPolls = 0;
+          artifact.lastNativeAssistantSignature = syncResult.latestAssistantSignature;
+        }
+        if (!artifact.assistantResponseObserved || syncResult.hasActiveAssistantParts) {
           artifact.completionInProgress = false;
           this.scheduleNativeHistoryPoll(session.id, orchestratorSessionId, runOpencodeSessionId, 1000);
           await this.notify({
             taskSessionId: session.id,
             message: {
               type: 'status_update',
-              content: '正在同步智能体回复...',
+              content: syncResult.hasActiveAssistantParts ? 'OpenCode 仍在输出，继续等待完成...' : '正在同步智能体回复...',
               stage: 'executing',
               tone: 'execution',
               metadata: {
                 ...metadata,
                 outcome,
-                source: 'direct_waiting_native_history',
+                source: syncResult.hasActiveAssistantParts
+                  ? 'direct_waiting_active_assistant_parts'
+                  : 'direct_waiting_native_history',
               },
             },
           });
           return;
+        }
+        aggregated = await this.flushTextStreams(
+          session.id,
+          orchestratorSessionId,
+          opencodeSessionId || undefined,
+          { persistMode: 'all' }
+        );
+        if (aggregated) {
+          artifact.lastText = aggregated.slice(-800);
         }
         this.finalizedRuns.add(runKey);
         this.clearNativeHistoryPoll(runKey);
@@ -3842,6 +4363,12 @@ export class OpencodeRemoteService {
         this.runArtifacts.delete(runKey);
         return;
       }
+      aggregated = await this.flushTextStreams(
+        session.id,
+        orchestratorSessionId,
+        opencodeSessionId || undefined,
+        { persistMode: 'all' }
+      );
       const currentPhase = (session.phase as FlowPhase) || 'development';
       let phaseForReview: FlowPhase = currentPhase;
       const artifact = this.getRunArtifact(runKey);

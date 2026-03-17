@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
-import { shouldStopProcessingForMessage } from '@/hooks/useTaskCreationAgent';
+import {
+  buildPendingSandboxPromptDispatchKey,
+  deriveSessionStateFromMessages,
+  shouldStopProcessingForMessage,
+} from '@/hooks/useTaskCreationAgent';
 
 describe('04_processing_stop_rules', () => {
   it('returns true for clarification and completed status', () => {
@@ -41,7 +45,7 @@ describe('04_processing_stop_rules', () => {
     };
 
     expect(shouldStopProcessingForMessage(finalMsg)).toBe(true);
-    expect(shouldStopProcessingForMessage(idleStatus)).toBe(true);
+    expect(shouldStopProcessingForMessage(idleStatus)).toBe(false);
     expect(shouldStopProcessingForMessage(questionTool)).toBe(true);
   });
 
@@ -60,5 +64,72 @@ describe('04_processing_stop_rules', () => {
     };
 
     expect(shouldStopProcessingForMessage(progressMsg)).toBe(false);
+  });
+
+  it('builds a stable dispatch key for pending sandbox prompts', () => {
+    expect(
+      buildPendingSandboxPromptDispatchKey({
+        sessionId: 'session-1',
+        messageKey: 'user-1',
+      })
+    ).toBe('session-1:user-1');
+    expect(
+      buildPendingSandboxPromptDispatchKey({
+        sessionId: '  ',
+        messageKey: 'user-1',
+      })
+    ).toBe('');
+  });
+
+  it('does not let a previous completed turn stop a new follow-up turn', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'user_input',
+        content: '第一轮问题',
+      },
+      {
+        type: 'status_update',
+        stage: 'completed',
+        content: 'OpenCode 执行完成',
+      },
+      {
+        type: 'user_input',
+        content: '继续修改这个实现',
+      },
+    ];
+
+    expect(deriveSessionStateFromMessages(messages)).toEqual({
+      stopProcessing: false,
+      runtimeStatus: null,
+      currentQuestion: null,
+    });
+  });
+
+  it('only derives clarification from the latest turn window', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'user_input',
+        content: '第一轮问题',
+      },
+      {
+        type: 'clarification_request',
+        question: '第一轮澄清',
+      },
+      {
+        type: 'user_response',
+        content: '第一轮回答',
+      },
+      {
+        type: 'status_update',
+        stage: 'completed',
+        content: 'OpenCode 执行完成',
+      },
+      {
+        type: 'user_input',
+        content: '第二轮继续',
+      },
+    ];
+
+    expect(deriveSessionStateFromMessages(messages).currentQuestion).toBeNull();
   });
 });

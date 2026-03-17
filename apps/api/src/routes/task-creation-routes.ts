@@ -119,6 +119,7 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   'application/sql',
 ]);
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
+const recentHistoryHydrationQueuedAt = new Map<string, number>();
 const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
 
 function clampNumber(value: number, min: number, max: number) {
@@ -206,11 +207,12 @@ function toIso(value: Date | string | null | undefined): string {
 }
 
 function toSessionSummary(session: any) {
+  const normalizedStage = normalizeLiveSessionStage(session);
   return {
     id: session.id,
     title: session.title,
     status: session.status,
-    stage: session.stage,
+    stage: normalizedStage,
     phase: session.phase,
     phaseCycle: session.phaseCycle,
     runtime: session.runtime,
@@ -221,6 +223,61 @@ function toSessionSummary(session: any) {
     messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
     messages: [],
   };
+}
+
+function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
+  if (!memorySession) return dbSession;
+  if (!dbSession) return memorySession;
+
+  const dbStatus = asText(dbSession.status);
+  const memoryStatus = asText(memorySession.status);
+  const shouldPreferDbLifecycle =
+    (dbStatus === 'completed' || dbStatus === 'failed') && dbStatus !== memoryStatus;
+
+  if (!shouldPreferDbLifecycle) {
+    return memorySession;
+  }
+
+  return {
+    ...memorySession,
+    status: dbSession.status,
+    stage: dbSession.stage,
+    updatedAt: dbSession.updatedAt || memorySession.updatedAt,
+  };
+}
+
+function normalizeLiveSessionStage(
+  session: Pick<
+    FileSessionRecord,
+    'status' | 'stage' | 'mode' | 'executor' | 'runtime' | 'messages'
+  > | null | undefined
+): NonNullable<FileSessionRecord['stage']> | undefined {
+  const status = asText(session?.status);
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'waiting_user') return 'clarifying';
+
+  const currentStage = asText(session?.stage);
+  const mode = asText(session?.mode);
+  const executor = asText(session?.executor);
+  const hasRuntime = Boolean(asText(session?.runtime?.orchestratorSessionId));
+  const hasOpencodeRuntime = Boolean(asText(session?.runtime?.opencodeSessionId));
+  const hasUserInput = Array.isArray(session?.messages)
+    ? session!.messages.some((message) => {
+        const type = asText(message?.messageType);
+        return type === 'user_input' || type === 'user_response' || type === 'opencode_user_input';
+      })
+    : false;
+
+  if (
+    status === 'in_progress' &&
+    (mode === 'sandbox' || executor === 'opencode' || hasRuntime || hasOpencodeRuntime) &&
+    hasUserInput
+  ) {
+    return 'executing';
+  }
+
+  return (currentStage as NonNullable<FileSessionRecord['stage']>) || 'collecting';
 }
 
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
@@ -413,18 +470,81 @@ async function resolveTaskSessionRecord(sessionId: string) {
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
+  session = await reconcileRecoveredOpencodeCompletion(session);
   return session;
 }
 
 async function resolveTaskSessionMeta(sessionId: string) {
   const session = await taskCreationFileMemoryStore.getSession(sessionId);
   if (session) {
-    return {
+    return reconcileRecoveredOpencodeCompletion({
       ...session,
+      stage: normalizeLiveSessionStage(session),
       messages: [],
-    };
+    });
   }
-  return buildLightweightFileSessionFromDb(sessionId);
+  const lightweight = await buildLightweightFileSessionFromDb(sessionId);
+  return reconcileRecoveredOpencodeCompletion(lightweight);
+}
+
+async function reconcileRecoveredOpencodeCompletion(
+  session: FileSessionRecord | null
+): Promise<FileSessionRecord | null> {
+  if (!session) {
+    return null;
+  }
+
+  if (session.status === 'completed' || session.status === 'failed') {
+    return session;
+  }
+
+  const shouldInspectNativeCompletion =
+    asText(session.mode) === 'sandbox' &&
+    (asText(session.executor) === 'opencode' || asText(session.runtime?.opencodeSessionId));
+
+  if (!shouldInspectNativeCompletion) {
+    return session;
+  }
+
+  const nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
+    allowProvision: true,
+  });
+
+  if (
+    !nativeProgress?.assistantObserved ||
+    !nativeProgress.hasRenderableAssistantReply ||
+    nativeProgress.hasActiveAssistantParts
+  ) {
+    return session;
+  }
+
+  const nextPhase = session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery';
+  await taskCreationFileMemoryStore.updateSessionState(session.id, {
+    status: 'completed',
+    stage: 'completed',
+    phase: nextPhase,
+  });
+  await taskCreationSessionDAO.updateSessionStatus(session.id, 'completed');
+
+  return {
+    ...session,
+    status: 'completed' as FileSessionRecord['status'],
+    stage: 'completed' as NonNullable<FileSessionRecord['stage']>,
+    phase: nextPhase as FileSessionRecord['phase'],
+    runtime: session.runtime
+      ? {
+          ...session.runtime,
+          orchestratorSessionId:
+            nativeProgress.orchestratorSessionId || session.runtime.orchestratorSessionId,
+          opencodeSessionId: nativeProgress.opencodeSessionId || session.runtime.opencodeSessionId,
+        }
+      : {
+        generation: 1,
+        orchestratorSessionId: nativeProgress.orchestratorSessionId,
+        opencodeSessionId: nativeProgress.opencodeSessionId,
+        updatedAt: new Date().toISOString(),
+        },
+  };
 }
 
 async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
@@ -1223,32 +1343,37 @@ function mapStoredMessagesToTimeline(
   }>
 ): TimelineMessage[] {
   return Array.isArray(messages)
-    ? messages.map((message, idx) => ({
-        id: String(message.id),
-        messageKey: buildTimelineMessageKey({
+    ? messages.map((message, idx) => {
+        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const normalizedMetadata = normalizeMessageTimelineMetadata(
+          sanitizedMetadata,
+          message.createdAt,
+          idx
+        );
+        const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
-          metadata: message.metadata,
+          metadata: sanitizedMetadata,
           createdAt: message.createdAt,
-        }),
-        role: (message.role as any) || 'agent',
-        messageType: message.messageType || 'message',
-        content: message.content || '',
-        metadata: {
-          ...normalizeMessageTimelineMetadata(
-            sanitizeTimelineMetadataForClient(message.metadata),
-            message.createdAt,
-            idx
-          ),
-          messageKey: buildTimelineMessageKey({
-            id: message.id,
-            messageType: message.messageType,
-            metadata: sanitizeTimelineMetadataForClient(message.metadata),
-            createdAt: message.createdAt,
-          }),
-        },
-        createdAt: toIso(message.createdAt as any),
-      }))
+        });
+        const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
+        const createdAt =
+          timestamp !== null
+            ? new Date(timestamp).toISOString()
+            : toIso(message.createdAt as any);
+        return {
+          id: String(message.id),
+          messageKey,
+          role: (message.role as any) || 'agent',
+          messageType: message.messageType || 'message',
+          content: message.content || '',
+          metadata: {
+            ...normalizedMetadata,
+            messageKey,
+          },
+          createdAt,
+        };
+      })
     : [];
 }
 
@@ -1361,8 +1486,18 @@ function buildTimelinePage(messages: TimelineMessage[]) {
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
   return messages.some((message) => {
     const content = asText(message?.content);
+    const metadata = pickRecord(message?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const isStructuralOpencodeEvent =
+      eventType === 'message.updated' ||
+      eventType === 'message.part.updated' ||
+      eventType === 'message.part.delta' ||
+      eventType === 'message.part.removed' ||
+      eventType === 'session.status' ||
+      eventType === 'session.idle' ||
+      eventType === 'message.final';
     if (message?.messageType === 'opencode_event') {
-      if (!content) {
+      if (!content && !isStructuralOpencodeEvent) {
         return true;
       }
       if (content.startsWith('[Message] ')) {
@@ -1380,8 +1515,18 @@ function hasLegacyRecentNoise(messages: TimelineMessage[]) {
 function filterLegacyTimelineNoise<T extends { messageType?: string; content?: string }>(messages: T[]): T[] {
   return messages.filter((message) => {
     const content = asText(message?.content);
+    const metadata = pickRecord((message as any)?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const isStructuralOpencodeEvent =
+      eventType === 'message.updated' ||
+      eventType === 'message.part.updated' ||
+      eventType === 'message.part.delta' ||
+      eventType === 'message.part.removed' ||
+      eventType === 'session.status' ||
+      eventType === 'session.idle' ||
+      eventType === 'message.final';
     if (message?.messageType === 'opencode_event') {
-      if (!content) return false;
+      if (!content && !isStructuralOpencodeEvent) return false;
       if (content.startsWith('[Message] ')) return false;
     }
     if (message?.messageType === 'status_update' && !content) {
@@ -1396,6 +1541,13 @@ function scheduleRecentHistoryHydration(sessionId: string) {
   if (!taskId || recentHistoryHydrationInFlight.has(taskId)) {
     return;
   }
+
+  const now = Date.now();
+  const lastQueuedAt = recentHistoryHydrationQueuedAt.get(taskId) || 0;
+  if (now - lastQueuedAt < 5000) {
+    return;
+  }
+  recentHistoryHydrationQueuedAt.set(taskId, now);
 
   const task = (async () => {
     try {
@@ -1881,7 +2033,7 @@ router.get('/sessions', async (req, res) => {
     const now = Date.now();
 
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
-    const sessions = rawSessions.map(toSessionSummary);
+    let sessions = rawSessions.map(toSessionSummary);
     if (!refresh && sessions.length > 0) {
       return res.json({
         success: true,
@@ -1917,6 +2069,17 @@ router.get('/sessions', async (req, res) => {
         data: summaries,
         cache: { hit: false },
       });
+    }
+
+    try {
+      const dbSummaries = await buildSessionSummaryFromDb(limit);
+      const dbById = new Map(dbSummaries.map((item) => [String(item.id), item]));
+      sessions = sessions.map((session) => mergeSessionLifecycleFromDb(session, dbById.get(String(session.id))));
+    } catch (error) {
+      if (!isTransientDatabaseError(error)) {
+        throw error;
+      }
+      console.warn('[TASK_SESSION_LIST_DB_RECONCILE_FAILED]', error);
     }
 
     sessionListCache = {
@@ -2033,11 +2196,58 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
+    const shouldPreferOpencodeNativeHistory =
+      asText(session?.mode) === 'sandbox' &&
+      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
 
     const shouldHydrateFromNativeHistory =
-      asText(session?.mode) === 'sandbox' &&
-      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId)) &&
+      shouldPreferOpencodeNativeHistory &&
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
+
+    if (shouldPreferOpencodeNativeHistory) {
+      const resolvedMessages = await resolveRenderableTimelineMessages(sessionId, session);
+      const resolvedRecentMessages = resolvedMessages.slice(Math.max(resolvedMessages.length - 50, 0));
+      const cacheOutOfSync =
+        shouldHydrateFromNativeHistory ||
+        recentMessages.length !== resolvedRecentMessages.length ||
+        (resolveMessageTimelineCursor(recentMessages[recentMessages.length - 1]) || 0) !==
+          (resolveMessageTimelineCursor(resolvedRecentMessages[resolvedRecentMessages.length - 1]) || 0) ||
+        (recentMessages[recentMessages.length - 1]?.messageKey || '') !==
+          (resolvedRecentMessages[resolvedRecentMessages.length - 1]?.messageKey || '');
+
+      if (cacheOutOfSync && resolvedRecentMessages.length > 0) {
+        void taskCreationSessionDAO
+          .replaceRecentMessagesSnapshot(
+            sessionId,
+            resolvedRecentMessages.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              messageType: message.messageType,
+              metadata: message.metadata,
+              createdAt: message.createdAt,
+            }))
+          )
+          .catch((error) => {
+            console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
+          });
+      }
+
+      const page = buildTimelinePage(resolvedRecentMessages);
+      const mayHaveOlderHistory =
+        resolvedRecentMessages.length >= 50 ||
+        asText(session?.runtime?.opencodeSessionId).length > 0 ||
+        asText(session?.executor) === 'opencode';
+
+      return res.json({
+        success: true,
+        data: {
+          ...page,
+          hasOlderHistory: mayHaveOlderHistory,
+          source: 'resolved_recent',
+        },
+      });
+    }
 
     if (shouldHydrateFromNativeHistory) {
       scheduleRecentHistoryHydration(sessionId);

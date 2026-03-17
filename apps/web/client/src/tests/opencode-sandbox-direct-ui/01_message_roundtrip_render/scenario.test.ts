@@ -24,12 +24,18 @@ describe('01_message_roundtrip_render', () => {
     ];
 
     const items = buildChatItems(messages);
-    const userItems = items.filter((item) => item.kind === 'user');
-    const agentItems = items.filter((item) => item.kind === 'agent');
+    const turnItems = items.filter((item) => item.kind === 'opencode_turn');
 
-    expect(userItems).toHaveLength(1);
-    expect(agentItems).toHaveLength(1);
-    expect((agentItems[0] as { markdown: string }).markdown).toContain('Node.js + SQLite');
-    expect((agentItems[0] as { markdown: string }).markdown).not.toContain(userText);
+    expect(turnItems).toHaveLength(1);
+    expect((turnItems[0] as { userText: string }).userText).toBe(userText);
+    expect(
+      (turnItems[0] as { assistantParts: Array<{ kind: string; markdown?: string }> }).assistantParts
+    ).toHaveLength(1);
+    expect(
+      (turnItems[0] as { assistantParts: Array<{ kind: string; markdown?: string }> }).assistantParts[0]?.markdown
+    ).toContain('Node.js + SQLite');
+    expect(
+      (turnItems[0] as { assistantParts: Array<{ kind: string; markdown?: string }> }).assistantParts[0]?.markdown
+    ).not.toContain(userText);
   });
 });

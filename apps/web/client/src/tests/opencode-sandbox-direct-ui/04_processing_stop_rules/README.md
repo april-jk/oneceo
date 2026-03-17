@@ -6,7 +6,10 @@
 
 - `clarification_request`
 - `status_update` 终态
-- `opencode_event` 的 `message.final / session.idle / session.status(idle)`
+- `opencode_event` 的 `message.final / session.status(idle) / question tool`
 - `question` 工具事件
 
-预期：以上终态应统一触发停止处理。
+预期：
+
+- `message.final` 与真正 completed/failed 状态应停止处理
+- `session.idle / session.status(idle)` 不应单独触发停转

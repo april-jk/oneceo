@@ -65,7 +65,7 @@ test('pickRecoveredOpencodeSessionId selects latest session under the same works
   assert.equal(sessionId, 'ses-new');
 });
 
-test('normalizeOpencodeNativeMessages maps user, tool, and final assistant text', () => {
+test('normalizeOpencodeNativeMessages preserves structural assistant events for direct render reconstruction', () => {
   const messages = normalizeOpencodeNativeMessages(
     [
       {
@@ -108,37 +108,57 @@ test('normalizeOpencodeNativeMessages maps user, tool, and final assistant text'
     CONTEXT
   );
 
-  assert.equal(messages.length, 3);
+  assert.equal(messages.length, 5);
 
   assert.deepEqual(
     messages.map((item) => ({
       role: item.role,
       messageType: item.messageType,
       content: item.content,
+      eventType: item.metadata?.eventType,
     })),
     [
       {
         role: 'user',
         messageType: 'opencode_user_input',
         content: '请帮我部署这个网站',
+        eventType: undefined,
+      },
+      {
+        role: 'agent',
+        messageType: 'opencode_event',
+        content: '',
+        eventType: 'message.updated',
       },
       {
         role: 'agent',
         messageType: 'opencode_event',
         content: '[Tool] deploy · completed',
+        eventType: 'message.part.updated',
       },
       {
         role: 'agent',
         messageType: 'opencode_event',
         content: '部署已经完成',
+        eventType: 'message.part.updated',
+      },
+      {
+        role: 'agent',
+        messageType: 'opencode_event',
+        content: '部署已经完成',
+        eventType: 'message.final',
       },
     ]
   );
 
   assert.equal(messages[0]?.metadata?.source, 'opencode_native_history');
-  assert.equal(messages[1]?.metadata?.eventType, 'message.part.updated');
-  assert.equal(messages[2]?.metadata?.eventType, 'message.final');
-  assert.ok(String(messages[2]?.id || '').includes('text-1'));
+  assert.equal(messages[1]?.metadata?.eventType, 'message.updated');
+  assert.equal(messages[2]?.metadata?.eventType, 'message.part.updated');
+  assert.equal(messages[3]?.metadata?.eventType, 'message.part.updated');
+  assert.equal(messages[4]?.metadata?.eventType, 'message.final');
+  assert.equal(messages[3]?.metadata?.messageId, 'msg-assistant');
+  assert.equal(messages[3]?.metadata?.partId, 'text-1');
+  assert.ok(String(messages[4]?.id || '').includes('final'));
 });
 
 test('normalizeOpencodeNativeMessages falls back to content when assistant message has no text parts', () => {
@@ -154,10 +174,13 @@ test('normalizeOpencodeNativeMessages falls back to content when assistant messa
     CONTEXT
   );
 
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0]?.messageType, 'opencode_event');
-  assert.equal(messages[0]?.content, '这是回放的最终文本');
-  assert.equal(messages[0]?.metadata?.eventType, 'message.final');
+  assert.equal(messages[0]?.content, '');
+  assert.equal(messages[0]?.metadata?.eventType, 'message.updated');
+  assert.equal(messages[1]?.messageType, 'opencode_event');
+  assert.equal(messages[1]?.content, '这是回放的最终文本');
+  assert.equal(messages[1]?.metadata?.eventType, 'message.final');
 });
 
 test('hasRenderableAssistantReply returns false for native history with only user input', () => {

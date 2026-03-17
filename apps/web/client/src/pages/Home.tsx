@@ -1233,6 +1233,41 @@ export type ChatItem =
       messageIndex: number;
       diffId?: string;
       messageKey?: string;
+    }
+  | {
+      kind: "opencode_turn";
+      userText: string;
+      attachments?: UploadedTaskAttachment[];
+      userMessageKey?: string;
+      assistantParts: OpencodeTurnPart[];
+      working?: boolean;
+      thinkingLabel?: string;
+      messageKey?: string;
+    };
+
+type OpencodeTurnPart =
+  | {
+      kind: "text";
+      markdown: string;
+      messageKey?: string;
+      partId?: string;
+    }
+  | {
+      kind: "reasoning";
+      markdown: string;
+      messageKey?: string;
+      partId?: string;
+    }
+  | {
+      kind: "tool";
+      eventType: string;
+      event: Record<string, unknown>;
+      content?: string;
+      metadata?: Record<string, unknown>;
+      messageIndex: number;
+      diffId?: string;
+      messageKey?: string;
+      partId?: string;
     };
 
 type CapsuleTone =
@@ -1243,7 +1278,7 @@ type CapsuleTone =
   | "review"
   | "error";
 
-export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
+function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   let progressBuffer: {
     label: string;
@@ -1606,6 +1641,360 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
   return items;
 }
 
+type DirectTurnDraft = {
+  userText: string;
+  attachments?: UploadedTaskAttachment[];
+  userMessageKey?: string;
+  assistantParts: OpencodeTurnPart[];
+  assistantPartIndex: Map<string, number>;
+  assistantMessageIds: Set<string>;
+  working: boolean;
+  thinkingLabel?: string;
+  messageKey?: string;
+};
+
+function extractUserAttachmentsFromMetadata(
+  metadata: unknown,
+): UploadedTaskAttachment[] {
+  const record = toRecord(metadata);
+  const raw = Array.isArray(record.attachments) ? record.attachments : [];
+  return raw
+    .map((item) => toRecord(item))
+    .map((item) => ({
+      name: asText(item.name),
+      path: asText(item.path),
+      size:
+        typeof item.size === "number" && Number.isFinite(item.size)
+          ? item.size
+          : Number(String(item.size || 0)) || 0,
+      mimeType: asText(item.mimeType) || undefined,
+      uploadedAt: asText(item.uploadedAt) || undefined,
+    }))
+    .filter((item) => item.name || item.path);
+}
+
+function cleanHeadingText(value: string) {
+  return value
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
+    .replace(/[*_~]+/g, "")
+    .trim();
+}
+
+function extractThinkingHeading(text: string) {
+  const markdown = text.replace(/\r\n?/g, "\n");
+
+  const html = markdown.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
+  if (html?.[1]) {
+    const value = cleanHeadingText(html[1].replace(/<[^>]+>/g, " "));
+    if (value) return value;
+  }
+
+  const atx = markdown.match(/^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/m);
+  if (atx?.[1]) {
+    const value = cleanHeadingText(atx[1]);
+    if (value) return value;
+  }
+
+  const setext = markdown.match(/^([^\n]+)\n(?:=+|-+)\s*$/m);
+  if (setext?.[1]) {
+    const value = cleanHeadingText(setext[1]);
+    if (value) return value;
+  }
+
+  return "";
+}
+
+function isStructuralDirectOpencodeEvent(metadata: Record<string, unknown>) {
+  const eventType = asText(metadata.eventType).toLowerCase();
+  return (
+    eventType === "message.updated" ||
+    eventType === "message.part.updated" ||
+    eventType === "message.part.delta" ||
+    eventType === "message.part.removed" ||
+    eventType === "message.final" ||
+    eventType === "session.status" ||
+    eventType === "session.idle"
+  );
+}
+
+function resolveOpencodeEventMessageId(metadata: Record<string, unknown>) {
+  const explicit = asText(metadata.messageId);
+  if (explicit) return explicit;
+  const eventInfo = getOpencodeEventInfo(metadata);
+  const message = toRecord(eventInfo.properties.message);
+  const info = toRecord(eventInfo.properties.info);
+  return (
+    asText(message.id) ||
+    asText(message.messageID) ||
+    asText(info.id) ||
+    asText(info.messageID)
+  );
+}
+
+function createDirectTurnDraft(
+  userText = "",
+  attachments?: UploadedTaskAttachment[],
+  userMessageKey?: string,
+): DirectTurnDraft {
+  return {
+    userText,
+    attachments,
+    userMessageKey,
+    assistantParts: [],
+    assistantPartIndex: new Map<string, number>(),
+    assistantMessageIds: new Set<string>(),
+    working: false,
+    messageKey: userMessageKey,
+  };
+}
+
+function normalizeDirectText(value: string) {
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
+function getDirectDiffSignature(
+  payload: ReturnType<typeof extractDiffPayload>,
+): string | null {
+  if (payload.kind === "structured") {
+    if (payload.files.length === 0) return null;
+    try {
+      return `structured:${JSON.stringify(payload.files)}`;
+    } catch {
+      return `structured:${payload.files.map((file) => file.file).join("|")}`;
+    }
+  }
+  if (payload.kind === "text") {
+    const trimmed = payload.text.trim();
+    return trimmed ? `text:${trimmed}` : null;
+  }
+  return null;
+}
+
+function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
+  const directTurns: DirectTurnDraft[] = [];
+  const assistantMessageToTurn = new Map<string, number>();
+  const fallbackItems: ChatItem[] = [];
+  const seenDiffSignatures = new Set<string>();
+
+  const ensureTurn = () => {
+    if (directTurns.length === 0) {
+      directTurns.push(createDirectTurnDraft());
+    }
+    return directTurns[directTurns.length - 1]!;
+  };
+
+  const ensureTurnForMessage = (messageId?: string) => {
+    if (messageId) {
+      const existingIndex = assistantMessageToTurn.get(messageId);
+      if (existingIndex !== undefined) {
+        return directTurns[existingIndex]!;
+      }
+    }
+    const turn = ensureTurn();
+    if (messageId) {
+      assistantMessageToTurn.set(messageId, directTurns.length - 1);
+      turn.assistantMessageIds.add(messageId);
+    }
+    return turn;
+  };
+
+  const upsertTurnPart = (turn: DirectTurnDraft, key: string, part: OpencodeTurnPart) => {
+    const existingIndex = turn.assistantPartIndex.get(key);
+    if (existingIndex === undefined) {
+      turn.assistantPartIndex.set(key, turn.assistantParts.length);
+      turn.assistantParts.push(part);
+      return;
+    }
+    turn.assistantParts[existingIndex] = part;
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+
+    if (message.type === "user_input" || message.type === "user_response") {
+      directTurns.push(
+        createDirectTurnDraft(
+          message.content || "",
+          extractUserAttachmentsFromMetadata(message.metadata),
+          message.messageKey,
+        ),
+      );
+      continue;
+    }
+
+    if (message.type === "error") {
+      fallbackItems.push({
+        kind: "agent",
+        markdown: `**错误**\n\n> ${message.message || message.content || "请求失败，请稍后重试"}`,
+        messageKey: message.messageKey,
+      });
+      continue;
+    }
+
+    if (message.type !== "opencode_event") {
+      continue;
+    }
+
+    const metadata = toRecord(message.metadata);
+    if (!isStructuralDirectOpencodeEvent(metadata)) {
+      continue;
+    }
+
+    const eventInfo = getOpencodeEventInfo(metadata);
+    const eventType = eventInfo.eventType;
+    const messageId = resolveOpencodeEventMessageId(metadata);
+    const content = (message.content || "").trim();
+    const role =
+      eventInfo.role ||
+      asText(toRecord(eventInfo.properties.info).role).toLowerCase();
+
+    if (eventType === "session.status" || eventType === "session.idle") {
+      const statusValue =
+        asText(toRecord(eventInfo.properties.status).type).toLowerCase() ||
+        asText(eventInfo.properties.status).toLowerCase() ||
+        (eventType === "session.idle" ? "idle" : "");
+      if (directTurns.length > 0) {
+        const currentTurn = directTurns[directTurns.length - 1]!;
+        currentTurn.working = statusValue !== "idle";
+      }
+      continue;
+    }
+
+    if (eventType === "message.updated") {
+      if (role !== "assistant") {
+        continue;
+      }
+      const turn = ensureTurnForMessage(messageId);
+      turn.messageKey = turn.messageKey || message.messageKey;
+      const completedAt = asText(toRecord(toRecord(eventInfo.properties.info).time).completed);
+      if (completedAt) {
+        turn.working = false;
+      }
+      continue;
+    }
+
+    if (role && role !== "assistant") {
+      continue;
+    }
+
+    const turn = ensureTurnForMessage(messageId);
+    turn.messageKey = turn.messageKey || message.messageKey;
+
+    if (eventType === "message.final") {
+      const partId = asText(eventInfo.part.id) || asText(metadata.partId) || "final";
+      if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
+        continue;
+      }
+      upsertTurnPart(turn, `text:${messageId || "assistant"}:${partId}`, {
+        kind: "text",
+        markdown: content,
+        messageKey: message.messageKey,
+        partId,
+      });
+      turn.working = false;
+      continue;
+    }
+
+    if (eventType !== "message.part.updated" && eventType !== "message.part.delta") {
+      continue;
+    }
+
+    const partId = asText(eventInfo.part.id) || asText(metadata.partId) || `${eventInfo.partType || "part"}-${index}`;
+    const partType = eventInfo.partType;
+    if (partType === "text") {
+      if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
+        continue;
+      }
+      upsertTurnPart(turn, `text:${messageId || "assistant"}:${partId}`, {
+        kind: "text",
+        markdown: content,
+        messageKey: message.messageKey,
+        partId,
+      });
+      const end = asNumericValue(toRecord(eventInfo.part.time).end);
+      if (end === null) {
+        turn.working = true;
+      }
+      continue;
+    }
+
+    if (partType === "reasoning") {
+      upsertTurnPart(turn, `reasoning:${messageId || "assistant"}:${partId}`, {
+        kind: "reasoning",
+        markdown: content,
+        messageKey: message.messageKey,
+        partId,
+      });
+      const heading = extractThinkingHeading(content);
+      if (heading) {
+        turn.thinkingLabel = heading;
+      }
+      const end = asNumericValue(toRecord(eventInfo.part.time).end);
+      if (end === null) {
+        turn.working = true;
+      }
+      continue;
+    }
+
+    if (partType === "tool") {
+      const toolName = eventInfo.toolName.toLowerCase();
+      if (toolName === "apply_patch") {
+        const signature = getDirectDiffSignature(extractDiffPayload(metadata));
+        if (!signature || seenDiffSignatures.has(signature)) {
+          continue;
+        }
+        seenDiffSignatures.add(signature);
+      }
+      const diffId = message.messageKey || `${messageId || "assistant"}:${partId}`;
+      upsertTurnPart(turn, `tool:${messageId || "assistant"}:${partId}`, {
+        kind: "tool",
+        eventType,
+        event: eventInfo.event,
+        content: message.content || "",
+        metadata,
+        messageIndex: index,
+        diffId,
+        messageKey: message.messageKey,
+        partId,
+      });
+      const toolStatus = asText(toRecord(eventInfo.part.state).status).toLowerCase();
+      if (toolStatus === "pending" || toolStatus === "running") {
+        turn.working = true;
+      }
+    }
+  }
+
+  const items: ChatItem[] = [];
+  for (const turn of directTurns) {
+    const assistantParts = turn.assistantParts.filter((part) =>
+      part.kind === "tool" ? Boolean(part.eventType) : Boolean(part.markdown.trim()),
+    );
+    if (!turn.userText.trim() && assistantParts.length === 0 && !turn.working) {
+      continue;
+    }
+    items.push({
+      kind: "opencode_turn",
+      userText: turn.userText,
+      attachments: turn.attachments,
+      userMessageKey: turn.userMessageKey,
+      assistantParts,
+      working: turn.working,
+      thinkingLabel: turn.thinkingLabel,
+      messageKey: turn.messageKey || turn.userMessageKey,
+    });
+  }
+
+  return items.length > 0 ? [...fallbackItems, ...items] : buildLegacyChatItems(messages);
+}
+
+export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
+  if (!messages.some((message) => message.type === "opencode_event")) {
+    return buildLegacyChatItems(messages);
+  }
+  return buildDirectOpencodeChatItems(messages);
+}
+
 function MessageBubble({
   item,
   onOpenDiffPreview,
@@ -1617,6 +2006,84 @@ function MessageBubble({
     messageIndex?: number | null;
   }) => void;
 }) {
+  if (item.kind === "opencode_turn") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full space-y-4"
+        data-message-key={item.messageKey}
+      >
+        <div className="w-full flex justify-end" data-message-key={item.userMessageKey}>
+          <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+            {item.userText ? (
+              <span className="whitespace-pre-wrap break-words">{item.userText}</span>
+            ) : null}
+            {item.attachments?.length ? (
+              <AttachmentChipList attachments={item.attachments} tone="inverse" />
+            ) : null}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {item.assistantParts.map((part, index) => {
+            if (part.kind === "tool") {
+              return (
+                <div key={part.partId || part.messageKey || `tool-${index}`}>
+                  <OpencodeToolCard
+                    item={{
+                      kind: "opencode_tool",
+                      eventType: part.eventType,
+                      event: part.event,
+                      content: part.content,
+                      metadata: part.metadata,
+                      messageIndex: part.messageIndex,
+                      diffId: part.diffId,
+                      messageKey: part.messageKey,
+                    }}
+                    onOpenDiffPreview={onOpenDiffPreview}
+                  />
+                </div>
+              );
+            }
+
+            if (part.kind === "reasoning") {
+              return (
+                <div
+                  key={part.partId || part.messageKey || `reasoning-${index}`}
+                  className="max-w-none text-sm leading-7 text-muted-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
+                >
+                  <Streamdown>{part.markdown}</Streamdown>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={part.partId || part.messageKey || `text-${index}`}
+                className="max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
+              >
+                <Streamdown>{part.markdown}</Streamdown>
+              </div>
+            );
+          })}
+
+          {item.working ? (
+            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-foreground/80">
+              <span className="bg-gradient-to-r from-slate-500 via-slate-900 to-slate-500 bg-[length:200%_100%] animate-shimmer text-transparent bg-clip-text">
+                思考中
+              </span>
+              {item.thinkingLabel ? (
+                <span className="text-muted-foreground">{item.thinkingLabel}</span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </motion.div>
+    );
+  }
+
   if (item.kind === "capsule") {
     const toneClass = "border-border/70 bg-muted/50 text-foreground/80";
     const segments =
@@ -1844,7 +2311,7 @@ function formatOpencodeEventLabel(eventType: string, stream: boolean): string {
   if (stream) return "OpenCode · 实时输出";
   if (!eventType) return "OpenCode";
   if (eventType === "message.final") return "OpenCode · 最终产出";
-  if (eventType === "session.idle") return "OpenCode · 执行完成";
+  if (eventType === "session.idle") return "OpenCode · 空闲";
   if (eventType === "session.status") return "OpenCode · 状态";
   return `OpenCode · ${eventType}`;
 }
@@ -1886,6 +2353,23 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asNumericValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 type OpencodeEventInfo = {
   eventType: string;
   event: Record<string, unknown>;
@@ -1893,6 +2377,7 @@ type OpencodeEventInfo = {
   part: Record<string, unknown>;
   partType: string;
   toolName: string;
+  role: string;
 };
 
 function getOpencodeEventInfo(
@@ -1906,6 +2391,7 @@ function getOpencodeEventInfo(
   const eventType = asText(metadata.eventType) || asText(event.type);
   const properties = toRecord(event.properties);
   const part = toRecord(properties.part);
+  const message = toRecord(properties.message);
   const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
   const toolName =
     asText(part.tool) || asText(part.name) || asText(properties.tool);
@@ -1916,6 +2402,8 @@ function getOpencodeEventInfo(
     part,
     partType,
     toolName,
+    role:
+      (asText(message.role) || asText(properties.role) || asText(part.role)).toLowerCase(),
   };
 }
 

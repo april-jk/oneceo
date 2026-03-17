@@ -2405,11 +2405,11 @@ export class OpencodeRemoteService {
     text: string;
     delta: string;
     updatedAt: number;
-  }): { streamKey: string; text: string; resetFrom?: string } {
+  }): { streamKey: string; text: string; delta: string; resetFrom?: string } {
     const streamKey = this.buildTextStreamKey(input.taskSessionId, input.opencodeSessionId, input.partId);
     const previous = this.textStreams.get(streamKey);
     if (previous?.truncated) {
-      return { streamKey, text: previous.text };
+      return { streamKey, text: previous.text, delta: '' };
     }
 
     let nextText = input.text;
@@ -2423,6 +2423,14 @@ export class OpencodeRemoteService {
     }
 
     const previousText = previous?.text || '';
+    let emittedDelta = input.delta;
+    if (!emittedDelta && nextText) {
+      if (previousText && nextText.startsWith(previousText)) {
+        emittedDelta = nextText.slice(previousText.length);
+      } else if (!previousText) {
+        emittedDelta = nextText;
+      }
+    }
     const isReset =
       previousText &&
       nextText &&
@@ -2457,6 +2465,7 @@ export class OpencodeRemoteService {
     return {
       streamKey,
       text: entry.text,
+      delta: emittedDelta,
       resetFrom: isReset ? previousText : undefined,
     };
   }
@@ -4015,7 +4024,7 @@ export class OpencodeRemoteService {
           opencodeSessionId: textStream.opencodeSessionId,
           eventType,
           partId: textStream.partId,
-          delta: textStream.delta || null,
+          delta: stream.delta || null,
           text: stream.text.slice(-120),
           textEvents: artifact.textEvents,
           promptedAt: artifact.promptedAt,
@@ -4039,12 +4048,12 @@ export class OpencodeRemoteService {
 
       this.streamBroadcastMeta.set(stream.streamKey, metadata);
       // 直通/实时增量：优先推送当前片段，避免等待广播节流。
-      const immediateContent = textStream.delta || stream.text;
+      const immediateContent = stream.delta || stream.text;
       if (immediateContent) {
         const immediateMeta = {
           ...metadata,
-          streamDelta: Boolean(textStream.delta),
-          source: textStream.delta ? 'stream_delta' : metadata.source,
+          streamDelta: Boolean(stream.delta),
+          source: stream.delta ? 'stream_delta' : metadata.source,
         };
         void this.notify({
           taskSessionId: session.id,

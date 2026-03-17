@@ -2695,6 +2695,139 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
   }
 }
 
+function collectPatchTargetFilesFromText(value: string): string[] {
+  if (!value.trim()) return [];
+  const pattern =
+    /^\*\*\* (?:Update|Add|Delete) File: (.+)$|^diff --git a\/(.+?) b\/.+$/gm;
+  const files = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value))) {
+    const candidate = (match[1] || match[2] || "").trim();
+    if (candidate) {
+      files.add(candidate);
+    }
+  }
+  return Array.from(files);
+}
+
+function summarizeTooltipLines(lines: Array<string | null | undefined>) {
+  return lines
+    .map((line) => asText(line).trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function buildOpencodeAtomicTooltip(input: {
+  eventType: string;
+  toolName: string;
+  properties: Record<string, unknown>;
+  toolInput: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  output?: string;
+}): string {
+  const toolKey = input.toolName.toLowerCase();
+  const properties = input.properties;
+  const toolInput = input.toolInput;
+  const metadata = input.metadata || {};
+  const output = asText(input.output);
+
+  const filePath =
+    asText(toolInput.filePath) ||
+    asText(toolInput.path) ||
+    asText(properties.file) ||
+    asText(properties.path);
+  const baseCommand =
+    asText(toolInput.command) ||
+    asText(toolInput.cmd) ||
+    (Array.isArray((toolInput as Record<string, unknown>).args)
+      ? ((toolInput as Record<string, unknown>).args as unknown[])
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean)
+          .join(" ")
+      : "") ||
+    (Array.isArray((properties as Record<string, unknown>).argv)
+      ? ((properties as Record<string, unknown>).argv as unknown[])
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean)
+          .join(" ")
+      : "") ||
+    asText(properties.command) ||
+    asText(properties.cmd);
+  const cwd = asText(toolInput.cwd) || asText(properties.cwd);
+  const pattern = asText(toolInput.pattern) || asText(properties.pattern);
+  const url = asText(toolInput.url) || asText(properties.url);
+
+  if (toolKey === "bash" || input.eventType === "command.executed") {
+    return summarizeTooltipLines([
+      baseCommand ? `命令: ${baseCommand}` : "",
+      cwd ? `目录: ${cwd}` : "",
+    ]);
+  }
+
+  if (toolKey === "read") {
+    return filePath ? `读取文件: ${filePath}` : "";
+  }
+
+  if (toolKey === "write") {
+    return filePath ? `写入文件: ${filePath}` : "";
+  }
+
+  if (toolKey === "edit") {
+    return filePath ? `编辑文件: ${filePath}` : "";
+  }
+
+  if (toolKey === "grep") {
+    return summarizeTooltipLines([
+      pattern ? `搜索模式: ${pattern}` : "",
+      filePath ? `范围: ${filePath}` : "",
+    ]);
+  }
+
+  if (toolKey === "glob") {
+    return summarizeTooltipLines([
+      pattern ? `匹配模式: ${pattern}` : "",
+      filePath ? `范围: ${filePath}` : "",
+    ]);
+  }
+
+  if (toolKey === "list") {
+    return filePath ? `列出目录: ${filePath}` : "";
+  }
+
+  if (toolKey === "webfetch") {
+    return url ? `抓取地址: ${url}` : "";
+  }
+
+  if (toolKey === "apply_patch") {
+    const diffPayload = extractDiffPayload(metadata);
+    const files =
+      diffPayload.kind === "structured"
+        ? diffPayload.files.map((file) => file.file).filter(Boolean)
+        : diffPayload.kind === "text"
+          ? collectPatchTargetFilesFromText(diffPayload.text)
+          : collectPatchTargetFilesFromText(output);
+    if (files.length === 0) {
+      return "应用补丁";
+    }
+    return summarizeTooltipLines([
+      "补丁目标文件:",
+      ...files.slice(0, 6).map((file) => `- ${file}`),
+      files.length > 6 ? `- 以及另外 ${files.length - 6} 个文件` : "",
+    ]);
+  }
+
+  if (input.eventType.startsWith("file.")) {
+    return filePath ? `文件路径: ${filePath}` : "";
+  }
+
+  if (toolKey === "task") {
+    const description = asText(toolInput.description) || asText(properties.description);
+    return description ? `子任务: ${description}` : "";
+  }
+
+  return "";
+}
+
 function OpencodeToolCard({
   item,
   onOpenDiffPreview,
@@ -2784,6 +2917,14 @@ function OpencodeToolCard({
     asText(input.description) ||
     asText(properties.command) ||
     asText(properties.cmd);
+  const explanationText = buildOpencodeAtomicTooltip({
+    eventType,
+    toolName: toolName || "",
+    properties,
+    toolInput: input,
+    metadata,
+    output,
+  });
   if (!toolName) {
     if (eventType.startsWith("file.")) {
       const filePath = asText(properties.file) || asText(properties.path);
@@ -2843,7 +2984,11 @@ function OpencodeToolCard({
           }
           className="text-left"
         >
-          <EventCapsule icon={FileDiff} text="Diff · 点击查看更改" />
+          <EventCapsule
+            icon={FileDiff}
+            text="Diff · 点击查看更改"
+            title={explanationText || undefined}
+          />
         </button>
       </motion.div>
     );
@@ -3114,12 +3259,14 @@ function OpencodeToolCard({
             <EventCapsule
               icon={toolKey === "write" ? FilePlus : FilePenLine}
               text={capsuleText}
+              title={explanationText || undefined}
             />
           </button>
         ) : (
           <EventCapsule
             icon={toolKey === "write" ? FilePlus : FilePenLine}
             text={capsuleText}
+            title={explanationText || undefined}
           />
         )}
       </motion.div>
@@ -3149,7 +3296,7 @@ function OpencodeToolCard({
           <EventCapsule
             icon={Terminal}
             text="Shell 执行"
-            title={commandHint || undefined}
+            title={explanationText || commandHint || undefined}
           />
           {commandText ? (
             <div className="rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
@@ -3196,12 +3343,14 @@ function OpencodeToolCard({
             <EventCapsule
               icon={FileText}
               text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+              title={explanationText || undefined}
             />
           </button>
         ) : (
           <EventCapsule
             icon={FileText}
             text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+            title={explanationText || undefined}
           />
         )}
       </motion.div>
@@ -3218,7 +3367,7 @@ function OpencodeToolCard({
       <EventCapsule
         icon={toolKey === "bash" ? Terminal : FileText}
         text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`}
-        title={toolKey === "bash" ? commandHint || undefined : undefined}
+        title={explanationText || (toolKey === "bash" ? commandHint || undefined : undefined)}
       />
     </motion.div>
   );

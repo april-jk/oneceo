@@ -3852,6 +3852,18 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     if (filterSessionId && msgOpencodeSessionId && msgOpencodeSessionId !== filterSessionId) {
       return;
     }
+    if (
+      (payload.eventType === 'message.part.updated' || payload.eventType === 'message.part.delta') &&
+      (() => {
+        const properties = pickRecord(payload.event?.properties);
+        const part = pickRecord(properties.part);
+        const partType = asText(part.type) || asText(properties.type);
+        const normalized = partType.trim().toLowerCase();
+        return normalized === 'text' || normalized === 'reasoning';
+      })()
+    ) {
+      return;
+    }
     const projected = opencodeEventStreamService.projectForClient({
       orchestratorSessionId,
       opencodeSessionId: msgOpencodeSessionId || undefined,
@@ -3909,9 +3921,6 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   });
   const unsubscribeTerminal = opencodeRemoteService.subscribe(({ taskSessionId, message }) => {
     if (taskSessionId !== sessionId) {
-      return;
-    }
-    if (message.type === 'opencode_event') {
       return;
     }
     const metadata = pickRecord(message.metadata);

@@ -21,6 +21,8 @@ import {
   FileText,
   FileDiff,
   Terminal,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -45,6 +47,11 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   useTaskCreationAgent,
@@ -1270,6 +1277,18 @@ type OpencodeTurnPart =
       partId?: string;
     };
 
+export type DirectMarkdownSegment =
+  | {
+      kind: "markdown";
+      markdown: string;
+    }
+  | {
+      kind: "foldable";
+      markdown: string;
+      summary: string;
+      lineCount: number;
+    };
+
 type CapsuleTone =
   | "system"
   | "intent"
@@ -1753,6 +1772,131 @@ function normalizeDirectText(value: string) {
   return value.replace(/\r\n/g, "\n").trim();
 }
 
+function countDirectMarkdownLines(value: string) {
+  const normalized = value.replace(/\r\n?/g, "\n");
+  if (!normalized.trim()) return 0;
+  return normalized.split("\n").length;
+}
+
+function isLongDirectMarkdown(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return false;
+  return (
+    countDirectMarkdownLines(normalized) >= 14 || normalized.length >= 600
+  );
+}
+
+function buildDirectMarkdownFoldSummary(
+  label: string,
+  markdown: string,
+  lineCountOverride?: number,
+) {
+  const lineCount = lineCountOverride ?? countDirectMarkdownLines(markdown);
+  return {
+    kind: "foldable" as const,
+    markdown,
+    lineCount,
+    summary: `${label} · ${lineCount} 行`,
+  };
+}
+
+function buildFencedCodeFoldSegment(
+  fullMatch: string,
+  languageHint: string,
+  body: string,
+): DirectMarkdownSegment | null {
+  if (!isLongDirectMarkdown(body)) {
+    return null;
+  }
+  const language = languageHint.trim().toLowerCase();
+  if (language === "diff" || language === "patch") {
+    return buildDirectMarkdownFoldSummary(
+      "Diff",
+      fullMatch,
+      countDirectMarkdownLines(body.trimEnd()),
+    );
+  }
+  if (language) {
+    return buildDirectMarkdownFoldSummary(
+      `${language} 代码`,
+      fullMatch,
+      countDirectMarkdownLines(body.trimEnd()),
+    );
+  }
+  return buildDirectMarkdownFoldSummary(
+    "代码块",
+    fullMatch,
+    countDirectMarkdownLines(body.trimEnd()),
+  );
+}
+
+function buildRawMarkdownFoldSegment(
+  markdown: string,
+): DirectMarkdownSegment | null {
+  const trimmed = markdown.trim();
+  if (!isLongDirectMarkdown(trimmed)) {
+    return null;
+  }
+  if (
+    /^\*\*\* Begin Patch/m.test(trimmed) ||
+    /^diff --git\b/m.test(trimmed) ||
+    (/^@@/m.test(trimmed) && /^[-+ ]/m.test(trimmed))
+  ) {
+    return buildDirectMarkdownFoldSummary("补丁", trimmed);
+  }
+  return null;
+}
+
+export function buildDirectMarkdownSegments(
+  markdown: string,
+): DirectMarkdownSegment[] {
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  if (!normalized.trim()) {
+    return [];
+  }
+
+  const segments: DirectMarkdownSegment[] = [];
+  const fencePattern = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let cursor = 0;
+  let matchedFence = false;
+
+  const pushMarkdownSegment = (value: string) => {
+    if (!value.trim()) return;
+    segments.push({
+      kind: "markdown",
+      markdown: value,
+    });
+  };
+
+  let match: RegExpExecArray | null;
+  while ((match = fencePattern.exec(normalized))) {
+    matchedFence = true;
+    const fullMatch = match[0];
+    const languageHint = match[1] || "";
+    const body = match[2] || "";
+    const start = match.index ?? 0;
+    pushMarkdownSegment(normalized.slice(cursor, start));
+    const folded = buildFencedCodeFoldSegment(fullMatch, languageHint, body);
+    if (folded) {
+      segments.push(folded);
+    } else {
+      pushMarkdownSegment(fullMatch);
+    }
+    cursor = start + fullMatch.length;
+  }
+
+  pushMarkdownSegment(normalized.slice(cursor));
+
+  if (!matchedFence) {
+    const folded = buildRawMarkdownFoldSegment(normalized);
+    if (folded) {
+      return [folded];
+    }
+  }
+
+  return segments;
+}
+
 function getDirectDiffSignature(
   payload: ReturnType<typeof extractDiffPayload>,
 ): string | null {
@@ -1968,7 +2112,11 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
   for (const turn of directTurns) {
     const assistantParts = turn.assistantParts.filter((part) =>
-      part.kind === "tool" ? Boolean(part.eventType) : Boolean(part.markdown.trim()),
+      part.kind === "tool"
+        ? Boolean(part.eventType)
+        : part.kind === "reasoning"
+          ? false
+          : Boolean(part.markdown.trim()),
     );
     if (!turn.userText.trim() && assistantParts.length === 0 && !turn.working) {
       continue;
@@ -1993,6 +2141,85 @@ export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
     return buildLegacyChatItems(messages);
   }
   return buildDirectOpencodeChatItems(messages);
+}
+
+function DirectFoldableMarkdownBlock({
+  segment,
+  muted = false,
+}: {
+  segment: Extract<DirectMarkdownSegment, { kind: "foldable" }>;
+  muted?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const bodyClassName = muted
+    ? "max-w-none text-sm leading-7 text-muted-foreground [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-3 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
+    : "max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-3 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold";
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="rounded-lg border border-border/70 bg-muted/30"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-foreground/85">
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span>{segment.summary}</span>
+        <span className="ml-auto text-[11px] text-muted-foreground">
+          {open ? "收起" : "展开"}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t border-border/60 px-3 py-3">
+        <div className={bodyClassName}>
+          <Streamdown>{segment.markdown}</Streamdown>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function DirectMarkdownMessage({
+  markdown,
+  muted = false,
+}: {
+  markdown: string;
+  muted?: boolean;
+}) {
+  const segments = useMemo(
+    () => buildDirectMarkdownSegments(markdown),
+    [markdown],
+  );
+  const bodyClassName = muted
+    ? "max-w-none text-sm leading-7 text-muted-foreground [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-3 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
+    : "max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/60 [&_pre]:bg-muted/40 [&_pre]:p-3 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold";
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      {segments.map((segment, index) =>
+        segment.kind === "foldable" ? (
+          <DirectFoldableMarkdownBlock
+            key={`foldable-${segment.summary}-${index}`}
+            segment={segment}
+            muted={muted}
+          />
+        ) : (
+          <div
+            key={`markdown-${index}`}
+            className={bodyClassName}
+          >
+            <Streamdown>{segment.markdown}</Streamdown>
+          </div>
+        ),
+      )}
+    </div>
+  );
 }
 
 function MessageBubble({
@@ -2048,24 +2275,11 @@ function MessageBubble({
               );
             }
 
-            if (part.kind === "reasoning") {
-              return (
-                <div
-                  key={part.partId || part.messageKey || `reasoning-${index}`}
-                  className="max-w-none text-sm leading-7 text-muted-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
-                >
-                  <Streamdown>{part.markdown}</Streamdown>
-                </div>
-              );
-            }
-
             return (
-              <div
+              <DirectMarkdownMessage
                 key={part.partId || part.messageKey || `text-${index}`}
-                className="max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold"
-              >
-                <Streamdown>{part.markdown}</Streamdown>
-              </div>
+                markdown={part.markdown}
+              />
             );
           })}
 

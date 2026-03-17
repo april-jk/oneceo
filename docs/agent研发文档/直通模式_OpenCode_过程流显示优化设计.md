@@ -1,6 +1,6 @@
 # 直通模式 OpenCode 过程流显示优化设计
 
-更新时间：2026-03-17
+更新时间：2026-03-17（补充 Codex / executor_event 展示规则）
 
 ## 1. 背景
 
@@ -49,7 +49,7 @@
 
 ## 3. 目标
 
-本轮目标仅限 `sandbox 直通 opencode` 模式：
+本轮目标优先覆盖 `sandbox 直通 opencode`，并补充 `codex executor_event` 的兼容展示：
 
 1. 对话过程看起来更流畅
 2. 用户能看见“正在做什么”和“做过什么”
@@ -57,6 +57,8 @@
 4. 原子级过程消息仍然可见
 5. 大段代码/长 diff 不再撑满整个对话区
 6. 页面语义继续尽量贴近 OpenCode Web
+7. `Codex` 直通模式不再把 `thread.started / item.started / item.completed` 这类结构事件直接显示给用户
+8. `Codex` 的控制面回执与执行正文分层显示，避免主对话区出现 `Codex 会话已建立...`、`EXECUTOR_EVENT` 等内部术语
 
 本轮不处理：
 
@@ -65,6 +67,65 @@
 3. 彻底重做对话 UI 结构
 
 ## 4. 设计原则
+
+### 4.0 Executor 事件兼容原则
+
+`Codex` 当前通过统一的 `executor_event` 进入前端，这类消息不是 OpenCode 的 `message.part.*` 结构，因此不能直接复用 OpenCode turn 还原逻辑。
+
+本轮对 `executor_event` 采用更保守的兼容策略：
+
+1. 保留用户真正关心的阶段信号
+2. 抑制纯结构性事件
+3. 保留有实际文本产出的事件
+4. 控制面回执不进入主对话正文
+
+具体规则：
+
+1. `turn.started`
+   - 显示为轻量进度胶囊 `Codex 开始执行`
+2. `turn.completed`
+   - 显示为终态胶囊 `Codex 执行完成`
+3. `turn.failed` / `turn.interrupted`
+   - 显示为错误胶囊
+4. `thread.started`
+   - 不显示
+5. `item.started`
+   - 不显示
+6. `item.completed`
+   - 仅当事件自身携带高价值正文时显示
+   - 如果只是 `Codex 事件: item.completed` 这类占位文本，则不显示
+7. `EXECUTOR_SESSION_READY` / `EXECUTOR_INPUT_ACCEPTED`
+   - 仍可作为 runtime / 调试链路存在
+   - 但不在主对话区正文中显示
+8. 本轮 `Codex` 兼容规则只挂在 `executor_event` 与 `executor=codex` 分支
+   - 不修改 `opencode_event -> opencode_turn` 的主渲染路径
+   - 不允许因为 Codex 过滤规则影响 OpenCode 的过程流展示
+
+### 4.0.1 Codex 原子消息增强
+
+在确认 Codex CLI 原始事件后，`item.completed` 并不只有最终答复，还包含：
+
+1. `reasoning`
+2. `agent_message`
+3. `command_execution`
+
+其中用户最能感知“过程正在推进”的，是 `reasoning` 与最终 `agent_message`。
+
+本轮增强策略：
+
+1. `reasoning` 类型
+   - 保留为独立原子消息
+   - 以 `Codex` 作者头部 + markdown 正文显示
+   - 示例：`Searching for agents`、`Planning initial single-file game`
+2. `agent_message` 类型
+   - 作为最终正文块显示
+   - 同样使用 `Codex` 作者头部
+3. `command_execution` 类型
+   - 当前仍保留为底层元数据，不默认全部铺到主对话区
+   - 相关字段需持久化：`itemType / command / exitCode / outputPreview`
+   - 这样后续若要补命令卡片，不需要再次改后端存储协议
+
+这样处理的目的不是让 Codex “更吵”，而是把真正有阅读价值的原子步骤稳定显示出来，同时把纯控制信号与低价值命令噪音继续留在调试层。
 
 ### 4.1 复用上游 message-part 语义
 

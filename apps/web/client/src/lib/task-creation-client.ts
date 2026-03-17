@@ -7,6 +7,8 @@ export type TaskCreationSessionSummary = {
   status?: string;
   stage?: string;
   phase?: string;
+  driver?: "altus" | "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "claudecode" | "codex";
   updatedAt?: string;
 };
 
@@ -173,9 +175,13 @@ export type TaskCreationSessionDetail = {
   status?: string;
   stage?: string;
   phase?: string;
+  driver?: "altus" | "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "claudecode" | "codex";
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
+    executor?: "opencode" | "claudecode" | "codex";
+    executorSessionId?: string;
     opencodeSessionId?: string;
     updatedAt?: string;
   };

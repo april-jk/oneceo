@@ -722,7 +722,7 @@ export default function Home() {
                     className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`}
                   />
                 }
-                text={`执行环境已接入（${runtime.orchestratorSessionId}）${runtime.latestType ? ` · ${runtime.latestType}` : ""}`}
+                text={`执行环境已接入（${runtime.orchestratorSessionId}）`}
               />
             )}
 
@@ -1221,7 +1221,7 @@ export type ChatItem =
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
-  | { kind: "agent"; markdown: string; messageKey?: string }
+  | { kind: "agent"; markdown: string; author?: string; messageKey?: string }
   | { kind: "agent_plain"; text: string; author?: string; messageKey?: string }
   | {
       kind: "capsule";
@@ -1386,7 +1386,11 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       .filter((item) => item.name || item.path);
   };
 
-  const pushAgentMarkdown = (markdown: string, messageKey?: string) => {
+  const pushAgentMarkdown = (
+    markdown: string,
+    messageKey?: string,
+    author?: string,
+  ) => {
     const normalized = normalizeForDedup(markdown);
     if (!normalized) return;
     const last = items[items.length - 1];
@@ -1395,13 +1399,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
     if (
       last?.kind === "agent" &&
-      normalizeForDedup(last.markdown) === normalized
+      normalizeForDedup(last.markdown) === normalized &&
+      (last.author || "") === (author || "")
     ) {
       return;
     }
     items.push({
       kind: "agent",
       markdown,
+      author,
       messageKey,
     });
   };
@@ -1525,6 +1531,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "status_update") {
       const label = message.content || "状态更新";
+      if (isCodexControlStatusLabel(label)) {
+        continue;
+      }
       const tone = message.tone || getCapsuleTone(label);
       if (isProgressStatusLabel(label)) {
         pushProgress(label, tone, message.messageKey);
@@ -1536,6 +1545,66 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           tone,
           messageKey: message.messageKey,
         });
+      }
+      continue;
+    }
+
+    if (message.type === "executor_event") {
+      const metadata = toRecord(message.metadata);
+      const event = toRecord(metadata.event);
+      const item = toRecord(event.item);
+      const eventType = asText(metadata.eventType).toLowerCase();
+      const itemType =
+        asText(metadata.itemType).toLowerCase() ||
+        asText(item.type).toLowerCase();
+      const content =
+        asText(item.text) ||
+        asText(item.content) ||
+        asText(item.message) ||
+        (message.content || "").trim();
+
+      if (eventType === "turn.started") {
+        pushProgress("Codex 开始执行", "execution", message.messageKey);
+        continue;
+      }
+
+      if (eventType === "turn.completed") {
+        flushProgress();
+        items.push({
+          kind: "capsule",
+          label: "Codex 执行完成",
+          tone: "execution",
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      if (eventType === "turn.failed" || eventType === "turn.interrupted") {
+        flushProgress();
+        items.push({
+          kind: "capsule",
+          label:
+            content ||
+            (eventType === "turn.interrupted" ? "Codex 执行已中断" : "Codex 执行失败"),
+          tone: "error",
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      flushProgress();
+      if (!content) {
+        continue;
+      }
+
+      if (
+        itemType === "reasoning" ||
+        itemType === "agent_message" ||
+        isLikelyMarkdownText(content)
+      ) {
+        pushAgentMarkdown(content, message.messageKey, "Codex");
+      } else {
+        pushAgentPlain(content, "Codex", message.messageKey);
       }
       continue;
     }
@@ -2396,8 +2465,15 @@ function MessageBubble({
       className="w-full"
       data-message-key={item.messageKey}
     >
-      <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold">
-        <Streamdown>{item.markdown}</Streamdown>
+      <div className="space-y-1.5 text-sm text-foreground">
+        {item.author ? (
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            {item.author}
+          </div>
+        ) : null}
+        <div className="max-w-none leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_strong]:font-semibold">
+          <Streamdown>{item.markdown}</Streamdown>
+        </div>
       </div>
     </motion.div>
   );
@@ -2519,6 +2595,29 @@ function getCapsuleTone(label: string): CapsuleTone {
   if (lower.includes("规划") || lower.includes("计划")) return "planning";
   if (lower.includes("执行")) return "execution";
   return "system";
+}
+
+function isCodexControlStatusLabel(label: string): boolean {
+  const text = label.trim().toLowerCase();
+  return (
+    text === "codex 会话已建立，正在等待执行..." ||
+    text === "codex 已接收输入，正在执行..."
+  );
+}
+
+function isLikelyMarkdownText(value: string): boolean {
+  const text = value.trim();
+  if (!text) return false;
+  return (
+    text.includes("```") ||
+    /^\s*\*\*[^*]+?\*\*/m.test(text) ||
+    /`[^`]+`/.test(text) ||
+    text.includes("\n\n") ||
+    /^\s*#{1,6}\s+/m.test(text) ||
+    /^\s*[-*+]\s+/m.test(text) ||
+    /^\s*\d+\.\s+/m.test(text) ||
+    /^\s*>\s+/m.test(text)
+  );
 }
 
 function formatOpencodeEventLabel(eventType: string, stream: boolean): string {

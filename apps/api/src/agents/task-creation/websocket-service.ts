@@ -11,7 +11,9 @@ import { getPublicErrorMessage } from '../../utils/error-response';
 import { taskCreationFileMemoryStore } from './file-memory-store';
 import { AwaitingUserInputError, isAwaitingUserInputError, isRecoverableAgentError } from './errors';
 import { randomUUID } from 'crypto';
+import { codexRemoteService } from '../../services/codex-remote-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
+import { sandboxExecutorRegistry } from '../../services/sandbox-executor-registry';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { taskCreationSessionDAO } from '../../db/dao';
 import { directModeEntryService } from '../../services/direct-mode-entry-service';
@@ -44,6 +46,7 @@ export class TaskCreationWebSocketService {
   private clarificationTimers: Map<string, NodeJS.Timeout> = new Map();
   private autoContinueCounts: Map<string, number> = new Map();
   private opencodeUnsubscribe: (() => void) | null = null;
+  private codexUnsubscribe: (() => void) | null = null;
 
   /**
    * 初始化 WebSocket 服务器
@@ -54,8 +57,22 @@ export class TaskCreationWebSocketService {
       console.error('[WebSocket] 服务异常:', error);
     });
     opencodeRemoteService.initialize();
+    codexRemoteService.initialize();
     if (!this.opencodeUnsubscribe) {
       this.opencodeUnsubscribe = opencodeRemoteService.subscribe(async ({ taskSessionId, message }) => {
+        this.sendToSessionClients(taskSessionId, {
+          type: message.type as any,
+          content: message.content,
+          metadata: message.metadata,
+          stage: message.stage as any,
+          phase: message.phase as any,
+          tone: message.tone as any,
+          sessionId: taskSessionId,
+        } as WebSocketMessage, { skipPersistence: true });
+      });
+    }
+    if (!this.codexUnsubscribe) {
+      this.codexUnsubscribe = codexRemoteService.subscribe(async ({ taskSessionId, message }) => {
         this.sendToSessionClients(taskSessionId, {
           type: message.type as any,
           content: message.content,
@@ -259,10 +276,19 @@ export class TaskCreationWebSocketService {
         plan: message.plan,
       } as Record<string, unknown>;
       const orchestratorSessionId = String(metadata.orchestratorSessionId || '').trim();
+      const executor = String(metadata.executor || '').trim();
+      const executorSessionId =
+        String(metadata.executorSessionId || '').trim() ||
+        String(metadata.opencodeSessionId || '').trim();
       const opencodeSessionId = String(metadata.opencodeSessionId || '').trim();
-      if (orchestratorSessionId || opencodeSessionId) {
+      if (executor) {
+        void taskCreationFileMemoryStore.updateSessionExecutor(sessionId, executor as any);
+      }
+      if (orchestratorSessionId || executorSessionId || opencodeSessionId) {
         void taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
           orchestratorSessionId: orchestratorSessionId || undefined,
+          executor: executor || undefined,
+          executorSessionId: executorSessionId || undefined,
           opencodeSessionId: opencodeSessionId || undefined,
         });
       }
@@ -564,6 +590,7 @@ export class TaskCreationWebSocketService {
 
     const orchestratorSessionId = String((message.metadata as any)?.orchestratorSessionId || '').trim();
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
+    const executor = sandboxExecutorRegistry.resolveExecutor((message.metadata as any)?.executor);
     const clientMessageKey = String((message.metadata as any)?.messageKey || '').trim() || undefined;
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
     const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
@@ -578,7 +605,6 @@ export class TaskCreationWebSocketService {
           '会话已创建'
         );
         await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
-        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
         await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
         await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
           stage: 'executing',
@@ -614,7 +640,6 @@ export class TaskCreationWebSocketService {
       }
       if (!createdSession) {
         await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
-        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
         await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
       }
 
@@ -751,7 +776,7 @@ export class TaskCreationWebSocketService {
         }
       }
 
-      const accepted = await opencodeRemoteService.sendUserInput({
+      const accepted = await sandboxExecutorRegistry.sendUserInput(executor, {
         taskSessionId,
         content: message.content || '',
         orchestratorSessionId: orchestratorSessionId || undefined,
@@ -766,9 +791,14 @@ export class TaskCreationWebSocketService {
         {
           type: 'opencode_status' as any,
           sessionId: taskSessionId,
-          content: 'OpenCode 已接收输入，正在执行...',
+          content:
+            accepted.executor === 'opencode'
+              ? 'OpenCode 已接收输入，正在执行...'
+              : `${accepted.executor} 已接收输入，正在执行...`,
           metadata: {
             orchestratorSessionId: accepted.orchestratorSessionId,
+            executor: accepted.executor,
+            executorSessionId: accepted.executorSessionId,
             opencodeSessionId: accepted.opencodeSessionId,
             executionMode: 'sandbox_direct',
           },
@@ -870,6 +900,10 @@ export class TaskCreationWebSocketService {
     if (this.opencodeUnsubscribe) {
       this.opencodeUnsubscribe();
       this.opencodeUnsubscribe = null;
+    }
+    if (this.codexUnsubscribe) {
+      this.codexUnsubscribe();
+      this.codexUnsubscribe = null;
     }
   }
 }

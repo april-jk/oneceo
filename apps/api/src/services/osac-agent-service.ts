@@ -24,6 +24,10 @@ type OpencodePartInput = {
   name?: string;
 };
 
+type ExecutorName = 'opencode' | 'codex' | 'claudecode';
+
+type ExecutorPartInput = OpencodePartInput;
+
 type OpencodeHttpResponse = {
   requestId?: string;
   status?: number;
@@ -96,6 +100,29 @@ function buildSyntheticMessage(
       orchestratorSessionId: sessionId,
     },
   };
+}
+
+function createOsacRequestId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeExecutorName(value: unknown): ExecutorName {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === 'codex') return 'codex';
+  if (normalized === 'claudecode') return 'claudecode';
+  return 'opencode';
+}
+
+function asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
+  const payload = message?.payload;
+  return payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+}
+
+function throwExecutorError(message: OsacMessage): never {
+  const payload = asPayloadRecord(message);
+  const errorCode = asString(payload.code) || 'executor_error';
+  const errorMessage = asString(payload.message) || 'executor request failed';
+  throw new Error(`${errorCode}: ${errorMessage}`);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -856,6 +883,236 @@ PY`;
     await touchSandbox(sessionId, 'opencode_prompt_accepted');
     return { opencodeSessionId: input.opencodeSessionId };
   }
+
+  async ensureExecutorRuntime(
+    sessionId: string,
+    input: { executor: ExecutorName | string; workspacePath?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_runtime');
+    auditOsacAction('EXECUTOR_RUNTIME_ENSURE', { sessionId, executor, requestId });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_RUNTIME_ENSURE',
+        payload: {
+          requestId,
+          executor,
+          workspacePath: input.workspacePath || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_RUNTIME_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      workspacePath: asString(payload.workspacePath) || input.workspacePath || undefined,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+    };
+  }
+
+  async createExecutorSession(
+    sessionId: string,
+    input: { executor: ExecutorName | string; workspacePath?: string; title?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_create');
+    auditOsacAction('EXECUTOR_SESSION_CREATE', { sessionId, executor, requestId });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_SESSION_CREATE',
+        payload: {
+          requestId,
+          executor,
+          workspacePath: input.workspacePath || undefined,
+          title: input.title || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_SESSION_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId),
+    };
+  }
+
+  async resumeExecutorSession(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string; workspacePath?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_resume');
+    auditOsacAction('EXECUTOR_SESSION_RESUME', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_SESSION_RESUME',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+          workspacePath: input.workspacePath || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_SESSION_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+    };
+  }
+
+  async sendExecutorInput(
+    sessionId: string,
+    input: {
+      executor: ExecutorName | string;
+      executorSessionId?: string;
+      workspacePath?: string;
+      parts: ExecutorPartInput[];
+    }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_input');
+    auditOsacAction('EXECUTOR_INPUT_SEND', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_INPUT_SEND',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId || undefined,
+          workspacePath: input.workspacePath || undefined,
+          parts: input.parts || [],
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_INPUT_ACCEPTED' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId || '',
+      status: asString(payload.status) || 'accepted',
+    };
+  }
+
+  async interruptExecutor(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_interrupt');
+    auditOsacAction('EXECUTOR_INTERRUPT', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_INTERRUPT',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_STATUS_RESPONSE' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+      status: asString(payload.status) || 'unknown',
+      running: Boolean(payload.running),
+    };
+  }
+
+  async getExecutorStatus(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_status');
+    auditOsacAction('EXECUTOR_STATUS_GET', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_STATUS_GET',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_STATUS_RESPONSE' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    const status = toRecord(payload.status);
+    return {
+      executor,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+      status: asString(status.status) || 'unknown',
+      running: Boolean(status.running),
+      workspacePath: asString(status.workspacePath) || undefined,
+      transport: asString(status.transport) || undefined,
+      lastEventType: asString(status.lastEventType) || undefined,
+      resolvedSessionId: asString(status.resolvedSessionId) || undefined,
+    };
+  }
+
   listMessages(sessionId: string, limit?: number) {
     return osacConnectionManager.listMessages(sessionId, limit);
   }

@@ -31,10 +31,12 @@ export class SandboxEnvironmentService {
     idempotencyKey?: string;
     bind?: Record<string, unknown>;
     envs?: Record<string, string>;
+    templateOverride?: string;
   }) {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+    const selectedTemplate = (input.templateOverride || e2bConfig.template).trim() || e2bConfig.template;
     const sandbox = await e2bConnector.createSandbox({
-      template: e2bConfig.template,
+      template: selectedTemplate,
       metadata: input.metadata || {},
       envs: input.envs,
       timeoutMs: e2bConfig.timeoutMs,
@@ -44,7 +46,7 @@ export class SandboxEnvironmentService {
 
     const securityProfile = this.buildSecurityProfile();
     const mapping = {
-      baseImage: e2bConfig.template,
+      baseImage: selectedTemplate,
       incrementalStorageDir: 'e2b',
       incrementalFileName: sandbox.sandboxId,
       incrementalFilePath: sandbox.sandboxId,
@@ -58,7 +60,7 @@ export class SandboxEnvironmentService {
       pendingArchiveUpdate: false,
       e2b: {
         sandboxId: sandbox.sandboxId,
-        template: e2bConfig.template,
+        template: selectedTemplate,
         timeoutMs: e2bConfig.timeoutMs,
         sandboxDomain: sandbox.sandboxDomain,
         trafficAccessToken: sandbox.trafficAccessToken || null,

@@ -1,6 +1,38 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
+export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+
+export function deriveSessionDriver(input: {
+  mode?: 'altus' | 'sandbox' | string;
+  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  fallbackDriver?: SessionDriver | string;
+}): SessionDriver | undefined {
+  const mode = typeof input.mode === 'string' ? input.mode.trim() : '';
+  const executor = typeof input.executor === 'string' ? input.executor.trim() : '';
+  const fallback = typeof input.fallbackDriver === 'string' ? input.fallbackDriver.trim() : '';
+
+  if (mode === 'altus') {
+    return 'altus';
+  }
+
+  if (mode === 'sandbox') {
+    if (executor === 'opencode' || executor === 'codex' || executor === 'claudecode') {
+      return executor;
+    }
+    if (fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+      return fallback;
+    }
+    return undefined;
+  }
+
+  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+    return fallback;
+  }
+
+  return undefined;
+}
+
 export interface FileSessionMessage {
   id: string;
   role: 'user' | 'agent' | 'system';
@@ -18,10 +50,13 @@ export interface FileSessionRecord {
   phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
   phaseCycle?: number;
   mode?: 'altus' | 'sandbox';
+  driver?: SessionDriver;
   executor?: 'opencode' | 'claudecode' | 'codex' | string;
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
+    executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    executorSessionId?: string;
     opencodeSessionId?: string;
     updatedAt?: string;
   };
@@ -282,6 +317,7 @@ class TaskCreationFileMemoryStore {
         phase: 'ideation',
         phaseCycle: 0,
         mode: 'altus',
+        driver: 'altus',
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -438,8 +474,25 @@ class TaskCreationFileMemoryStore {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      if (session.mode === mode) return;
+      if (session.mode === mode) {
+        const nextDriver = deriveSessionDriver({
+          mode,
+          executor: session.executor,
+          fallbackDriver: session.driver,
+        });
+        if (nextDriver && session.driver !== nextDriver) {
+          session.driver = nextDriver;
+          session.updatedAt = new Date().toISOString();
+          await this.writeMemory(memory);
+        }
+        return;
+      }
       session.mode = mode;
+      session.driver = deriveSessionDriver({
+        mode,
+        executor: session.executor,
+        fallbackDriver: session.driver,
+      });
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -451,8 +504,38 @@ class TaskCreationFileMemoryStore {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      if (session.executor === executor) return;
+      if (session.executor === executor) {
+        const nextDriver = deriveSessionDriver({
+          mode: session.mode,
+          executor,
+          fallbackDriver: session.driver,
+        });
+        if (nextDriver && session.driver !== nextDriver) {
+          session.driver = nextDriver;
+          session.updatedAt = new Date().toISOString();
+          await this.writeMemory(memory);
+        }
+        return;
+      }
       session.executor = executor;
+      session.driver = deriveSessionDriver({
+        mode: session.mode,
+        executor,
+        fallbackDriver: session.driver,
+      });
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
+    if (!driver) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.driver === driver) return;
+      session.driver = driver;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -460,7 +543,13 @@ class TaskCreationFileMemoryStore {
 
   async updateRuntimeBinding(
     sessionId: string,
-    runtime: { generation?: number; orchestratorSessionId?: string; opencodeSessionId?: string }
+    runtime: {
+      generation?: number;
+      orchestratorSessionId?: string;
+      executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      executorSessionId?: string;
+      opencodeSessionId?: string;
+    }
   ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -475,12 +564,35 @@ class TaskCreationFileMemoryStore {
           : currentOrchestrator;
       const orchestratorChanged =
         runtime.orchestratorSessionId !== undefined && nextOrchestrator !== currentOrchestrator;
+      const currentExecutor =
+        typeof current.executor === 'string' && current.executor.trim()
+          ? current.executor.trim()
+          : undefined;
+      const requestedExecutor =
+        runtime.executor !== undefined
+          ? String(runtime.executor || '').trim() || undefined
+          : runtime.opencodeSessionId !== undefined
+            ? 'opencode'
+            : currentExecutor;
+      const currentExecutorSessionId = current.executorSessionId || current.opencodeSessionId || undefined;
+      const nextExecutorSessionId =
+        runtime.executorSessionId !== undefined
+          ? runtime.executorSessionId || undefined
+          : runtime.opencodeSessionId !== undefined
+            ? runtime.opencodeSessionId || undefined
+            : orchestratorChanged
+              ? undefined
+              : currentExecutorSessionId;
       const nextOpencode =
         runtime.opencodeSessionId !== undefined
           ? runtime.opencodeSessionId || undefined
-          : orchestratorChanged
-            ? undefined
-            : current.opencodeSessionId;
+          : requestedExecutor === 'opencode'
+            ? runtime.executorSessionId !== undefined
+              ? runtime.executorSessionId || undefined
+              : orchestratorChanged
+                ? undefined
+                : current.opencodeSessionId || current.executorSessionId || undefined
+            : undefined;
       const currentGeneration =
         typeof current.generation === 'number' && Number.isFinite(current.generation)
           ? Math.max(0, Math.floor(current.generation))
@@ -503,9 +615,19 @@ class TaskCreationFileMemoryStore {
       session.runtime = {
         generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
+        executor: requestedExecutor,
+        executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,
         updatedAt: new Date().toISOString(),
       };
+      const derivedDriver = deriveSessionDriver({
+        mode: session.mode,
+        executor: session.executor || requestedExecutor,
+        fallbackDriver: session.driver,
+      });
+      if (derivedDriver) {
+        session.driver = derivedDriver;
+      }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -714,6 +836,23 @@ class TaskCreationFileMemoryStore {
     const memory = await this.readMemory();
     const candidates = memory.sessions
       .filter((session) => session.runtime?.opencodeSessionId === target)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return candidates[0] || null;
+  }
+
+  async findSessionByExecutorSessionId(executorSessionId: string): Promise<FileSessionRecord | null> {
+    const target = executorSessionId.trim();
+    if (!target) return null;
+
+    const memory = await this.readMemory();
+    const candidates = memory.sessions
+      .filter((session) => {
+        const runtime = session.runtime || {};
+        return (
+          runtime.executorSessionId === target ||
+          runtime.opencodeSessionId === target
+        );
+      })
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     return candidates[0] || null;
   }

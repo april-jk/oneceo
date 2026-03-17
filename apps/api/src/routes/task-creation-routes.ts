@@ -8,7 +8,11 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
+import {
+  deriveSessionDriver,
+  taskCreationFileMemoryStore,
+  type FileSessionRecord,
+} from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
@@ -215,6 +219,9 @@ function toSessionSummary(session: any) {
     stage: normalizedStage,
     phase: session.phase,
     phaseCycle: session.phaseCycle,
+    driver: session.driver,
+    mode: session.mode,
+    executor: session.executor,
     runtime: session.runtime,
     pendingQuestion: session.pendingQuestion,
     pendingOptions: session.pendingOptions,
@@ -249,7 +256,7 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
 function normalizeLiveSessionStage(
   session: Pick<
     FileSessionRecord,
-    'status' | 'stage' | 'mode' | 'executor' | 'runtime' | 'messages'
+    'status' | 'stage' | 'mode' | 'driver' | 'executor' | 'runtime' | 'messages'
   > | null | undefined
 ): NonNullable<FileSessionRecord['stage']> | undefined {
   const status = asText(session?.status);
@@ -259,8 +266,10 @@ function normalizeLiveSessionStage(
 
   const currentStage = asText(session?.stage);
   const mode = asText(session?.mode);
+  const driver = asText(session?.driver);
   const executor = asText(session?.executor);
   const hasRuntime = Boolean(asText(session?.runtime?.orchestratorSessionId));
+  const hasExecutorRuntime = Boolean(asText(session?.runtime?.executorSessionId));
   const hasOpencodeRuntime = Boolean(asText(session?.runtime?.opencodeSessionId));
   const hasUserInput = Array.isArray(session?.messages)
     ? session!.messages.some((message) => {
@@ -271,7 +280,18 @@ function normalizeLiveSessionStage(
 
   if (
     status === 'in_progress' &&
-    (mode === 'sandbox' || executor === 'opencode' || hasRuntime || hasOpencodeRuntime) &&
+    (
+      mode === 'sandbox' ||
+      driver === 'opencode' ||
+      driver === 'codex' ||
+      driver === 'claudecode' ||
+      executor === 'opencode' ||
+      executor === 'codex' ||
+      executor === 'claudecode' ||
+      hasRuntime ||
+      hasExecutorRuntime ||
+      hasOpencodeRuntime
+    ) &&
     hasUserInput
   ) {
     return 'executing';
@@ -309,9 +329,6 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     }
     console.warn('[TASK_SESSION_DB_HYDRATE_PARTIAL]', { sessionId, error });
   }
-  const hasOpencodeHistory = Array.isArray(messages)
-    ? messages.some((message) => asText(message.messageType).startsWith('opencode_'))
-    : false;
   const titleCandidate =
     taskDescription?.title ||
     messages?.find((m) => m.role === 'user')?.content ||
@@ -346,18 +363,34 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
       )
     : [];
   const inferredRuntime = inferRuntimeFromMessages(normalizedMessages, orchestratorSessionId);
+  const inferredExecutor =
+    asText(inferredRuntime.executor) || (inferredRuntime.executorSessionId ? 'opencode' : '');
+  const hasSandboxHistory = Array.isArray(messages)
+    ? messages.some((message) => {
+        const messageType = asText(message.messageType);
+        return (
+          messageType.startsWith('opencode_') ||
+          messageType.startsWith('codex_') ||
+          messageType === 'executor_event'
+        );
+      })
+    : false;
+  const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
 
   return {
     id: session.id,
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
     status,
     stage,
-    mode: hasOpencodeHistory ? 'sandbox' : undefined,
-    executor: hasOpencodeHistory ? 'opencode' : undefined,
+    mode: sandboxExecutor ? 'sandbox' : undefined,
+    executor: sandboxExecutor || undefined,
+    driver: sandboxExecutor ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor }) : undefined,
     runtime: orchestratorSessionId
       ? {
           generation: inferredRuntime.generation,
           orchestratorSessionId,
+          executor: inferredRuntime.executor || (inferredRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId,
           opencodeSessionId: inferredRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
         }
@@ -407,10 +440,20 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
     : [];
 
   const inferredRuntime = inferRuntimeFromMessages(normalizedRecentMessages, orchestratorSessionId);
-  const hasOpencodeSignals =
+  const inferredExecutor =
+    asText(inferredRuntime.executor) || (inferredRuntime.executorSessionId ? 'opencode' : '');
+  const hasSandboxSignals =
     Boolean(orchestratorSessionId) ||
-    Boolean(inferredRuntime.opencodeSessionId) ||
-    normalizedRecentMessages.some((message) => asText(message.messageType).startsWith('opencode_'));
+    Boolean(inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId) ||
+    normalizedRecentMessages.some((message) => {
+      const messageType = asText(message.messageType);
+      return (
+        messageType.startsWith('opencode_') ||
+        messageType.startsWith('codex_') ||
+        messageType === 'executor_event'
+      );
+    });
+  const sandboxExecutor = inferredExecutor || (hasSandboxSignals ? 'opencode' : '');
   const titleCandidate =
     taskDescription?.title ||
     normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content ||
@@ -434,12 +477,15 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
     status,
     stage,
-    mode: hasOpencodeSignals ? 'sandbox' : undefined,
-    executor: hasOpencodeSignals ? 'opencode' : undefined,
+    mode: hasSandboxSignals ? 'sandbox' : undefined,
+    executor: sandboxExecutor || undefined,
+    driver: hasSandboxSignals ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor || 'opencode' }) : undefined,
     runtime: orchestratorSessionId
       ? {
           generation: inferredRuntime.generation,
           orchestratorSessionId,
+          executor: inferredRuntime.executor || (inferredRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId,
           opencodeSessionId: inferredRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
         }
@@ -459,8 +505,13 @@ async function hydrateFileSessionFromDb(sessionId: string) {
     await taskCreationFileMemoryStore.updateRuntimeBinding(record.id, {
       generation: record.runtime.generation,
       orchestratorSessionId: record.runtime.orchestratorSessionId,
+      executor: record.runtime.executor || record.executor,
+      executorSessionId: record.runtime.executorSessionId || record.runtime.opencodeSessionId,
       opencodeSessionId: record.runtime.opencodeSessionId,
     });
+  }
+  if (record.driver) {
+    await taskCreationFileMemoryStore.updateSessionDriver(record.id, record.driver);
   }
   return record;
 }
@@ -718,25 +769,45 @@ async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot
   }
 }
 
+function resolveRuntimeExecutor(session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime'>): 'opencode' | 'codex' {
+  const preferred =
+    asText(session.runtime?.executor) ||
+    asText(session.executor) ||
+    asText(session.driver);
+  return preferred === 'codex' ? 'codex' : 'opencode';
+}
+
 async function ensureTaskSessionRuntime(sessionId: string) {
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
   }
 
+  const executor = resolveRuntimeExecutor(session);
   const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
   const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
   if (orchestratorSessionId) {
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
     if (environment?.status === 'ready') {
       try {
-        await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
-          orchestratorSessionId,
-          taskSessionId: sessionId,
-        });
-        await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
-          workspacePath: workspaceRoot || undefined,
-        });
+        if (executor === 'opencode') {
+          await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
+            orchestratorSessionId,
+            taskSessionId: sessionId,
+          });
+          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+            workspacePath: workspaceRoot || undefined,
+          });
+        } else {
+          await sandboxAgentProvisionService.provisionWithLock({
+            executor,
+            metadata: {
+              taskSessionId: sessionId,
+              taskTitle: session.title,
+              executor,
+            },
+          });
+        }
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         return {
@@ -754,14 +825,18 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   }
 
   const provision = await sandboxAgentProvisionService.provisionWithLock({
+    executor,
     metadata: {
       taskSessionId: sessionId,
       taskTitle: session.title,
+      executor,
     },
   });
 
   await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
     orchestratorSessionId: provision.sessionId,
+    executor,
+    executorSessionId: '',
     opencodeSessionId: '',
   });
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
@@ -1011,6 +1086,14 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'streamKey',
     'partId',
     'eventType',
+    'executor',
+    'itemId',
+    'itemType',
+    'itemStatus',
+    'itemText',
+    'command',
+    'outputPreview',
+    'exitCode',
   ]) {
     if (metadata[key] !== undefined) {
       slim[key] = metadata[key];
@@ -1246,9 +1329,9 @@ function annotateRuntimeGenerations<T extends { metadata?: Record<string, unknow
 }
 
 function inferRuntimeFromMessages(
-  messages: Array<{ metadata?: Record<string, unknown>; createdAt?: string }>,
+  messages: Array<{ metadata?: Record<string, unknown>; createdAt?: string; messageType?: string }>,
   orchestratorSessionId?: string | null
-): { generation?: number; opencodeSessionId?: string } {
+): { generation?: number; executor?: string; executorSessionId?: string; opencodeSessionId?: string } {
   const targetOrchestrator = asText(orchestratorSessionId);
   const ordered = annotateRuntimeGenerations(messages);
   const matched = ordered.filter((item) => {
@@ -1258,9 +1341,21 @@ function inferRuntimeFromMessages(
   const latest = matched.length > 0 ? matched[matched.length - 1] : null;
   if (!latest) return {};
   const metadata = pickRecord(latest.metadata);
+  const legacySessionId = asText(metadata.opencodeSessionId);
+  const rawExecutorSessionId = asText(metadata.executorSessionId) || legacySessionId;
+  const messageType = asText(latest.messageType);
+  const inferredExecutor =
+    asText(metadata.executor) ||
+    (messageType.startsWith('codex_') ? 'codex' : '') ||
+    (rawExecutorSessionId ? 'opencode' : '');
+  const opencodeSessionId = legacySessionId || rawExecutorSessionId || undefined;
+  const executorSessionId = rawExecutorSessionId || undefined;
+  const executor = inferredExecutor;
   return {
     generation: normalizeRuntimeGenerationValue(metadata.runtimeGeneration) || undefined,
-    opencodeSessionId: asText(metadata.opencodeSessionId) || undefined,
+    executor: executor || undefined,
+    executorSessionId,
+    opencodeSessionId,
   };
 }
 
@@ -1900,6 +1995,7 @@ router.post('/sessions', async (req, res) => {
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
     const requestedExecutor = asText(req.body?.executor);
+    const requestedDriver = asText(req.body?.driver);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -1924,6 +2020,16 @@ router.post('/sessions', async (req, res) => {
     }
     if (requestedExecutor) {
       await taskCreationFileMemoryStore.updateSessionExecutor(session.id, requestedExecutor);
+    }
+    const derivedDriver =
+      (requestedDriver as FileSessionRecord['driver']) ||
+      deriveSessionDriver({
+        mode: requestedMode || session.mode,
+        executor: requestedExecutor || session.executor,
+        fallbackDriver: session.driver,
+      });
+    if (derivedDriver) {
+      await taskCreationFileMemoryStore.updateSessionDriver(session.id, derivedDriver);
     }
 
     if (isNewSession) {

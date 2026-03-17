@@ -89,6 +89,14 @@ export class TaskCreationSessionDAO {
       'partType',
       'eventRole',
       'eventState',
+      'executor',
+      'itemId',
+      'itemType',
+      'itemStatus',
+      'itemText',
+      'command',
+      'outputPreview',
+      'exitCode',
     ]) {
       if (metadata[key] !== undefined) {
         slim[key] = metadata[key];

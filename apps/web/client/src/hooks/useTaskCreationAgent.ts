@@ -31,6 +31,7 @@ export interface AgentMessage {
     | 'plan_generated'
     | 'error'
     | 'opencode_error'
+    | 'executor_event'
     | 'user_input'
     | 'user_response'
     | 'opencode_event';
@@ -50,6 +51,8 @@ export interface AgentMessage {
 export interface OrchestrationRuntime {
   generation: number | null;
   orchestratorSessionId: string | null;
+  executor: 'opencode' | 'claudecode' | 'codex';
+  executorSessionId: string | null;
   opencodeSessionId: string | null;
   status: string | null;
   ready: boolean;
@@ -219,6 +222,18 @@ function readExecutor(): 'opencode' | 'claudecode' | 'codex' {
     // ignore storage failures
   }
   return 'opencode';
+}
+
+function normalizeExecutor(value: unknown): 'opencode' | 'claudecode' | 'codex' {
+  const normalized = asText(value).toLowerCase();
+  if (normalized === 'claudecode') return 'claudecode';
+  if (normalized === 'codex') return 'codex';
+  return 'opencode';
+}
+
+function resolveExecutorSessionId(metadataRaw: unknown): string {
+  const metadata = toRecord(metadataRaw);
+  return asText(metadata.executorSessionId) || asText(metadata.opencodeSessionId);
 }
 
 function getOrCreateSseClientId(): string {
@@ -616,6 +631,183 @@ function isTerminalOpencodeMessage(message: AgentMessage): boolean {
   );
 }
 
+function getExecutorEventInfo(
+  metadataRaw: unknown,
+  contentRaw?: string
+): {
+  executor: string;
+  eventType: string;
+  normalizedEventType: string;
+  event: Record<string, unknown>;
+  text: string;
+} {
+  const metadata = toRecord(metadataRaw);
+  const event = toRecord(metadata.event);
+  const item = toRecord(event.item);
+  const eventType = asText(metadata.eventType) || asText(event.type);
+  const text =
+    asText(metadata.itemText) ||
+    asText(item.text) ||
+    asText(item.content) ||
+    asText(item.message) ||
+    asText(event.text) ||
+    asText(event.content) ||
+    asText(event.message) ||
+    asText(event.status) ||
+    (contentRaw || '').trim();
+  return {
+    executor: asText(metadata.executor).toLowerCase(),
+    eventType,
+    normalizedEventType: eventType.toLowerCase(),
+    event,
+    text,
+  };
+}
+
+function isCodexControlStatusContent(metadataRaw: unknown, contentRaw?: string): boolean {
+  const metadata = toRecord(metadataRaw);
+  if (asText(metadata.executor).toLowerCase() !== 'codex') {
+    return false;
+  }
+  const content = (contentRaw || '').trim().toLowerCase();
+  return (
+    content === 'codex 会话已建立，正在等待执行...' ||
+    content === 'codex 已接收输入，正在执行...'
+  );
+}
+
+function hasMeaningfulExecutorEventText(metadataRaw: unknown, contentRaw?: string): boolean {
+  const { normalizedEventType, text } = getExecutorEventInfo(metadataRaw, contentRaw);
+  if (!text) {
+    return false;
+  }
+  if (text === normalizedEventType) {
+    return false;
+  }
+  if (
+    text === 'Codex 开始执行' ||
+    text === 'Codex 执行完成' ||
+    text === 'Codex 执行失败' ||
+    text === 'Codex 执行已中断'
+  ) {
+    return false;
+  }
+  if (text === `Codex 事件: ${normalizedEventType}` || text === `Codex 事件: ${normalizedEventType.toUpperCase()}`) {
+    return false;
+  }
+  return true;
+}
+
+function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): boolean {
+  const { normalizedEventType } = getExecutorEventInfo(metadataRaw, contentRaw);
+  if (!normalizedEventType) {
+    return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
+  }
+  if (
+    normalizedEventType === 'turn.started' ||
+    normalizedEventType === 'turn.completed' ||
+    normalizedEventType === 'turn.failed' ||
+    normalizedEventType === 'turn.interrupted'
+  ) {
+    if (
+      (normalizedEventType === 'turn.completed' && getExecutorEventInfo(metadataRaw, contentRaw).text.toLowerCase() === 'completed') ||
+      (normalizedEventType === 'turn.failed' && getExecutorEventInfo(metadataRaw, contentRaw).text.toLowerCase() === 'failed') ||
+      (normalizedEventType === 'turn.interrupted' && getExecutorEventInfo(metadataRaw, contentRaw).text.toLowerCase() === 'interrupted')
+    ) {
+      return false;
+    }
+    return true;
+  }
+  if (normalizedEventType === 'thread.started' || normalizedEventType === 'item.started') {
+    return false;
+  }
+  if (normalizedEventType === 'item.completed') {
+    return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
+  }
+  return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
+}
+
+function mapExecutorEventStage(
+  metadataRaw: unknown
+): AgentMessage['stage'] | undefined {
+  const { normalizedEventType } = getExecutorEventInfo(metadataRaw);
+  if (normalizedEventType === 'turn.completed') return 'completed';
+  if (normalizedEventType === 'turn.failed' || normalizedEventType === 'turn.interrupted') {
+    return 'failed';
+  }
+  if (normalizedEventType) return 'executing';
+  return undefined;
+}
+
+function resolveTerminalMessageOutcome(message: AgentMessage): 'completed' | 'failed' | null {
+  if (message.stage === 'completed' || message.stage === 'failed') {
+    return message.stage;
+  }
+
+  const metadata = toRecord(message.metadata);
+  const outcome = asText(metadata.outcome).toLowerCase();
+  if (outcome === 'completed' || outcome === 'failed') {
+    return outcome;
+  }
+
+  if (message.type === 'executor_event') {
+    const eventType = asText(metadata.eventType).toLowerCase();
+    if (eventType === 'turn.completed') return 'completed';
+    if (eventType === 'turn.failed' || eventType === 'turn.interrupted') return 'failed';
+
+    const content = (message.content || message.message || '').trim().toLowerCase();
+    if (content === 'completed' || content.includes('执行完成')) {
+      return 'completed';
+    }
+    if (content === 'failed' || content.includes('执行失败') || content.includes('已中断')) {
+      return 'failed';
+    }
+    return null;
+  }
+
+  if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
+    const content = (message.content || message.message || '').trim();
+    return content.includes('失败') || content.includes('结束') ? 'failed' : 'completed';
+  }
+
+  if (message.type === 'opencode_event') {
+    const eventType = asText(metadata.eventType).toLowerCase();
+    if (eventType === 'session.completed' || eventType === 'message.final') {
+      return 'completed';
+    }
+    if (eventType === 'session.error') {
+      return 'failed';
+    }
+  }
+
+  return null;
+}
+
+function resolveRealtimeSessionStatus(message: AgentMessage): string | undefined {
+  if (message.type === 'status_update') {
+    if (message.stage === 'clarifying') {
+      return 'waiting_user';
+    }
+    const terminal = resolveTerminalMessageOutcome(message);
+    if (terminal) {
+      return terminal;
+    }
+    return 'executing';
+  }
+
+  if (message.type === 'executor_event') {
+    const terminal = resolveTerminalMessageOutcome(message);
+    if (terminal) {
+      return terminal;
+    }
+    if (message.stage === 'executing') {
+      return 'executing';
+    }
+  }
+
+  return undefined;
+}
+
 function resolveOpencodeToolName(metadataRaw: unknown): string {
   const metadata = toRecord(metadataRaw);
   const eventType = asText(metadata.eventType).toLowerCase();
@@ -683,11 +875,7 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
     .find((message) => shouldStopProcessingForMessage(message));
   const lastTerminalMessage = [...relevantMessages]
     .reverse()
-    .find(
-      (message) =>
-        message.type === 'status_update' &&
-        (message.stage === 'completed' || message.stage === 'failed' || isTerminalOpencodeMessage(message))
-    );
+    .find((message) => resolveTerminalMessageOutcome(message) !== null);
   const lastClarificationIndex = relevantMessages
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => message.type === 'clarification_request')
@@ -697,10 +885,7 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
   if (lastClarificationIndex === undefined) {
     return {
       stopProcessing: Boolean(lastStopMessage),
-      runtimeStatus:
-        lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed'
-          ? lastTerminalMessage.stage
-          : null,
+      runtimeStatus: lastTerminalMessage ? resolveTerminalMessageOutcome(lastTerminalMessage) : null,
       currentQuestion: null,
     };
   }
@@ -712,10 +897,7 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
 
   return {
     stopProcessing: Boolean(lastStopMessage),
-    runtimeStatus:
-      lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed'
-        ? lastTerminalMessage.stage
-        : null,
+    runtimeStatus: lastTerminalMessage ? resolveTerminalMessageOutcome(lastTerminalMessage) : null,
     currentQuestion:
       !hasUserResponseAfter && clarification?.question
         ? {
@@ -731,11 +913,11 @@ export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
     return true;
   }
 
-  if (message.type === 'status_update') {
-    if (message.stage === 'completed' || message.stage === 'failed') {
+  if (message.type === 'status_update' || message.type === 'executor_event') {
+    if (resolveTerminalMessageOutcome(message)) {
       return true;
     }
-    return isTerminalOpencodeMessage(message);
+    return message.type === 'status_update' ? isTerminalOpencodeMessage(message) : false;
   }
 
   if (message.type !== 'opencode_event') {
@@ -817,6 +999,17 @@ function isSendableRuntimeStatus(status: string | null | undefined): boolean {
 
 function normalizeTerminalDisplayMessage(message: AgentMessage): AgentMessage {
   const metadata = toRecord(message.metadata);
+  if (message.type === 'executor_event') {
+    const info = getExecutorEventInfo(metadata, message.content);
+    if (info.text && info.text !== (message.content || '').trim()) {
+      return {
+        ...message,
+        content: info.text,
+        message: info.text,
+      };
+    }
+  }
+
   const errorText = asText(metadata.errorMessage);
   if (!errorText) {
     return message;
@@ -836,6 +1029,16 @@ function normalizeTerminalDisplayMessage(message: AgentMessage): AgentMessage {
     return {
       ...message,
       content: `OpenCode 执行失败：${errorText}`,
+    };
+  }
+
+  if (message.type === 'executor_event' && !(message.content || '').trim()) {
+    return {
+      ...message,
+      content: `Codex 执行失败：${errorText}`,
+      message: `Codex 执行失败：${errorText}`,
+      stage: 'failed',
+      tone: 'error',
     };
   }
 
@@ -995,12 +1198,24 @@ function mergeRealtimeMessage(
   if (isDuplicateStatus) {
     return prev;
   }
+  if (message.type === 'status_update' && isCodexControlStatusContent(message.metadata, message.content)) {
+    return prev;
+  }
   const isDuplicateUserMessage =
     (message.type === 'user_input' || message.type === 'user_response') &&
     lastMessage?.type === message.type &&
     (message.content || '').trim() &&
     (message.content || '').trim() === (lastMessage?.content || '').trim();
   if (isDuplicateUserMessage) {
+    return prev;
+  }
+  const isDuplicateExecutorTail =
+    message.type === 'executor_event' &&
+    lastMessage?.type === 'executor_event' &&
+    asText(toRecord(lastMessage.metadata).eventType).toLowerCase() === asText(toRecord(message.metadata).eventType).toLowerCase() &&
+    (message.content || '').trim() &&
+    (message.content || '').trim() === (lastMessage?.content || '').trim();
+  if (isDuplicateExecutorTail) {
     return prev;
   }
 
@@ -1060,6 +1275,9 @@ function mergeRealtimeMessage(
     if (!isStructuralOpencodeEvent(metadata)) {
       return prev;
     }
+  }
+  if (message.type === 'executor_event' && !shouldDisplayExecutorEvent(metadata, message.content)) {
+    return prev;
   }
   if (
     message.type === 'opencode_event' &&
@@ -1203,6 +1421,23 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
     if (messageType === 'session_started') {
       continue;
     }
+    if (messageType === 'status_update' && isCodexControlStatusContent(metadata, item?.content || '')) {
+      continue;
+    }
+    if (messageType === 'executor_event' && !shouldDisplayExecutorEvent(metadata, item?.content || '')) {
+      continue;
+    }
+    if (messageType === 'executor_event') {
+      const last = result[result.length - 1];
+      if (
+        asText(last?.messageType) === 'executor_event' &&
+        asText(toRecord(last?.metadata).eventType).toLowerCase() === asText(metadata.eventType).toLowerCase() &&
+        asText(last?.content) &&
+        asText(last?.content) === asText(item?.content)
+      ) {
+        continue;
+      }
+    }
 
     if (messageType === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
       const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
@@ -1331,7 +1566,7 @@ type PersistedHistoryViewCache = {
 };
 
 const HISTORY_VIEW_CACHE_PREFIX = 'task_creation_history_view:';
-const HISTORY_VIEW_CACHE_VERSION = 4;
+const HISTORY_VIEW_CACHE_VERSION = 5;
 const HISTORY_VIEW_CACHE_LIMIT = 300;
 const HISTORY_PAGE_SIZE = 50;
 
@@ -1357,6 +1592,12 @@ function hasLegacyHistoryNoise(messages: AgentMessage[]): boolean {
     if (message.type === 'opencode_event') {
       if (!content) return true;
       if (content.startsWith('[Message] ')) return true;
+    }
+    if (message.type === 'executor_event' && !shouldDisplayExecutorEvent(message.metadata, content)) {
+      return true;
+    }
+    if (message.type === 'status_update' && isCodexControlStatusContent(message.metadata, content)) {
+      return true;
     }
     if (message.type === 'status_update' && !content) {
       return true;
@@ -1428,7 +1669,12 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
   const id = item?.id;
   const messageKey = asText(item?.messageKey);
 
-  if (messageType === 'session_started' || messageType === 'opencode_agent_input') {
+  if (
+    messageType === 'session_started' ||
+    messageType === 'opencode_agent_input' ||
+    messageType === 'codex_user_input' ||
+    messageType === 'codex_agent_input'
+  ) {
     return null;
   }
   if (messageType === 'opencode_user_input') {
@@ -1495,6 +1741,9 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
   }
 
   if (messageType === 'status_update') {
+    if (isCodexControlStatusContent(metadata, item?.content || '')) {
+      return null;
+    }
     return {
       id,
       messageKey,
@@ -1503,6 +1752,24 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
       stage: metadata?.stage as AgentMessage['stage'],
       tone: (metadata?.tone as AgentMessage['tone']) || 'system',
       agent: metadata?.agent as string | undefined,
+      sessionId: historySessionId,
+      metadata,
+    };
+  }
+
+  if (messageType === 'executor_event') {
+    if (!shouldDisplayExecutorEvent(metadata, item?.content || '')) {
+      return null;
+    }
+    const stage = mapExecutorEventStage(metadata);
+    const { text } = getExecutorEventInfo(metadata, item?.content || '');
+    return {
+      id,
+      messageKey,
+      type: 'executor_event',
+      content: text || item?.content || '',
+      stage,
+      tone: stage === 'failed' ? 'error' : 'execution',
       sessionId: historySessionId,
       metadata,
     };
@@ -1611,7 +1878,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const outboundQueueRef = useRef<string[]>([]);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
-  const ensureRuntimeRef = useRef<() => Promise<void>>(async () => {});
+  const ensureRuntimeRef = useRef<(targetSessionId?: string) => Promise<void>>(async () => {});
   const startRuntimeOnNextSessionRef = useRef(false);
   const opencodeSessionIdRef = useRef<string | null>(null);
   const runtimeStatusRef = useRef<string | null>(null);
@@ -1970,15 +2237,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (msgOpencodeSessionId) {
         setOpencodeSessionId(msgOpencodeSessionId);
       }
-      if (message.type === 'status_update') {
-        const outcome = asText(message.metadata?.outcome).toLowerCase();
-        if (message.stage === 'completed' || outcome === 'completed') {
-          setRuntimeStatus('completed');
-        } else if (message.stage === 'failed' || outcome === 'failed') {
-          setRuntimeStatus('failed');
-        } else {
-          setRuntimeStatus('executing');
-        }
+      const realtimeStatus = resolveRealtimeSessionStatus(message);
+      if (realtimeStatus === 'completed' || realtimeStatus === 'failed') {
+        setRuntimeStatus(realtimeStatus);
+      } else if (message.type === 'status_update') {
+        setRuntimeStatus('executing');
       }
       updateSseCursor(payload, message);
       if (shouldStopProcessingForMessage(message)) {
@@ -2289,30 +2552,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           return;
         }
         const messageSessionId = message.sessionId || message.metadata?.sessionId;
-        let nextStatus: string | undefined;
+        let nextStatus = resolveRealtimeSessionStatus(message);
         if (messageSessionId) {
-          if (message.type === 'status_update') {
-            if (message.stage === 'completed') {
-              nextStatus = 'completed';
-            } else if (message.stage === 'failed') {
-              nextStatus = 'failed';
-            } else if (message.stage === 'clarifying') {
-              nextStatus = 'waiting_user';
-            } else {
-              const outcome =
-                typeof message.metadata?.outcome === 'string' ? message.metadata.outcome.trim() : '';
-              if (outcome === 'completed' || outcome === 'failed') {
-                nextStatus = outcome;
-              } else {
-                nextStatus = 'executing';
-              }
-            }
-          }
           bindSessionId(messageSessionId);
 
           if (startRuntimeOnNextSessionRef.current && autoRuntime) {
             startRuntimeOnNextSessionRef.current = false;
-            void ensureRuntimeRef.current();
+            void ensureRuntimeRef.current(messageSessionId);
           }
           dispatchSessionUpdated(messageSessionId, {
             status: nextStatus,
@@ -2341,11 +2587,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           setIsProcessing(false);
           if (messageSessionId) {
             window.setTimeout(() => {
+              const terminalStatus = resolveRealtimeSessionStatus(message);
               dispatchSessionUpdated(messageSessionId, {
                 status:
-                  message.type === 'status_update' && message.stage === 'completed'
+                  terminalStatus === 'completed'
                     ? 'completed'
-                    : message.type === 'status_update' && message.stage === 'failed'
+                    : terminalStatus === 'failed'
                       ? 'failed'
                       : undefined,
               });
@@ -2767,8 +3014,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     [orchestratorSessionId, runtimeEnabled]
   );
 
-  const ensureRuntime = useCallback(async () => {
-    const sid = (sessionId || '').trim();
+  const ensureRuntime = useCallback(async (targetSessionId?: string) => {
+    const sid = (targetSessionId || sessionId || '').trim();
     if (!sid || runtimeStarting || runtimeReady) return;
     try {
       const detail = await getTaskCreationSession(sid);
@@ -2934,7 +3181,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (cancelled) return;
       void refreshRuntimeStatus(pendingPrompt.sessionId);
       if (autoRuntime && !runtimeStarting) {
-        void ensureRuntimeRef.current();
+        void ensureRuntimeRef.current(pendingPrompt.sessionId);
       }
     };
 
@@ -3074,7 +3321,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
     startRuntimeOnNextSessionRef.current = true;
     if (autoRuntime && runtimeEnabled && targetSessionId && !runtimeReady && !runtimeStarting) {
-      void ensureRuntime();
+      void ensureRuntime(targetSessionId);
     }
     if (targetSessionId && orchestratorSessionId && runtimeEnabled && runtimeReady) {
       setRuntimeStatus('executing');
@@ -3246,6 +3493,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (activeSessionId) {
           void refreshRuntimeStatus(activeSessionId);
         }
+        if (autoRuntime && activeSessionId && !runtimeStarting) {
+          void ensureRuntimeRef.current(activeSessionId);
+        }
         return;
       }
       if (!nextRuntimeSendable) {
@@ -3261,7 +3511,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           void refreshRuntimeStatus(activeSessionId);
         }
         if (autoRuntime && !runtimeStarting) {
-          void ensureRuntimeRef.current();
+          void ensureRuntimeRef.current(activeSessionId);
         }
         return;
       }
@@ -3343,13 +3593,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       messages: runtimeMessages,
       refresh: async () => {
         if (!runtimeReady) {
-          await ensureRuntime();
+          await ensureRuntime(sessionId || undefined);
           return;
         }
         await syncRuntime();
       },
       ensure: async () => {
-        await ensureRuntime();
+        await ensureRuntime(sessionId || undefined);
       },
     } as OrchestrationRuntime,
     sendUserInput,

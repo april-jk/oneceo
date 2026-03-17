@@ -38,6 +38,15 @@ type RuntimeInfo = {
   stateRoot?: string;
 };
 
+type SandboxPromptDispatchResult = {
+  accepted: boolean;
+  sent: boolean;
+  responseHeadSeen: boolean;
+  status: number;
+  detail: string;
+  rc: number;
+};
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -124,7 +133,10 @@ function getErrorMessage(error: unknown): string {
 }
 
 function preferSandboxPromptDispatch(): boolean {
-  return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'false')
+  // OpenCode's POST /session/:id/message can stay open long enough to hit our HTTP timeout
+  // even after the prompt has already been accepted. Default to in-sandbox fire-and-forget
+  // dispatch so timeout fallback does not duplicate the same user turn.
+  return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'true')
     .trim()
     .toLowerCase() !== 'false';
 }
@@ -161,7 +173,7 @@ async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
 async function dispatchPromptInSandbox(
   sessionId: string,
   input: { opencodeSessionId: string; parts: OpencodePartInput[]; workspacePath?: string }
-) {
+): Promise<SandboxPromptDispatchResult> {
   const directory = input.workspacePath ? `?directory=${encodeURIComponent(input.workspacePath)}` : '';
   const url = `http://127.0.0.1:${e2bConfig.opencodePort}/session/${encodeURIComponent(
     input.opencodeSessionId
@@ -187,11 +199,12 @@ request = (
     "Connection: close\\r\\n\\r\\n"
 ).encode('utf-8') + body
 
-result = {"ok": False, "status": 0, "detail": ""}
+result = {"accepted": False, "sent": False, "responseHeadSeen": False, "status": 0, "detail": ""}
 try:
     sock = socket.create_connection((host, int(port)), timeout=5)
     try:
         sock.sendall(request)
+        result["sent"] = True
         sock.settimeout(2)
         head = b""
         try:
@@ -200,21 +213,43 @@ try:
             head = b""
         status = 0
         preview = ""
+        response_head_seen = False
         if head:
+            response_head_seen = True
             preview = head.decode('utf-8', 'ignore').splitlines()[0][:180]
             if preview.startswith("HTTP/"):
                 parts = preview.split()
                 if len(parts) >= 2 and parts[1].isdigit():
                     status = int(parts[1])
         # status=0 means response head not observed in short timeout; request is already sent.
-        ok = status == 0 or status < 400 or status == 409
-        result = {"ok": ok, "status": status, "detail": preview}
+        accepted = status == 0 or status < 400 or status == 409
+        result = {
+            "accepted": accepted,
+            "sent": True,
+            "responseHeadSeen": response_head_seen,
+            "status": status,
+            "detail": preview,
+        }
+    except Exception as e:
+        result = {
+            "accepted": bool(result.get("sent")) and int(result.get("status", 0) or 0) == 0,
+            "sent": bool(result.get("sent")),
+            "responseHeadSeen": bool(result.get("responseHeadSeen")),
+            "status": int(result.get("status", 0) or 0),
+            "detail": str(e),
+        }
     finally:
         sock.close()
 except Exception as e:
-    result = {"ok": False, "status": 0, "detail": str(e)}
+    result = {
+        "accepted": False,
+        "sent": bool(result.get("sent")),
+        "responseHeadSeen": bool(result.get("responseHeadSeen")),
+        "status": int(result.get("status", 0) or 0),
+        "detail": str(e),
+    }
 print("OCPROMPT_RESULT=" + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
-sys.exit(0 if result.get("ok") else 1)
+sys.exit(0 if result.get("accepted") else 1)
 PY
 __oc_prompt_rc=$?
 echo "__OCPROMPT_RC__=\${__oc_prompt_rc}"
@@ -229,13 +264,17 @@ exit 0
     .map((line) => line.trim())
     .find((line) => line.startsWith('OCPROMPT_RESULT='));
 
-  let ok = false;
+  let accepted = false;
+  let sent = false;
+  let responseHeadSeen = false;
   let status = 0;
   let detail = '';
   if (jsonLine) {
     try {
       const parsed = JSON.parse(jsonLine.slice('OCPROMPT_RESULT='.length)) as Record<string, unknown>;
-      ok = Boolean(parsed.ok);
+      accepted = Boolean(parsed.accepted ?? parsed.ok);
+      sent = Boolean(parsed.sent);
+      responseHeadSeen = Boolean(parsed.responseHeadSeen);
       status = Number(parsed.status || 0);
       detail = String(parsed.detail || '');
     } catch (error) {
@@ -243,10 +282,14 @@ exit 0
     }
   }
 
-  if (!ok || rc !== 0) {
-    const statusLabel = status ? `status=${status}` : 'status=unknown';
-    throw new Error(`sandbox prompt dispatch failed: ${statusLabel}; rc=${rc}; detail=${detail || 'none'}`);
-  }
+  return {
+    accepted,
+    sent,
+    responseHeadSeen,
+    status,
+    detail,
+    rc,
+  };
 }
 
 export class OsacAgentService {
@@ -721,11 +764,34 @@ PY`;
 
     if (preferSandboxPromptDispatch()) {
       try {
-        await dispatchPromptInSandbox(sessionId, {
+        const sandboxResult = await dispatchPromptInSandbox(sessionId, {
           opencodeSessionId: input.opencodeSessionId,
           parts: input.parts || [],
           workspacePath: input.workspacePath || runtime.workspaceRoot,
         });
+        if (!sandboxResult.accepted) {
+          const sandboxMessage = `status=${sandboxResult.status || 'unknown'}; rc=${sandboxResult.rc}; detail=${sandboxResult.detail || 'none'}`;
+          if (logFallback) {
+            console.warn('[OPENCODE_PROMPT_SANDBOX_FAILED] fallback to http:', sandboxResult);
+          }
+          try {
+            await sendViaHttp();
+          } catch (httpError) {
+            const httpMessage = getErrorMessage(httpError);
+            if (!isRetryablePromptError(httpError)) {
+              throw new Error(`opencode prompt failed: sandbox=${sandboxMessage}; http=${httpMessage}`);
+            }
+            await ensureOpencodeServer(sessionId, runtime);
+            try {
+              await sendViaHttp();
+            } catch (retryError) {
+              const retryMessage = getErrorMessage(retryError);
+              throw new Error(
+                `opencode prompt failed after sandbox+http retry: sandbox=${sandboxMessage}; http=${httpMessage}; retry=${retryMessage}`
+              );
+            }
+          }
+        }
       } catch (sandboxError) {
         const sandboxMessage = getErrorMessage(sandboxError);
         if (logFallback) {

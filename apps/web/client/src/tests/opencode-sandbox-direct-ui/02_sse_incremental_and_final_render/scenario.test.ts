@@ -55,11 +55,14 @@ describe('02_sse_incremental_and_final_render', () => {
     ];
 
     const items = buildChatItems(messages);
-    const plainItems = items.filter((item) => item.kind === 'agent_plain');
-    const finalItems = items.filter((item) => item.kind === 'agent');
+    const turnItems = items.filter((item) => item.kind === 'opencode_turn');
 
-    expect(plainItems).toHaveLength(0);
-    expect(finalItems).toHaveLength(1);
-    expect((finalItems[0] as { markdown: string }).markdown).toContain('项目结构已生成完成');
+    expect(turnItems).toHaveLength(1);
+    expect(
+      (turnItems[0] as { assistantParts: Array<{ kind: string; markdown?: string }> }).assistantParts
+    ).toHaveLength(1);
+    expect(
+      (turnItems[0] as { assistantParts: Array<{ kind: string; markdown?: string }> }).assistantParts[0]?.markdown
+    ).toContain('项目结构已生成完成');
   });
 });

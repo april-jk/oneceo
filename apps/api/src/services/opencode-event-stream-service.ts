@@ -83,6 +83,11 @@ type SessionBinding = {
   updatedAt: number;
 };
 
+type MessageRoleEntry = {
+  role: string;
+  updatedAt: number;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -375,6 +380,7 @@ export class OpencodeEventStreamService {
   private retryIntervalMs = Number(process.env.OPENCODE_EVENT_RETRY_INTERVAL_MS || 1500);
   private streamTextState = new Map<string, { text: string; updatedAt: number }>();
   private streamTextMaxEntries = Number(process.env.OPENCODE_EVENT_STREAM_STATE_MAX || 1000);
+  private messageRoles = new Map<string, MessageRoleEntry>();
   private sessionBindings = new Map<string, SessionBinding>();
   private sessionBindingTtlMs = Number(process.env.OPENCODE_EVENT_BINDING_TTL_MS || 15000);
   private persistQueue: PersistEntry[] = [];
@@ -486,7 +492,7 @@ export class OpencodeEventStreamService {
         ? (properties.part as Record<string, unknown>)
         : {};
     const partType = (asTrimmedText(part.type) || asTrimmedText(properties.type)).toLowerCase();
-    if (partType && partType !== 'text') {
+    if (partType && partType !== 'text' && partType !== 'reasoning') {
       return null;
     }
     const delta = asTrimmedText(properties.delta);
@@ -550,6 +556,21 @@ export class OpencodeEventStreamService {
           asTrimmedText(properties.text);
         if (text) return this.compactText(text, 320);
         return partStatus ? `[Text] ${partStatus}` : '[Text] updated';
+      }
+      if (partType === 'reasoning') {
+        const text =
+          asTrimmedText(part.text) ||
+          asTrimmedText(part.content) ||
+          asTrimmedText(properties.text);
+        if (text) return this.compactText(text, 320);
+        return partStatus ? `[Reasoning] ${partStatus}` : '[Reasoning] 思考中';
+      }
+      if (partType === 'step-start') {
+        return '[Step] 开始执行';
+      }
+      if (partType === 'step-finish') {
+        const reason = asTrimmedText(part.reason) || asTrimmedText(properties.reason);
+        return reason ? `[Step] ${reason}` : '[Step] 完成';
       }
       if (partType === 'file') {
         const filePath = asTrimmedText(part.path) || asTrimmedText(properties.path);
@@ -639,6 +660,87 @@ export class OpencodeEventStreamService {
 
   private buildStreamKey(orchestratorSessionId: string, opencodeSessionId: string | undefined, partId: string) {
     return `${orchestratorSessionId}::${opencodeSessionId || ''}::${partId || 'text'}`;
+  }
+
+  private buildMessageRoleKey(
+    orchestratorSessionId: string,
+    opencodeSessionId: string | undefined,
+    messageId: string
+  ) {
+    return `${orchestratorSessionId}::${opencodeSessionId || ''}::${messageId}`;
+  }
+
+  private pruneMessageRoles() {
+    const maxEntries = 4000;
+    if (this.messageRoles.size <= maxEntries) return;
+    const entries = Array.from(this.messageRoles.entries()).sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+    const removeCount = entries.length - maxEntries;
+    for (let i = 0; i < removeCount; i += 1) {
+      this.messageRoles.delete(entries[i][0]);
+    }
+  }
+
+  private enrichEventRole(
+    orchestratorSessionId: string,
+    opencodeSessionId: string | undefined,
+    event: Record<string, unknown>
+  ): Record<string, unknown> {
+    const eventType = asTrimmedText(event.type);
+    const properties =
+      event.properties && typeof event.properties === 'object'
+        ? { ...(event.properties as Record<string, unknown>) }
+        : {};
+    const part =
+      properties.part && typeof properties.part === 'object'
+        ? { ...(properties.part as Record<string, unknown>) }
+        : {};
+    const info =
+      properties.info && typeof properties.info === 'object'
+        ? (properties.info as Record<string, unknown>)
+        : {};
+
+    const explicitRole =
+      asTrimmedText(properties.role) ||
+      asTrimmedText(part.role) ||
+      asTrimmedText(info.role);
+    const infoMessageId = asTrimmedText(info.id);
+    const partMessageId = asTrimmedText(part.messageID) || asTrimmedText(part.messageId);
+
+    if (eventType === 'message.updated' && infoMessageId && explicitRole) {
+      this.messageRoles.set(
+        this.buildMessageRoleKey(orchestratorSessionId, opencodeSessionId, infoMessageId),
+        { role: explicitRole.toLowerCase(), updatedAt: Date.now() }
+      );
+      this.pruneMessageRoles();
+      if (!properties.role) {
+        properties.role = explicitRole.toLowerCase();
+      }
+      return {
+        ...event,
+        properties,
+      };
+    }
+
+    if (explicitRole || !partMessageId) {
+      return event;
+    }
+
+    const cached = this.messageRoles.get(
+      this.buildMessageRoleKey(orchestratorSessionId, opencodeSessionId, partMessageId)
+    );
+    if (!cached?.role) {
+      return event;
+    }
+
+    properties.role = cached.role;
+    if (Object.keys(part).length > 0 && !part.role) {
+      part.role = cached.role;
+      properties.part = part;
+    }
+    return {
+      ...event,
+      properties,
+    };
   }
 
   private extractEventInfo(event: Record<string, unknown>) {
@@ -732,7 +834,7 @@ export class OpencodeEventStreamService {
       : typeof properties.type === 'string'
         ? properties.type
         : '';
-    if (partType && partType.toLowerCase() !== 'text') {
+    if (partType && partType.toLowerCase() !== 'text' && partType.toLowerCase() !== 'reasoning') {
       return event;
     }
     const partId =
@@ -1120,10 +1222,15 @@ export class OpencodeEventStreamService {
                   payloadRecord.event && typeof payloadRecord.event === 'object'
                     ? (payloadRecord.event as Record<string, unknown>)
                     : (normalized as Record<string, unknown>);
-                const fastEvent = this.applyStreamDelta(
+                const enrichedEvent = this.enrichEventRole(
                   input.orchestratorSessionId,
                   opencodeSessionId,
                   eventRecord
+                );
+                const fastEvent = this.applyStreamDelta(
+                  input.orchestratorSessionId,
+                  opencodeSessionId,
+                  enrichedEvent
                 );
                 const fastPayload = {
                   opencodeSessionId,

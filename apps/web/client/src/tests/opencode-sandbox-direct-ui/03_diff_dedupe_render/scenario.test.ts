@@ -212,7 +212,20 @@ describe('03_diff_dedupe_render', () => {
   it('ignores session.diff and keeps one diff card for duplicated apply_patch payload', () => {
     const messages: AgentMessage[] = [sessionDiffEvent(), applyPatchEvent(), applyPatchEvent()];
     const items = buildChatItems(messages);
-    const diffCards = items.filter((item) => item.kind === 'opencode_tool');
+    const diffCards = items.flatMap((item) => {
+      if (item.kind === 'opencode_tool') {
+        return [item];
+      }
+      if (item.kind === 'opencode_turn') {
+        return item.assistantParts
+          .filter((part) => part.kind === 'tool')
+          .map((part) => ({
+            kind: 'opencode_tool' as const,
+            eventType: part.eventType,
+          }));
+      }
+      return [];
+    });
 
     expect(diffCards).toHaveLength(1);
     expect(diffCards[0].eventType).toBe('message.part.updated');

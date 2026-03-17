@@ -84,6 +84,15 @@ type PendingSandboxPrompt = {
   prePersistedUserInput: boolean;
 };
 
+export function buildPendingSandboxPromptDispatchKey(
+  prompt: Pick<PendingSandboxPrompt, 'sessionId' | 'messageKey'> | null | undefined
+): string {
+  const sessionId = typeof prompt?.sessionId === 'string' ? prompt.sessionId.trim() : '';
+  const messageKey = typeof prompt?.messageKey === 'string' ? prompt.messageKey.trim() : '';
+  if (!sessionId || !messageKey) return '';
+  return `${sessionId}:${messageKey}`;
+}
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
@@ -247,6 +256,10 @@ function normalizeRuntimeStatus(value: unknown): string | null {
   return null;
 }
 
+function isUserTurnMessage(message: AgentMessage | null | undefined): boolean {
+  return message?.type === 'user_input' || message?.type === 'user_response';
+}
+
 function isTerminalRuntimeStatus(value: unknown): boolean {
   const normalized = normalizeRuntimeStatus(value);
   return (
@@ -286,7 +299,7 @@ function extractStreamContent(eventType: string, event: Record<string, unknown>)
   const properties = toRecord(event.properties);
   const part = toRecord(properties.part);
   const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
-  if (partType && partType !== 'text') {
+  if (partType && partType !== 'text' && partType !== 'reasoning') {
     return null;
   }
   const delta = asText(properties.delta);
@@ -332,6 +345,18 @@ function summarizeOpencodeEvent(eventType: string, event: Record<string, unknown
       const text = asText(part.text) || asText(part.content) || asText(properties.text);
       if (text) return compactText(text, 320);
       return partStatus ? `[Text] ${partStatus}` : '[Text] updated';
+    }
+    if (partType === 'reasoning') {
+      const text = asText(part.text) || asText(part.content) || asText(properties.text);
+      if (text) return compactText(text, 320);
+      return partStatus ? `[Reasoning] ${partStatus}` : '[Reasoning] 思考中';
+    }
+    if (partType === 'step-start') {
+      return '[Step] 开始执行';
+    }
+    if (partType === 'step-finish') {
+      const reason = asText(part.reason) || asText(properties.reason);
+      return reason ? `[Step] ${reason}` : '[Step] 完成';
     }
     if (partType === 'file') {
       const filePath = asText(part.path) || asText(properties.path);
@@ -408,6 +433,35 @@ function getOpencodeEventInfo(metadata: Record<string, unknown>): OpencodeEventI
   };
 }
 
+function resolveOpencodeMessageIdFromMetadata(metadataRaw: unknown): string {
+  const metadata = toRecord(metadataRaw);
+  const explicit = asText(metadata.messageId);
+  if (explicit) return explicit;
+  const { properties } = getOpencodeEventInfo(metadata);
+  const message = toRecord(properties.message);
+  const info = toRecord(properties.info);
+  return (
+    asText(message.id) ||
+    asText(message.messageID) ||
+    asText(info.id) ||
+    asText(info.messageID)
+  );
+}
+
+function isStructuralOpencodeEvent(metadataRaw: unknown): boolean {
+  const metadata = toRecord(metadataRaw);
+  const eventType = asText(metadata.eventType).toLowerCase();
+  return (
+    eventType === 'message.updated' ||
+    eventType === 'message.part.updated' ||
+    eventType === 'message.part.delta' ||
+    eventType === 'message.part.removed' ||
+    eventType === 'session.status' ||
+    eventType === 'session.idle' ||
+    eventType === 'message.final'
+  );
+}
+
 function resolveStreamKeyFromMetadata(metadata: Record<string, unknown>): string | null {
   const explicit = asText(metadata.streamKey);
   if (explicit) return explicit;
@@ -447,7 +501,7 @@ function isTextStreamEvent(metadata: Record<string, unknown>, content?: string):
   const text = (content || '').trim();
   if (metadata.stream === true) {
     const { partType } = getOpencodeEventInfo(metadata);
-    if (partType && partType !== 'text') {
+    if (partType && partType !== 'text' && partType !== 'reasoning') {
       return false;
     }
     const normalized = text.replace(/\s+/g, ' ');
@@ -471,6 +525,9 @@ function isTextStreamEvent(metadata: Record<string, unknown>, content?: string):
   }
 
   if (partType === 'text') {
+    return true;
+  }
+  if (partType === 'reasoning') {
     return true;
   }
 
@@ -516,8 +573,17 @@ function shouldDisplayOpencodeEvent(metadata: Record<string, unknown>, content?:
   ) {
     return true;
   }
+  if (
+    (eventType === 'message.part.updated' || eventType === 'message.part.delta') &&
+    (partType === 'reasoning' || partType === 'step-start' || partType === 'step-finish')
+  ) {
+    return true;
+  }
 
   if (text.startsWith('[Tool]')) {
+    return true;
+  }
+  if (text.startsWith('[Reasoning]') || text.startsWith('[Step]')) {
     return true;
   }
 
@@ -574,6 +640,92 @@ function isQuestionToolEvent(metadataRaw: unknown): boolean {
   return resolveOpencodeToolName(metadataRaw) === 'question';
 }
 
+function normalizeRealtimeStatusMessage(message: AgentMessage): AgentMessage {
+  if (message.type !== ('opencode_status' as AgentMessage['type'])) {
+    return message;
+  }
+
+  const metadata = toRecord(message.metadata);
+  const errorText = asText(metadata.errorMessage);
+  const content = errorText ? `OpenCode 执行失败：${errorText}` : message.content || '';
+  const normalized = content.trim();
+  const inferredStage =
+    normalized.includes('OpenCode 执行完成')
+      ? 'completed'
+      : normalized.includes('OpenCode 执行失败') || normalized.includes('OpenCode 执行已结束')
+        ? 'failed'
+        : 'executing';
+
+  return {
+    ...message,
+    type: 'status_update',
+    content,
+    stage: inferredStage,
+    tone: 'execution',
+  };
+}
+
+export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
+  stopProcessing: boolean;
+  runtimeStatus: 'completed' | 'failed' | null;
+  currentQuestion: { question: string; options?: string[] } | null;
+} {
+  const lastUserTurnIndex = [...messages]
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => isUserTurnMessage(message))
+    .map(({ index }) => index)
+    .pop();
+  const relevantMessages =
+    lastUserTurnIndex === undefined ? messages : messages.slice(lastUserTurnIndex + 1);
+
+  const lastStopMessage = [...relevantMessages]
+    .reverse()
+    .find((message) => shouldStopProcessingForMessage(message));
+  const lastTerminalMessage = [...relevantMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.type === 'status_update' &&
+        (message.stage === 'completed' || message.stage === 'failed' || isTerminalOpencodeMessage(message))
+    );
+  const lastClarificationIndex = relevantMessages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.type === 'clarification_request')
+    .map(({ index }) => index)
+    .pop();
+
+  if (lastClarificationIndex === undefined) {
+    return {
+      stopProcessing: Boolean(lastStopMessage),
+      runtimeStatus:
+        lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed'
+          ? lastTerminalMessage.stage
+          : null,
+      currentQuestion: null,
+    };
+  }
+
+  const clarification = relevantMessages[lastClarificationIndex];
+  const hasUserResponseAfter = relevantMessages
+    .slice(lastClarificationIndex + 1)
+    .some((message) => message.type === 'user_response');
+
+  return {
+    stopProcessing: Boolean(lastStopMessage),
+    runtimeStatus:
+      lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed'
+        ? lastTerminalMessage.stage
+        : null,
+    currentQuestion:
+      !hasUserResponseAfter && clarification?.question
+        ? {
+            question: clarification.question,
+            options: clarification.options,
+          }
+        : null,
+  };
+}
+
 export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
   if (message.type === 'clarification_request' || message.type === 'plan_generated') {
     return true;
@@ -598,7 +750,6 @@ export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
   const eventType = asText(metadata.eventType).toLowerCase();
   if (
     eventType === 'message.final' ||
-    eventType === 'session.idle' ||
     eventType === 'session.error' ||
     eventType === 'session.completed'
   ) {
@@ -612,7 +763,7 @@ export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
       asText(toRecord(properties.state).state).toLowerCase() ||
       asText(properties.state).toLowerCase() ||
       asText(properties.status).toLowerCase();
-    if (state === 'idle' || state === 'error' || state === 'failed') {
+    if (state === 'error' || state === 'failed') {
       return true;
     }
   }
@@ -734,7 +885,19 @@ function resolveAgentMessageKey(message: Partial<AgentMessage>): string {
     return `boundary:${generationSegment}:${sessionEventSeq ?? createdAt ?? 'na'}`;
   }
 
+  const eventType = asText(metadata.eventType).toLowerCase();
   const opencodeSessionId = asText(metadata.opencodeSessionId);
+  const opencodeMessageId = resolveOpencodeMessageIdFromMetadata(metadata);
+  if (eventType === 'message.updated' && opencodeMessageId) {
+    return `message:${generationSegment}:${opencodeSessionId || 'na'}:${opencodeMessageId}`;
+  }
+  if (eventType === 'session.status' || eventType === 'session.idle') {
+    const sessionKey = opencodeSessionId || asText(toRecord(toRecord(metadata.event).properties).sessionID);
+    if (sessionKey) {
+      return `session-status:${generationSegment}:${sessionKey}`;
+    }
+  }
+
   const partId = resolveOpencodePartIdForMessage(metadata);
   if (opencodeSessionId && partId) {
     return `stream:${generationSegment}:${opencodeSessionId}:${partId}`;
@@ -894,7 +1057,31 @@ function mergeRealtimeMessage(
     }
   }
   if (message.type === 'opencode_event' && !shouldDisplayOpencodeEvent(metadata, message.content)) {
-    return prev;
+    if (!isStructuralOpencodeEvent(metadata)) {
+      return prev;
+    }
+  }
+  if (
+    message.type === 'opencode_event' &&
+    isStructuralOpencodeEvent(metadata) &&
+    !isNonTextPartEvent(metadata) &&
+    !isTextStreamEvent(metadata, message.content) &&
+    asText(metadata.eventType) !== 'message.final'
+  ) {
+    const idx = prev.findIndex((item) => resolveAgentMessageKey(item) === messageKey);
+    if (idx >= 0) {
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        ...message,
+        metadata: {
+          ...toRecord(next[idx].metadata),
+          ...metadata,
+        },
+      };
+      return next;
+    }
+    return [...prev, message];
   }
   if (message.type === 'opencode_event' && isNonTextPartEvent(metadata)) {
     const streamKey = resolveStreamKeyFromMetadata(metadata);
@@ -1037,6 +1224,10 @@ function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreatio
     }
 
     if (messageType === 'opencode_event' && !shouldDisplayOpencodeEvent(metadata, item?.content)) {
+      if (!isStructuralOpencodeEvent(metadata)) {
+        continue;
+      }
+      result.push(item);
       continue;
     }
 
@@ -1319,7 +1510,7 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
 
   if (messageType === 'opencode_event') {
     const content = item?.content || '';
-    if (!content.trim()) {
+    if (!content.trim() && !isStructuralOpencodeEvent(metadata)) {
       return null;
     }
     return {
@@ -1434,6 +1625,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistoryRequestRef = useRef<{ sessionId: string; promise: Promise<void> } | null>(null);
   const historyExpandedRef = useRef(false);
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
+  const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -1456,6 +1648,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     loadHistoryRequestRef.current = null;
     historyExpandedRef.current = false;
     pendingSandboxPromptRef.current = null;
+    dispatchedPendingSandboxPromptsRef.current.clear();
     sseCursorRef.current = 0;
     sseCursorKindRef.current = null;
     sseStreamSeqRef.current.clear();
@@ -1723,7 +1916,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     if (!payload || typeof payload !== 'object') return;
     if (payload.status === 'ready') return;
     if (payload.type) {
-      const message: AgentMessage = {
+      const rawMessage: AgentMessage = {
         type: payload.type,
         messageKey: asText(payload.messageKey),
         content: payload.content || payload.message || '',
@@ -1734,6 +1927,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         agent: payload.agent,
         sessionId: payload.sessionId || sessionId || undefined,
       };
+      const message = normalizeRealtimeStatusMessage(rawMessage);
       if (message.type === 'error') {
         const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
         if (!shouldDisplayErrorText(errorText)) {
@@ -1782,6 +1976,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           setRuntimeStatus('completed');
         } else if (message.stage === 'failed' || outcome === 'failed') {
           setRuntimeStatus('failed');
+        } else {
+          setRuntimeStatus('executing');
         }
       }
       updateSseCursor(payload, message);
@@ -2024,7 +2220,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
     ws.onmessage = (event) => {
       try {
-        const message: AgentMessage = JSON.parse(event.data);
+        let message: AgentMessage = JSON.parse(event.data);
+        message = normalizeRealtimeStatusMessage(message);
         message.messageKey =
           asText((message as any).messageKey) ||
           asText(message.metadata?.messageKey) ||
@@ -2106,6 +2303,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
                 typeof message.metadata?.outcome === 'string' ? message.metadata.outcome.trim() : '';
               if (outcome === 'completed' || outcome === 'failed') {
                 nextStatus = outcome;
+              } else {
+                nextStatus = 'executing';
               }
             }
           }
@@ -2122,7 +2321,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const orchestratorId = extractOrchestratorSessionId(message);
         if (orchestratorId) {
           setOrchestratorSessionId(orchestratorId);
-          setRuntimeStatus((current) => (isTerminalRuntimeStatus(current) ? current : 'ready'));
+          setRuntimeStatus((current) => {
+            if (nextStatus) {
+              return nextStatus;
+            }
+            return isTerminalRuntimeStatus(current) ? current : 'ready';
+          });
         }
         const opencodeId = asText(message.metadata?.opencodeSessionId);
         if (opencodeId) {
@@ -2343,49 +2547,19 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   );
 
   const syncQuestionAndRuntimeState = useCallback((normalized: AgentMessage[]) => {
-    const lastStopMessage = [...normalized]
-      .reverse()
-      .find((msg) => shouldStopProcessingForMessage(msg));
-    const lastTerminalMessage = [...normalized]
-      .reverse()
-      .find(
-        (msg) =>
-          msg.type === 'status_update' &&
-          (msg.stage === 'completed' || msg.stage === 'failed' || isTerminalOpencodeMessage(msg))
-      );
-    if (lastTerminalMessage?.stage === 'completed' || lastTerminalMessage?.stage === 'failed') {
-      setRuntimeStatus(lastTerminalMessage.stage);
+    const derived = deriveSessionStateFromMessages(normalized);
+    if (derived.runtimeStatus) {
+      setRuntimeStatus(derived.runtimeStatus);
     }
-    if (lastStopMessage) {
+    if (derived.stopProcessing) {
       setIsProcessing(false);
     }
-
-    const lastClarificationIndex = [...normalized]
-      .map((msg, index) => ({ msg, index }))
-      .filter(({ msg }) => msg.type === 'clarification_request')
-      .map(({ index }) => index)
-      .pop();
-    if (lastClarificationIndex === undefined) {
+    if (!derived.currentQuestion) {
       setCurrentQuestion(null);
       return;
     }
-    const hasUserResponseAfter = normalized
-      .slice(lastClarificationIndex + 1)
-      .some((msg) => msg.type === 'user_response');
-    if (hasUserResponseAfter) {
-      setCurrentQuestion(null);
-      return;
-    }
-    const clarification = normalized[lastClarificationIndex];
-    if (clarification.question) {
-      setIsProcessing(false);
-      setCurrentQuestion({
-        question: clarification.question,
-        options: clarification.options,
-      });
-      return;
-    }
-    setCurrentQuestion(null);
+    setIsProcessing(false);
+    setCurrentQuestion(derived.currentQuestion);
   }, []);
 
   const applyHistoryState = useCallback(
@@ -2468,10 +2642,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         hasOlderHistory: recent.hasOlderHistory,
       });
     } catch (error) {
-      if (isAbortLikeError(error)) {
-        return;
+      if (!isAbortLikeError(error)) {
+        console.error('[TaskCreationAgent] 加载最近历史失败:', error);
       }
-      console.error('[TaskCreationAgent] 加载最近历史失败:', error);
       try {
         const page = await getTaskCreationOlderMessages(historySessionId, {
           limit: HISTORY_PAGE_SIZE,
@@ -2708,6 +2881,16 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [sessionId, loadHistory]);
 
   useEffect(() => {
+    if (!sessionId) return;
+    writeHistoryViewCache(
+      sessionId,
+      messages,
+      oldestHistoryCursorRef.current,
+      hasOlderHistory
+    );
+  }, [hasOlderHistory, messages, sessionId]);
+
+  useEffect(() => {
     if (!sessionId || sseReplayHint <= 0) {
       return;
     }
@@ -2785,6 +2968,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
 
+    const dispatchKey = buildPendingSandboxPromptDispatchKey(pendingPrompt);
+    if (!dispatchKey) {
+      return;
+    }
+    if (dispatchedPendingSandboxPromptsRef.current.has(dispatchKey)) {
+      return;
+    }
+    dispatchedPendingSandboxPromptsRef.current.add(dispatchKey);
+
     setRuntimeStatus('executing');
     setRuntimeError(null);
     sendOrQueueMessage({
@@ -2797,6 +2989,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         ...(opencodeSessionId ? { opencodeSessionId } : undefined),
         altusMode: 'sandbox',
         executor: readExecutor(),
+        messageKey: pendingPrompt.messageKey,
         ...(pendingPrompt.prePersistedUserInput ? { prePersistedUserInput: true } : undefined),
       },
     });
@@ -2823,6 +3016,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sseStreamClockRef.current.clear();
     sseStreamLengthRef.current.clear();
     sseStreamSignatureRef.current.clear();
+    dispatchedPendingSandboxPromptsRef.current.clear();
   }, [sessionId]);
 
   useEffect(() => {

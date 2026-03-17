@@ -41,6 +41,8 @@
 - 进一步补充了“长代码类消息默认折叠、按需展开”的设计约束，后续实现会采用“原子消息保留 + 大体积内容折叠”的方式控制对话区篇幅。
 - 直通模式前端渲染已完成第一阶段优化：assistant turn 默认隐藏 reasoning 正文，保留 `thinking heading` 与原子文本消息，同时给大段 fenced code block、长 patch / diff 增加了折叠展示。
 - 新增直通模式前端单测，覆盖 reasoning 隐藏、thinking heading 保留、原子消息保留、长代码折叠等核心行为。
+- 继续修复直通模式 SSE 文本流：后端文本流归一现在会对连续 full-text snapshot 反推出 delta，SSE 路由也已改为对文本/思考流优先使用这条归一后的实时消息，避免页面表现成“整段整段刷新”。
+- 补充了原子消息 hover 说明的设计约束：主卡片保持简洁，悬停时展示完整命令、完整文件路径、补丁目标文件等解释性文本。
 
 ## 遇到的问题
 
@@ -64,6 +66,7 @@
 - 续聊时前端原先按“全局最后一个 terminal message”推导当前状态，导致第二轮消息刚发送时仍可能被上一轮 completed 回推为已结束。
 - 实时 websocket 的 `opencode_status` 与 history restore 走了两套逻辑，续聊时容易出现“后端已接收，但前端仍停在旧状态”的错位。
 - 当前直通模式虽然已经能按 OpenCode `message + part` 重建 turn，但阶段性 reasoning 文本仍可能直接落到主对话区，阅读负担偏高。
+- 继续核对后发现，SSE 链路与 websocket 链路对文本流的归一方式并不一致，前端一旦切到 SSE 优先就会更容易表现为整段快照更新。
 
 ## 后续建议
 
@@ -81,3 +84,4 @@
 - 若需要进一步逼近 OpenCode Web，可继续把 turn 内的 thinking heading / retry / diff 区块样式也抽成更接近上游 `session-turn` 的组件层。
 - 下一步建议直接跑一轮真实 oneceo 页面 + OpenCode Web 双端续聊对账，重点确认第二轮 prompt 在同一 `opencodeSessionId` 下的发送、实时显示和刷新恢复都一致。
 - 设计确认后，下一步优先只改前端直通 turn 渲染，默认隐藏 reasoning 正文，保留 thinking heading 与 tool 过程卡片，再补最小渲染单测。
+- 下一步建议直接跑一轮真实直通会话，对照 oneceo 页面与 OpenCode Web，重点确认 SSE 文本输出现在是否已经按同一 `partId` 连续增量追加，而不是按整段跳变。

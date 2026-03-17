@@ -1,7 +1,11 @@
 import * as crypto from 'crypto';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { downloadFromR2, existsInR2, uploadToR2 } from './r2-client';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { clearSandboxDirty, setSandboxMetadata, extractTaskSessionId } from './sandbox-activity-service';
@@ -22,6 +26,7 @@ export type ArchiveWorkspaceResult = {
   sizeBytes: number;
   taskSessionId: string | null;
   workspaceRoot: string;
+  stateRoot: string;
 };
 
 type ArchiveManifest = {
@@ -30,6 +35,7 @@ type ArchiveManifest = {
   taskSessionId?: string;
   archivedAt: string;
   workspaceRoot: string;
+  stateRoot?: string;
   archiveKey: string;
   snapshotKey: string;
   sha256: string;
@@ -43,6 +49,7 @@ type SandboxArchiveServiceDeps = {
   existsInR2: typeof existsInR2;
   uploadToR2: typeof uploadToR2;
   resolveOpencodeWorkspacePath: typeof resolveOpencodeWorkspacePath;
+  resolveOpencodeStatePath: typeof resolveOpencodeStatePath;
   sandboxExecutionEnvironmentDAO: typeof sandboxExecutionEnvironmentDAO;
   taskCreationFileMemoryStore: typeof taskCreationFileMemoryStore;
   clearSandboxDirty: typeof clearSandboxDirty;
@@ -55,6 +62,7 @@ const defaultSandboxArchiveServiceDeps: SandboxArchiveServiceDeps = {
   existsInR2,
   uploadToR2,
   resolveOpencodeWorkspacePath,
+  resolveOpencodeStatePath,
   sandboxExecutionEnvironmentDAO,
   taskCreationFileMemoryStore,
   clearSandboxDirty,
@@ -161,6 +169,7 @@ export function isArchiveStorageConfigured(): boolean {
 
 async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   workspaceRoot: string;
+  stateRoot: string;
   taskSessionId: string | null;
   existingMetadata: Record<string, unknown>;
 }> {
@@ -168,10 +177,17 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   const metadata = (env?.metadata || {}) as Record<string, unknown>;
   const taskSessionId = extractTaskSessionId(metadata);
   const fromMeta = asText((metadata as any).opencodeWorkspaceRoot);
+  const stateFromMeta = asText((metadata as any).opencodeStateRoot);
 
   if (fromMeta) {
     return {
       workspaceRoot: normalizePath(fromMeta),
+      stateRoot: normalizePath(
+        stateFromMeta ||
+          (taskSessionId
+            ? sandboxArchiveServiceDeps.resolveOpencodeStatePath(taskSessionId)
+            : resolveLegacyOpencodeStatePath(fromMeta) || fromMeta)
+      ),
       taskSessionId,
       existingMetadata: metadata,
     };
@@ -180,6 +196,7 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   if (taskSessionId) {
     return {
       workspaceRoot: sandboxArchiveServiceDeps.resolveOpencodeWorkspacePath(taskSessionId),
+      stateRoot: sandboxArchiveServiceDeps.resolveOpencodeStatePath(taskSessionId),
       taskSessionId,
       existingMetadata: metadata,
     };
@@ -188,6 +205,7 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   const fallback = WORKSPACE_ROOT_DEFAULT;
   return {
     workspaceRoot: normalizePath(fallback),
+    stateRoot: normalizePath(resolveLegacyOpencodeStatePath(fallback) || fallback),
     taskSessionId,
     existingMetadata: metadata,
   };
@@ -205,7 +223,7 @@ export async function archiveSandboxWorkspace(
     throw new Error('R2 archive storage not configured');
   }
 
-  const { workspaceRoot, taskSessionId, existingMetadata } = await resolveWorkspaceRoot(sandboxId);
+  const { workspaceRoot, stateRoot, taskSessionId, existingMetadata } = await resolveWorkspaceRoot(sandboxId);
   if (!taskSessionId && workspaceRoot === normalizePath(WORKSPACE_ROOT_DEFAULT)) {
     throw new Error('无法确定归档目录：缺少 taskSessionId 与 workspaceRoot');
   }
@@ -222,7 +240,17 @@ export async function archiveSandboxWorkspace(
   });
 
   const tarPath = `/tmp/workspace_backup_${Date.now()}.tar.gz`;
-  const tarCommand = `mkdir -p ${shellEscape(workspaceRoot)} && tar -czf ${tarPath} -C ${shellEscape(workspaceRoot)} .`;
+  const bundleRoot = `/tmp/workspace_bundle_${Date.now()}`;
+  const tarCommand = `
+set -euo pipefail
+mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}
+rm -rf ${shellEscape(bundleRoot)}
+mkdir -p ${shellEscape(bundleRoot)}
+ln -s ${shellEscape(workspaceRoot)} ${shellEscape(`${bundleRoot}/workspace`)}
+ln -s ${shellEscape(stateRoot)} ${shellEscape(`${bundleRoot}/state`)}
+tar -chzf ${tarPath} -C ${shellEscape(bundleRoot)} workspace state
+rm -rf ${shellEscape(bundleRoot)}
+`;
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(sandboxId, tarCommand, { timeoutMs: 180000 });
 
   const archiveBytes = await sandboxArchiveServiceDeps.e2bConnector.readFile(sandboxId, tarPath);
@@ -242,11 +270,12 @@ export async function archiveSandboxWorkspace(
   }
 
   const manifest: ArchiveManifest = {
-    version: 2,
+    version: 3,
     sandboxId,
     taskSessionId: taskSessionId || undefined,
     archivedAt,
     workspaceRoot,
+    stateRoot,
     archiveKey,
     snapshotKey: storedSnapshotKey,
     sha256: hash,
@@ -255,7 +284,11 @@ export async function archiveSandboxWorkspace(
   };
   await sandboxArchiveServiceDeps.uploadToR2(metadataKey, Buffer.from(JSON.stringify(manifest, null, 2)));
 
-  await sandboxArchiveServiceDeps.e2bConnector.runCommand(sandboxId, `rm -f ${tarPath}`, { timeoutMs: 30000 });
+  await sandboxArchiveServiceDeps.e2bConnector.runCommand(
+    sandboxId,
+    `rm -f ${tarPath} && rm -rf ${shellEscape(bundleRoot)}`,
+    { timeoutMs: 30000 }
+  );
 
   await sandboxArchiveServiceDeps.clearSandboxDirty(sandboxId, {
     archiveStatus: unchanged ? 'up_to_date' : 'archived',
@@ -266,6 +299,8 @@ export async function archiveSandboxWorkspace(
     r2ArchiveSha256: hash,
     lastArchivedAt: archivedAt,
     archiveSizeBytes: sizeBytes,
+    opencodeWorkspaceRoot: workspaceRoot,
+    opencodeStateRoot: stateRoot,
   });
 
   return {
@@ -278,6 +313,7 @@ export async function archiveSandboxWorkspace(
     sizeBytes,
     taskSessionId,
     workspaceRoot,
+    stateRoot,
   };
 }
 
@@ -286,7 +322,7 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
     return false;
   }
 
-  const { workspaceRoot, taskSessionId } = await resolveWorkspaceRoot(sandboxId);
+  const { workspaceRoot, stateRoot, taskSessionId } = await resolveWorkspaceRoot(sandboxId);
   const metadataKey = buildMetadataKey(taskSessionId, sandboxId);
   let manifest: Partial<ArchiveManifest> | undefined;
 
@@ -312,15 +348,36 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
 
   const archiveBytes = await sandboxArchiveServiceDeps.downloadFromR2(restoreKey);
   const tarPath = '/tmp/workspace_restore.tar.gz';
+  const restoreRoot = `/tmp/workspace_restore_${Date.now()}`;
 
   await sandboxArchiveServiceDeps.e2bConnector.writeFile(sandboxId, tarPath, archiveBytes);
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(
     sandboxId,
     [
       `mkdir -p ${shellEscape(workspaceRoot)}`,
+      `mkdir -p ${shellEscape(stateRoot)}`,
       `find ${shellEscape(workspaceRoot)} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
-      `tar -xzf ${tarPath} -C ${shellEscape(workspaceRoot)}`,
+      `find ${shellEscape(stateRoot)} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
+      `rm -rf ${shellEscape(restoreRoot)}`,
+      `mkdir -p ${shellEscape(restoreRoot)}`,
+      `tar -xzf ${tarPath} -C ${shellEscape(restoreRoot)}`,
+      `if [[ -d ${shellEscape(`${restoreRoot}/workspace`)} ]]; then cp -a ${shellEscape(
+        `${restoreRoot}/workspace/.`
+      )} ${shellEscape(workspaceRoot)}/; else tar -xzf ${tarPath} -C ${shellEscape(workspaceRoot)}; fi`,
+      `if [[ -d ${shellEscape(`${restoreRoot}/state`)} ]]; then cp -a ${shellEscape(
+        `${restoreRoot}/state/.`
+      )} ${shellEscape(stateRoot)}/; fi`,
+      `if [[ -d ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')} ]] && [[ -z "$(find ${shellEscape(
+        stateRoot
+      )} -mindepth 1 -print -quit 2>/dev/null)" ]]; then rm -rf ${shellEscape(
+        stateRoot
+      )} && mv ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')} ${shellEscape(
+        stateRoot
+      )}; fi`,
+      `rm -rf ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')}`,
+      `mkdir -p ${shellEscape(stateRoot)}`,
       `rm -f ${tarPath}`,
+      `rm -rf ${shellEscape(restoreRoot)}`,
     ].join(' && '),
     { timeoutMs: 240000 }
   );
@@ -331,6 +388,8 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
     r2ArchiveKey: buildArchiveKey(taskSessionId, sandboxId),
     r2RestoreSourceKey: restoreKey,
     r2ArchiveMetadataKey: metadataKey,
+    opencodeWorkspaceRoot: workspaceRoot,
+    opencodeStateRoot: stateRoot,
   });
 
   return true;

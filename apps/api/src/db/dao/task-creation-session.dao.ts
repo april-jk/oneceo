@@ -170,6 +170,48 @@ export class TaskCreationSessionDAO {
     return slim;
   }
 
+  private dedupeRecentWindowRows<
+    T extends { messageKey: string | null; timelineCursor: number | null; createdAt?: Date | string | null }
+  >(rows: T[]): T[] {
+    if (!Array.isArray(rows) || rows.length <= 1) {
+      return rows;
+    }
+    const byKey = new Map<string, T>();
+    for (const row of rows) {
+      const key = typeof row.messageKey === 'string' ? row.messageKey.trim() : '';
+      if (!key) {
+        continue;
+      }
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, row);
+        continue;
+      }
+      const rowCursor = Number(row.timelineCursor || 0);
+      const existingCursor = Number(existing.timelineCursor || 0);
+      if (rowCursor > existingCursor) {
+        byKey.set(key, row);
+        continue;
+      }
+      if (rowCursor === existingCursor) {
+        const rowCreatedAt = Date.parse(String(row.createdAt || '')) || 0;
+        const existingCreatedAt = Date.parse(String(existing.createdAt || '')) || 0;
+        if (rowCreatedAt >= existingCreatedAt) {
+          byKey.set(key, row);
+        }
+      }
+    }
+    return [...byKey.values()]
+      .sort((left, right) => {
+        const cursorDelta = Number(left.timelineCursor || 0) - Number(right.timelineCursor || 0);
+        if (cursorDelta !== 0) {
+          return cursorDelta;
+        }
+        return (Date.parse(String(left.createdAt || '')) || 0) - (Date.parse(String(right.createdAt || '')) || 0);
+      })
+      .slice(-TaskCreationSessionDAO.RECENT_MESSAGE_LIMIT);
+  }
+
   private isUuid(value: unknown): value is string {
     if (typeof value !== 'string') return false;
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
@@ -510,7 +552,7 @@ export class TaskCreationSessionDAO {
           continue;
         }
 
-        const payload = [...latest]
+        const payload = this.dedupeRecentWindowRows([...latest])
           .sort((left, right) => (left.timelineCursor || 0) - (right.timelineCursor || 0))
           .map((message) => {
             const decorated = this.decorateStoredMessage(message);
@@ -547,7 +589,8 @@ export class TaskCreationSessionDAO {
       return;
     }
 
-    const payload = snapshot
+    const payload = this.dedupeRecentWindowRows(
+      snapshot
       .map((message, index) => {
         const createdAt =
           message.createdAt instanceof Date
@@ -587,8 +630,8 @@ export class TaskCreationSessionDAO {
           updatedAt: new Date(),
         };
       })
-      .sort((left, right) => (left.timelineCursor || 0) - (right.timelineCursor || 0))
-      .slice(-TaskCreationSessionDAO.RECENT_MESSAGE_LIMIT);
+    )
+      .sort((left, right) => (left.timelineCursor || 0) - (right.timelineCursor || 0));
 
     await db.insert(taskSessionRecentMessages).values(payload as any);
   }

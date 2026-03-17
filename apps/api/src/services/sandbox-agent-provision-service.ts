@@ -8,7 +8,11 @@ import {
 import { e2bConnector } from '../connectors/e2b-connector';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
@@ -265,14 +269,11 @@ function buildOpencodeConfig(
 async function writeOpencodeConfig(
   sessionId: string,
   envs: Record<string, string>,
-  workspaceRoot?: string | null,
   extraMcpEntries: Record<string, unknown> = {}
 ) {
   const config = buildOpencodeConfig(envs, extraMcpEntries);
   const configDir = '$HOME/.config/opencode';
   const configPath = `${configDir}/opencode.json`;
-  const workspaceConfigDir = workspaceRoot ? `${workspaceRoot.replace(/\/+$/, '')}/.opencode` : '';
-  const workspaceConfigPath = workspaceConfigDir ? `${workspaceConfigDir}/opencode.json` : '';
   const commandLines = [
     `mkdir -p ${configDir}`,
     `rm -f ${configDir}/opencode.jsonc`,
@@ -280,27 +281,36 @@ async function writeOpencodeConfig(
     config,
     'EOF',
   ];
-  if (workspaceConfigDir && workspaceConfigPath) {
-    commandLines.push(
-      `mkdir -p ${shellEscape(workspaceConfigDir)}`,
-      `rm -f ${shellEscape(`${workspaceConfigDir}/opencode.jsonc`)}`,
-      `cat <<'EOF' > ${shellEscape(workspaceConfigPath)}`,
-      config,
-      'EOF'
-    );
-  }
   const command = `${commandLines.join('\n')}
 `;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
 }
 
-async function ensureWorkspace(sessionId: string, taskSessionId?: string) {
+async function ensureWorkspaceLayout(sessionId: string, taskSessionId?: string) {
   if (!taskSessionId) return null;
   const workspaceRoot = resolveOpencodeWorkspacePath(taskSessionId);
-  if (!workspaceRoot) return null;
-  const command = `mkdir -p ${shellEscape(workspaceRoot)}`;
-  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
-  return workspaceRoot;
+  const stateRoot = resolveOpencodeStatePath(taskSessionId);
+  if (!workspaceRoot || !stateRoot) return null;
+  const command = `mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}`;
+  const maxAttempts = Math.max(3, Number(process.env.E2B_WORKSPACE_PREPARE_ATTEMPTS || 5));
+  const delayMs = Math.max(500, Number(process.env.E2B_WORKSPACE_PREPARE_DELAY_MS || 1500));
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
+      return { workspaceRoot, stateRoot };
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 >= maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return { workspaceRoot, stateRoot };
 }
 
 function shellEscape(value: string): string {
@@ -308,10 +318,40 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function resolveOpencodeDataHome(workspaceRoot?: string | null): string | null {
-  const normalized = pickString(workspaceRoot);
-  if (!normalized) return null;
-  return `${normalized.replace(/\/+$/, '')}/.opencode`;
+function resolveOpencodeDataHome(stateRoot?: string | null): string | null {
+  return pickString(stateRoot);
+}
+
+async function migrateLegacyWorkspaceState(
+  sessionId: string,
+  workspaceRoot?: string | null,
+  stateRoot?: string | null
+) {
+  const normalizedWorkspace = pickString(workspaceRoot);
+  const normalizedState = pickString(stateRoot);
+  const legacyRoot = resolveLegacyOpencodeStatePath(normalizedWorkspace);
+  if (!normalizedWorkspace || !normalizedState || !legacyRoot) {
+    return;
+  }
+
+  const command = `
+set -euo pipefail
+legacy_root=${shellEscape(legacyRoot)}
+state_root=${shellEscape(normalizedState)}
+mkdir -p "$(dirname "$state_root")"
+
+if [[ -d "$legacy_root" ]]; then
+  if [[ -z "$(find "$state_root" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    rm -rf "$state_root"
+    mv "$legacy_root" "$state_root"
+  else
+    rm -rf "$legacy_root"
+  fi
+fi
+
+mkdir -p "$state_root"
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
 }
 
 function buildSandboxVerifyScript(): string {
@@ -480,7 +520,7 @@ async function startOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
-  workspaceRoot?: string | null,
+  stateRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   try {
@@ -492,8 +532,8 @@ async function startOpencodeServer(
 
   const inlineEnv = Object.entries({
     ...envs,
-    ...(resolveOpencodeDataHome(workspaceRoot)
-      ? { XDG_DATA_HOME: resolveOpencodeDataHome(workspaceRoot)! }
+    ...(resolveOpencodeDataHome(stateRoot)
+      ? { XDG_DATA_HOME: resolveOpencodeDataHome(stateRoot)! }
       : {}),
   })
     .map(([key, value]) => `${key}=${shellEscape(value)}`)
@@ -533,12 +573,12 @@ async function restartOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
-  workspaceRoot?: string | null,
+  stateRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   await stopOpencodeServer(sessionId);
   await new Promise((resolve) => setTimeout(resolve, 500));
-  await startOpencodeServer(sessionId, baseUrl, envs, workspaceRoot, trafficAccessToken);
+  await startOpencodeServer(sessionId, baseUrl, envs, stateRoot, trafficAccessToken);
 }
 
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
@@ -557,17 +597,13 @@ export class SandboxAgentProvisionService {
       ...baseEnvs,
       ...connectorBootstrap.processEnvs,
     };
-    await writeOpencodeConfig(
-      sessionId,
-      opencodeEnvs,
-      resolveOpencodeWorkspacePath(input.taskSessionId || ''),
-      connectorBootstrap.mcpEntries
-    );
+    const stateRoot = input.taskSessionId ? resolveOpencodeStatePath(input.taskSessionId) : undefined;
+    await writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries);
     await restartOpencodeServer(
       sessionId,
       baseUrl,
       opencodeEnvs,
-      resolveOpencodeWorkspacePath(input.taskSessionId || ''),
+      stateRoot,
       trafficAccessToken
     );
     return {
@@ -631,7 +667,9 @@ export class SandboxAgentProvisionService {
     await runStep('opencode_present', () => assertOpencodeReady(sessionId));
     await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
 
-    const workspaceRoot = await runStep('workspace_prepare', () => ensureWorkspace(sessionId, taskSessionId || undefined));
+    const layout = await runStep('workspace_prepare', () => ensureWorkspaceLayout(sessionId, taskSessionId || undefined));
+    const workspaceRoot = layout?.workspaceRoot || null;
+    const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
 
     await ensurePlaywrightDeps(sessionId);
 
@@ -641,6 +679,7 @@ export class SandboxAgentProvisionService {
         await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
       }
     }
+    await runStep('opencode_state_migrate', () => migrateLegacyWorkspaceState(sessionId, workspaceRoot, stateRoot));
 
     const connectorBootstrap = await runStep('opencode_connector_config', () =>
       resolveAttachedConnectorBootstrap(taskSessionId)
@@ -651,12 +690,12 @@ export class SandboxAgentProvisionService {
     };
 
     await runStep('opencode_config', () =>
-      writeOpencodeConfig(sessionId, opencodeEnvs, workspaceRoot, connectorBootstrap.mcpEntries)
+      writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
     );
     await runStep('opencode_start', () =>
       isReused
-        ? restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
-        : startOpencodeServer(sessionId, baseUrl, opencodeEnvs, workspaceRoot, trafficAccessToken)
+        ? restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, stateRoot, trafficAccessToken)
+        : startOpencodeServer(sessionId, baseUrl, opencodeEnvs, stateRoot, trafficAccessToken)
     );
     await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
     await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
@@ -671,6 +710,7 @@ export class SandboxAgentProvisionService {
       opencodePort: e2bConfig.opencodePort,
       opencodeHost: host,
       opencodeWorkspaceRoot: workspaceRoot || undefined,
+      opencodeStateRoot: stateRoot || undefined,
       e2b: {
         ...(existing?.metadata as any)?.e2b,
         sandboxId: sessionId,

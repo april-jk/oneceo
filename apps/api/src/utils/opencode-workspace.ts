@@ -6,11 +6,45 @@ function sanitizeSegment(input: string): string {
   return normalized;
 }
 
+function normalizeRoot(input: string, fallback: string): string {
+  return (input || fallback).trim().replace(/[\\/]+$/, '');
+}
+
+function parentDir(input: string): string {
+  const normalized = input.replace(/[\\/]+$/, '');
+  const index = normalized.lastIndexOf('/');
+  if (index <= 0) {
+    return normalized;
+  }
+  return normalized.slice(0, index);
+}
+
 export function resolveOpencodeWorkspacePath(taskSessionId: string): string {
-  const root = (process.env.OPENCODE_TASK_WORKSPACE_ROOT || '/opt/.altus/opencode/workspaces')
-    .trim()
-    .replace(/[\\/]+$/, '');
+  const root = normalizeRoot(
+    process.env.OPENCODE_TASK_WORKSPACE_ROOT || '',
+    '/opt/.altus/opencode/workspaces'
+  );
   const safeSession = sanitizeSegment(taskSessionId);
   return `${root}/${safeSession}`;
 }
 
+export function resolveOpencodeStatePath(taskSessionId: string): string {
+  const explicit = (process.env.OPENCODE_TASK_STATE_ROOT || '').trim();
+  const workspaceBase = normalizeRoot(
+    process.env.OPENCODE_TASK_WORKSPACE_ROOT || '',
+    '/opt/.altus/opencode/workspaces'
+  );
+  const root = explicit
+    ? normalizeRoot(explicit, '/home/user/opencode/state')
+    : `${parentDir(workspaceBase)}/state`;
+  const safeSession = sanitizeSegment(taskSessionId);
+  return `${root}/${safeSession}`;
+}
+
+export function resolveLegacyOpencodeStatePath(workspaceRoot?: string | null): string | null {
+  const normalized = typeof workspaceRoot === 'string' ? workspaceRoot.trim() : '';
+  if (!normalized) {
+    return null;
+  }
+  return `${normalized.replace(/\/+$/, '')}/.opencode`;
+}

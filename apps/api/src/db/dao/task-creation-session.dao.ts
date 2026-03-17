@@ -547,11 +547,6 @@ export class TaskCreationSessionDAO {
           .orderBy(desc(conversationMessages.timelineCursor), desc(conversationMessages.createdAt), desc(conversationMessages.id))
           .limit(TaskCreationSessionDAO.RECENT_MESSAGE_LIMIT);
 
-        await db.delete(taskSessionRecentMessages).where(eq(taskSessionRecentMessages.sessionId, sessionId));
-        if (latest.length === 0) {
-          continue;
-        }
-
         const payload = this.dedupeRecentWindowRows([...latest])
           .sort((left, right) => (left.timelineCursor || 0) - (right.timelineCursor || 0))
           .map((message) => {
@@ -572,7 +567,31 @@ export class TaskCreationSessionDAO {
             };
           });
 
-        await db.insert(taskSessionRecentMessages).values(payload);
+        await db.transaction(async (tx) => {
+          await tx
+            .delete(taskSessionRecentMessages)
+            .where(eq(taskSessionRecentMessages.sessionId, sessionId));
+          if (payload.length === 0) {
+            return;
+          }
+          await tx
+            .insert(taskSessionRecentMessages)
+            .values(payload)
+            .onConflictDoUpdate({
+              target: [taskSessionRecentMessages.sessionId, taskSessionRecentMessages.messageKey],
+              set: {
+                messageId: sql`excluded.message_id`,
+                role: sql`excluded.role`,
+                content: sql`excluded.content`,
+                messageType: sql`excluded.message_type`,
+                metadata: sql`excluded.metadata`,
+                timelineCursor: sql`excluded.timeline_cursor`,
+                runtimeGeneration: sql`excluded.runtime_generation`,
+                createdAt: sql`excluded.created_at`,
+                updatedAt: sql`excluded.updated_at`,
+              },
+            });
+        });
       }
     } catch (error) {
       if (this.isRecentMessageTableUnavailable(error)) {
@@ -584,11 +603,6 @@ export class TaskCreationSessionDAO {
 
   async replaceRecentMessagesSnapshot(sessionId: string, messages: RecentMessageSnapshotInput[]) {
     const snapshot = Array.isArray(messages) ? messages : [];
-    await db.delete(taskSessionRecentMessages).where(eq(taskSessionRecentMessages.sessionId, sessionId));
-    if (snapshot.length === 0) {
-      return;
-    }
-
     const payload = this.dedupeRecentWindowRows(
       snapshot
       .map((message, index) => {
@@ -633,7 +647,31 @@ export class TaskCreationSessionDAO {
     )
       .sort((left, right) => (left.timelineCursor || 0) - (right.timelineCursor || 0));
 
-    await db.insert(taskSessionRecentMessages).values(payload as any);
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(taskSessionRecentMessages)
+        .where(eq(taskSessionRecentMessages.sessionId, sessionId));
+      if (payload.length === 0) {
+        return;
+      }
+      await tx
+        .insert(taskSessionRecentMessages)
+        .values(payload as any)
+        .onConflictDoUpdate({
+          target: [taskSessionRecentMessages.sessionId, taskSessionRecentMessages.messageKey],
+          set: {
+            messageId: sql`excluded.message_id`,
+            role: sql`excluded.role`,
+            content: sql`excluded.content`,
+            messageType: sql`excluded.message_type`,
+            metadata: sql`excluded.metadata`,
+            timelineCursor: sql`excluded.timeline_cursor`,
+            runtimeGeneration: sql`excluded.runtime_generation`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        });
+    });
   }
 
   private async pruneConversationStorageNoise(sessionId: string) {

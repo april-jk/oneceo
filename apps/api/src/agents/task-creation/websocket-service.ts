@@ -564,6 +564,7 @@ export class TaskCreationWebSocketService {
 
     const orchestratorSessionId = String((message.metadata as any)?.orchestratorSessionId || '').trim();
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
+    const clientMessageKey = String((message.metadata as any)?.messageKey || '').trim() || undefined;
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
     const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
 
@@ -755,6 +756,7 @@ export class TaskCreationWebSocketService {
         content: message.content || '',
         orchestratorSessionId: orchestratorSessionId || undefined,
         workspacePath: workspacePath || undefined,
+        clientMessageKey,
       });
 
       // 直通模式下给前端一个“已接收”回执，并同步当前 opencodeSessionId，

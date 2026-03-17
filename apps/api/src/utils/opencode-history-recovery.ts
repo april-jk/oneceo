@@ -23,6 +23,23 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function normalizePath(value: unknown): string {
   const text = asText(value);
   if (!text) return '';
@@ -99,60 +116,194 @@ function buildToolSummary(part: Record<string, unknown>): string {
   return status ? `[Tool] ${toolName} · ${status}` : `[Tool] ${toolName}`;
 }
 
-function buildToolMetadata(part: Record<string, unknown>, context: RecoveryContext) {
-  const toolName =
-    asText(part.tool) ||
-    asText(part.name) ||
-    asText(toRecord(part.call).name) ||
-    'tool';
+function buildStructuralMetadata(
+  eventType: string,
+  event: Record<string, unknown>,
+  context: RecoveryContext,
+  extra?: Record<string, unknown>
+) {
   return {
     runtimeGeneration: context.generation,
     orchestratorSessionId: context.orchestratorSessionId,
     opencodeSessionId: context.opencodeSessionId,
     workspacePath: context.workspacePath,
     source: 'opencode_native_history',
-    eventType: 'message.part.updated',
+    eventType,
+    event,
+    ...(extra || {}),
     rawPayload: {
-      eventType: 'message.part.updated',
-      event: {
-        type: 'message.part.updated',
-        directory: context.workspacePath,
-        properties: {
-          part: {
-            id: asText(part.id) || undefined,
-            type: 'tool',
-            tool: toolName,
-            name: toolName,
-            state: toRecord(part.state),
-          },
-        },
-      },
+      eventType,
+      event,
     },
   } satisfies Record<string, unknown>;
 }
 
-function buildAssistantTextMetadata(partId: string | undefined, context: RecoveryContext) {
+function normalizeNativeMessageInfo(record: Record<string, unknown>, context: RecoveryContext) {
+  const info = toRecord(record.info);
+  const role = (asText(info.role) || asText(record.role)).toLowerCase();
+  const created = resolveMessageTimestamp(record);
+  const recordTime = toRecord(record.time);
+  const infoTime = toRecord(info.time);
+  const completed =
+    asNumber(recordTime.completed) ||
+    asNumber(recordTime.ended) ||
+    asNumber(infoTime.completed) ||
+    asNumber(infoTime.ended);
+  const sessionID =
+    asText(record.sessionID) ||
+    asText(record.sessionId) ||
+    asText(info.sessionID) ||
+    asText(info.sessionId) ||
+    context.opencodeSessionId;
+  const id = asText(record.id) || asText(info.id);
+  const parentID = asText(record.parentID) || asText(record.parentId) || asText(info.parentID) || asText(info.parentId);
+  const providerID =
+    asText(record.providerID) ||
+    asText(record.providerId) ||
+    asText(info.providerID) ||
+    asText(info.providerId);
+  const modelID =
+    asText(record.modelID) ||
+    asText(record.modelId) ||
+    asText(info.modelID) ||
+    asText(info.modelId);
+
+  if (role === 'assistant') {
+    return {
+      ...info,
+      ...record,
+      id,
+      sessionID,
+      role: 'assistant',
+      parentID: parentID || undefined,
+      providerID: providerID || undefined,
+      modelID: modelID || undefined,
+      time: {
+        created,
+        ...(completed ? { completed } : {}),
+      },
+    } satisfies Record<string, unknown>;
+  }
+
   return {
-    runtimeGeneration: context.generation,
-    orchestratorSessionId: context.orchestratorSessionId,
-    opencodeSessionId: context.opencodeSessionId,
-    workspacePath: context.workspacePath,
-    source: 'opencode_native_history',
-    eventType: 'message.final',
-    rawPayload: {
-      eventType: 'message.final',
-      event: {
-        type: 'message.final',
-        directory: context.workspacePath,
-        properties: {
-          part: {
-            id: partId || undefined,
-            type: 'text',
-          },
-        },
+    ...info,
+    ...record,
+    id,
+    sessionID,
+    role: role || 'user',
+    time: {
+      created,
+    },
+  } satisfies Record<string, unknown>;
+}
+
+function normalizeNativePart(
+  rawPart: Record<string, unknown>,
+  messageInfo: Record<string, unknown>,
+  context: RecoveryContext
+) {
+  const type = asText(rawPart.type).toLowerCase();
+  const id = asText(rawPart.id) || asText(rawPart.callID) || `${type || 'part'}_${messageInfo.id}`;
+  const sessionID = asText(rawPart.sessionID) || asText(rawPart.sessionId) || context.opencodeSessionId;
+  const messageID = asText(rawPart.messageID) || asText(rawPart.messageId) || asText(messageInfo.id);
+
+  return {
+    ...rawPart,
+    id,
+    type: type || asText(rawPart.type),
+    sessionID,
+    messageID,
+  } satisfies Record<string, unknown>;
+}
+
+function buildMessageUpdatedMetadata(
+  messageInfo: Record<string, unknown>,
+  context: RecoveryContext
+) {
+  const event = {
+    type: 'message.updated',
+    directory: context.workspacePath,
+    properties: {
+      info: messageInfo,
+      role: asText(messageInfo.role).toLowerCase() || undefined,
+    },
+  } satisfies Record<string, unknown>;
+  return buildStructuralMetadata('message.updated', event, context, {
+    messageId: asText(messageInfo.id) || undefined,
+    role: asText(messageInfo.role).toLowerCase() || undefined,
+  });
+}
+
+function buildPartUpdatedMetadata(
+  part: Record<string, unknown>,
+  messageInfo: Record<string, unknown>,
+  context: RecoveryContext
+) {
+  const role = asText(messageInfo.role).toLowerCase() || undefined;
+  const event = {
+    type: 'message.part.updated',
+    directory: context.workspacePath,
+    properties: {
+      part,
+      role,
+      message: {
+        id: asText(messageInfo.id) || undefined,
+        role,
+        parentID: asText(messageInfo.parentID) || undefined,
+        time: toRecord(messageInfo.time),
       },
     },
   } satisfies Record<string, unknown>;
+  return buildStructuralMetadata('message.part.updated', event, context, {
+    messageId: asText(messageInfo.id) || undefined,
+    partId: asText(part.id) || undefined,
+    role,
+  });
+}
+
+function buildAssistantFinalMetadata(
+  partId: string | undefined,
+  messageInfo: Record<string, unknown>,
+  context: RecoveryContext
+) {
+  const event = {
+    type: 'message.final',
+    directory: context.workspacePath,
+    properties: {
+      part: {
+        id: partId || undefined,
+        type: 'text',
+        messageID: asText(messageInfo.id) || undefined,
+        sessionID: context.opencodeSessionId,
+      },
+      role: 'assistant',
+      message: {
+        id: asText(messageInfo.id) || undefined,
+        role: 'assistant',
+        parentID: asText(messageInfo.parentID) || undefined,
+        time: toRecord(messageInfo.time),
+      },
+    },
+  } satisfies Record<string, unknown>;
+  return buildStructuralMetadata('message.final', event, context, {
+    messageId: asText(messageInfo.id) || undefined,
+    partId: partId || undefined,
+    role: 'assistant',
+  });
+}
+
+function summarizeRenderablePart(part: Record<string, unknown>): string {
+  const type = asText(part.type).toLowerCase();
+  if (type === 'text') {
+    return asText(part.text) || asText(part.content);
+  }
+  if (type === 'reasoning') {
+    return asText(part.text) || asText(part.content);
+  }
+  if (type === 'tool' || type === 'tool-call' || type === 'tool_call') {
+    return buildToolSummary(part);
+  }
+  return '';
 }
 
 export function pickRecoveredOpencodeSessionId(
@@ -216,10 +367,11 @@ export function normalizeOpencodeNativeMessages(
     createdAtMs: number,
     sequence: number,
     metadata?: Record<string, unknown>,
-    idSuffix?: string
+    idSuffix?: string,
+    options?: { allowEmpty?: boolean }
   ) => {
     const normalizedContent = String(content || '').trim();
-    if (!normalizedContent) return;
+    if (!normalizedContent && options?.allowEmpty !== true) return;
     result.push({
       id: `${context.opencodeSessionId}:${createdAtMs}:${sequence}${idSuffix ? `:${idSuffix}` : ''}`,
       role,
@@ -243,6 +395,7 @@ export function normalizeOpencodeNativeMessages(
       const role = (asText(info.role) || asText(record.role)).toLowerCase();
       const createdAtMs = resolveMessageTimestamp(record);
       const parts = Array.isArray(record.parts) ? record.parts : [];
+      const messageInfo = normalizeNativeMessageInfo(record, context);
       let sequence = 0;
 
       if (role === 'user') {
@@ -264,6 +417,7 @@ export function normalizeOpencodeNativeMessages(
             opencodeSessionId: context.opencodeSessionId,
             workspacePath: context.workspacePath,
             source: 'opencode_native_history',
+            opencodeMessageId: asText(messageInfo.id) || undefined,
           },
           asText(info.id) || asText(record.id) || 'user'
         );
@@ -274,44 +428,66 @@ export function normalizeOpencodeNativeMessages(
         return;
       }
 
-      const textParts: string[] = [];
-      let textPartId = '';
+      push(
+        'agent',
+        'opencode_event',
+        '',
+        createdAtMs,
+        sequence++,
+        buildMessageUpdatedMetadata(messageInfo, context),
+        `${asText(messageInfo.id) || 'assistant'}:message`,
+        { allowEmpty: true }
+      );
+
+      let finalAssistantText = '';
+      let finalAssistantPartId = '';
       for (const rawPart of parts) {
-        const part = toRecord(rawPart);
+        const part = normalizeNativePart(toRecord(rawPart), messageInfo, context);
         const partType = asText(part.type).toLowerCase();
+        const content = summarizeRenderablePart(part);
         if (partType === 'tool' || partType === 'tool-call' || partType === 'tool_call') {
           push(
             'agent',
             'opencode_event',
-            buildToolSummary(part),
+            content,
             createdAtMs,
             sequence++,
-            buildToolMetadata(part, context),
-            asText(part.id) || asText(part.callID) || 'tool'
+            buildPartUpdatedMetadata(part, messageInfo, context),
+            `${asText(messageInfo.id) || 'assistant'}:${asText(part.id) || 'tool'}`
           );
           continue;
         }
-        if (partType === 'text') {
-          const text = asText(part.text) || asText(part.content);
-          if (text) {
-            textParts.push(text);
-            if (!textPartId) {
-              textPartId = asText(part.id);
+        if (partType === 'text' || partType === 'reasoning') {
+          push(
+            'agent',
+            'opencode_event',
+            content,
+            createdAtMs,
+            sequence++,
+            buildPartUpdatedMetadata(part, messageInfo, context),
+            `${asText(messageInfo.id) || 'assistant'}:${asText(part.id) || partType}`
+          );
+          if (partType === 'text' && content) {
+            finalAssistantText = finalAssistantText ? `${finalAssistantText}\n\n${content}` : content;
+            if (!finalAssistantPartId) {
+              finalAssistantPartId = asText(part.id);
             }
           }
         }
       }
 
-      const assistantText = textParts.join('\n\n') || asText(record.content);
-      push(
-        'agent',
-        'opencode_event',
-        assistantText,
-        createdAtMs,
-        sequence++,
-        buildAssistantTextMetadata(textPartId || undefined, context),
-        textPartId || asText(info.id) || asText(record.id) || 'assistant'
-      );
+      const assistantText = finalAssistantText || asText(record.content);
+      if (assistantText) {
+        push(
+          'agent',
+          'opencode_event',
+          assistantText,
+          createdAtMs,
+          sequence++,
+          buildAssistantFinalMetadata(finalAssistantPartId || undefined, messageInfo, context),
+          `${asText(messageInfo.id) || 'assistant'}:final`
+        );
+      }
     });
 
   return result;

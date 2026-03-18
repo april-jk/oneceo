@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
   BarChart3,
@@ -29,7 +36,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
-import { buildPreviewItems, type PreviewDiffItem, type StructuredFileDiff } from "@/lib/opencode-preview";
+import {
+  buildPreviewItems,
+  type PreviewDiffItem,
+  type StructuredFileDiff,
+} from "@/lib/opencode-preview";
 import { Streamdown } from "streamdown";
 import {
   deleteTaskCreationDatabaseRow,
@@ -101,7 +112,9 @@ export default function OpencodePreviewPanel({
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
   const [internalTab, setInternalTab] = useState<PreviewTab>("files");
-  const [internalSelectedDiffId, setInternalSelectedDiffId] = useState<string | null>(null);
+  const [internalSelectedDiffId, setInternalSelectedDiffId] = useState<
+    string | null
+  >(null);
   const [autoDiff, setAutoDiff] = useState(true);
   const [tree, setTree] = useState<WorkspaceTree | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
@@ -111,16 +124,25 @@ export default function OpencodePreviewPanel({
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [dirState, setDirState] = useState<Record<string, DirectoryLoadState>>({});
-  const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(null);
+  const [dirState, setDirState] = useState<Record<string, DirectoryLoadState>>(
+    {},
+  );
+  const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(
+    null,
+  );
   const [debugLoading, setDebugLoading] = useState(false);
   const [debugStarting, setDebugStarting] = useState(false);
   const [debugError, setDebugError] = useState<string | null>(null);
-  const [deploymentInfo, setDeploymentInfo] = useState<TaskCreationDeploymentInfo | null>(null);
+  const [deploymentInfo, setDeploymentInfo] =
+    useState<TaskCreationDeploymentInfo | null>(null);
   const [deploymentLoading, setDeploymentLoading] = useState(false);
   const [deploymentError, setDeploymentError] = useState<string | null>(null);
-  const [deploymentAction, setDeploymentAction] = useState<"deploy" | "redeploy" | "rollback" | null>(null);
-  const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
+  const [deploymentAction, setDeploymentAction] = useState<
+    "deploy" | "redeploy" | "rollback" | null
+  >(null);
+  const [selectedDeploymentId, setSelectedDeploymentId] = useState<
+    string | null
+  >(null);
   const refreshTimerRef = useRef<number | null>(null);
   const debugBootRef = useRef(false);
   const debugRuntimeBootRef = useRef(false);
@@ -143,7 +165,10 @@ export default function OpencodePreviewPanel({
     if (autoDiff) {
       const latest = diffItems[diffItems.length - 1];
       setSelectedDiffId(latest ? latest.id : null);
-    } else if (selectedDiffId && !diffItems.find((item) => item.id === selectedDiffId)) {
+    } else if (
+      selectedDiffId &&
+      !diffItems.find((item) => item.id === selectedDiffId)
+    ) {
       const latest = diffItems[diffItems.length - 1];
       setSelectedDiffId(latest ? latest.id : null);
     }
@@ -156,7 +181,7 @@ export default function OpencodePreviewPanel({
     currentItems: WorkspaceTreeItem[],
     incomingItems: WorkspaceTreeItem[],
     parentPath: string,
-    append: boolean
+    append: boolean,
   ): WorkspaceTreeItem[] => {
     const normalizedParent = normalizeWorkspacePath(parentPath);
     const parentPrefix = normalizedParent ? `${normalizedParent}/` : "";
@@ -164,7 +189,9 @@ export default function OpencodePreviewPanel({
 
     currentItems.forEach((item) => {
       const normalized = normalizeWorkspacePath(item.path);
-      const belongsToParent = normalizedParent ? normalized.startsWith(parentPrefix) : true;
+      const belongsToParent = normalizedParent
+        ? normalized.startsWith(parentPrefix)
+        : true;
       if (!append && belongsToParent) return;
       byPath.set(normalized, { path: normalized, type: item.type });
     });
@@ -180,7 +207,7 @@ export default function OpencodePreviewPanel({
 
   async function loadDirectory(
     dirPath: string,
-    options?: { append?: boolean; refresh?: boolean; silent?: boolean }
+    options?: { append?: boolean; refresh?: boolean; silent?: boolean },
   ) {
     if (!sessionId) {
       return null;
@@ -217,7 +244,12 @@ export default function OpencodePreviewPanel({
 
       setTree((prev) => {
         const baseItems = prev?.items || [];
-        const mergedItems = mergeWorkspaceItems(baseItems, page.items || [], normalizedDir, append);
+        const mergedItems = mergeWorkspaceItems(
+          baseItems,
+          page.items || [],
+          normalizedDir,
+          append,
+        );
         return {
           root: page.root || prev?.root || "",
           items: mergedItems,
@@ -232,7 +264,8 @@ export default function OpencodePreviewPanel({
           error: null,
           hasMore: Boolean(page.hasMore),
           nextCursor:
-            typeof page.nextCursor === "number" && Number.isFinite(page.nextCursor)
+            typeof page.nextCursor === "number" &&
+            Number.isFinite(page.nextCursor)
               ? page.nextCursor
               : null,
           returned: Number(page.returned || 0),
@@ -294,7 +327,11 @@ export default function OpencodePreviewPanel({
       const normalized = normalizeWorkspacePath(dirPath);
       const state = dirState[normalized];
       if (!state || !state.initialized || state.error) {
-        await loadDirectory(normalized, { append: false, refresh: false, silent: true });
+        await loadDirectory(normalized, {
+          append: false,
+          refresh: false,
+          silent: true,
+        });
       }
     }
     setFileLoading(true);
@@ -396,17 +433,30 @@ export default function OpencodePreviewPanel({
     });
     const state = dirState[normalized];
     if (!state || !state.initialized || state.error) {
-      void loadDirectory(normalized, { append: false, refresh: false, silent: true });
+      void loadDirectory(normalized, {
+        append: false,
+        refresh: false,
+        silent: true,
+      });
     }
   };
 
   const handleLoadMoreDirectory = (path: string) => {
     const normalized = normalizeWorkspacePath(path);
     const state = dirState[normalized];
-    if (!state || state.loading || !state.hasMore || state.nextCursor === null) {
+    if (
+      !state ||
+      state.loading ||
+      !state.hasMore ||
+      state.nextCursor === null
+    ) {
       return;
     }
-    void loadDirectory(normalized, { append: true, refresh: false, silent: true });
+    void loadDirectory(normalized, {
+      append: true,
+      refresh: false,
+      silent: true,
+    });
   };
 
   useEffect(() => {
@@ -511,10 +561,14 @@ export default function OpencodePreviewPanel({
         }
       } catch (error) {
         if (cancelled) return;
-        const message = error instanceof Error ? error.message : "加载调试信息失败";
+        const message =
+          error instanceof Error ? error.message : "加载调试信息失败";
         setDebugError(message);
         setDebugInfo(null);
-        if (message.toLowerCase().includes("failed to fetch") || message.toLowerCase().includes("network")) {
+        if (
+          message.toLowerCase().includes("failed to fetch") ||
+          message.toLowerCase().includes("network")
+        ) {
           if (debugPollRef.current) {
             window.clearTimeout(debugPollRef.current);
           }
@@ -559,7 +613,10 @@ export default function OpencodePreviewPanel({
       }, 4000);
     };
 
-    const loadDeployment = async (silent: boolean = false, deploymentId?: string) => {
+    const loadDeployment = async (
+      silent: boolean = false,
+      deploymentId?: string,
+    ) => {
       if (!silent) {
         setDeploymentLoading(true);
       }
@@ -567,7 +624,7 @@ export default function OpencodePreviewPanel({
       try {
         const info = await getTaskCreationDeploymentInfo(
           sessionId,
-          deploymentId || selectedDeploymentId || undefined
+          deploymentId || selectedDeploymentId || undefined,
         );
         if (cancelled) return;
         setDeploymentInfo(info);
@@ -575,7 +632,8 @@ export default function OpencodePreviewPanel({
         schedulePoll(Boolean(info?.activeDeploymentPending));
       } catch (error) {
         if (cancelled) return;
-        const message = error instanceof Error ? error.message : "加载部署信息失败";
+        const message =
+          error instanceof Error ? error.message : "加载部署信息失败";
         setDeploymentError(message);
         if (!silent) {
           setDeploymentInfo(null);
@@ -605,7 +663,9 @@ export default function OpencodePreviewPanel({
       window.clearTimeout(deploymentPollRef.current);
     }
     deploymentPollRef.current = window.setTimeout(() => {
-      void refreshDeployment(selectedDeploymentId || deploymentInfo.deploymentId || undefined);
+      void refreshDeployment(
+        selectedDeploymentId || deploymentInfo.deploymentId || undefined,
+      );
     }, 4000);
     return () => {
       if (deploymentPollRef.current) {
@@ -613,7 +673,14 @@ export default function OpencodePreviewPanel({
         deploymentPollRef.current = null;
       }
     };
-  }, [open, currentTab, sessionId, deploymentInfo?.activeDeploymentPending, deploymentInfo?.deploymentId, selectedDeploymentId]);
+  }, [
+    open,
+    currentTab,
+    sessionId,
+    deploymentInfo?.activeDeploymentPending,
+    deploymentInfo?.deploymentId,
+    selectedDeploymentId,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -637,7 +704,8 @@ export default function OpencodePreviewPanel({
 
   if (!open) return null;
 
-  const currentDiff = diffItems.find((item) => item.id === selectedDiffId) || null;
+  const currentDiff =
+    diffItems.find((item) => item.id === selectedDiffId) || null;
   const treeCount = tree?.items.length || 0;
 
   const refreshDeployment = async (deploymentId?: string) => {
@@ -650,19 +718,22 @@ export default function OpencodePreviewPanel({
     try {
       const info = await getTaskCreationDeploymentInfo(
         sessionId,
-        deploymentId || selectedDeploymentId || undefined
+        deploymentId || selectedDeploymentId || undefined,
       );
       setDeploymentInfo(info);
       setSelectedDeploymentId(info?.deploymentId || deploymentId || null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "加载部署信息失败";
+      const message =
+        error instanceof Error ? error.message : "加载部署信息失败";
       setDeploymentError(message);
     } finally {
       setDeploymentLoading(false);
     }
   };
 
-  const runDeploymentAction = async (action: "deploy" | "redeploy" | "rollback") => {
+  const runDeploymentAction = async (
+    action: "deploy" | "redeploy" | "rollback",
+  ) => {
     if (!sessionId) {
       setDeploymentError("缺少会话信息");
       return;
@@ -674,10 +745,18 @@ export default function OpencodePreviewPanel({
         action === "deploy"
           ? await deployTaskCreationSession(sessionId)
           : action === "redeploy"
-            ? await redeployTaskCreationSession(sessionId, selectedDeploymentId || "")
-            : await rollbackTaskCreationSessionDeployment(sessionId, selectedDeploymentId || "");
+            ? await redeployTaskCreationSession(
+                sessionId,
+                selectedDeploymentId || "",
+              )
+            : await rollbackTaskCreationSessionDeployment(
+                sessionId,
+                selectedDeploymentId || "",
+              );
       setDeploymentInfo(result);
-      setSelectedDeploymentId(result?.deploymentId || selectedDeploymentId || null);
+      setSelectedDeploymentId(
+        result?.deploymentId || selectedDeploymentId || null,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "部署操作失败";
       setDeploymentError(message);
@@ -690,15 +769,22 @@ export default function OpencodePreviewPanel({
     <aside
       className={cn(
         "w-full h-full shrink-0 rounded-xl border border-border/70 bg-white flex flex-col min-h-0",
-        className
+        className,
       )}
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
           内容预览
-          <span className="text-xs text-muted-foreground">{treeCount + diffItems.length}</span>
+          <span className="text-xs text-muted-foreground">
+            {treeCount + diffItems.length}
+          </span>
         </div>
-        <Button variant="ghost" size="sm" onClick={onToggle} className="h-7 rounded-full">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggle}
+          className="h-7 rounded-full"
+        >
           收起
         </Button>
       </div>
@@ -710,7 +796,9 @@ export default function OpencodePreviewPanel({
             onTabChange?.("files");
             if (!onTabChange) setInternalTab("files");
           }}
-          className={currentTab === "files" ? "text-foreground font-semibold" : ""}
+          className={
+            currentTab === "files" ? "text-foreground font-semibold" : ""
+          }
         >
           文件
         </button>
@@ -721,7 +809,9 @@ export default function OpencodePreviewPanel({
             onTabChange?.("changes");
             if (!onTabChange) setInternalTab("changes");
           }}
-          className={currentTab === "changes" ? "text-foreground font-semibold" : ""}
+          className={
+            currentTab === "changes" ? "text-foreground font-semibold" : ""
+          }
         >
           更改
         </button>
@@ -732,7 +822,9 @@ export default function OpencodePreviewPanel({
             onTabChange?.("debug");
             if (!onTabChange) setInternalTab("debug");
           }}
-          className={currentTab === "debug" ? "text-foreground font-semibold" : ""}
+          className={
+            currentTab === "debug" ? "text-foreground font-semibold" : ""
+          }
         >
           调试
         </button>
@@ -743,7 +835,9 @@ export default function OpencodePreviewPanel({
             onTabChange?.("deployment");
             if (!onTabChange) setInternalTab("deployment");
           }}
-          className={currentTab === "deployment" ? "text-foreground font-semibold" : ""}
+          className={
+            currentTab === "deployment" ? "text-foreground font-semibold" : ""
+          }
         >
           部署
         </button>
@@ -753,7 +847,9 @@ export default function OpencodePreviewPanel({
         <div
           className={cn(
             "absolute inset-0 h-full w-full transition-opacity",
-            currentTab === "files" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+            currentTab === "files"
+              ? "opacity-100 pointer-events-auto"
+              : "opacity-0 pointer-events-none",
           )}
           aria-hidden={currentTab !== "files"}
         >
@@ -778,7 +874,9 @@ export default function OpencodePreviewPanel({
         <div
           className={cn(
             "absolute inset-0 h-full w-full transition-opacity",
-            currentTab === "changes" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+            currentTab === "changes"
+              ? "opacity-100 pointer-events-auto"
+              : "opacity-0 pointer-events-none",
           )}
           aria-hidden={currentTab !== "changes"}
         >
@@ -794,7 +892,9 @@ export default function OpencodePreviewPanel({
         <div
           className={cn(
             "absolute inset-0 h-full w-full transition-opacity",
-            currentTab === "deployment" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+            currentTab === "deployment"
+              ? "opacity-100 pointer-events-auto"
+              : "opacity-0 pointer-events-none",
           )}
           aria-hidden={currentTab !== "deployment"}
         >
@@ -818,7 +918,9 @@ export default function OpencodePreviewPanel({
         <div
           className={cn(
             "absolute inset-0 h-full w-full transition-opacity",
-            currentTab === "debug" ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+            currentTab === "debug"
+              ? "opacity-100 pointer-events-auto"
+              : "opacity-0 pointer-events-none",
           )}
           aria-hidden={currentTab !== "debug"}
         >
@@ -844,7 +946,8 @@ export default function OpencodePreviewPanel({
                 const info = await getTaskCreationDebugInfo(sessionId);
                 setDebugInfo(info);
               } catch (error) {
-                const message = error instanceof Error ? error.message : "启动调试失败";
+                const message =
+                  error instanceof Error ? error.message : "启动调试失败";
                 setDebugError(message);
               } finally {
                 setDebugStarting(false);
@@ -865,7 +968,8 @@ type TreeNode = {
 };
 
 function toRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object") return value as Record<string, unknown>;
+  if (value && typeof value === "object")
+    return value as Record<string, unknown>;
   return {};
 }
 
@@ -894,16 +998,36 @@ function formatPreviewTimestamp(value?: string | null) {
 }
 
 function shouldRefreshFromMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.type !== "opencode_event") return false;
+  if (!message) return false;
+  if (message.type === "executor_event") {
+    const metadata = toRecord(message.metadata);
+    if (asText(metadata.executor).toLowerCase() !== "codex") return false;
+    const event = toRecord(metadata.event);
+    const item = toRecord(event.item);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const itemType =
+      asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
+    return eventType === "item.completed" && itemType === "file_change";
+  }
+  if (message.type !== "opencode_event") return false;
   const metadata = toRecord(message.metadata);
   const event = toRecord(metadata.event);
   const rawPayload = toRecord(metadata.rawPayload);
   const rawEvent = toRecord(rawPayload.event);
-  const eventType = (asText(metadata.eventType) || asText(event.type) || asText(rawEvent.type)).toLowerCase();
-  if (eventType.startsWith("file.") || eventType === "session.diff") return true;
+  const eventType = (
+    asText(metadata.eventType) ||
+    asText(event.type) ||
+    asText(rawEvent.type)
+  ).toLowerCase();
+  if (eventType.startsWith("file.") || eventType === "session.diff")
+    return true;
   const properties = toRecord(event.properties);
   const part = toRecord(properties.part);
-  const tool = (asText(part.tool) || asText(part.name) || asText(properties.tool)).toLowerCase();
+  const tool = (
+    asText(part.tool) ||
+    asText(part.name) ||
+    asText(properties.tool)
+  ).toLowerCase();
   return tool === "write" || tool === "edit" || tool === "apply_patch";
 }
 
@@ -985,7 +1109,12 @@ function FilePreview({
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>文件预览尚未加载</span>
-        <Button variant="outline" size="sm" onClick={onRefresh} disabled={runtimeStarting}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          disabled={runtimeStarting}
+        >
           {runtimeStarting ? "加载中..." : "加载文件"}
         </Button>
       </div>
@@ -1020,8 +1149,8 @@ function FilePreview({
       : null;
 
   return (
-    <div className="flex h-full flex-col md:flex-row">
-      <div className="md:basis-[30%] md:max-w-[30%] border-b md:border-b-0 md:border-r border-border overflow-auto px-3 py-3 bg-slate-50/60">
+    <div className="flex h-full min-h-0 flex-col md:flex-row">
+      <div className="border-b border-border overflow-auto overscroll-contain bg-slate-50/60 px-3 py-3 md:basis-[30%] md:max-w-[30%] md:border-r md:border-b-0">
         <div className="mb-2 space-y-1">
           <div className="text-[11px] text-muted-foreground break-all font-mono">
             根目录: {tree.root}
@@ -1060,26 +1189,40 @@ function FilePreview({
                 </span>
               </div>
               {contentLoading ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">加载中...</div>
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  加载中...
+                </div>
               ) : previewType === "markdown" && !isBinary ? (
-                <div className="min-h-0 flex-1 overflow-auto px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
                   <Streamdown>{file?.content || ""}</Streamdown>
                 </div>
               ) : previewType === "image" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto p-3">
-                  <img src={binaryDataUrl} alt={selectedPath} className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50" />
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
+                  <img
+                    src={binaryDataUrl}
+                    alt={selectedPath}
+                    className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50"
+                  />
                 </div>
               ) : previewType === "video" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto p-3">
-                  <video src={binaryDataUrl} controls className="max-h-full w-full rounded-md border border-slate-200 bg-black" />
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
+                  <video
+                    src={binaryDataUrl}
+                    controls
+                    className="max-h-full w-full rounded-md border border-slate-200 bg-black"
+                  />
                 </div>
               ) : previewType === "audio" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto p-3">
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                   <audio src={binaryDataUrl} controls className="w-full" />
                 </div>
               ) : previewType === "pdf" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto p-3">
-                  <iframe title={`preview-${selectedPath}`} src={binaryDataUrl} className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white" />
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
+                  <iframe
+                    title={`preview-${selectedPath}`}
+                    src={binaryDataUrl}
+                    className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                  />
                 </div>
               ) : isBinary ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">
@@ -1088,7 +1231,7 @@ function FilePreview({
                     : "该二进制文件类型暂不支持内嵌预览。"}
                 </div>
               ) : (
-                <div className="min-h-0 flex-1 overflow-auto">
+                <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
                   <pre className="px-3 py-3 text-xs leading-5 whitespace-pre text-slate-700">
                     <code>{file?.content || ""}</code>
                   </pre>
@@ -1153,7 +1296,9 @@ function TreeList({
             >
               <span className="w-3">{isDir ? (isOpen ? "▾" : "▸") : ""}</span>
               <span className="truncate">{node.name}</span>
-              {isDir && state?.loading ? <span className="ml-1 text-[10px] text-slate-400">加载中</span> : null}
+              {isDir && state?.loading ? (
+                <span className="ml-1 text-[10px] text-slate-400">加载中</span>
+              ) : null}
             </button>
             {isDir && isOpen ? (
               <div className="space-y-1">
@@ -1255,8 +1400,12 @@ function DiffPreview({
             })}
         </select>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-3">
-        {current ? <DiffBlock diff={current.diff} files={current.files} /> : <EmptyState text="暂无更改" />}
+      <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-3">
+        {current ? (
+          <DiffBlock diff={current.diff} files={current.files} />
+        ) : (
+          <EmptyState text="暂无更改" />
+        )}
       </div>
     </div>
   );
@@ -1287,7 +1436,8 @@ function DeploymentPreview({
   onRedeploy: () => void;
   onRollback: () => void;
 }) {
-  const [section, setSection] = useState<DeploymentWorkbenchSection>("overview");
+  const [section, setSection] =
+    useState<DeploymentWorkbenchSection>("overview");
   const [settingsSection, setSettingsSection] =
     useState<DeploymentSettingsSection>("general");
   const pendingStatuses = new Set([
@@ -1301,16 +1451,22 @@ function DeploymentPreview({
   ]);
   const currentDeploymentId = selectedDeploymentId || info?.deploymentId || "";
   const currentDeployment =
-    info?.deployments.find((item) => item.id === currentDeploymentId) || info?.deployments[0] || null;
+    info?.deployments.find((item) => item.id === currentDeploymentId) ||
+    info?.deployments[0] ||
+    null;
   const status = currentDeployment?.status || info?.latestStatus || "";
   const hasSuccessfulDeployment =
-    info?.deployments.some((item) => item.status === "SUCCESS") || info?.latestStatus === "SUCCESS";
-  const isPending = Boolean(info?.activeDeploymentPending || pendingStatuses.has(status.toUpperCase()));
+    info?.deployments.some((item) => item.status === "SUCCESS") ||
+    info?.latestStatus === "SUCCESS";
+  const isPending = Boolean(
+    info?.activeDeploymentPending || pendingStatuses.has(status.toUpperCase()),
+  );
   const statusMeta = !info?.configured
     ? {
         label: "未就绪",
-        description:
-          info?.missing.length ? `还需准备 ${info.missing.length} 项部署资源后才能发布。` : "正在准备部署资源。",
+        description: info?.missing.length
+          ? `还需准备 ${info.missing.length} 项部署资源后才能发布。`
+          : "正在准备部署资源。",
         badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
         dotClass: "bg-slate-400",
         panelClass: "border-slate-200 bg-slate-50/80",
@@ -1355,29 +1511,47 @@ function DeploymentPreview({
     new Map(
       [
         primaryAccessUrl ? ["网站地址", primaryAccessUrl] : null,
-        runtimeUrl && runtimeUrl !== primaryAccessUrl ? ["运行地址", runtimeUrl] : null,
-        ...((info?.domains || [])
-          .filter((domain) => domain && domain !== primaryAccessUrl && domain !== runtimeUrl)
-          .map((domain, index) => [`绑定域名 ${index + 1}`, domain] as const)),
+        runtimeUrl && runtimeUrl !== primaryAccessUrl
+          ? ["运行地址", runtimeUrl]
+          : null,
+        ...(info?.domains || [])
+          .filter(
+            (domain) =>
+              domain && domain !== primaryAccessUrl && domain !== runtimeUrl,
+          )
+          .map((domain, index) => [`绑定域名 ${index + 1}`, domain] as const),
       ]
         .filter(Boolean)
-        .map((entry) => entry as readonly [string, string])
-    )
+        .map((entry) => entry as readonly [string, string]),
+    ),
   );
   const primaryActionText =
-    actionLoading === "deploy" ? "发布中..." : hasSuccessfulDeployment ? "发布新版本" : "立即发布";
-  const successCount = info?.deployments.filter((item) => item.status === "SUCCESS").length ?? 0;
+    actionLoading === "deploy"
+      ? "发布中..."
+      : hasSuccessfulDeployment
+        ? "发布新版本"
+        : "立即发布";
+  const successCount =
+    info?.deployments.filter((item) => item.status === "SUCCESS").length ?? 0;
   const failedCount =
-    info?.deployments.filter((item) => item.status === "FAILED" || item.status === "CRASHED").length ?? 0;
+    info?.deployments.filter(
+      (item) => item.status === "FAILED" || item.status === "CRASHED",
+    ).length ?? 0;
   const totalDeployments = info?.deployments.length ?? 0;
-  const successRate = totalDeployments ? `${Math.round((successCount / totalDeployments) * 100)}%` : "暂无数据";
-  const latestTimestamp = formatPreviewTimestamp(currentDeployment?.createdAt) || currentDeployment?.createdAt || "尚无记录";
+  const successRate = totalDeployments
+    ? `${Math.round((successCount / totalDeployments) * 100)}%`
+    : "暂无数据";
+  const latestTimestamp =
+    formatPreviewTimestamp(currentDeployment?.createdAt) ||
+    currentDeployment?.createdAt ||
+    "尚无记录";
   const logsText = info?.logs.length
     ? info.logs
-        .map((entry) =>
-          `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${
-            entry.severity ? `${entry.severity} ` : ""
-          }${entry.message}`
+        .map(
+          (entry) =>
+            `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${
+              entry.severity ? `${entry.severity} ` : ""
+            }${entry.message}`,
         )
         .join("\n")
     : "";
@@ -1391,7 +1565,12 @@ function DeploymentPreview({
       <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">部署</span>
-          <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", statusMeta.badgeClass)}>
+          <span
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[11px]",
+              statusMeta.badgeClass,
+            )}
+          >
             {statusMeta.label}
           </span>
         </div>
@@ -1440,9 +1619,11 @@ function DeploymentPreview({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-4">
+      <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4">
         {error ? <div className="text-xs text-rose-600">{error}</div> : null}
-        {info?.message ? <div className="text-xs text-muted-foreground">{info.message}</div> : null}
+        {info?.message ? (
+          <div className="text-xs text-muted-foreground">{info.message}</div>
+        ) : null}
 
         {section === "overview" ? (
           <DeploymentOverviewSection
@@ -1482,7 +1663,11 @@ function DeploymentPreview({
         ) : null}
 
         {section === "database" ? (
-          <DeploymentDatabaseSection sessionId={sessionId} info={info} statusMeta={statusMeta} />
+          <DeploymentDatabaseSection
+            sessionId={sessionId}
+            info={info}
+            statusMeta={statusMeta}
+          />
         ) : null}
 
         {section === "storage" ? (
@@ -1577,14 +1762,23 @@ function DeploymentOverviewSection({
             </div>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <div className={cn("size-2 rounded-full", statusMeta.dotClass)} />
-                <h3 className="text-lg font-semibold text-slate-900">{statusMeta.label}</h3>
+                <div
+                  className={cn("size-2 rounded-full", statusMeta.dotClass)}
+                />
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {statusMeta.label}
+                </h3>
               </div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">{statusMeta.description}</p>
+              <p className="max-w-2xl text-sm leading-6 text-slate-600">
+                {statusMeta.description}
+              </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={onDeploy} disabled={!info?.canDeploy || Boolean(actionLoading)}>
+            <Button
+              onClick={onDeploy}
+              disabled={!info?.canDeploy || Boolean(actionLoading)}
+            >
               {actionLoading === "deploy" ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -1609,7 +1803,9 @@ function DeploymentOverviewSection({
               onClick={onRollback}
               disabled={!currentDeploymentId || Boolean(actionLoading)}
             >
-              {actionLoading === "rollback" ? <Loader2 className="size-4 animate-spin" /> : null}
+              {actionLoading === "rollback" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : null}
               回滚版本
             </Button>
           </div>
@@ -1629,11 +1825,17 @@ function DeploymentOverviewSection({
           <DeploymentMetricCard
             title="访问入口"
             value={primaryAccessUrl ? "网站已生成访问地址" : "尚未生成访问地址"}
-            subtitle={primaryAccessUrl || "首次发布成功后，这里会展示线上访问地址。"}
+            subtitle={
+              primaryAccessUrl || "首次发布成功后，这里会展示线上访问地址。"
+            }
           />
           <DeploymentMetricCard
             title="版本概览"
-            value={info?.deployments.length ? `${info.deployments.length} 次发布记录` : "暂无发布记录"}
+            value={
+              info?.deployments.length
+                ? `${info.deployments.length} 次发布记录`
+                : "暂无发布记录"
+            }
             subtitle={
               info?.activeDeploymentPending
                 ? "当前有任务正在发布中。"
@@ -1659,7 +1861,9 @@ function DeploymentOverviewSection({
                   {primaryAccessUrl}
                 </a>
               ) : (
-                <p className="text-sm text-slate-500">发布完成后自动生成线上地址。</p>
+                <p className="text-sm text-slate-500">
+                  发布完成后自动生成线上地址。
+                </p>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1676,7 +1880,9 @@ function DeploymentOverviewSection({
                 onClick={() => onRefresh(currentDeploymentId || undefined)}
                 disabled={loading}
               >
-                <RefreshCw className={cn("size-4", loading ? "animate-spin" : "")} />
+                <RefreshCw
+                  className={cn("size-4", loading ? "animate-spin" : "")}
+                />
                 刷新结果
               </Button>
             </div>
@@ -1698,7 +1904,9 @@ function DeploymentOverviewSection({
                     <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
                       {label}
                     </div>
-                    <div className="mt-1 break-all text-sm text-slate-700">{value}</div>
+                    <div className="mt-1 break-all text-sm text-slate-700">
+                      {value}
+                    </div>
                   </div>
                   <ExternalLink className="size-4 shrink-0 text-slate-400" />
                 </div>
@@ -1716,7 +1924,9 @@ function DeploymentOverviewSection({
               发布记录
             </div>
             <div className="text-xs text-slate-500">
-              {currentDeployment ? `当前查看 ${currentDeployment.id.slice(0, 8)}` : "暂无记录"}
+              {currentDeployment
+                ? `当前查看 ${currentDeployment.id.slice(0, 8)}`
+                : "暂无记录"}
             </div>
           </div>
           <div className="space-y-3 p-4">
@@ -1737,23 +1947,34 @@ function DeploymentOverviewSection({
                       onClick={() => onSelectDeployment(item.id)}
                       className={cn(
                         "w-full rounded-md border px-3 py-3 text-left transition-colors",
-                        itemSelected ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:bg-slate-50"
+                        itemSelected
+                          ? "border-slate-900 bg-slate-50"
+                          : "border-slate-200 hover:bg-slate-50",
                       )}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
-                            <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", itemStatusClass)}>
+                            <span
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[11px]",
+                                itemStatusClass,
+                              )}
+                            >
                               {item.status}
                             </span>
-                            <span className="font-mono text-[11px] text-slate-400">{item.id.slice(0, 8)}</span>
+                            <span className="font-mono text-[11px] text-slate-400">
+                              {item.id.slice(0, 8)}
+                            </span>
                           </div>
                           <div className="text-sm font-medium text-slate-900">
                             {item.commitMessage || "由 OneCEO 触发的版本发布"}
                           </div>
                         </div>
                         <div className="text-xs text-slate-500">
-                          {formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}
+                          {formatPreviewTimestamp(item.createdAt) ||
+                            item.createdAt ||
+                            "时间未知"}
                         </div>
                       </div>
                     </button>
@@ -1774,7 +1995,8 @@ function DeploymentOverviewSection({
                       当前版本详情
                     </div>
                     <div className="mt-1 text-sm font-semibold text-slate-900">
-                      {currentDeployment.commitMessage || "由 OneCEO 触发的版本发布"}
+                      {currentDeployment.commitMessage ||
+                        "由 OneCEO 触发的版本发布"}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
                       {currentDeployment.commitAuthor
@@ -1817,13 +2039,21 @@ function DeploymentOverviewSection({
                 title="项目"
                 value={info?.projectName || info?.projectId || "未配置"}
                 mono={Boolean(info?.projectId && info?.projectName)}
-                extra={info?.projectId && info?.projectName ? info.projectId : undefined}
+                extra={
+                  info?.projectId && info?.projectName
+                    ? info.projectId
+                    : undefined
+                }
               />
               <DeploymentInfoCard
                 title="服务"
                 value={info?.serviceName || info?.serviceId || "未配置"}
                 mono={Boolean(info?.serviceId && info?.serviceName)}
-                extra={info?.serviceId && info?.serviceName ? info.serviceId : undefined}
+                extra={
+                  info?.serviceId && info?.serviceName
+                    ? info.serviceId
+                    : undefined
+                }
               />
               <DeploymentInfoCard
                 title="环境"
@@ -1851,14 +2081,16 @@ function DeploymentOverviewSection({
               发布日志
             </div>
             {logsText ? (
-              <div className="max-h-[420px] overflow-auto bg-slate-950 text-slate-100">
+              <div className="max-h-[420px] overflow-auto overscroll-contain bg-slate-950 text-slate-100">
                 <pre className="px-4 py-4 text-[11px] leading-5 whitespace-pre-wrap break-words">
                   <code>{logsText}</code>
                 </pre>
               </div>
             ) : (
               <div className="px-4 py-10 text-sm text-slate-500">
-                {info?.configured ? "当前版本暂无日志输出" : "部署资源准备完成后可查看发布日志"}
+                {info?.configured
+                  ? "当前版本暂无日志输出"
+                  : "部署资源准备完成后可查看发布日志"}
               </div>
             )}
           </section>
@@ -1907,7 +2139,9 @@ function DeploymentDashboardSection({
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="truncate text-lg font-semibold text-slate-900">{siteName}</h3>
+                    <h3 className="truncate text-lg font-semibold text-slate-900">
+                      {siteName}
+                    </h3>
                   </div>
                   {primaryUrl ? (
                     <a
@@ -1920,7 +2154,9 @@ function DeploymentDashboardSection({
                       <ExternalLink className="size-3.5 shrink-0" />
                     </a>
                   ) : (
-                    <div className="mt-1 text-sm text-slate-500">尚未生成站点访问地址</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      尚未生成站点访问地址
+                    </div>
                   )}
                 </div>
               </div>
@@ -1949,7 +2185,9 @@ function DeploymentDashboardSection({
                 公开
               </div>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                {primaryUrl ? "您的网站现已公开，任何人都可以访问。" : "完成首次发布后，网站会自动对外开放访问。"}
+                {primaryUrl
+                  ? "您的网站现已公开，任何人都可以访问。"
+                  : "完成首次发布后，网站会自动对外开放访问。"}
               </p>
             </div>
             <Button variant="outline" size="sm" className="h-8 text-xs">
@@ -1962,15 +2200,27 @@ function DeploymentDashboardSection({
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <h3 className="text-base font-medium text-slate-900">分析</h3>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 rounded-md text-xs"
+              >
                 <CalendarDays className="size-4" />
                 过去 24 小时
               </Button>
-              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 rounded-md text-xs"
+              >
                 <Filter className="size-4" />
                 筛选器
               </Button>
-              <Button variant="outline" size="sm" className="h-9 rounded-md text-xs">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 rounded-md text-xs"
+              >
                 <RefreshCw className="size-4" />
                 刷新
               </Button>
@@ -1986,20 +2236,32 @@ function DeploymentDashboardSection({
               <SiteMetricTab label="跳出率" value="0%" />
             </div>
             <div className="flex h-[320px] items-center justify-center text-sm text-slate-400">
-              {sessionId ? "当前还没有站点访问数据" : "缺少会话信息，无法展示站点数据"}
+              {sessionId
+                ? "当前还没有站点访问数据"
+                : "缺少会话信息，无法展示站点数据"}
             </div>
           </section>
 
           <div className="grid gap-4 xl:grid-cols-2">
-            <AnalyticsPlaceholderCard title="浏览最多的页面" primaryLabel="页面" secondaryLabel="访客" />
-            <AnalyticsPlaceholderCard title="引荐来源" primaryLabel="引荐来源" secondaryLabel="访客" />
+            <AnalyticsPlaceholderCard
+              title="浏览最多的页面"
+              primaryLabel="页面"
+              secondaryLabel="访客"
+            />
+            <AnalyticsPlaceholderCard
+              title="引荐来源"
+              primaryLabel="引荐来源"
+              secondaryLabel="访客"
+            />
             <AnalyticsPlaceholderCard
               title="地区"
               primaryLabel="地区"
               secondaryLabel="访客"
               rightControl={
                 <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 text-xs">
-                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">列表</span>
+                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">
+                    列表
+                  </span>
                   <span className="px-3 py-1 text-slate-500">地图</span>
                 </div>
               }
@@ -2010,7 +2272,9 @@ function DeploymentDashboardSection({
               secondaryLabel="访客"
               rightControl={
                 <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 text-xs">
-                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">浏览器</span>
+                  <span className="rounded-md bg-white px-3 py-1 text-slate-900 shadow-sm">
+                    浏览器
+                  </span>
                   <span className="px-3 py-1 text-slate-500">操作系统</span>
                   <span className="px-3 py-1 text-slate-500">设备</span>
                 </div>
@@ -2029,27 +2293,49 @@ function DeploymentDashboardSection({
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">部署数据</div>
+                <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                  部署数据
+                </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xl font-semibold text-slate-900">当前状态：{statusMeta.label}</h3>
-                  <span className={cn("rounded-full border px-2.5 py-1 text-[11px]", statusMeta.badgeClass)}>
-                    {info?.activeDeploymentPending ? "发布进行中" : "状态已同步"}
+                  <h3 className="text-xl font-semibold text-slate-900">
+                    当前状态：{statusMeta.label}
+                  </h3>
+                  <span
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px]",
+                      statusMeta.badgeClass,
+                    )}
+                  >
+                    {info?.activeDeploymentPending
+                      ? "发布进行中"
+                      : "状态已同步"}
                   </span>
                 </div>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{statusMeta.description}</p>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                  {statusMeta.description}
+                </p>
               </div>
               <DashboardModeToggle mode={mode} onChange={setMode} />
             </div>
 
             <div className="flex flex-wrap gap-2">
               <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                最近同步: <span className="font-medium text-slate-900">{latestTimestamp}</span>
+                最近同步:{" "}
+                <span className="font-medium text-slate-900">
+                  {latestTimestamp}
+                </span>
               </div>
               <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                可回退版本: <span className="font-medium text-slate-900">{successCount}</span>
+                可回退版本:{" "}
+                <span className="font-medium text-slate-900">
+                  {successCount}
+                </span>
               </div>
               <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
-                访问入口: <span className="font-medium text-slate-900">{accessEntries.length}</span>
+                访问入口:{" "}
+                <span className="font-medium text-slate-900">
+                  {accessEntries.length}
+                </span>
               </div>
             </div>
           </div>
@@ -2081,17 +2367,30 @@ function DeploymentDashboardSection({
 
       <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-slate-900">当前线上版本</div>
-          <div className="mt-1 text-xs text-slate-500">先看当前可访问版本，再决定是否继续发布、验证或回退。</div>
+          <div className="text-sm font-semibold text-slate-900">
+            当前线上版本
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            先看当前可访问版本，再决定是否继续发布、验证或回退。
+          </div>
         </div>
         <div className="space-y-4 p-4 sm:p-5">
           <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">版本说明</div>
+                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                  版本说明
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={cn("rounded-full border px-2 py-1 text-[11px]", statusMeta.badgeClass)}>
-                    {currentDeployment?.status || info?.latestStatus || "UNKNOWN"}
+                  <span
+                    className={cn(
+                      "rounded-full border px-2 py-1 text-[11px]",
+                      statusMeta.badgeClass,
+                    )}
+                  >
+                    {currentDeployment?.status ||
+                      info?.latestStatus ||
+                      "UNKNOWN"}
                   </span>
                   {info?.activeDeploymentPending ? (
                     <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
@@ -2106,11 +2405,17 @@ function DeploymentDashboardSection({
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 <span>{currentDeployment?.commitAuthor || "平台自动发布"}</span>
                 <span className="size-1 rounded-full bg-slate-300" />
-                <span>{formatPreviewTimestamp(currentDeployment?.createdAt) || currentDeployment?.createdAt || "时间未知"}</span>
+                <span>
+                  {formatPreviewTimestamp(currentDeployment?.createdAt) ||
+                    currentDeployment?.createdAt ||
+                    "时间未知"}
+                </span>
                 {currentDeployment?.id ? (
                   <>
                     <span className="size-1 rounded-full bg-slate-300" />
-                    <span className="font-mono">{currentDeployment.id.slice(0, 8)}</span>
+                    <span className="font-mono">
+                      {currentDeployment.id.slice(0, 8)}
+                    </span>
                   </>
                 ) : null}
               </div>
@@ -2119,7 +2424,9 @@ function DeploymentDashboardSection({
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
             <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">访问入口</div>
+              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                访问入口
+              </div>
               <div className="mt-3 space-y-2">
                 {accessEntries.length ? (
                   accessEntries.slice(0, 3).map(([label, url]) => (
@@ -2143,12 +2450,21 @@ function DeploymentDashboardSection({
             </div>
 
             <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">发布概览</div>
+              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                发布概览
+              </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <DashboardMiniStat label="成功版本" value={`${successCount}`} />
                 <DashboardMiniStat label="失败版本" value={`${failedCount}`} />
-                <DashboardMiniStat label="访问入口" value={`${accessEntries.length}`} />
-                <DashboardMiniStat label="最近活动" value={latestTimestamp} subtle />
+                <DashboardMiniStat
+                  label="访问入口"
+                  value={`${accessEntries.length}`}
+                />
+                <DashboardMiniStat
+                  label="最近活动"
+                  value={latestTimestamp}
+                  subtle
+                />
               </div>
             </div>
           </div>
@@ -2158,7 +2474,9 @@ function DeploymentDashboardSection({
       <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
           <div className="text-sm font-semibold text-slate-900">操作判断</div>
-          <div className="mt-1 text-xs text-slate-500">把最重要的部署判断压缩成简短结论，减少在侧栏里反复找信息。</div>
+          <div className="mt-1 text-xs text-slate-500">
+            把最重要的部署判断压缩成简短结论，减少在侧栏里反复找信息。
+          </div>
         </div>
         <div className="grid gap-3 p-4 sm:p-5 md:grid-cols-3">
           <InsightCard
@@ -2195,12 +2513,16 @@ function DeploymentDashboardSection({
       <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">最近版本轨迹</div>
+            <div className="text-sm font-semibold text-slate-900">
+              最近版本轨迹
+            </div>
             <div className="mt-1 text-xs text-slate-500">
               精简展示最近 6 次发布，重点保留状态、时间和版本说明。
             </div>
           </div>
-          <div className="text-xs text-slate-500">{info?.deployments.length || 0} 条记录</div>
+          <div className="text-xs text-slate-500">
+            {info?.deployments.length || 0} 条记录
+          </div>
         </div>
         <div className="p-5">
           {info?.deployments.length ? (
@@ -2216,9 +2538,10 @@ function DeploymentDashboardSection({
                         "mx-auto mt-[3px] size-2 rounded-full",
                         item.status === "SUCCESS"
                           ? "bg-emerald-500"
-                          : item.status === "FAILED" || item.status === "CRASHED"
+                          : item.status === "FAILED" ||
+                              item.status === "CRASHED"
                             ? "bg-rose-500"
-                            : "bg-amber-500"
+                            : "bg-amber-500",
                       )}
                     />
                   </div>
@@ -2230,7 +2553,11 @@ function DeploymentDashboardSection({
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                         <span>{item.commitAuthor || "平台自动发布"}</span>
                         <span className="size-1 rounded-full bg-slate-300" />
-                        <span>{formatPreviewTimestamp(item.createdAt) || item.createdAt || "时间未知"}</span>
+                        <span>
+                          {formatPreviewTimestamp(item.createdAt) ||
+                            item.createdAt ||
+                            "时间未知"}
+                        </span>
                         <span className="size-1 rounded-full bg-slate-300" />
                         <span className="font-mono">{item.id.slice(0, 8)}</span>
                       </div>
@@ -2262,17 +2589,27 @@ function DeploymentDatabaseSection({
   info: TaskCreationDeploymentInfo | null;
   statusMeta: DeploymentStatusMeta;
 }) {
-  const [databaseInfo, setDatabaseInfo] = useState<TaskCreationDatabaseInfo | null>(null);
-  const [rowsPage, setRowsPage] = useState<TaskCreationDatabaseRowsPage | null>(null);
+  const [databaseInfo, setDatabaseInfo] =
+    useState<TaskCreationDatabaseInfo | null>(null);
+  const [rowsPage, setRowsPage] = useState<TaskCreationDatabaseRowsPage | null>(
+    null,
+  );
   const [databaseLoading, setDatabaseLoading] = useState(false);
   const [rowsLoading, setRowsLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"insert" | "update" | "delete" | null>(null);
+  const [actionLoading, setActionLoading] = useState<
+    "insert" | "update" | "delete" | null
+  >(null);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [rowsError, setRowsError] = useState<string | null>(null);
   const [activeTableId, setActiveTableId] = useState<string | null>(null);
-  const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">("record");
-  const [selectedRowLocator, setSelectedRowLocator] = useState<TaskCreationDatabaseRowLocator | null>(null);
-  const [selectedRowValues, setSelectedRowValues] = useState<Record<string, string>>({});
+  const [panelMode, setPanelMode] = useState<"record" | "insert" | "settings">(
+    "record",
+  );
+  const [selectedRowLocator, setSelectedRowLocator] =
+    useState<TaskCreationDatabaseRowLocator | null>(null);
+  const [selectedRowValues, setSelectedRowValues] = useState<
+    Record<string, string>
+  >({});
   const [page, setPage] = useState(1);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -2289,7 +2626,9 @@ function DeploymentDatabaseSection({
         setActiveTableId((current) => current || result?.tables[0]?.id || null);
       } catch (error) {
         if (cancelled) return;
-        setDatabaseError(error instanceof Error ? error.message : "加载数据库信息失败");
+        setDatabaseError(
+          error instanceof Error ? error.message : "加载数据库信息失败",
+        );
       } finally {
         if (!cancelled) {
           setDatabaseLoading(false);
@@ -2309,7 +2648,12 @@ function DeploymentDatabaseSection({
       setRowsLoading(true);
       setRowsError(null);
       try {
-        const result = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+        const result = await getTaskCreationDatabaseRows(
+          sessionId,
+          activeTableId,
+          page,
+          50,
+        );
         if (cancelled) return;
         setRowsPage(result);
         if (!result?.rows.length) {
@@ -2320,7 +2664,9 @@ function DeploymentDatabaseSection({
           return;
         }
         const currentRow = selectedRowLocator
-          ? result.rows.find((row) => matchRowLocator(row, selectedRowLocator, result.columns))
+          ? result.rows.find((row) =>
+              matchRowLocator(row, selectedRowLocator, result.columns),
+            )
           : null;
         const nextRow = currentRow || result.rows[0];
         const nextLocator = buildRowLocator(nextRow, result.columns);
@@ -2344,7 +2690,9 @@ function DeploymentDatabaseSection({
   }, [sessionId, activeTableId, page]);
 
   const activeTable =
-    databaseInfo?.tables.find((table) => table.id === activeTableId) || databaseInfo?.tables[0] || null;
+    databaseInfo?.tables.find((table) => table.id === activeTableId) ||
+    databaseInfo?.tables[0] ||
+    null;
   const editorColumns = rowsPage?.columns || [];
 
   const handleRefresh = async () => {
@@ -2356,7 +2704,9 @@ function DeploymentDatabaseSection({
     try {
       const [summary, rows] = await Promise.all([
         getTaskCreationDatabaseInfo(sessionId),
-        activeTableId ? getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50) : Promise.resolve(null),
+        activeTableId
+          ? getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50)
+          : Promise.resolve(null),
       ]);
       setDatabaseInfo(summary);
       if (rows) setRowsPage(rows);
@@ -2389,7 +2739,10 @@ function DeploymentDatabaseSection({
     try {
       await navigator.clipboard.writeText(value);
       setCopiedField(key);
-      window.setTimeout(() => setCopiedField((current) => (current === key ? null : current)), 1200);
+      window.setTimeout(
+        () => setCopiedField((current) => (current === key ? null : current)),
+        1200,
+      );
     } catch {
       // ignore clipboard errors in preview panel
     }
@@ -2404,17 +2757,22 @@ function DeploymentDatabaseSection({
         await insertTaskCreationDatabaseRow(
           sessionId,
           activeTableId,
-          buildMutationValues(rowsPage.columns, selectedRowValues)
+          buildMutationValues(rowsPage.columns, selectedRowValues),
         );
       } else {
         await updateTaskCreationDatabaseRow(
           sessionId,
           activeTableId,
           selectedRowLocator || {},
-          buildMutationValues(rowsPage.columns, selectedRowValues)
+          buildMutationValues(rowsPage.columns, selectedRowValues),
         );
       }
-      const refreshed = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+      const refreshed = await getTaskCreationDatabaseRows(
+        sessionId,
+        activeTableId,
+        page,
+        50,
+      );
       setRowsPage(refreshed);
       if (panelMode === "insert") {
         setPanelMode("record");
@@ -2425,21 +2783,33 @@ function DeploymentDatabaseSection({
         setSelectedRowValues(buildEditorValues(refreshed.columns, targetRow));
       }
     } catch (error) {
-      setRowsError(error instanceof Error ? error.message : "保存数据库记录失败");
+      setRowsError(
+        error instanceof Error ? error.message : "保存数据库记录失败",
+      );
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleDelete = async () => {
-    if (!sessionId || !activeTableId || !selectedRowLocator || !rowsPage) return;
+    if (!sessionId || !activeTableId || !selectedRowLocator || !rowsPage)
+      return;
     const confirmed = window.confirm("确认删除当前记录？此操作无法撤销。");
     if (!confirmed) return;
     setActionLoading("delete");
     setRowsError(null);
     try {
-      await deleteTaskCreationDatabaseRow(sessionId, activeTableId, selectedRowLocator);
-      const refreshed = await getTaskCreationDatabaseRows(sessionId, activeTableId, page, 50);
+      await deleteTaskCreationDatabaseRow(
+        sessionId,
+        activeTableId,
+        selectedRowLocator,
+      );
+      const refreshed = await getTaskCreationDatabaseRows(
+        sessionId,
+        activeTableId,
+        page,
+        50,
+      );
       setRowsPage(refreshed);
       if (refreshed?.rows.length) {
         const targetRow = refreshed.rows[0];
@@ -2450,7 +2820,9 @@ function DeploymentDatabaseSection({
         handleCreateNew();
       }
     } catch (error) {
-      setRowsError(error instanceof Error ? error.message : "删除数据库记录失败");
+      setRowsError(
+        error instanceof Error ? error.message : "删除数据库记录失败",
+      );
     } finally {
       setActionLoading(null);
     }
@@ -2464,10 +2836,15 @@ function DeploymentDatabaseSection({
     <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
       <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="relative flex h-full flex-col">
-          <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200" />
-          <div className="flex-1 space-y-2 overflow-y-auto p-3">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200"
+          />
+          <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
             {databaseLoading && !databaseInfo ? (
-              <div className="px-3 py-2 text-sm text-slate-500">正在准备数据库…</div>
+              <div className="px-3 py-2 text-sm text-slate-500">
+                正在准备数据库…
+              </div>
             ) : null}
             {databaseInfo?.tables.map((table) => (
               <button
@@ -2482,11 +2859,13 @@ function DeploymentDatabaseSection({
                   "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
                     ? "bg-slate-100 text-slate-900"
-                    : "text-slate-700 hover:bg-slate-50"
+                    : "text-slate-700 hover:bg-slate-50",
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{table.name}</div>
+                  <div className="truncate text-sm font-medium">
+                    {table.name}
+                  </div>
                 </div>
                 <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">
                   {table.sourceLabel}
@@ -2519,15 +2898,22 @@ function DeploymentDatabaseSection({
               {activeTable ? activeTable.name : "数据库"}
             </div>
             <div className="mt-1 text-xs text-slate-500">
-              {activeTable ? `${activeTable.schema}.${activeTable.name}` : "等待选择数据表"}
+              {activeTable
+                ? `${activeTable.schema}.${activeTable.name}`
+                : "等待选择数据表"}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="h-8 text-xs">
-              <TableProperties className="size-4" />
-              列 {rowsPage?.columns.length || 0}
+              <TableProperties className="size-4" />列{" "}
+              {rowsPage?.columns.length || 0}
             </Button>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void handleRefresh()}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => void handleRefresh()}
+            >
               <RefreshCw className="size-4" />
               刷新
             </Button>
@@ -2538,8 +2924,12 @@ function DeploymentDatabaseSection({
           </div>
         </div>
 
-        {databaseError ? <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div> : null}
-        {rowsError ? <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div> : null}
+        {databaseError ? (
+          <div className="px-4 pt-3 text-xs text-rose-600">{databaseError}</div>
+        ) : null}
+        {rowsError ? (
+          <div className="px-4 pt-3 text-xs text-rose-600">{rowsError}</div>
+        ) : null}
 
         <div className="min-h-0">
           {activeTable && rowsPage ? (
@@ -2555,7 +2945,9 @@ function DeploymentDatabaseSection({
                         >
                           <div className="flex items-center gap-2">
                             <span>{column.name}</span>
-                            {column.isPrimaryKey ? <KeyRound className="size-3.5 text-slate-400" /> : null}
+                            {column.isPrimaryKey ? (
+                              <KeyRound className="size-3.5 text-slate-400" />
+                            ) : null}
                           </div>
                         </th>
                       ))}
@@ -2564,7 +2956,10 @@ function DeploymentDatabaseSection({
                   <tbody>
                     {rowsLoading ? (
                       <tr>
-                        <td colSpan={Math.max(rowsPage.columns.length, 1)} className="px-4 py-16 text-center text-slate-400">
+                        <td
+                          colSpan={Math.max(rowsPage.columns.length, 1)}
+                          className="px-4 py-16 text-center text-slate-400"
+                        >
                           正在加载数据…
                         </td>
                       </tr>
@@ -2572,19 +2967,26 @@ function DeploymentDatabaseSection({
                       rowsPage.rows.map((row, index) => {
                         const locator = buildRowLocator(row, rowsPage.columns);
                         const active = selectedRowLocator
-                          ? matchRowLocator(row, selectedRowLocator, rowsPage.columns)
+                          ? matchRowLocator(
+                              row,
+                              selectedRowLocator,
+                              rowsPage.columns,
+                            )
                           : index === 0;
                         return (
                           <tr
                             key={String(row._oneceo_ctid || index)}
                             className={cn(
                               "cursor-pointer transition-colors",
-                              active ? "bg-slate-50" : "hover:bg-slate-50/70"
+                              active ? "bg-slate-50" : "hover:bg-slate-50/70",
                             )}
                             onClick={() => handleSelectRow(row)}
                           >
                             {rowsPage.columns.map((column) => (
-                              <td key={column.name} className="border-b border-slate-100 px-3 py-2 align-top text-slate-700">
+                              <td
+                                key={column.name}
+                                className="border-b border-slate-100 px-3 py-2 align-top text-slate-700"
+                              >
                                 <div className="max-w-[220px] truncate">
                                   {formatDatabaseCell(row[column.name])}
                                 </div>
@@ -2595,7 +2997,10 @@ function DeploymentDatabaseSection({
                       })
                     ) : (
                       <tr>
-                        <td colSpan={Math.max(rowsPage.columns.length, 1)} className="px-4 py-16 text-center text-slate-400">
+                        <td
+                          colSpan={Math.max(rowsPage.columns.length, 1)}
+                          className="px-4 py-16 text-center text-slate-400"
+                        >
                           当前数据表没有数据
                         </td>
                       </tr>
@@ -2615,7 +3020,9 @@ function DeploymentDatabaseSection({
                     size="sm"
                     className="h-8 text-xs"
                     disabled={rowsPage.page <= 1}
-                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                    onClick={() =>
+                      setPage((current) => Math.max(1, current - 1))
+                    }
                   >
                     <ChevronLeft className="size-4" />
                     上一页
@@ -2638,7 +3045,9 @@ function DeploymentDatabaseSection({
             </>
           ) : (
             <div className="px-4 py-20 text-center text-sm text-slate-400">
-              {databaseLoading ? "正在连接数据库…" : "选择数据表后即可查看和修改数据"}
+              {databaseLoading
+                ? "正在连接数据库…"
+                : "选择数据表后即可查看和修改数据"}
             </div>
           )}
         </div>
@@ -2647,7 +3056,11 @@ function DeploymentDatabaseSection({
       <section className="rounded-lg border border-slate-200/80 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
           <div className="text-sm font-semibold text-slate-900">
-            {panelMode === "settings" ? "连接信息" : panelMode === "insert" ? "新增记录" : "记录详情"}
+            {panelMode === "settings"
+              ? "连接信息"
+              : panelMode === "insert"
+                ? "新增记录"
+                : "记录详情"}
           </div>
           <div className="mt-1 text-xs text-slate-500">
             {panelMode === "settings"
@@ -2664,12 +3077,16 @@ function DeploymentDatabaseSection({
               <div className="grid gap-3">
                 <ConnectionInfoField
                   label="连接 URL"
-                  value={databaseInfo.connection.publicConnectionUrl || databaseInfo.connection.connectionUrl}
+                  value={
+                    databaseInfo.connection.publicConnectionUrl ||
+                    databaseInfo.connection.connectionUrl
+                  }
                   copied={copiedField === "url"}
                   onCopy={() =>
                     void handleCopy(
                       "url",
-                      databaseInfo.connection.publicConnectionUrl || databaseInfo.connection.connectionUrl
+                      databaseInfo.connection.publicConnectionUrl ||
+                        databaseInfo.connection.connectionUrl,
                     )
                   }
                 />
@@ -2677,39 +3094,67 @@ function DeploymentDatabaseSection({
                   label="主机"
                   value={databaseInfo.connection.host}
                   copied={copiedField === "host"}
-                  onCopy={() => void handleCopy("host", databaseInfo.connection.host)}
+                  onCopy={() =>
+                    void handleCopy("host", databaseInfo.connection.host)
+                  }
                 />
                 <ConnectionInfoField
                   label="端口"
                   value={databaseInfo.connection.port}
                   copied={copiedField === "port"}
-                  onCopy={() => void handleCopy("port", databaseInfo.connection.port)}
+                  onCopy={() =>
+                    void handleCopy("port", databaseInfo.connection.port)
+                  }
                 />
                 <ConnectionInfoField
                   label="用户名"
                   value={databaseInfo.connection.username}
                   copied={copiedField === "username"}
-                  onCopy={() => void handleCopy("username", databaseInfo.connection.username)}
+                  onCopy={() =>
+                    void handleCopy(
+                      "username",
+                      databaseInfo.connection.username,
+                    )
+                  }
                 />
                 <ConnectionInfoField
                   label="密码"
                   value={databaseInfo.connection.password}
                   copied={copiedField === "password"}
-                  onCopy={() => void handleCopy("password", databaseInfo.connection.password)}
+                  onCopy={() =>
+                    void handleCopy(
+                      "password",
+                      databaseInfo.connection.password,
+                    )
+                  }
                   sensitive
                 />
                 <ConnectionInfoField
                   label="数据库"
                   value={databaseInfo.connection.database}
                   copied={copiedField === "database"}
-                  onCopy={() => void handleCopy("database", databaseInfo.connection.database)}
+                  onCopy={() =>
+                    void handleCopy(
+                      "database",
+                      databaseInfo.connection.database,
+                    )
+                  }
                 />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <DeploymentMiniStatus label="数据库状态" value={databaseInfo.latestDeploymentStatus || "UNKNOWN"} />
-                <DeploymentMiniStatus label="连接模式" value={databaseInfo.connection.sslMode.toUpperCase()} />
-                <DeploymentMiniStatus label="卷标识" value={databaseInfo.volumeName || "已挂载"} />
+                <DeploymentMiniStatus
+                  label="数据库状态"
+                  value={databaseInfo.latestDeploymentStatus || "UNKNOWN"}
+                />
+                <DeploymentMiniStatus
+                  label="连接模式"
+                  value={databaseInfo.connection.sslMode.toUpperCase()}
+                />
+                <DeploymentMiniStatus
+                  label="卷标识"
+                  value={databaseInfo.volumeName || "已挂载"}
+                />
                 <DeploymentMiniStatus
                   label="应用发布"
                   value={info?.configured ? statusMeta.label : "部署准备中"}
@@ -2725,13 +3170,23 @@ function DeploymentDatabaseSection({
                 {panelMode !== "settings" ? (
                   <div className="flex items-center gap-2">
                     {panelMode === "record" ? (
-                      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleCreateNew}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={handleCreateNew}
+                      >
                         <Plus className="size-4" />
                         新建
                       </Button>
                     ) : null}
                     {panelMode === "record" ? (
-                      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setPanelMode("record")}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => setPanelMode("record")}
+                      >
                         <Pencil className="size-4" />
                         编辑
                       </Button>
@@ -2758,7 +3213,9 @@ function DeploymentDatabaseSection({
                     key={column.name}
                     column={column}
                     value={selectedRowValues[column.name] || ""}
-                    disabled={panelMode === "record" ? column.isPrimaryKey : false}
+                    disabled={
+                      panelMode === "record" ? column.isPrimaryKey : false
+                    }
                     onChange={(nextValue) =>
                       setSelectedRowValues((current) => ({
                         ...current,
@@ -2770,7 +3227,12 @@ function DeploymentDatabaseSection({
               </div>
 
               <div className="flex items-center gap-2 pt-2">
-                <Button size="sm" className="h-8 text-xs" disabled={Boolean(actionLoading)} onClick={() => void handleSave()}>
+                <Button
+                  size="sm"
+                  className="h-8 text-xs"
+                  disabled={Boolean(actionLoading)}
+                  onClick={() => void handleSave()}
+                >
                   {actionLoading === "insert" || actionLoading === "update" ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : null}
@@ -2811,7 +3273,9 @@ function DashboardModeToggle({
         onClick={() => onChange("deployments")}
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
-          mode === "deployments" ? "bg-white text-slate-900 shadow-sm" : "hover:text-slate-700"
+          mode === "deployments"
+            ? "bg-white text-slate-900 shadow-sm"
+            : "hover:text-slate-700",
         )}
       >
         部署数据
@@ -2821,7 +3285,9 @@ function DashboardModeToggle({
         onClick={() => onChange("site")}
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
-          mode === "site" ? "bg-white text-slate-900 shadow-sm" : "hover:text-slate-700"
+          mode === "site"
+            ? "bg-white text-slate-900 shadow-sm"
+            : "hover:text-slate-700",
         )}
       >
         站点数据
@@ -2844,10 +3310,12 @@ function SiteMetricTab({
       type="button"
       className={cn(
         "bg-white px-4 py-4 text-left transition-colors",
-        active ? "bg-slate-50" : "hover:bg-slate-50"
+        active ? "bg-slate-50" : "hover:bg-slate-50",
       )}
     >
-      <div className="text-[11px] uppercase tracking-[0.06em] text-slate-400">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.06em] text-slate-400">
+        {label}
+      </div>
       <div className="mt-2 text-base font-semibold text-slate-900">{value}</div>
     </button>
   );
@@ -2874,7 +3342,9 @@ function AnalyticsPlaceholderCard({
         <span>{primaryLabel}</span>
         <span className="text-right">{secondaryLabel}</span>
       </div>
-      <div className="flex flex-1 items-center justify-center text-sm text-slate-400">没有数据</div>
+      <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
+        没有数据
+      </div>
     </section>
   );
 }
@@ -2890,7 +3360,9 @@ function CompactDeploymentMetric({
 }) {
   return (
     <div className="bg-white px-5 py-4">
-      <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </div>
       <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
       <div className="mt-1 text-xs text-slate-500">{hint}</div>
     </div>
@@ -2910,14 +3382,18 @@ function DashboardMiniStat({
     <div
       className={cn(
         "rounded-md border px-3 py-3",
-        subtle ? "border-slate-100 bg-slate-50/80" : "border-slate-200 bg-white"
+        subtle
+          ? "border-slate-100 bg-slate-50/80"
+          : "border-slate-200 bg-white",
       )}
     >
-      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+        {label}
+      </div>
       <div
         className={cn(
           "mt-2 text-sm font-medium",
-          subtle ? "text-slate-600" : "text-slate-900"
+          subtle ? "text-slate-600" : "text-slate-900",
         )}
       >
         {value}
@@ -2957,8 +3433,15 @@ function ConnectionInfoField({
   return (
     <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-slate-500">{label}</div>
-        <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={onCopy}>
+        <div className="text-xs uppercase tracking-[0.08em] text-slate-500">
+          {label}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-[11px]"
+          onClick={onCopy}
+        >
           <Copy className="size-3.5" />
           {copied ? "已复制" : "复制"}
         </Button>
@@ -2998,7 +3481,13 @@ function DatabaseFieldEditor({
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           className="min-h-[88px] rounded-md border-slate-200 bg-white text-xs"
-          placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
+          placeholder={
+            column.hasDefault
+              ? column.defaultValue || ""
+              : column.isNullable
+                ? "null"
+                : ""
+          }
         />
       ) : (
         <Input
@@ -3006,7 +3495,13 @@ function DatabaseFieldEditor({
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           className="h-9 rounded-md border-slate-200 bg-white text-xs"
-          placeholder={column.hasDefault ? column.defaultValue || "" : column.isNullable ? "null" : ""}
+          placeholder={
+            column.hasDefault
+              ? column.defaultValue || ""
+              : column.isNullable
+                ? "null"
+                : ""
+          }
         />
       )}
     </div>
@@ -3027,12 +3522,14 @@ function formatDatabaseCell(value: unknown) {
 
 function buildRowLocator(
   row: Record<string, unknown>,
-  columns: TaskCreationDatabaseColumn[]
+  columns: TaskCreationDatabaseColumn[],
 ): TaskCreationDatabaseRowLocator {
   const primaryKeys = columns.filter((column) => column.isPrimaryKey);
   if (primaryKeys.length) {
     return {
-      primaryKey: Object.fromEntries(primaryKeys.map((column) => [column.name, row[column.name]])),
+      primaryKey: Object.fromEntries(
+        primaryKeys.map((column) => [column.name, row[column.name]]),
+      ),
     };
   }
   return {
@@ -3043,7 +3540,7 @@ function buildRowLocator(
 function matchRowLocator(
   row: Record<string, unknown>,
   locator: TaskCreationDatabaseRowLocator,
-  columns: TaskCreationDatabaseColumn[]
+  columns: TaskCreationDatabaseColumn[],
 ) {
   if (locator.ctid) {
     return row._oneceo_ctid === locator.ctid;
@@ -3051,12 +3548,16 @@ function matchRowLocator(
   const primaryKey = locator.primaryKey || {};
   return columns
     .filter((column) => column.isPrimaryKey)
-    .every((column) => String(row[column.name] ?? "") === String(primaryKey[column.name] ?? ""));
+    .every(
+      (column) =>
+        String(row[column.name] ?? "") ===
+        String(primaryKey[column.name] ?? ""),
+    );
 }
 
 function buildEditorValues(
   columns: TaskCreationDatabaseColumn[],
-  row?: Record<string, unknown>
+  row?: Record<string, unknown>,
 ) {
   return Object.fromEntries(
     columns.map((column) => [
@@ -3066,13 +3567,13 @@ function buildEditorValues(
           ? JSON.stringify(row[column.name], null, 2)
           : String(row[column.name])
         : "",
-    ])
+    ]),
   );
 }
 
 function buildMutationValues(
   columns: TaskCreationDatabaseColumn[],
-  values: Record<string, string>
+  values: Record<string, string>,
 ) {
   const result: Record<string, unknown> = {};
   columns.forEach((column) => {
@@ -3114,7 +3615,9 @@ function DeploymentStorageSection({
             subtitle="后续适合图片、附件、导出文件和大体积静态资源。"
           />
           <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-slate-900">当前可见状态</div>
+            <div className="text-sm font-semibold text-slate-900">
+              当前可见状态
+            </div>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
               <DeploymentMiniStatus label="应用访问" value={statusMeta.label} />
               <DeploymentMiniStatus
@@ -3242,7 +3745,11 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title="当前版本"
                 value={currentDeployment?.commitMessage || "等待首次发布"}
-                extra={currentDeployment?.id ? `版本号 ${currentDeployment.id.slice(0, 8)}` : undefined}
+                extra={
+                  currentDeployment?.id
+                    ? `版本号 ${currentDeployment.id.slice(0, 8)}`
+                    : undefined
+                }
               />
             </div>
           ) : null}
@@ -3252,12 +3759,20 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title="主访问地址"
                 value={primaryAccessUrl || "尚未生成"}
-                extra={primaryAccessUrl ? "当前可直接用于线上访问与验证" : "完成首次发布后自动生成"}
+                extra={
+                  primaryAccessUrl
+                    ? "当前可直接用于线上访问与验证"
+                    : "完成首次发布后自动生成"
+                }
               />
               <div className="grid gap-3 md:grid-cols-2">
                 {accessEntries.length ? (
                   accessEntries.map(([label, value]) => (
-                    <DeploymentInfoCard key={`${label}-${value}`} title={label} value={value} />
+                    <DeploymentInfoCard
+                      key={`${label}-${value}`}
+                      title={label}
+                      value={value}
+                    />
                   ))
                 ) : (
                   <DeploymentPlaceholderCard
@@ -3384,7 +3899,11 @@ function DeploymentSettingsSectionPanel({
               <DeploymentInfoCard
                 title="最近同步版本"
                 value={currentDeployment?.commitMessage || "等待首次同步"}
-                extra={currentDeployment?.id ? `同步标识 ${currentDeployment.id.slice(0, 8)}` : undefined}
+                extra={
+                  currentDeployment?.id
+                    ? `同步标识 ${currentDeployment.id.slice(0, 8)}`
+                    : undefined
+                }
               />
               <DeploymentInfoCard
                 title="用户感知"
@@ -3418,7 +3937,7 @@ function DeploymentMenuButton({
         "inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
         active
           ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50"
+          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
       )}
     >
       <Icon className="size-3.5" />
@@ -3444,7 +3963,7 @@ function DeploymentSettingsButton({
         "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
         active
           ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50"
+          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
       )}
     >
       {label}
@@ -3464,10 +3983,19 @@ function DeploymentMetricCard({
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-md border border-slate-200/80 bg-slate-50/40 p-3", className)}>
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
+    <div
+      className={cn(
+        "rounded-md border border-slate-200/80 bg-slate-50/40 p-3",
+        className,
+      )}
+    >
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+        {title}
+      </div>
       <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
-      {subtitle ? <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div> : null}
+      {subtitle ? (
+        <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div>
+      ) : null}
     </div>
   );
 }
@@ -3485,19 +4013,36 @@ function DeploymentInfoCard({
 }) {
   return (
     <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
-      <div className={cn("mt-2 text-sm font-medium text-slate-900 break-all", mono ? "font-mono text-[12px]" : "")}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+        {title}
+      </div>
+      <div
+        className={cn(
+          "mt-2 text-sm font-medium text-slate-900 break-all",
+          mono ? "font-mono text-[12px]" : "",
+        )}
+      >
         {value}
       </div>
-      {extra ? <div className="mt-1 text-xs leading-5 text-slate-500">{extra}</div> : null}
+      {extra ? (
+        <div className="mt-1 text-xs leading-5 text-slate-500">{extra}</div>
+      ) : null}
     </div>
   );
 }
 
-function DeploymentMiniStatus({ label, value }: { label: string; value: string }) {
+function DeploymentMiniStatus({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-md border border-slate-200/80 bg-slate-50/30 px-3 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</div>
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+        {label}
+      </div>
       <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
     </div>
   );
@@ -3544,10 +4089,16 @@ function DebugPreview({
         url.searchParams.set("pwd", "oneceo");
       }
       if (!url.searchParams.get("username")) {
-        url.searchParams.set("username", url.searchParams.get("usr") || "oneceo");
+        url.searchParams.set(
+          "username",
+          url.searchParams.get("usr") || "oneceo",
+        );
       }
       if (!url.searchParams.get("password")) {
-        url.searchParams.set("password", url.searchParams.get("pwd") || "oneceo");
+        url.searchParams.set(
+          "password",
+          url.searchParams.get("pwd") || "oneceo",
+        );
       }
       if (!url.searchParams.get("autoconnect")) {
         url.searchParams.set("autoconnect", "1");
@@ -3569,7 +4120,11 @@ function DebugPreview({
 
   if (!runtimeReady) {
     return (
-      <EmptyState text={starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"} />
+      <EmptyState
+        text={
+          starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"
+        }
+      />
     );
   }
   if (loading) {
@@ -3586,7 +4141,12 @@ function DebugPreview({
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
         <span>{info?.message || "调试服务未就绪"}</span>
-        <Button variant="outline" size="sm" onClick={onStart} disabled={starting}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onStart}
+          disabled={starting}
+        >
           {starting ? "启动中..." : "启动调试"}
         </Button>
       </div>
@@ -3620,25 +4180,50 @@ function DebugPreview({
   );
 }
 
-function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[] }) {
+function DiffBlock({
+  diff,
+  files,
+}: {
+  diff?: string;
+  files?: StructuredFileDiff[];
+}) {
   const structuredFiles = useMemo(() => parseStructuredDiffs(files), [files]);
-  const unifiedFiles = useMemo(() => (diff ? parseUnifiedDiffDetailed(diff) : []), [diff]);
-  const fallbackFiles = useMemo(() => (diff ? parseApplyPatchDiff(diff) : []), [diff]);
+  const unifiedFiles = useMemo(
+    () => (diff ? parseUnifiedDiffDetailed(diff) : []),
+    [diff],
+  );
+  const fallbackFiles = useMemo(
+    () => (diff ? parseApplyPatchDiff(diff) : []),
+    [diff],
+  );
   const baseFiles =
-    structuredFiles.length > 0 ? structuredFiles : unifiedFiles.length > 0 ? unifiedFiles : fallbackFiles;
+    structuredFiles.length > 0
+      ? structuredFiles
+      : unifiedFiles.length > 0
+        ? unifiedFiles
+        : fallbackFiles;
   const [showWhitespace, setShowWhitespace] = useState(false);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(false);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
   const [collapsedHunks, setCollapsedHunks] = useState<Set<string>>(new Set());
   const effectiveFiles = useMemo(() => {
     const withWhitespace = markWhitespaceOnly(baseFiles);
-    return ignoreWhitespace ? filterWhitespaceOnly(withWhitespace) : withWhitespace;
+    return ignoreWhitespace
+      ? filterWhitespaceOnly(withWhitespace)
+      : withWhitespace;
   }, [baseFiles, ignoreWhitespace]);
   const displayFiles = useMemo(() => {
     return effectiveFiles
       .map((file) => {
         const stats = computeFileStats(file);
-        if (stats.additions === 0 && stats.deletions === 0) {
+        const hasRenderableLines = file.hunks.some(
+          (hunk) => hunk.lines.length > 0,
+        );
+        if (
+          stats.additions === 0 &&
+          stats.deletions === 0 &&
+          !hasRenderableLines
+        ) {
           return null;
         }
         const mode = resolveDiffDisplayMode(stats);
@@ -3670,9 +4255,13 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
     return <EmptyState text="忽略空白差异后无可展示内容" />;
   }
 
-  const showGlobalHeader = displayFiles.every((entry) => entry.mode === "split");
+  const showGlobalHeader = displayFiles.every(
+    (entry) => entry.mode === "split",
+  );
   const allFileIds = displayFiles.map((entry) => entry.file.id);
-  const allHunkIds = displayFiles.flatMap((entry) => entry.hunks.map((hunk) => hunk.id));
+  const allHunkIds = displayFiles.flatMap((entry) =>
+    entry.hunks.map((hunk) => hunk.id),
+  );
 
   const toggleFile = (id: string) => {
     setCollapsedFiles((prev) => {
@@ -3727,7 +4316,9 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
           <button
             type="button"
             className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
-              showWhitespace ? "border-emerald-500 text-emerald-700" : "border-slate-200"
+              showWhitespace
+                ? "border-emerald-500 text-emerald-700"
+                : "border-slate-200"
             }`}
             onClick={() => setShowWhitespace((prev) => !prev)}
           >
@@ -3736,7 +4327,9 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
           <button
             type="button"
             className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
-              ignoreWhitespace ? "border-emerald-500 text-emerald-700" : "border-slate-200"
+              ignoreWhitespace
+                ? "border-emerald-500 text-emerald-700"
+                : "border-slate-200"
             }`}
             onClick={() => setIgnoreWhitespace((prev) => !prev)}
           >
@@ -3750,14 +4343,16 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
           <div className="px-3 py-2">After</div>
         </div>
       ) : null}
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="flex-1 min-h-0 overflow-auto overscroll-contain">
         {displayFiles.map(({ file, stats, mode, hunks }) => {
           const fileCollapsed = collapsedFiles.has(file.id);
           return (
             <div key={file.id} className="border-b border-slate-200">
               <div className="flex items-center justify-between px-3 py-2 text-slate-700 bg-slate-50">
                 <div>
-                  <div className="text-xs font-semibold">文件: {file.displayPath}</div>
+                  <div className="text-xs font-semibold">
+                    文件: {file.displayPath}
+                  </div>
                   {(file.oldPath || file.newPath) && (
                     <div className="text-[11px] text-slate-500">
                       {file.oldPath ? `- ${file.oldPath}` : ""}
@@ -3782,7 +4377,9 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
               {!fileCollapsed && !showGlobalHeader ? (
                 mode === "split" ? (
                   <div className="grid grid-cols-2 border-t border-slate-200 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
-                    <div className="px-3 py-2 border-r border-slate-200">Before</div>
+                    <div className="px-3 py-2 border-r border-slate-200">
+                      Before
+                    </div>
                     <div className="px-3 py-2">After</div>
                   </div>
                 ) : (
@@ -3811,25 +4408,42 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                         <div>
                           {mode === "split" &&
                             hunk.lines.map((row, index) => (
-                              <div key={`${hunk.id}-row-${index}`} className="grid grid-cols-2">
+                              <div
+                                key={`${hunk.id}-row-${index}`}
+                                className="grid grid-cols-2"
+                              >
                                 <div
                                   className={`flex gap-2 px-3 py-0.5 border-r border-slate-200 ${
-                                    row.leftType === "del" ? "bg-rose-50 text-rose-700" : "text-slate-700"
+                                    row.leftType === "del"
+                                      ? "bg-rose-50 text-rose-700"
+                                      : "text-slate-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">{row.leftLine ?? ""}</span>
+                                  <span className="w-8 text-right text-slate-400">
+                                    {row.leftLine ?? ""}
+                                  </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
-                                    {renderWhitespace(row.leftText, showWhitespace)}
+                                    {renderWhitespace(
+                                      row.leftText,
+                                      showWhitespace,
+                                    )}
                                   </span>
                                 </div>
                                 <div
                                   className={`flex gap-2 px-3 py-0.5 ${
-                                    row.rightType === "add" ? "bg-emerald-50 text-emerald-700" : "text-slate-700"
+                                    row.rightType === "add"
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : "text-slate-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">{row.rightLine ?? ""}</span>
+                                  <span className="w-8 text-right text-slate-400">
+                                    {row.rightLine ?? ""}
+                                  </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
-                                    {renderWhitespace(row.rightText, showWhitespace)}
+                                    {renderWhitespace(
+                                      row.rightText,
+                                      showWhitespace,
+                                    )}
                                   </span>
                                 </div>
                               </div>
@@ -3841,14 +4455,21 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                                 <div
                                   key={`${hunk.id}-row-${index}`}
                                   className={`flex gap-2 px-3 py-0.5 ${
-                                    isAdd ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"
+                                    isAdd
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : "bg-rose-50 text-rose-700"
                                   }`}
                                 >
                                   <span className="w-8 text-right text-slate-400">
-                                    {isAdd ? row.rightLine ?? "" : row.leftLine ?? ""}
+                                    {isAdd
+                                      ? (row.rightLine ?? "")
+                                      : (row.leftLine ?? "")}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
-                                    {renderWhitespace(isAdd ? row.rightText : row.leftText, showWhitespace)}
+                                    {renderWhitespace(
+                                      isAdd ? row.rightText : row.leftText,
+                                      showWhitespace,
+                                    )}
                                   </span>
                                 </div>
                               );
@@ -3856,7 +4477,9 @@ function DiffBlock({ diff, files }: { diff?: string; files?: StructuredFileDiff[
                         </div>
                       )}
                       {hunkCollapsed && (
-                        <div className="px-3 py-1 text-[11px] text-slate-400">...</div>
+                        <div className="px-3 py-1 text-[11px] text-slate-400">
+                          ...
+                        </div>
                       )}
                     </div>
                   );
@@ -3936,7 +4559,10 @@ function markWhitespaceOnly(files: DiffFile[]): DiffFile[] {
         for (let idx = 0; idx < pairCount; idx += 1) {
           const delText = delLines[idx].leftText;
           const addText = addLines[idx].rightText;
-          if (delText !== addText && normalizeWhitespace(delText) === normalizeWhitespace(addText)) {
+          if (
+            delText !== addText &&
+            normalizeWhitespace(delText) === normalizeWhitespace(addText)
+          ) {
             delLines[idx].whitespaceOnly = true;
             addLines[idx].whitespaceOnly = true;
           }
@@ -3980,7 +4606,10 @@ function computeFileStats(file: DiffFile) {
   return { additions, deletions };
 }
 
-function resolveDiffDisplayMode(stats: { additions: number; deletions: number }): DiffDisplayMode {
+function resolveDiffDisplayMode(stats: {
+  additions: number;
+  deletions: number;
+}): DiffDisplayMode {
   if (stats.additions > 0 && stats.deletions === 0) return "add-only";
   if (stats.deletions > 0 && stats.additions === 0) return "del-only";
   return "split";
@@ -3990,7 +4619,10 @@ function isDisplayFile(value: DisplayFile | null): value is DisplayFile {
   return value !== null && value.hunks.length > 0;
 }
 
-function filterLinesForMode(lines: DiffLine[], mode: DiffDisplayMode): DiffLine[] {
+function filterLinesForMode(
+  lines: DiffLine[],
+  mode: DiffDisplayMode,
+): DiffLine[] {
   if (mode === "add-only") {
     return lines.filter((line) => line.rightType === "add");
   }
@@ -4042,7 +4674,12 @@ function diffLines(before: string[], after: string[]): DiffOp[] {
   return [];
 }
 
-function backtrackDiff(trace: number[][], before: string[], after: string[], max: number): DiffOp[] {
+function backtrackDiff(
+  trace: number[][],
+  before: string[],
+  after: string[],
+  max: number,
+): DiffOp[] {
   let x = before.length;
   let y = after.length;
   const ops: DiffOp[] = [];
@@ -4168,6 +4805,26 @@ function parseStructuredDiffs(files?: StructuredFileDiff[]): DiffFile[] {
       ops = diffLines(beforeLines, afterLines);
     }
     const rows = buildDiffRows(ops);
+    if (rows.length === 0 && file.status) {
+      rows.push({
+        leftLine: null,
+        rightLine: null,
+        leftText:
+          file.status === "added"
+            ? "文件已创建，暂无可展示的 diff 详情"
+            : file.status === "deleted"
+              ? "文件已删除，暂无可展示的 diff 详情"
+              : "文件已更新，暂无可展示的 diff 详情",
+        rightText:
+          file.status === "added"
+            ? "文件已创建，暂无可展示的 diff 详情"
+            : file.status === "deleted"
+              ? "文件已删除，暂无可展示的 diff 详情"
+              : "文件已更新，暂无可展示的 diff 详情",
+        leftType: "context",
+        rightType: "context",
+      });
+    }
     const diffFile: DiffFile = {
       id: `struct-${index}`,
       oldPath: file.status === "added" ? null : file.file,
@@ -4237,7 +4894,9 @@ function parseUnifiedDiffDetailed(diff: string): DiffFile[] {
       ensureFile();
       const path = line.replace(/^\\+\\+\\+\\s+/, "");
       currentFile!.newPath = normalizeDiffPath(path.replace(/^b\//, ""));
-      currentFile!.displayPath = normalizeDiffPath(currentFile!.newPath || currentFile!.oldPath || "未命名文件");
+      currentFile!.displayPath = normalizeDiffPath(
+        currentFile!.newPath || currentFile!.oldPath || "未命名文件",
+      );
       continue;
     }
 

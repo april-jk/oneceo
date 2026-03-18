@@ -17,6 +17,26 @@ export default async function runScenario(ctx: ScenarioContext) {
   const initialSessionId = ctx.sessionId;
   const initialOpencodeSessionId = ctx.opencodeSessionId;
 
+  await ctx.ws.waitFor(
+    (msg) => {
+      if (msg.type !== 'opencode_event' && msg.type !== 'status_update' && msg.type !== 'opencode_status') {
+        return false;
+      }
+      const contentText = String(msg.content || '').toLowerCase();
+      if (msg.type === 'status_update' || msg.type === 'opencode_status') {
+        return (
+          contentText.includes('opencode 执行完成') ||
+          contentText.includes('opencode 执行已结束') ||
+          contentText.includes('opencode 执行失败')
+        );
+      }
+      const subtype = String((msg.metadata || {}).eventType || '').toLowerCase();
+      return subtype === 'message.final' || subtype === 'session.idle' || subtype === 'session.status';
+    },
+    90000,
+    '续聊前应先收到上一轮完成信号'
+  );
+
   const prompt = `DIRECT_SUITE_${ctx.suiteId}_CONTINUATION: 继续在同一会话回复“continuation-ok”。`;
   ctx.prompts.push(prompt);
 

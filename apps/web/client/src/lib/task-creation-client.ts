@@ -7,6 +7,8 @@ export type TaskCreationSessionSummary = {
   status?: string;
   stage?: string;
   phase?: string;
+  driver?: "altus" | "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "claudecode" | "codex";
   updatedAt?: string;
 };
 
@@ -20,6 +22,8 @@ export type CreateTaskCreationSessionInput = {
 };
 
 export type TaskCreationHistoryMessage = {
+  id?: string;
+  messageKey?: string;
   role?: string;
   content?: string;
   messageType?: string;
@@ -27,11 +31,33 @@ export type TaskCreationHistoryMessage = {
   createdAt?: string;
 };
 
+export type TaskCreationHistoryRecentPage = {
+  messages: TaskCreationHistoryMessage[];
+  oldestCursor: number | null;
+  newestCursor: number | null;
+  hasOlderHistory: boolean;
+  source?: string;
+};
+
+export type TaskCreationHistoryOlderPage = {
+  messages: TaskCreationHistoryMessage[];
+  oldestCursor: number | null;
+  newestCursor: number | null;
+  nextBeforeCursor: number | null;
+  hasMore: boolean;
+  source?: string;
+};
+
 export type TaskCreationRuntimeStatus = {
   status?: string;
   provider?: string;
   updatedAt?: string;
   sandboxId?: string;
+  codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";
+  codexRestoreAt?: string;
+  codexRestoreSourceKey?: string;
+  previousExecutorSessionId?: string;
+  codexRestoreFailureReason?: string;
 };
 
 export type TaskCreationUploadedAttachment = {
@@ -154,9 +180,19 @@ export type TaskCreationSessionDetail = {
   status?: string;
   stage?: string;
   phase?: string;
+  driver?: "altus" | "opencode" | "claudecode" | "codex";
+  executor?: "opencode" | "claudecode" | "codex";
   runtime?: {
+    generation?: number;
     orchestratorSessionId?: string;
+    executor?: "opencode" | "claudecode" | "codex";
+    executorSessionId?: string;
     opencodeSessionId?: string;
+    codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
     updatedAt?: string;
   };
   runtimeStatus?: TaskCreationRuntimeStatus | null;
@@ -211,11 +247,30 @@ export type WorkspaceFile = {
   binaryTooLarge?: boolean;
 };
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: buildClientIdentityHeaders(init?.headers),
-  });
+async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = options?.timeoutMs;
+  const controller =
+    typeof AbortController !== "undefined" && timeoutMs && timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId =
+    controller && timeoutMs
+      ? window.setTimeout(() => {
+          controller.abort(new DOMException("request timeout", "AbortError"));
+        }, timeoutMs)
+      : null;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: controller?.signal ?? init?.signal,
+      cache: init?.cache || "no-store",
+      headers: buildClientIdentityHeaders(init?.headers),
+    });
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
@@ -252,9 +307,9 @@ export async function createTaskCreationSession(
   const url = `${getApiBaseUrl()}/api/task-creation/sessions`;
   const response = await fetch(url, {
     method: "POST",
-    headers: {
+    headers: buildClientIdentityHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(input || {}),
   });
   if (!response.ok) {
@@ -269,6 +324,46 @@ export async function listTaskCreationMessages(sessionId: string): Promise<TaskC
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages`;
   const result = await fetchJson<{ data?: TaskCreationHistoryMessage[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationRecentMessages(sessionId: string): Promise<TaskCreationHistoryRecentPage> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/recent`;
+  const result = await fetchJson<{ data?: TaskCreationHistoryRecentPage }>(url, undefined, { timeoutMs: 2500 });
+  return (
+    result?.data || {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+      hasOlderHistory: false,
+    }
+  );
+}
+
+export async function getTaskCreationOlderMessages(
+  sessionId: string,
+  options?: { before?: number | null; limit?: number }
+): Promise<TaskCreationHistoryOlderPage> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (typeof options?.before === 'number' && Number.isFinite(options.before) && options.before > 0) {
+    params.set('before', String(Math.floor(options.before)));
+  }
+  if (typeof options?.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0) {
+    params.set('limit', String(Math.floor(options.limit)));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages/history${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationHistoryOlderPage }>(url, undefined, { timeoutMs: 4000 });
+  return (
+    result?.data || {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+      nextBeforeCursor: null,
+      hasMore: false,
+    }
+  );
 }
 
 export async function createTaskCreationDraftSession(title?: string): Promise<TaskCreationSessionDetail> {
@@ -295,7 +390,16 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
 export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
-  const result = await fetchJson<{ data?: TaskCreationSessionDetail }>(url);
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionDetail };
   return result?.data || null;
 }
 

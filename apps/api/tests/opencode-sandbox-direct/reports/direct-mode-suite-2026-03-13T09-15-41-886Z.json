@@ -1,0 +1,20 @@
+{
+  "suiteId": "mmoojbf4",
+  "apiBase": "http://127.0.0.1:4000",
+  "wsUrl": "ws://127.0.0.1:4000/ws/task-creation",
+  "startedAt": "2026-03-13T09:13:41.776Z",
+  "finishedAt": "2026-03-13T09:15:41.885Z",
+  "passed": false,
+  "scenarioResults": [
+    {
+      "name": "01_session_bootstrap",
+      "passed": false,
+      "startedAt": "2026-03-13T09:15:41.885Z",
+      "finishedAt": "2026-03-13T09:15:41.885Z",
+      "details": {
+        "error": "[timeout] scenario.01_session_bootstrap exceeded 120000ms\nError: [timeout] scenario.01_session_bootstrap exceeded 120000ms\n    at Timeout._onTimeout (/Users/eunice/codingProject/oneceo/apps/api/tests/opencode-sandbox-direct/run-direct-mode-tests.ts:38:14)\n    at listOnTimeout (node:internal/timers:608:17)\n    at process.processTimers (node:internal/timers:543:7)"
+      }
+    }
+  ],
+  "error": "recentWsMessages=[\n  {\n    \"type\": \"agent_message\",\n    \"agent\": \"system\",\n    \"content\": \"欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。\",\n    \"metadata\": {},\n    \"receivedAt\": 1773393221879\n  },\n  {\n    \"type\": \"agent_message\",\n    \"agent\": \"system\",\n    \"content\": \"会话已创建\",\n    \"sessionId\": \"79d0fcc7-5084-4dc4-b50a-71e9f5300509\",\n    \"metadata\": {\n      \"sessionId\": \"79d0fcc7-5084-4dc4-b50a-71e9f5300509\"\n    },\n    \"receivedAt\": 1773393223940\n  },\n  {\n    \"type\": \"error\",\n    \"sessionId\": \"79d0fcc7-5084-4dc4-b50a-71e9f5300509\",\n    \"message\": \"[PROVISION:opencode_start] opencode serve 启动失败: opencode health check failed: 502 {\\\"sandboxId\\\":\\\"id6sx9u9ygip1k5t69fwz\\\",\\\"message\\\":\\\"The sandbox is running but port is not open\\\",\\\"port\\\":4096,\\\"code\\\":502}\",\n    \"content\": \"[PROVISION:opencode_start] opencode serve 启动失败: opencode health check failed: 502 {\\\"sandboxId\\\":\\\"id6sx9u9ygip1k5t69fwz\\\",\\\"message\\\":\\\"The sandbox is running but port is not open\\\",\\\"port\\\":4096,\\\"code\\\":502}\",\n    \"metadata\": {\n      \"sessionId\": \"79d0fcc7-5084-4dc4-b50a-71e9f5300509\"\n    },\n    \"receivedAt\": 1773393303011\n  }\n]"
+}

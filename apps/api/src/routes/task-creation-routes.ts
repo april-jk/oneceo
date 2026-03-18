@@ -8,12 +8,17 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
+import {
+  deriveSessionDriver,
+  taskCreationFileMemoryStore,
+  type FileSessionRecord,
+} from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
 import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
+import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug } from '../services/sandbox-debug-service';
@@ -117,6 +122,8 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   'application/x-sh',
   'application/sql',
 ]);
+const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
+const recentHistoryHydrationQueuedAt = new Map<string, number>();
 const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
 
 function clampNumber(value: number, min: number, max: number) {
@@ -136,6 +143,45 @@ function parseRefreshFlag(value: unknown): boolean {
   if (value === undefined || value === null) return false;
   const text = String(value).trim().toLowerCase();
   return text === '1' || text === 'true' || text === 'yes';
+}
+
+function flattenErrorMessages(error: unknown): string[] {
+  const messages: string[] = [];
+  let current: any = error;
+  const visited = new Set<unknown>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const message = typeof current?.message === 'string' ? current.message.trim() : '';
+    if (message) {
+      messages.push(message);
+    }
+    current = current?.cause;
+  }
+  return messages;
+}
+
+function isTransientDatabaseError(error: unknown): boolean {
+  const messages = flattenErrorMessages(error).join(' | ').toLowerCase();
+  if (!messages) return false;
+  return (
+    messages.includes('drizzlequeryerror') ||
+    messages.includes('connection terminated due to connection timeout') ||
+    messages.includes('connection terminated unexpectedly') ||
+    messages.includes('timeout exceeded when trying to connect') ||
+    messages.includes('terminating connection due to administrator command') ||
+    messages.includes('too many clients already') ||
+    messages.includes('remaining connection slots are reserved')
+  );
+}
+
+function respondDatabaseUnavailable(
+  res: express.Response,
+  fallbackMessage = '数据库暂时不可用，请稍后重试'
+) {
+  return res.status(503).json({
+    success: false,
+    error: getPublicErrorMessage(fallbackMessage),
+  });
 }
 
 function resolveTenantKey(req: express.Request): string {
@@ -165,13 +211,17 @@ function toIso(value: Date | string | null | undefined): string {
 }
 
 function toSessionSummary(session: any) {
+  const normalizedStage = normalizeLiveSessionStage(session);
   return {
     id: session.id,
     title: session.title,
     status: session.status,
-    stage: session.stage,
+    stage: normalizedStage,
     phase: session.phase,
     phaseCycle: session.phaseCycle,
+    driver: session.driver,
+    mode: session.mode,
+    executor: session.executor,
     runtime: session.runtime,
     pendingQuestion: session.pendingQuestion,
     pendingOptions: session.pendingOptions,
@@ -180,6 +230,74 @@ function toSessionSummary(session: any) {
     messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
     messages: [],
   };
+}
+
+function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
+  if (!memorySession) return dbSession;
+  if (!dbSession) return memorySession;
+
+  const dbStatus = asText(dbSession.status);
+  const memoryStatus = asText(memorySession.status);
+  const shouldPreferDbLifecycle =
+    (dbStatus === 'completed' || dbStatus === 'failed') && dbStatus !== memoryStatus;
+
+  if (!shouldPreferDbLifecycle) {
+    return memorySession;
+  }
+
+  return {
+    ...memorySession,
+    status: dbSession.status,
+    stage: dbSession.stage,
+    updatedAt: dbSession.updatedAt || memorySession.updatedAt,
+  };
+}
+
+function normalizeLiveSessionStage(
+  session: Pick<
+    FileSessionRecord,
+    'status' | 'stage' | 'mode' | 'driver' | 'executor' | 'runtime' | 'messages'
+  > | null | undefined
+): NonNullable<FileSessionRecord['stage']> | undefined {
+  const status = asText(session?.status);
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (status === 'waiting_user') return 'clarifying';
+
+  const currentStage = asText(session?.stage);
+  const mode = asText(session?.mode);
+  const driver = asText(session?.driver);
+  const executor = asText(session?.executor);
+  const hasRuntime = Boolean(asText(session?.runtime?.orchestratorSessionId));
+  const hasExecutorRuntime = Boolean(asText(session?.runtime?.executorSessionId));
+  const hasOpencodeRuntime = Boolean(asText(session?.runtime?.opencodeSessionId));
+  const hasUserInput = Array.isArray(session?.messages)
+    ? session!.messages.some((message) => {
+        const type = asText(message?.messageType);
+        return type === 'user_input' || type === 'user_response' || type === 'opencode_user_input';
+      })
+    : false;
+
+  if (
+    status === 'in_progress' &&
+    (
+      mode === 'sandbox' ||
+      driver === 'opencode' ||
+      driver === 'codex' ||
+      driver === 'claudecode' ||
+      executor === 'opencode' ||
+      executor === 'codex' ||
+      executor === 'claudecode' ||
+      hasRuntime ||
+      hasExecutorRuntime ||
+      hasOpencodeRuntime
+    ) &&
+    hasUserInput
+  ) {
+    return 'executing';
+  }
+
+  return (currentStage as NonNullable<FileSessionRecord['stage']>) || 'collecting';
 }
 
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
@@ -198,10 +316,19 @@ async function findEnvironmentByTaskSessionId(taskSessionId: string) {
 async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
   const session = await taskCreationSessionDAO.getSession(sessionId);
   if (!session) return null;
-  const [taskDescription, messages] = await Promise.all([
-    taskCreationSessionDAO.getTaskDescription(sessionId),
-    taskCreationSessionDAO.getMessages(sessionId),
-  ]);
+  let taskDescription: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
+  let messages: Awaited<ReturnType<typeof taskCreationSessionDAO.getMessages>> = [];
+  try {
+    [taskDescription, messages] = await Promise.all([
+      taskCreationSessionDAO.getTaskDescription(sessionId),
+      taskCreationSessionDAO.getMessages(sessionId),
+    ]);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_DB_HYDRATE_PARTIAL]', { sessionId, error });
+  }
   const titleCandidate =
     taskDescription?.title ||
     messages?.find((m) => m.role === 'user')?.content ||
@@ -222,31 +349,162 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
 
   const env = await findEnvironmentByTaskSessionId(sessionId);
   const orchestratorSessionId = env?.sessionId;
+  const normalizedMessages = Array.isArray(messages)
+    ? annotateRuntimeGenerations(
+        messages.map((m, idx) => ({
+          id: String(m.id),
+          role: (m.role as any) || 'agent',
+          messageType: m.messageType || 'message',
+          content: m.content || '',
+          metadata: normalizeMessageTimelineMetadata(sanitizeTimelineMetadataForClient(m.metadata), m.createdAt, idx),
+          createdAt: toIso(m.createdAt as any),
+        })),
+        { orchestratorSessionId }
+      )
+    : [];
+  const inferredRuntime = inferRuntimeFromMessages(normalizedMessages, orchestratorSessionId);
+  const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
+  const inferredExecutor =
+    asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
+  const hasSandboxHistory = Array.isArray(messages)
+    ? messages.some((message) => {
+        const messageType = asText(message.messageType);
+        return (
+          messageType.startsWith('opencode_') ||
+          messageType.startsWith('codex_') ||
+          messageType === 'executor_event'
+        );
+      })
+    : false;
+  const sandboxExecutor = inferredExecutor || (hasSandboxHistory ? 'opencode' : '');
 
   return {
     id: session.id,
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
     status,
     stage,
+    mode: sandboxExecutor ? 'sandbox' : undefined,
+    executor: sandboxExecutor || undefined,
+    driver: sandboxExecutor ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor }) : undefined,
     runtime: orchestratorSessionId
       ? {
+          generation: inferredRuntime.generation,
+          codexRestoreStatus: mergedRuntime.codexRestoreStatus as any,
+          codexRestoreAt: mergedRuntime.codexRestoreAt,
+          codexRestoreSourceKey: mergedRuntime.codexRestoreSourceKey,
+          previousExecutorSessionId: mergedRuntime.previousExecutorSessionId,
+          codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
           orchestratorSessionId,
-          opencodeSessionId: undefined,
+          executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
+          opencodeSessionId: mergedRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
         }
       : undefined,
     createdAt: toIso(session.createdAt as any),
     updatedAt: toIso(session.updatedAt as any),
-    messages: Array.isArray(messages)
-      ? messages.map((m, idx) => ({
-          id: String(m.id),
-          role: (m.role as any) || 'agent',
-          messageType: m.messageType || 'message',
-          content: m.content || '',
-          metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
-          createdAt: toIso(m.createdAt as any),
-        }))
-      : [],
+    messages: normalizedMessages,
+  };
+}
+
+async function buildLightweightFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
+  const session = await taskCreationSessionDAO.getSession(sessionId);
+  if (!session) return null;
+
+  let taskDescription: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
+  let recentMessages: Awaited<ReturnType<typeof taskCreationSessionDAO.getRecentMessages>> = [];
+  try {
+    [taskDescription, recentMessages] = await Promise.all([
+      taskCreationSessionDAO.getTaskDescription(sessionId),
+      taskCreationSessionDAO.getRecentMessages(sessionId, 50),
+    ]);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_DB_LIGHTWEIGHT_PARTIAL]', { sessionId, error });
+  }
+
+  const env = await findEnvironmentByTaskSessionId(sessionId);
+  const orchestratorSessionId = env?.sessionId;
+  const normalizedRecentMessages = Array.isArray(recentMessages)
+    ? annotateRuntimeGenerations(
+        recentMessages.map((message, idx) => ({
+          id: String(message.id),
+          role: (message.role as any) || 'agent',
+          messageType: message.messageType || 'message',
+          content: message.content || '',
+          metadata: normalizeMessageTimelineMetadata(
+            sanitizeTimelineMetadataForClient(message.metadata),
+            message.createdAt,
+            idx
+          ),
+          createdAt: toIso(message.createdAt as any),
+        })),
+        { orchestratorSessionId }
+      )
+    : [];
+
+  const inferredRuntime = inferRuntimeFromMessages(normalizedRecentMessages, orchestratorSessionId);
+  const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
+  const inferredExecutor =
+    asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
+  const hasSandboxSignals =
+    Boolean(orchestratorSessionId) ||
+    Boolean(inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId) ||
+    normalizedRecentMessages.some((message) => {
+      const messageType = asText(message.messageType);
+      return (
+        messageType.startsWith('opencode_') ||
+        messageType.startsWith('codex_') ||
+        messageType === 'executor_event'
+      );
+    });
+  const sandboxExecutor = inferredExecutor || (hasSandboxSignals ? 'opencode' : '');
+  const titleCandidate =
+    taskDescription?.title ||
+    normalizedRecentMessages.find((message) => asText(message.role) === 'user')?.content ||
+    '新建任务会话';
+
+  const status: FileSessionRecord['status'] =
+    session.status === 'completed' || session.status === 'failed' || session.status === 'waiting_user'
+      ? session.status
+      : 'in_progress';
+  const stage: NonNullable<FileSessionRecord['stage']> =
+    status === 'completed'
+      ? 'completed'
+      : status === 'failed'
+        ? 'failed'
+        : status === 'waiting_user'
+          ? 'clarifying'
+          : 'executing';
+
+  return {
+    id: session.id,
+    title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    status,
+    stage,
+    mode: hasSandboxSignals ? 'sandbox' : undefined,
+    executor: sandboxExecutor || undefined,
+    driver: hasSandboxSignals ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor || 'opencode' }) : undefined,
+    runtime: orchestratorSessionId
+      ? {
+          generation: inferredRuntime.generation,
+          codexRestoreStatus: mergedRuntime.codexRestoreStatus as any,
+          codexRestoreAt: mergedRuntime.codexRestoreAt,
+          codexRestoreSourceKey: mergedRuntime.codexRestoreSourceKey,
+          previousExecutorSessionId: mergedRuntime.previousExecutorSessionId,
+          codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
+          orchestratorSessionId,
+          executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
+          opencodeSessionId: mergedRuntime.opencodeSessionId,
+          updatedAt: toIso(env?.updatedAt as any),
+        }
+      : undefined,
+    createdAt: toIso(session.createdAt as any),
+    updatedAt: toIso(session.updatedAt as any),
+    messages: [],
   };
 }
 
@@ -257,9 +515,20 @@ async function hydrateFileSessionFromDb(sessionId: string) {
   await taskCreationFileMemoryStore.updateSessionStatus(record.id, record.status as any);
   if (record.runtime?.orchestratorSessionId) {
     await taskCreationFileMemoryStore.updateRuntimeBinding(record.id, {
+      generation: record.runtime.generation,
       orchestratorSessionId: record.runtime.orchestratorSessionId,
+      executor: record.runtime.executor || record.executor,
+      executorSessionId: record.runtime.executorSessionId || record.runtime.opencodeSessionId,
       opencodeSessionId: record.runtime.opencodeSessionId,
+      codexRestoreStatus: record.runtime.codexRestoreStatus as any,
+      codexRestoreAt: record.runtime.codexRestoreAt,
+      codexRestoreSourceKey: record.runtime.codexRestoreSourceKey,
+      previousExecutorSessionId: record.runtime.previousExecutorSessionId,
+      codexRestoreFailureReason: record.runtime.codexRestoreFailureReason,
     });
+  }
+  if (record.driver) {
+    await taskCreationFileMemoryStore.updateSessionDriver(record.id, record.driver);
   }
   return record;
 }
@@ -269,7 +538,81 @@ async function resolveTaskSessionRecord(sessionId: string) {
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
+  session = await reconcileRecoveredOpencodeCompletion(session);
   return session;
+}
+
+async function resolveTaskSessionMeta(sessionId: string) {
+  const session = await taskCreationFileMemoryStore.getSession(sessionId);
+  if (session) {
+    return reconcileRecoveredOpencodeCompletion({
+      ...session,
+      stage: normalizeLiveSessionStage(session),
+      messages: [],
+    });
+  }
+  const lightweight = await buildLightweightFileSessionFromDb(sessionId);
+  return reconcileRecoveredOpencodeCompletion(lightweight);
+}
+
+async function reconcileRecoveredOpencodeCompletion(
+  session: FileSessionRecord | null
+): Promise<FileSessionRecord | null> {
+  if (!session) {
+    return null;
+  }
+
+  if (session.status === 'completed' || session.status === 'failed') {
+    return session;
+  }
+
+  const shouldInspectNativeCompletion =
+    asText(session.mode) === 'sandbox' &&
+    (asText(session.executor) === 'opencode' || asText(session.runtime?.opencodeSessionId));
+
+  if (!shouldInspectNativeCompletion) {
+    return session;
+  }
+
+  const nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
+    allowProvision: true,
+  });
+
+  if (
+    !nativeProgress?.assistantObserved ||
+    !nativeProgress.hasRenderableAssistantReply ||
+    nativeProgress.hasActiveAssistantParts
+  ) {
+    return session;
+  }
+
+  const nextPhase = session.phase === 'delivery' ? 'delivery' : (session.phase as any) || 'delivery';
+  await taskCreationFileMemoryStore.updateSessionState(session.id, {
+    status: 'completed',
+    stage: 'completed',
+    phase: nextPhase,
+  });
+  await taskCreationSessionDAO.updateSessionStatus(session.id, 'completed');
+
+  return {
+    ...session,
+    status: 'completed' as FileSessionRecord['status'],
+    stage: 'completed' as NonNullable<FileSessionRecord['stage']>,
+    phase: nextPhase as FileSessionRecord['phase'],
+    runtime: session.runtime
+      ? {
+          ...session.runtime,
+          orchestratorSessionId:
+            nativeProgress.orchestratorSessionId || session.runtime.orchestratorSessionId,
+          opencodeSessionId: nativeProgress.opencodeSessionId || session.runtime.opencodeSessionId,
+        }
+      : {
+        generation: 1,
+        orchestratorSessionId: nativeProgress.orchestratorSessionId,
+        opencodeSessionId: nativeProgress.opencodeSessionId,
+        updatedAt: new Date().toISOString(),
+        },
+  };
 }
 
 async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
@@ -388,9 +731,24 @@ async function buildSessionSummaryFromDb(limit: number) {
   const sessions = await taskCreationSessionDAO.getRecentSessions(limit);
   const result: any[] = [];
   for (const session of sessions) {
-    const description = await taskCreationSessionDAO.getTaskDescription(session.id);
+    let description: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
+    let messages: Awaited<ReturnType<typeof taskCreationSessionDAO.getMessages>> = [];
+    try {
+      [description, messages] = await Promise.all([
+        taskCreationSessionDAO.getTaskDescription(session.id),
+        taskCreationSessionDAO.getMessages(session.id),
+      ]);
+    } catch (error) {
+      if (!isTransientDatabaseError(error)) {
+        throw error;
+      }
+      console.warn('[TASK_SESSION_LIST_DB_PARTIAL]', { sessionId: session.id, error });
+    }
+    const firstUserMessage =
+      messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
     const title =
       description?.title ||
+      String(firstUserMessage).trim().slice(0, 80) ||
       `任务会话 ${String(session.id).slice(-6)}`;
     result.push({
       id: session.id,
@@ -428,21 +786,45 @@ async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot
   }
 }
 
+function resolveRuntimeExecutor(session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime'>): 'opencode' | 'codex' {
+  const preferred =
+    asText(session.runtime?.executor) ||
+    asText(session.executor) ||
+    asText(session.driver);
+  return preferred === 'codex' ? 'codex' : 'opencode';
+}
+
 async function ensureTaskSessionRuntime(sessionId: string) {
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
   }
 
+  const executor = resolveRuntimeExecutor(session);
   const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
   const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
   if (orchestratorSessionId) {
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
     if (environment?.status === 'ready') {
       try {
-        await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
-          workspacePath: workspaceRoot || undefined,
-        });
+        if (executor === 'opencode') {
+          await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
+            orchestratorSessionId,
+            taskSessionId: sessionId,
+          });
+          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+            workspacePath: workspaceRoot || undefined,
+          });
+        } else {
+          await sandboxAgentProvisionService.provisionWithLock({
+            executor,
+            metadata: {
+              taskSessionId: sessionId,
+              taskTitle: session.title,
+              executor,
+            },
+          });
+        }
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         return {
@@ -460,15 +842,21 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   }
 
   const provision = await sandboxAgentProvisionService.provisionWithLock({
+    executor,
     metadata: {
       taskSessionId: sessionId,
       taskTitle: session.title,
+      executor,
     },
   });
 
   await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
     orchestratorSessionId: provision.sessionId,
-    opencodeSessionId: '',
+    executor,
+    executorSessionId: executor === 'codex' ? session.runtime?.executorSessionId || undefined : '',
+    opencodeSessionId: executor === 'opencode' ? '' : undefined,
+    previousExecutorSessionId:
+      executor === 'codex' ? session.runtime?.executorSessionId || undefined : undefined,
   });
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
@@ -698,6 +1086,665 @@ function normalizeMessageTimelineMetadata(
   return metadata;
 }
 
+function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string, unknown> {
+  const metadata = pickRecord(metadataRaw);
+  const slim: Record<string, unknown> = {};
+
+  for (const key of [
+    'messageKey',
+    'timestamp',
+    'sessionEventSeq',
+    'timelineCursor',
+    'runtimeGeneration',
+    'runtimeGenerationBoundary',
+    'orchestratorSessionId',
+    'opencodeSessionId',
+    'workspacePath',
+    'stage',
+    'tone',
+    'streamKey',
+    'partId',
+    'eventType',
+    'executor',
+    'itemId',
+    'itemType',
+    'itemStatus',
+    'itemText',
+    'command',
+    'outputPreview',
+    'exitCode',
+    'fileChanges',
+    'filePaths',
+    'commandCategory',
+    'targetPath',
+    'approvalText',
+    'approvalOptions',
+    'codexRestoreStatus',
+    'codexRestoreAt',
+    'codexRestoreSourceKey',
+    'previousExecutorSessionId',
+    'codexRestoreFailureReason',
+  ]) {
+    if (metadata[key] !== undefined) {
+      slim[key] = metadata[key];
+    }
+  }
+
+  const eventFromMeta = pickRecord(metadata.event);
+  const rawPayload = pickRecord(metadata.rawPayload);
+  const eventFromPayload = pickRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const properties = pickRecord(event.properties);
+  const part = pickRecord(properties.part);
+
+  const toolName =
+    asText(metadata.toolName) ||
+    asText(part.tool) ||
+    asText(part.name) ||
+    asText(properties.tool) ||
+    asText(properties.name);
+  if (toolName) {
+    slim.toolName = toolName;
+  }
+
+  const partType = asText(metadata.partType) || asText(part.type);
+  if (partType) {
+    slim.partType = partType;
+  }
+
+  const eventRole = asText(metadata.eventRole) || asText(part.role);
+  if (eventRole) {
+    slim.eventRole = eventRole;
+  }
+
+  const eventState =
+    asText(metadata.eventState) ||
+    asText(pickRecord(properties.state).state) ||
+    asText(properties.state) ||
+    asText(properties.status);
+  if (eventState) {
+    slim.eventState = eventState;
+  }
+
+  const resolvedPartId =
+    asText(slim.partId) ||
+    asText(part.id) ||
+    asText(part.callID) ||
+    asText(properties.partId) ||
+    asText(properties.callID);
+  if (resolvedPartId) {
+    slim.partId = resolvedPartId;
+  }
+
+  if (Object.keys(event).length > 0) {
+    const slimProps: Record<string, unknown> = {};
+    const slimPart: Record<string, unknown> = {};
+    for (const key of ['id', 'callID', 'type', 'role', 'tool', 'name']) {
+      const value = asText(part[key]);
+      if (value) {
+        slimPart[key] = value;
+      }
+    }
+    if (Object.keys(slimPart).length > 0) {
+      slimProps.part = slimPart;
+    }
+    for (const key of ['tool', 'name', 'partId', 'callID', 'status']) {
+      const value = asText(properties[key]);
+      if (value) {
+        slimProps[key] = value;
+      }
+    }
+    if (eventState) {
+      slimProps.state = { state: eventState };
+    }
+    if (Object.keys(slimProps).length > 0) {
+      slim.event = { properties: slimProps };
+    }
+  }
+
+  return slim;
+}
+
+function normalizeRuntimeGenerationValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return null;
+}
+
+function resolveOpencodePartId(metadataRaw: unknown): string {
+  const metadata = pickRecord(metadataRaw);
+  const explicit =
+    asText(metadata.partId) ||
+    asText(metadata.streamKey);
+  if (explicit) {
+    return explicit;
+  }
+  const rawPayload = pickRecord(metadata.rawPayload);
+  const eventFromMeta = pickRecord(metadata.event);
+  const eventFromPayload = pickRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const properties = pickRecord(event.properties);
+  const part = pickRecord(properties.part);
+  return (
+    asText(part.id) ||
+    asText(part.callID) ||
+    asText(properties.partId) ||
+    asText(properties.callID)
+  );
+}
+
+function buildTimelineMessageKey(input: {
+  id?: string | number | null;
+  messageType?: string | null;
+  metadata?: unknown;
+  createdAt?: unknown;
+}): string {
+  const metadata = pickRecord(input.metadata);
+  const explicit = asText(metadata.messageKey);
+  if (explicit) {
+    return explicit;
+  }
+
+  const messageType = asText(input.messageType) || 'message';
+  const runtimeGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+  const generationSegment = runtimeGeneration ?? 'na';
+  const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
+  const timelineCursor =
+    sessionEventSeq ??
+    asTimelineCursor(metadata.timestamp) ??
+    asTimelineCursor(input.createdAt) ??
+    0;
+
+  if (metadata.runtimeGenerationBoundary === true) {
+    return `boundary:${generationSegment}:${timelineCursor || 'na'}`;
+  }
+
+  const opencodeSessionId = asText(metadata.opencodeSessionId);
+  const partId = resolveOpencodePartId(metadata);
+  if (opencodeSessionId && partId) {
+    return `stream:${generationSegment}:${opencodeSessionId}:${partId}`;
+  }
+
+  if (sessionEventSeq !== null) {
+    return `runtime:${generationSegment}:${sessionEventSeq}:${messageType}`;
+  }
+
+  const id = input.id !== undefined && input.id !== null ? String(input.id).trim() : '';
+  if (id) {
+    return id.startsWith('db:') || id.startsWith('boundary:') || id.startsWith('stream:') || id.startsWith('runtime:')
+      ? id
+      : `db:${id}`;
+  }
+
+  return `runtime:${generationSegment}:${timelineCursor || 'na'}:${messageType}`;
+}
+
+function annotateRuntimeGenerations<T extends { metadata?: Record<string, unknown>; createdAt?: string }>(
+  messages: T[],
+  runtime?: { generation?: number; orchestratorSessionId?: string | null } | null
+): T[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+
+  const sorted = [...messages].sort((a, b) => resolveMessageTimelineCursor(a) - resolveMessageTimelineCursor(b));
+  const distinctOrchestrators: string[] = [];
+  const seenOrchestrators = new Set<string>();
+  for (const item of sorted) {
+    const orchestratorId = asText(pickRecord(item?.metadata).orchestratorSessionId);
+    if (!orchestratorId || seenOrchestrators.has(orchestratorId)) continue;
+    seenOrchestrators.add(orchestratorId);
+    distinctOrchestrators.push(orchestratorId);
+  }
+
+  const generationByOrchestrator = new Map<string, number>();
+  for (const item of sorted) {
+    const metadata = pickRecord(item?.metadata);
+    const explicitGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+    const orchestratorId = asText(metadata.orchestratorSessionId);
+    if (explicitGeneration !== null && orchestratorId) {
+      generationByOrchestrator.set(orchestratorId, explicitGeneration);
+    }
+  }
+
+  const currentGeneration = normalizeRuntimeGenerationValue(runtime?.generation);
+  const currentOrchestrator = asText(runtime?.orchestratorSessionId);
+  if (
+    currentGeneration !== null &&
+    currentOrchestrator &&
+    distinctOrchestrators.includes(currentOrchestrator)
+  ) {
+    const currentIndex = distinctOrchestrators.indexOf(currentOrchestrator);
+    const startGeneration = Math.max(1, currentGeneration - currentIndex);
+    distinctOrchestrators.forEach((orchestratorId, index) => {
+      if (!generationByOrchestrator.has(orchestratorId)) {
+        generationByOrchestrator.set(orchestratorId, startGeneration + index);
+      }
+    });
+  }
+
+  let nextGeneration = Math.max(
+    0,
+    ...Array.from(generationByOrchestrator.values()).filter((value) => Number.isFinite(value) && value > 0)
+  );
+  for (const orchestratorId of distinctOrchestrators) {
+    if (generationByOrchestrator.has(orchestratorId)) continue;
+    nextGeneration += 1;
+    generationByOrchestrator.set(orchestratorId, nextGeneration);
+  }
+
+  let lastKnownGeneration = currentGeneration || 1;
+  return sorted.map((item) => {
+    const metadata = normalizeMessageTimelineMetadata(item?.metadata, item?.createdAt, 0);
+    const explicitGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+    const orchestratorId = asText(metadata.orchestratorSessionId);
+    const runtimeGeneration =
+      explicitGeneration ??
+      (orchestratorId ? generationByOrchestrator.get(orchestratorId) || null : null) ??
+      lastKnownGeneration;
+    if (runtimeGeneration) {
+      metadata.runtimeGeneration = runtimeGeneration;
+      lastKnownGeneration = runtimeGeneration;
+    }
+    return {
+      ...item,
+      metadata,
+    };
+  });
+}
+
+function inferRuntimeFromMessages(
+  messages: Array<{ metadata?: Record<string, unknown>; createdAt?: string; messageType?: string }>,
+  orchestratorSessionId?: string | null
+): {
+  generation?: number;
+  executor?: string;
+  executorSessionId?: string;
+  opencodeSessionId?: string;
+  codexRestoreStatus?: string;
+  codexRestoreAt?: string;
+  codexRestoreSourceKey?: string;
+  previousExecutorSessionId?: string;
+  codexRestoreFailureReason?: string;
+} {
+  const targetOrchestrator = asText(orchestratorSessionId);
+  const ordered = annotateRuntimeGenerations(messages);
+  const matched = ordered.filter((item) => {
+    if (!targetOrchestrator) return true;
+    return asText(pickRecord(item?.metadata).orchestratorSessionId) === targetOrchestrator;
+  });
+  const latest = matched.length > 0 ? matched[matched.length - 1] : null;
+  if (!latest) return {};
+  const metadata = pickRecord(latest.metadata);
+  const legacySessionId = asText(metadata.opencodeSessionId);
+  const rawExecutorSessionId = asText(metadata.executorSessionId) || legacySessionId;
+  const messageType = asText(latest.messageType);
+  const inferredExecutor =
+    asText(metadata.executor) ||
+    (messageType.startsWith('codex_') ? 'codex' : '') ||
+    (rawExecutorSessionId ? 'opencode' : '');
+  const opencodeSessionId = legacySessionId || rawExecutorSessionId || undefined;
+  const executorSessionId = rawExecutorSessionId || undefined;
+  const executor = inferredExecutor;
+  return {
+    generation: normalizeRuntimeGenerationValue(metadata.runtimeGeneration) || undefined,
+    executor: executor || undefined,
+    executorSessionId,
+    opencodeSessionId,
+    codexRestoreStatus: asText(metadata.codexRestoreStatus) || undefined,
+    codexRestoreAt: asText(metadata.codexRestoreAt) || undefined,
+    codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || undefined,
+    previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || undefined,
+    codexRestoreFailureReason: asText(metadata.codexRestoreFailureReason) || undefined,
+  };
+}
+
+function mergeCodexRuntimeMetadata(
+  runtime: {
+    generation?: number;
+    executor?: string;
+    executorSessionId?: string;
+    opencodeSessionId?: string;
+    codexRestoreStatus?: string;
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
+  },
+  environmentMetadata?: Record<string, unknown> | null
+) {
+  const metadata = pickRecord(environmentMetadata);
+  return {
+    ...runtime,
+    codexRestoreStatus: asText(metadata.codexRestoreStatus) || runtime.codexRestoreStatus,
+    codexRestoreAt: asText(metadata.codexRestoreAt) || runtime.codexRestoreAt,
+    codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || runtime.codexRestoreSourceKey,
+    previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || runtime.previousExecutorSessionId,
+    codexRestoreFailureReason:
+      asText(metadata.codexRestoreFailureReason) || runtime.codexRestoreFailureReason,
+  };
+}
+
+function injectRuntimeGenerationBoundaries<
+  T extends {
+    id?: string;
+    messageKey?: string;
+    role?: string;
+    messageType?: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+    createdAt?: string;
+  },
+>(messages: T[]): T[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+
+  const allGenerations = Array.from(
+    new Set(
+      messages
+        .map((item) => normalizeRuntimeGenerationValue(pickRecord(item?.metadata).runtimeGeneration))
+        .filter((value): value is number => value !== null)
+    )
+  );
+  if (allGenerations.length <= 1) {
+    return messages;
+  }
+
+  const result: T[] = [];
+  let lastGeneration: number | null = null;
+  for (const item of messages) {
+    const metadata = pickRecord(item?.metadata);
+    const runtimeGeneration = normalizeRuntimeGenerationValue(metadata.runtimeGeneration);
+    if (runtimeGeneration !== null && lastGeneration !== null && runtimeGeneration !== lastGeneration) {
+      const timelineCursor = resolveMessageTimelineCursor(item);
+      result.push({
+        id: `runtime-generation-boundary-${runtimeGeneration}-${timelineCursor || Date.now()}`,
+        messageKey: `boundary:${runtimeGeneration}:${timelineCursor || Date.now()}`,
+        role: 'system',
+        messageType: 'status_update',
+        content: `已切换到第 ${runtimeGeneration} 代执行环境，以下内容来自新的 sandbox 恢复。`,
+        metadata: {
+          messageKey: `boundary:${runtimeGeneration}:${timelineCursor || Date.now()}`,
+          runtimeGeneration,
+          runtimeGenerationBoundary: true,
+          stage: 'executing',
+          tone: 'system',
+          timestamp: timelineCursor || Date.now(),
+          sessionEventSeq:
+            Number.isFinite(timelineCursor) && timelineCursor > 0 ? timelineCursor - 1 : Date.now() * 1000 - 1,
+        },
+        createdAt: item.createdAt,
+      } as unknown as T);
+    }
+    if (runtimeGeneration !== null) {
+      lastGeneration = runtimeGeneration;
+    }
+    result.push(item);
+  }
+  return result;
+}
+
+type TimelineMessage = {
+  id: string;
+  messageKey: string;
+  role: 'user' | 'agent' | 'system';
+  messageType: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+};
+
+function mapStoredMessagesToTimeline(
+  messages: Array<{
+    id: string | number;
+    role?: string | null;
+    messageType?: string | null;
+    content?: string | null;
+    metadata?: unknown;
+    createdAt?: unknown;
+  }>
+): TimelineMessage[] {
+  return Array.isArray(messages)
+    ? messages.map((message, idx) => {
+        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const normalizedMetadata = normalizeMessageTimelineMetadata(
+          sanitizedMetadata,
+          message.createdAt,
+          idx
+        );
+        const messageKey = buildTimelineMessageKey({
+          id: message.id,
+          messageType: message.messageType,
+          metadata: sanitizedMetadata,
+          createdAt: message.createdAt,
+        });
+        const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
+        const createdAt =
+          timestamp !== null
+            ? new Date(timestamp).toISOString()
+            : toIso(message.createdAt as any);
+        return {
+          id: String(message.id),
+          messageKey,
+          role: (message.role as any) || 'agent',
+          messageType: message.messageType || 'message',
+          content: message.content || '',
+          metadata: {
+            ...normalizedMetadata,
+            messageKey,
+          },
+          createdAt,
+        };
+      })
+    : [];
+}
+
+function attachTimelineMessageKeys(
+  messages: Array<{
+    id: string;
+    role: 'user' | 'agent' | 'system';
+    messageType: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    createdAt: string;
+  }>
+): TimelineMessage[] {
+  return Array.isArray(messages)
+    ? messages.map((message) => {
+        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const messageKey = buildTimelineMessageKey({
+          id: message.id,
+          messageType: message.messageType,
+          metadata: sanitizedMetadata,
+          createdAt: message.createdAt,
+        });
+        return {
+          ...message,
+          messageKey,
+          metadata: {
+            ...sanitizedMetadata,
+            messageKey,
+          },
+        };
+      })
+    : [];
+}
+
+async function resolveRenderableTimelineMessages(
+  sessionId: string,
+  session?: any
+): Promise<TimelineMessage[]> {
+  const shouldPreferOpencodeNativeHistory =
+    asText(session?.mode) === 'sandbox' &&
+    (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+
+  let persistedMessages: TimelineMessage[] | null = null;
+  const loadPersistedMessages = async () => {
+    if (persistedMessages) return persistedMessages;
+    persistedMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
+    return persistedMessages;
+  };
+
+  let messages: TimelineMessage[] | null = null;
+  if (shouldPreferOpencodeNativeHistory) {
+    const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(sessionId, {
+      allowProvision: true,
+    });
+    const normalizedNativeMessages = nativeMessages ? attachTimelineMessageKeys(nativeMessages) : null;
+    if (normalizedNativeMessages && normalizedNativeMessages.length > 0) {
+      if (hasRenderableAssistantReply(normalizedNativeMessages)) {
+        messages = normalizedNativeMessages;
+      } else {
+        const fallbackMessages = await loadPersistedMessages();
+        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : normalizedNativeMessages;
+      }
+    }
+  }
+
+  if (!messages || messages.length === 0) {
+    messages = await loadPersistedMessages();
+  }
+  if (!messages || messages.length === 0) {
+    const fallback = await taskCreationSessionDAO.getMessages(sessionId);
+    messages = mapStoredMessagesToTimeline(fallback);
+  }
+
+  messages = annotateRuntimeGenerations(messages, session?.runtime);
+  messages = injectRuntimeGenerationBoundaries(messages);
+  messages = filterLegacyTimelineNoise(messages);
+  messages.sort((a, b) => {
+    const ta = resolveMessageTimelineCursor(a);
+    const tb = resolveMessageTimelineCursor(b);
+    if (ta !== tb) return ta - tb;
+
+    const sa = asPositiveInt(pickRecord(a?.metadata).sessionEventSeq) || 0;
+    const sb = asPositiveInt(pickRecord(b?.metadata).sessionEventSeq) || 0;
+    if (sa !== sb) return sa - sb;
+
+    const ca = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
+    const cb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
+    if (ca !== cb) return ca - cb;
+    return 0;
+  });
+
+  return messages;
+}
+
+function buildTimelinePage(messages: TimelineMessage[]) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      messages: [],
+      oldestCursor: null,
+      newestCursor: null,
+    };
+  }
+  return {
+    messages,
+    oldestCursor: resolveMessageTimelineCursor(messages[0]) || null,
+    newestCursor: resolveMessageTimelineCursor(messages[messages.length - 1]) || null,
+  };
+}
+
+function hasLegacyRecentNoise(messages: TimelineMessage[]) {
+  return messages.some((message) => {
+    const content = asText(message?.content);
+    const metadata = pickRecord(message?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const isStructuralOpencodeEvent =
+      eventType === 'message.updated' ||
+      eventType === 'message.part.updated' ||
+      eventType === 'message.part.delta' ||
+      eventType === 'message.part.removed' ||
+      eventType === 'session.status' ||
+      eventType === 'session.idle' ||
+      eventType === 'message.final';
+    if (message?.messageType === 'opencode_event') {
+      if (!content && !isStructuralOpencodeEvent) {
+        return true;
+      }
+      if (content.startsWith('[Message] ')) {
+        return true;
+      }
+      return false;
+    }
+    if (message?.messageType === 'status_update' && !content) {
+      return true;
+    }
+    return false;
+  });
+}
+
+function filterLegacyTimelineNoise<T extends { messageType?: string; content?: string }>(messages: T[]): T[] {
+  return messages.filter((message) => {
+    const content = asText(message?.content);
+    const metadata = pickRecord((message as any)?.metadata);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const isStructuralOpencodeEvent =
+      eventType === 'message.updated' ||
+      eventType === 'message.part.updated' ||
+      eventType === 'message.part.delta' ||
+      eventType === 'message.part.removed' ||
+      eventType === 'session.status' ||
+      eventType === 'session.idle' ||
+      eventType === 'message.final';
+    if (message?.messageType === 'opencode_event') {
+      if (!content && !isStructuralOpencodeEvent) return false;
+      if (content.startsWith('[Message] ')) return false;
+    }
+    if (message?.messageType === 'status_update' && !content) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function scheduleRecentHistoryHydration(sessionId: string) {
+  const taskId = asText(sessionId);
+  if (!taskId || recentHistoryHydrationInFlight.has(taskId)) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastQueuedAt = recentHistoryHydrationQueuedAt.get(taskId) || 0;
+  if (now - lastQueuedAt < 5000) {
+    return;
+  }
+  recentHistoryHydrationQueuedAt.set(taskId, now);
+
+  const task = (async () => {
+    try {
+      const nativeMessages = await opencodeRemoteService.loadNativeMessageHistory(taskId, {
+        allowProvision: true,
+      });
+      if (!nativeMessages || nativeMessages.length === 0) {
+        return;
+      }
+
+      await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+        taskId,
+        filterLegacyTimelineNoise(nativeMessages).slice(-50).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          messageType: message.messageType,
+          metadata: message.metadata,
+          createdAt: message.createdAt,
+        }))
+      );
+    } catch (error) {
+      console.warn('[RECENT_HISTORY_HYDRATION_FAILED]', { sessionId: taskId, error });
+    } finally {
+      recentHistoryHydrationInFlight.delete(taskId);
+    }
+  })();
+
+  recentHistoryHydrationInFlight.set(taskId, task);
+}
+
 function pickRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   return {};
@@ -716,11 +1763,17 @@ async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
   try {
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
     if (!environment) return null;
+    const metadata = pickRecord(environment.metadata);
     return {
       status: environment.status,
-      provider: (environment.metadata as any)?.sandboxProvider || undefined,
+      provider: metadata.sandboxProvider || undefined,
       updatedAt: environment.updatedAt,
       sandboxId: environment.sessionId,
+      codexRestoreStatus: asText(metadata.codexRestoreStatus) || undefined,
+      codexRestoreAt: asText(metadata.codexRestoreAt) || undefined,
+      codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || undefined,
+      previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || undefined,
+      codexRestoreFailureReason: asText(metadata.codexRestoreFailureReason) || undefined,
     };
   } catch (error) {
     console.warn('[TASK_CREATION_RUNTIME_STATUS_FAILED]', sessionId, error);
@@ -886,6 +1939,23 @@ function writeSse(res: express.Response, payload: unknown, eventName?: string, e
   }
 }
 
+function respondEphemeralSseBridge(
+  res: express.Response,
+  payload: Record<string, unknown>,
+  options?: { retryMs?: number }
+) {
+  const retryMs = Math.max(1000, Number(options?.retryMs || 5000));
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  res.write(`retry: ${retryMs}\n`);
+  writeSse(res, payload, 'bridge');
+  res.end();
+}
+
 type SseClientRuntimeState = {
   sessionId: string;
   clientId: string;
@@ -1002,6 +2072,7 @@ router.post('/sessions', async (req, res) => {
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
     const requestedExecutor = asText(req.body?.executor);
+    const requestedDriver = asText(req.body?.driver);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -1027,6 +2098,16 @@ router.post('/sessions', async (req, res) => {
     if (requestedExecutor) {
       await taskCreationFileMemoryStore.updateSessionExecutor(session.id, requestedExecutor);
     }
+    const derivedDriver =
+      (requestedDriver as FileSessionRecord['driver']) ||
+      deriveSessionDriver({
+        mode: requestedMode || session.mode,
+        executor: requestedExecutor || session.executor,
+        fallbackDriver: session.driver,
+      });
+    if (derivedDriver) {
+      await taskCreationFileMemoryStore.updateSessionDriver(session.id, derivedDriver);
+    }
 
     if (isNewSession) {
       await taskCreationFileMemoryStore.addMessage(
@@ -1038,7 +2119,7 @@ router.post('/sessions', async (req, res) => {
     }
 
     let persistedInitialMessage = false;
-    if (initialMessage) {
+    if (initialMessage && isNewSession) {
       const history = await taskCreationFileMemoryStore.getMessages(session.id);
       const last = history.length > 0 ? history[history.length - 1] : null;
       const isDuplicateTail =
@@ -1135,7 +2216,7 @@ router.get('/sessions', async (req, res) => {
     const now = Date.now();
 
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
-    const sessions = rawSessions.map(toSessionSummary);
+    let sessions = rawSessions.map(toSessionSummary);
     if (!refresh && sessions.length > 0) {
       return res.json({
         success: true,
@@ -1173,6 +2254,17 @@ router.get('/sessions', async (req, res) => {
       });
     }
 
+    try {
+      const dbSummaries = await buildSessionSummaryFromDb(limit);
+      const dbById = new Map(dbSummaries.map((item) => [String(item.id), item]));
+      sessions = sessions.map((session) => mergeSessionLifecycleFromDb(session, dbById.get(String(session.id))));
+    } catch (error) {
+      if (!isTransientDatabaseError(error)) {
+        throw error;
+      }
+      console.warn('[TASK_SESSION_LIST_DB_RECONCILE_FAILED]', error);
+    }
+
     sessionListCache = {
       fetchedAt: now,
       limit,
@@ -1186,6 +2278,16 @@ router.get('/sessions', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取会话列表失败:', error);
+    if (isTransientDatabaseError(error)) {
+      if (sessionListCache && sessionListCache.data.length > 0) {
+        return res.json({
+          success: true,
+          data: sessionListCache.data,
+          cache: { hit: true, stale: true, ageMs: Date.now() - sessionListCache.fetchedAt },
+        });
+      }
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取会话列表失败，请稍后重试'),
@@ -1205,6 +2307,9 @@ router.post('/sessions/draft', async (req, res) => {
     });
   } catch (error: any) {
     console.error('创建草稿会话失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '创建草稿会话失败'),
@@ -1219,7 +2324,7 @@ router.post('/sessions/draft', async (req, res) => {
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const sessionData = await resolveTaskSessionRecord(sessionId);
+    const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
       return res.status(404).json({
@@ -1250,9 +2355,149 @@ router.get('/sessions/:sessionId', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取会话详情失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取会话详情失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/messages/recent
+ * 首屏最近消息热缓存，仅依赖数据库
+ */
+router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionMeta(sessionId);
+    const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
+    const recentMessages = filterLegacyTimelineNoise(
+      injectRuntimeGenerationBoundaries(
+        annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
+      )
+    );
+    const shouldPreferOpencodeNativeHistory =
+      asText(session?.mode) === 'sandbox' &&
+      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+
+    const shouldHydrateFromNativeHistory =
+      shouldPreferOpencodeNativeHistory &&
+      (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
+
+    if (shouldPreferOpencodeNativeHistory) {
+      const resolvedMessages = await resolveRenderableTimelineMessages(sessionId, session);
+      const resolvedRecentMessages = resolvedMessages.slice(Math.max(resolvedMessages.length - 50, 0));
+      const cacheOutOfSync =
+        shouldHydrateFromNativeHistory ||
+        recentMessages.length !== resolvedRecentMessages.length ||
+        (resolveMessageTimelineCursor(recentMessages[recentMessages.length - 1]) || 0) !==
+          (resolveMessageTimelineCursor(resolvedRecentMessages[resolvedRecentMessages.length - 1]) || 0) ||
+        (recentMessages[recentMessages.length - 1]?.messageKey || '') !==
+          (resolvedRecentMessages[resolvedRecentMessages.length - 1]?.messageKey || '');
+
+      if (cacheOutOfSync && resolvedRecentMessages.length > 0) {
+        void taskCreationSessionDAO
+          .replaceRecentMessagesSnapshot(
+            sessionId,
+            resolvedRecentMessages.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              messageType: message.messageType,
+              metadata: message.metadata,
+              createdAt: message.createdAt,
+            }))
+          )
+          .catch((error) => {
+            console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
+          });
+      }
+
+      const page = buildTimelinePage(resolvedRecentMessages);
+      const mayHaveOlderHistory =
+        resolvedRecentMessages.length >= 50 ||
+        asText(session?.runtime?.opencodeSessionId).length > 0 ||
+        asText(session?.executor) === 'opencode';
+
+      return res.json({
+        success: true,
+        data: {
+          ...page,
+          hasOlderHistory: mayHaveOlderHistory,
+          source: 'resolved_recent',
+        },
+      });
+    }
+
+    if (shouldHydrateFromNativeHistory) {
+      scheduleRecentHistoryHydration(sessionId);
+    }
+
+    const page = buildTimelinePage(recentMessages);
+    const mayHaveOlderHistory =
+      recentMessages.length >= 50 ||
+      asText(session?.runtime?.opencodeSessionId).length > 0 ||
+      asText(session?.executor) === 'opencode';
+
+    res.json({
+      success: true,
+      data: {
+        ...page,
+        hasOlderHistory: mayHaveOlderHistory,
+        source: 'recent_cache',
+      },
+    });
+  } catch (error: any) {
+    console.error('获取最近消息缓存失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取最近消息缓存失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/messages/history
+ * 按 cursor 增量加载更老历史
+ */
+router.get('/sessions/:sessionId/messages/history', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionMeta(sessionId);
+    const beforeCursor = asTimelineCursor(req.query.before);
+    const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
+
+    const fullTimeline = await resolveRenderableTimelineMessages(sessionId, session);
+    const olderMessages =
+      beforeCursor !== null
+        ? fullTimeline.filter((item) => resolveMessageTimelineCursor(item) < beforeCursor)
+        : fullTimeline;
+    const pageMessages = olderMessages.slice(Math.max(olderMessages.length - limit, 0));
+    const page = buildTimelinePage(pageMessages);
+
+    res.json({
+      success: true,
+      data: {
+        ...page,
+        hasMore: olderMessages.length > pageMessages.length,
+        nextBeforeCursor: page.oldestCursor,
+        source: 'resolved_history',
+      },
+    });
+  } catch (error: any) {
+    console.error('获取增量历史失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('获取增量历史失败，请稍后重试'),
     });
   }
 });
@@ -1264,35 +2509,8 @@ router.get('/sessions/:sessionId', async (req, res) => {
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    let messages = await taskCreationFileMemoryStore.getMessages(sessionId);
-    if (!messages || messages.length === 0) {
-      const fallback = await taskCreationSessionDAO.getMessages(sessionId);
-      messages = Array.isArray(fallback)
-        ? fallback.map((m, idx) => ({
-            id: String(m.id),
-            role: (m.role as any) || 'agent',
-            messageType: m.messageType || 'message',
-            content: m.content || '',
-            metadata: normalizeMessageTimelineMetadata(m.metadata, m.createdAt, idx),
-            createdAt: toIso(m.createdAt as any),
-          }))
-        : [];
-    }
-
-    messages.sort((a, b) => {
-      const ta = resolveMessageTimelineCursor(a);
-      const tb = resolveMessageTimelineCursor(b);
-      if (ta !== tb) return ta - tb;
-
-      const sa = asPositiveInt(pickRecord(a?.metadata).sessionEventSeq) || 0;
-      const sb = asPositiveInt(pickRecord(b?.metadata).sessionEventSeq) || 0;
-      if (sa !== sb) return sa - sb;
-
-      const ca = a?.createdAt ? Date.parse(String(a.createdAt)) : 0;
-      const cb = b?.createdAt ? Date.parse(String(b.createdAt)) : 0;
-      if (ca !== cb) return ca - cb;
-      return 0;
-    });
+    const session = await resolveTaskSessionMeta(sessionId);
+    const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
     res.json({
       success: true,
@@ -1300,6 +2518,9 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取对话消息失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取对话消息失败，请稍后重试'),
@@ -2547,7 +3768,19 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
  */
 router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   const { sessionId } = req.params;
-  const session = await resolveTaskSessionRecord(sessionId);
+  let session: FileSessionRecord | null = null;
+  try {
+    session = await resolveTaskSessionRecord(sessionId);
+  } catch (error) {
+    console.error('获取 OpenCode 事件流会话失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('读取会话失败，请稍后重试'),
+    });
+  }
   if (!session) {
     return res.status(404).json({
       success: false,
@@ -2557,18 +3790,37 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   const orchestratorSessionId = session.runtime?.orchestratorSessionId;
   if (!orchestratorSessionId) {
-    return res.status(409).json({
-      success: false,
-      error: getPublicErrorMessage('执行环境未就绪，无法订阅事件流'),
+    return respondEphemeralSseBridge(res, {
+      status: 'runtime_unavailable',
+      reason: 'missing_orchestrator_session',
+      sessionId,
+      retryAfterMs: 5000,
+      relay: 'backend_only',
     });
   }
   opencodeEventStreamService.bindSession(orchestratorSessionId, sessionId, session.mode);
 
-  const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
-  if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
-    return res.status(409).json({
+  let runtimeStatus: Awaited<ReturnType<typeof resolveRuntimeStatus>>;
+  try {
+    runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+  } catch (error) {
+    console.error('获取 OpenCode 事件流运行时状态失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
       success: false,
-      error: getPublicErrorMessage('执行环境未启动，无法订阅事件流'),
+      error: getPublicErrorMessage('读取执行环境状态失败，请稍后重试'),
+    });
+  }
+  if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+    return respondEphemeralSseBridge(res, {
+      status: 'runtime_not_ready',
+      reason: runtimeStatus.status,
+      sessionId,
+      orchestratorSessionId,
+      retryAfterMs: 5000,
+      relay: 'backend_only',
     });
   }
 
@@ -2611,9 +3863,13 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   } catch (error: any) {
     if (isSandboxNotFoundError(error)) {
       await markSandboxClosed(orchestratorSessionId);
-      return res.status(409).json({
-        success: false,
-        error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
+      return respondEphemeralSseBridge(res, {
+        status: 'runtime_closed',
+        reason: 'sandbox_not_found',
+        sessionId,
+        orchestratorSessionId,
+        retryAfterMs: 5000,
+        relay: 'backend_only',
       });
     }
     return res.status(502).json({
@@ -2695,7 +3951,11 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
         return 0;
       };
       const filtered = history
-        .filter((item) => item.messageType === 'opencode_event')
+        .filter((item) =>
+          item.messageType === 'opencode_event' ||
+          item.messageType === 'opencode_error' ||
+          item.messageType === 'status_update'
+        )
         .filter((item) => {
           const cursor = pickCursorFromItem(item);
           if (!Number.isFinite(cursor) || cursor <= 0) return false;
@@ -2744,11 +4004,21 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           (Number.isFinite(timestampEventId) && timestampEventId > 0 ? timestampEventId : undefined) ??
           (Number.isFinite(createdAtEventId) && createdAtEventId > 0 ? createdAtEventId : undefined) ??
           (Number.isFinite(seqEventId) && seqEventId > 0 ? seqEventId : undefined);
+        const messageKey = buildTimelineMessageKey({
+          id: item.id,
+          messageType: item.messageType,
+          metadata: item.metadata,
+          createdAt: item.createdAt,
+        });
         writeSse(res, {
           sessionId,
           type: item.messageType,
           content: item.content,
-          metadata: item.metadata,
+          metadata: {
+            ...pickRecord(item.metadata),
+            messageKey,
+          },
+          messageKey,
           createdAt: item.createdAt,
         }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
         if (Number.isFinite(eventId as number) && (eventId as number) > 0) {
@@ -2765,6 +4035,18 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     if (filterSessionId && msgOpencodeSessionId && msgOpencodeSessionId !== filterSessionId) {
       return;
     }
+    if (
+      (payload.eventType === 'message.part.updated' || payload.eventType === 'message.part.delta') &&
+      (() => {
+        const properties = pickRecord(payload.event?.properties);
+        const part = pickRecord(properties.part);
+        const partType = asText(part.type) || asText(properties.type);
+        const normalized = partType.trim().toLowerCase();
+        return normalized === 'text' || normalized === 'reasoning';
+      })()
+    ) {
+      return;
+    }
     const projected = opencodeEventStreamService.projectForClient({
       orchestratorSessionId,
       opencodeSessionId: msgOpencodeSessionId || undefined,
@@ -2775,6 +4057,16 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       sessionEventSeq: payload.sessionEventSeq,
     });
     const createdAt = new Date(payload.timestamp || Date.now()).toISOString();
+    const messageKey = buildTimelineMessageKey({
+      messageType: projected.type,
+      metadata: {
+        ...pickRecord(projected.metadata),
+        opencodeSessionId: msgOpencodeSessionId || undefined,
+        sessionEventSeq: payload.sessionEventSeq,
+        timestamp: payload.timestamp,
+      },
+      createdAt,
+    });
     const liveEventId =
       (typeof payload.sessionEventSeq === 'number' &&
       Number.isFinite(payload.sessionEventSeq) &&
@@ -2793,9 +4085,56 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
       {
         sessionId,
         ...projected,
+        messageKey,
         opencodeSessionId: msgOpencodeSessionId || undefined,
         eventType: payload.eventType,
         event: payload.event,
+        createdAt,
+        metadata: {
+          ...pickRecord(projected.metadata),
+          messageKey,
+        },
+      },
+      undefined,
+      Number.isFinite(liveEventId as number) ? (liveEventId as number) : undefined
+    );
+    if (Number.isFinite(liveEventId as number) && (liveEventId as number) > 0) {
+      updateSseClientCursor(activeConnection.key, liveEventId as number);
+    }
+  });
+  const unsubscribeTerminal = opencodeRemoteService.subscribe(({ taskSessionId, message }) => {
+    if (taskSessionId !== sessionId) {
+      return;
+    }
+    const metadata = pickRecord(message.metadata);
+    const msgOpencodeSessionId = asText(metadata.opencodeSessionId);
+    if (filterSessionId && msgOpencodeSessionId && msgOpencodeSessionId !== filterSessionId) {
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const messageKey = buildTimelineMessageKey({
+      messageType: message.type,
+      metadata: message.metadata,
+      createdAt,
+    });
+    const liveEventId =
+      asPositiveInt(metadata.sessionEventSeq) ??
+      asTimelineCursor(metadata.timestamp) ??
+      Date.parse(createdAt);
+    writeSse(
+      res,
+      {
+        sessionId,
+        type: message.type,
+        content: message.content,
+        metadata: {
+          ...metadata,
+          messageKey,
+        },
+        messageKey,
+        stage: message.stage,
+        phase: message.phase,
+        tone: message.tone,
         createdAt,
       },
       undefined,
@@ -2828,6 +4167,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
     cleaned = true;
     clearInterval(pingTimer);
     unsubscribe();
+    unsubscribeTerminal();
     console.log(
       '[OPENCODE_SSE_CLIENT_DISCONNECTED]',
       JSON.stringify({
@@ -2872,6 +4212,9 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取意图识别结果失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取意图识别结果失败，请稍后重试'),
@@ -2902,6 +4245,9 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取任务描述失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取任务描述失败，请稍后重试'),
@@ -2932,6 +4278,9 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取执行计划失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
     res.status(500).json({
       success: false,
       error: getPublicErrorMessage('获取执行计划失败，请稍后重试'),

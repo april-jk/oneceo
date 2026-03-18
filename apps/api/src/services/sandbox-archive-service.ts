@@ -1,7 +1,11 @@
 import * as crypto from 'crypto';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { downloadFromR2, existsInR2, uploadToR2 } from './r2-client';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { clearSandboxDirty, setSandboxMetadata, extractTaskSessionId } from './sandbox-activity-service';
@@ -22,6 +26,12 @@ export type ArchiveWorkspaceResult = {
   sizeBytes: number;
   taskSessionId: string | null;
   workspaceRoot: string;
+  stateRoot: string;
+  codexArchiveHome?: string;
+  codexDotCodexPath?: string;
+  codexArchivedExecutorSessionId?: string;
+  codexArchiveVerifiedAt?: string;
+  codexArchiveVerifiedRollout?: string;
 };
 
 type ArchiveManifest = {
@@ -30,6 +40,12 @@ type ArchiveManifest = {
   taskSessionId?: string;
   archivedAt: string;
   workspaceRoot: string;
+  stateRoot?: string;
+  codexArchiveHome?: string;
+  codexDotCodexPath?: string;
+  codexArchivedExecutorSessionId?: string;
+  codexArchiveVerifiedAt?: string;
+  codexArchiveVerifiedRollout?: string;
   archiveKey: string;
   snapshotKey: string;
   sha256: string;
@@ -43,6 +59,7 @@ type SandboxArchiveServiceDeps = {
   existsInR2: typeof existsInR2;
   uploadToR2: typeof uploadToR2;
   resolveOpencodeWorkspacePath: typeof resolveOpencodeWorkspacePath;
+  resolveOpencodeStatePath: typeof resolveOpencodeStatePath;
   sandboxExecutionEnvironmentDAO: typeof sandboxExecutionEnvironmentDAO;
   taskCreationFileMemoryStore: typeof taskCreationFileMemoryStore;
   clearSandboxDirty: typeof clearSandboxDirty;
@@ -55,6 +72,7 @@ const defaultSandboxArchiveServiceDeps: SandboxArchiveServiceDeps = {
   existsInR2,
   uploadToR2,
   resolveOpencodeWorkspacePath,
+  resolveOpencodeStatePath,
   sandboxExecutionEnvironmentDAO,
   taskCreationFileMemoryStore,
   clearSandboxDirty,
@@ -80,6 +98,12 @@ function normalizePath(input: string): string {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  const normalized = asText(value).toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
 }
 
 function buildArchiveKey(taskSessionId: string | null, sandboxId: string): string {
@@ -111,6 +135,76 @@ function shellEscape(value: string): string {
 
 function sha256(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+async function ensureCodexStateReady(
+  sandboxId: string,
+  input: {
+    codexDotCodexPath: string;
+    executorSessionId?: string;
+    reason: string;
+  }
+): Promise<{ verified: boolean; matchedFile?: string; latestFile?: string }> {
+  const executorSessionId = asText(input.executorSessionId);
+  if (!executorSessionId) {
+    return { verified: false };
+  }
+
+  const attempts = Math.max(3, Number(process.env.CODEX_ARCHIVE_READY_ATTEMPTS || 8));
+  const delayMs = Math.max(500, Number(process.env.CODEX_ARCHIVE_READY_DELAY_MS || 1500));
+  let latestFile = '';
+  const extractCommandOutput = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+      const result = (value as any).result;
+      const output = asText(result?.stdout || result?.output || (value as any).stdout || (value as any).output);
+      if (output) return output;
+    }
+    return '';
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const command = `
+set -euo pipefail
+state_dir=${shellEscape(`${input.codexDotCodexPath.replace(/\/+$/, '')}/sessions`)}
+target=${shellEscape(executorSessionId)}
+sync || true
+if [ ! -d "$state_dir" ]; then
+  exit 0
+fi
+match="$(find "$state_dir" -type f -name "*$target*.jsonl" -print -quit 2>/dev/null || true)"
+if [ -n "$match" ]; then
+  printf 'FOUND:%s' "$match"
+  exit 0
+fi
+latest="$(find "$state_dir" -type f -name '*.jsonl' -print | sort | tail -n 1 || true)"
+if [ -n "$latest" ]; then
+  printf 'LATEST:%s' "$latest"
+fi
+`;
+    let output = '';
+    try {
+      const result: any = await sandboxArchiveServiceDeps.e2bConnector.runCommand(sandboxId, command, {
+        timeoutMs: 20_000,
+      });
+      output = asText(result?.stdout || result?.output);
+    } catch (error) {
+      output = extractCommandOutput(error);
+      if (!output) {
+        throw error;
+      }
+    }
+    if (output.startsWith('FOUND:')) {
+      return { verified: true, matchedFile: output.slice('FOUND:'.length) };
+    }
+    if (output.startsWith('LATEST:')) {
+      latestFile = output.slice('LATEST:'.length);
+    }
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  return { verified: false, latestFile: latestFile || undefined };
 }
 
 function parseManifest(raw: Buffer): Partial<ArchiveManifest> {
@@ -161,6 +255,9 @@ export function isArchiveStorageConfigured(): boolean {
 
 async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   workspaceRoot: string;
+  stateRoot: string;
+  codexArchiveHome: string;
+  codexDotCodexPath: string;
   taskSessionId: string | null;
   existingMetadata: Record<string, unknown>;
 }> {
@@ -168,26 +265,46 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   const metadata = (env?.metadata || {}) as Record<string, unknown>;
   const taskSessionId = extractTaskSessionId(metadata);
   const fromMeta = asText((metadata as any).opencodeWorkspaceRoot);
+  const stateFromMeta = asText((metadata as any).opencodeStateRoot);
+  const codexArchiveHomeFromMeta = asText((metadata as any).codexArchiveHome);
+  const codexDotCodexPathFromMeta = asText((metadata as any).codexDotCodexPath);
 
   if (fromMeta) {
+    const normalizedStateRoot = normalizePath(
+      stateFromMeta ||
+        (taskSessionId
+          ? sandboxArchiveServiceDeps.resolveOpencodeStatePath(taskSessionId)
+          : resolveLegacyOpencodeStatePath(fromMeta) || fromMeta)
+    );
     return {
       workspaceRoot: normalizePath(fromMeta),
+      stateRoot: normalizedStateRoot,
+      codexArchiveHome: normalizePath(codexArchiveHomeFromMeta || `${normalizedStateRoot}/codex-home`),
+      codexDotCodexPath: normalizePath(codexDotCodexPathFromMeta || `${normalizedStateRoot}/codex-home/.codex`),
       taskSessionId,
       existingMetadata: metadata,
     };
   }
 
   if (taskSessionId) {
+    const stateRoot = sandboxArchiveServiceDeps.resolveOpencodeStatePath(taskSessionId);
     return {
       workspaceRoot: sandboxArchiveServiceDeps.resolveOpencodeWorkspacePath(taskSessionId),
+      stateRoot,
+      codexArchiveHome: normalizePath(`${stateRoot}/codex-home`),
+      codexDotCodexPath: normalizePath(`${stateRoot}/codex-home/.codex`),
       taskSessionId,
       existingMetadata: metadata,
     };
   }
 
   const fallback = WORKSPACE_ROOT_DEFAULT;
+  const stateRoot = normalizePath(resolveLegacyOpencodeStatePath(fallback) || fallback);
   return {
     workspaceRoot: normalizePath(fallback),
+    stateRoot,
+    codexArchiveHome: normalizePath(`${stateRoot}/codex-home`),
+    codexDotCodexPath: normalizePath(`${stateRoot}/codex-home/.codex`),
     taskSessionId,
     existingMetadata: metadata,
   };
@@ -205,7 +322,8 @@ export async function archiveSandboxWorkspace(
     throw new Error('R2 archive storage not configured');
   }
 
-  const { workspaceRoot, taskSessionId, existingMetadata } = await resolveWorkspaceRoot(sandboxId);
+  const { workspaceRoot, stateRoot, codexArchiveHome, codexDotCodexPath, taskSessionId, existingMetadata } =
+    await resolveWorkspaceRoot(sandboxId);
   if (!taskSessionId && workspaceRoot === normalizePath(WORKSPACE_ROOT_DEFAULT)) {
     throw new Error('无法确定归档目录：缺少 taskSessionId 与 workspaceRoot');
   }
@@ -214,6 +332,18 @@ export async function archiveSandboxWorkspace(
   const metadataKey = buildMetadataKey(taskSessionId, sandboxId);
   const archivedAt = new Date().toISOString();
   const snapshotKey = buildSnapshotKey(taskSessionId, sandboxId, archivedAt);
+  const sandboxExecutor = asText((existingMetadata as any).sandboxExecutor || (existingMetadata as any).executor).toLowerCase();
+  const codexExecutorSessionId =
+    asText((existingMetadata as any).codexActiveExecutorSessionId) ||
+    asText((existingMetadata as any).lastExecutorSessionId);
+  const requiresCodexStateVerification =
+    sandboxExecutor === 'codex' &&
+    Boolean(codexExecutorSessionId) &&
+    (asBoolean((existingMetadata as any).codexStateSyncRequired) ||
+      reason === 'codex_turn_completed' ||
+      options?.forceUpload === true);
+  let codexArchiveVerifiedAt: string | undefined;
+  let codexArchiveVerifiedRollout: string | undefined;
 
   await sandboxArchiveServiceDeps.setSandboxMetadata(sandboxId, {
     archiveStatus: 'in_progress',
@@ -221,8 +351,53 @@ export async function archiveSandboxWorkspace(
     lastArchiveAttemptAt: archivedAt,
   });
 
+  if (requiresCodexStateVerification) {
+    const verification = await ensureCodexStateReady(sandboxId, {
+      codexDotCodexPath,
+      executorSessionId: codexExecutorSessionId,
+      reason,
+    });
+    if (!verification.verified) {
+      const archiveError = [
+        'Codex 状态未同步完成，已拒绝生成归档。',
+        `executorSessionId=${codexExecutorSessionId}`,
+        verification.latestFile ? `latest=${verification.latestFile}` : 'latest=missing',
+      ].join(' ');
+      await sandboxArchiveServiceDeps.setSandboxMetadata(sandboxId, {
+        archiveStatus: 'failed',
+        archiveReason: reason,
+        archiveError,
+        codexArchiveReady: false,
+        codexArchiveVerificationReason: reason,
+        codexArchiveVerificationFailedAt: new Date().toISOString(),
+        codexArchivedExecutorSessionId: codexExecutorSessionId,
+        codexArchiveVerifiedRollout: verification.latestFile || undefined,
+      });
+      throw new Error(archiveError);
+    }
+    codexArchiveVerifiedAt = new Date().toISOString();
+    codexArchiveVerifiedRollout = verification.matchedFile || verification.latestFile;
+    await sandboxArchiveServiceDeps.setSandboxMetadata(sandboxId, {
+      codexArchiveReady: true,
+      codexArchiveVerificationReason: reason,
+      codexArchiveVerifiedAt,
+      codexArchiveVerifiedRollout,
+      codexArchivedExecutorSessionId: codexExecutorSessionId,
+    });
+  }
+
   const tarPath = `/tmp/workspace_backup_${Date.now()}.tar.gz`;
-  const tarCommand = `mkdir -p ${shellEscape(workspaceRoot)} && tar -czf ${tarPath} -C ${shellEscape(workspaceRoot)} .`;
+  const bundleRoot = `/tmp/workspace_bundle_${Date.now()}`;
+  const tarCommand = `
+set -euo pipefail
+mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}
+rm -rf ${shellEscape(bundleRoot)}
+mkdir -p ${shellEscape(bundleRoot)}
+ln -s ${shellEscape(workspaceRoot)} ${shellEscape(`${bundleRoot}/workspace`)}
+ln -s ${shellEscape(stateRoot)} ${shellEscape(`${bundleRoot}/state`)}
+tar -chzf ${tarPath} -C ${shellEscape(bundleRoot)} workspace state
+rm -rf ${shellEscape(bundleRoot)}
+`;
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(sandboxId, tarCommand, { timeoutMs: 180000 });
 
   const archiveBytes = await sandboxArchiveServiceDeps.e2bConnector.readFile(sandboxId, tarPath);
@@ -242,11 +417,17 @@ export async function archiveSandboxWorkspace(
   }
 
   const manifest: ArchiveManifest = {
-    version: 2,
+    version: 3,
     sandboxId,
     taskSessionId: taskSessionId || undefined,
     archivedAt,
     workspaceRoot,
+    stateRoot,
+    codexArchiveHome,
+    codexDotCodexPath,
+    codexArchivedExecutorSessionId: codexExecutorSessionId || undefined,
+    codexArchiveVerifiedAt,
+    codexArchiveVerifiedRollout,
     archiveKey,
     snapshotKey: storedSnapshotKey,
     sha256: hash,
@@ -255,7 +436,11 @@ export async function archiveSandboxWorkspace(
   };
   await sandboxArchiveServiceDeps.uploadToR2(metadataKey, Buffer.from(JSON.stringify(manifest, null, 2)));
 
-  await sandboxArchiveServiceDeps.e2bConnector.runCommand(sandboxId, `rm -f ${tarPath}`, { timeoutMs: 30000 });
+  await sandboxArchiveServiceDeps.e2bConnector.runCommand(
+    sandboxId,
+    `rm -f ${tarPath} && rm -rf ${shellEscape(bundleRoot)}`,
+    { timeoutMs: 30000 }
+  );
 
   await sandboxArchiveServiceDeps.clearSandboxDirty(sandboxId, {
     archiveStatus: unchanged ? 'up_to_date' : 'archived',
@@ -266,6 +451,15 @@ export async function archiveSandboxWorkspace(
     r2ArchiveSha256: hash,
     lastArchivedAt: archivedAt,
     archiveSizeBytes: sizeBytes,
+    opencodeWorkspaceRoot: workspaceRoot,
+    opencodeStateRoot: stateRoot,
+    codexArchiveHome,
+    codexDotCodexPath,
+    codexArchiveReady: requiresCodexStateVerification ? true : undefined,
+    codexArchiveVerifiedAt,
+    codexArchiveVerifiedRollout,
+    codexArchivedExecutorSessionId: codexExecutorSessionId || undefined,
+    codexStateSyncRequired: requiresCodexStateVerification ? false : undefined,
   });
 
   return {
@@ -278,6 +472,12 @@ export async function archiveSandboxWorkspace(
     sizeBytes,
     taskSessionId,
     workspaceRoot,
+    stateRoot,
+    codexArchiveHome,
+    codexDotCodexPath,
+    codexArchivedExecutorSessionId: codexExecutorSessionId || undefined,
+    codexArchiveVerifiedAt,
+    codexArchiveVerifiedRollout,
   };
 }
 
@@ -286,7 +486,8 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
     return false;
   }
 
-  const { workspaceRoot, taskSessionId } = await resolveWorkspaceRoot(sandboxId);
+  const { workspaceRoot, stateRoot, codexArchiveHome, codexDotCodexPath, taskSessionId } =
+    await resolveWorkspaceRoot(sandboxId);
   const metadataKey = buildMetadataKey(taskSessionId, sandboxId);
   let manifest: Partial<ArchiveManifest> | undefined;
 
@@ -312,15 +513,36 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
 
   const archiveBytes = await sandboxArchiveServiceDeps.downloadFromR2(restoreKey);
   const tarPath = '/tmp/workspace_restore.tar.gz';
+  const restoreRoot = `/tmp/workspace_restore_${Date.now()}`;
 
   await sandboxArchiveServiceDeps.e2bConnector.writeFile(sandboxId, tarPath, archiveBytes);
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(
     sandboxId,
     [
       `mkdir -p ${shellEscape(workspaceRoot)}`,
+      `mkdir -p ${shellEscape(stateRoot)}`,
       `find ${shellEscape(workspaceRoot)} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
-      `tar -xzf ${tarPath} -C ${shellEscape(workspaceRoot)}`,
+      `find ${shellEscape(stateRoot)} -mindepth 1 -maxdepth 1 -exec rm -rf {} +`,
+      `rm -rf ${shellEscape(restoreRoot)}`,
+      `mkdir -p ${shellEscape(restoreRoot)}`,
+      `tar -xzf ${tarPath} -C ${shellEscape(restoreRoot)}`,
+      `if [[ -d ${shellEscape(`${restoreRoot}/workspace`)} ]]; then cp -a ${shellEscape(
+        `${restoreRoot}/workspace/.`
+      )} ${shellEscape(workspaceRoot)}/; else tar -xzf ${tarPath} -C ${shellEscape(workspaceRoot)}; fi`,
+      `if [[ -d ${shellEscape(`${restoreRoot}/state`)} ]]; then cp -a ${shellEscape(
+        `${restoreRoot}/state/.`
+      )} ${shellEscape(stateRoot)}/; fi`,
+      `if [[ -d ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')} ]] && [[ -z "$(find ${shellEscape(
+        stateRoot
+      )} -mindepth 1 -print -quit 2>/dev/null)" ]]; then rm -rf ${shellEscape(
+        stateRoot
+      )} && mv ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')} ${shellEscape(
+        stateRoot
+      )}; fi`,
+      `rm -rf ${shellEscape(resolveLegacyOpencodeStatePath(workspaceRoot) || '')}`,
+      `mkdir -p ${shellEscape(stateRoot)}`,
       `rm -f ${tarPath}`,
+      `rm -rf ${shellEscape(restoreRoot)}`,
     ].join(' && '),
     { timeoutMs: 240000 }
   );
@@ -331,6 +553,10 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
     r2ArchiveKey: buildArchiveKey(taskSessionId, sandboxId),
     r2RestoreSourceKey: restoreKey,
     r2ArchiveMetadataKey: metadataKey,
+    opencodeWorkspaceRoot: workspaceRoot,
+    opencodeStateRoot: stateRoot,
+    codexArchiveHome,
+    codexDotCodexPath,
   });
 
   return true;

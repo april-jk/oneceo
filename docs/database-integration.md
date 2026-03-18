@@ -4,6 +4,18 @@
 
 本文档记录了 PostgreSQL 数据库在任务创建智能体中的集成实现。使用 Railway 托管的 PostgreSQL 数据库，通过 Drizzle ORM 实现数据持久化。
 
+## ⚠️ 瞬时连接异常处理
+
+- 任务创建相关查询接口在遇到数据库瞬时不可用时，不再让异常直接穿透到进程级。
+- 当前会识别的典型异常包括：
+  - `Connection terminated due to connection timeout`
+  - `Connection terminated unexpectedly`
+  - `timeout exceeded when trying to connect`
+- 处理策略：
+  - 会话列表接口优先返回已有缓存的旧数据。
+  - 会话详情与消息、意图、任务描述、执行计划等接口返回 `503`，提示数据库暂时不可用。
+  - `OpenCode` 事件流入口在读取会话阶段失败时直接返回 `503`，避免未捕获异常导致 API 进程退出。
+
 ## 🗄️ 数据库信息
 
 ### 连接信息

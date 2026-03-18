@@ -183,6 +183,31 @@ async function getSessionDiff(
   return JSON.parse(text) as unknown;
 }
 
+async function getSessionMessages(
+  baseUrl: string,
+  input: { sessionId: string; directory?: string },
+  trafficAccessToken?: string
+) {
+  if (!input.sessionId) {
+    throw new Error('opencode sessionId is required');
+  }
+  const url = buildUrl(
+    baseUrl,
+    `/session/${encodeURIComponent(input.sessionId)}/message`,
+    input.directory ? { directory: input.directory } : undefined
+  );
+  const headers = buildHeaders({}, trafficAccessToken);
+  const resp = await fetchWithTimeout(url.toString(), {
+    headers,
+    timeoutMs: resolvePromptTimeoutMs(),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`opencode session messages failed: ${resp.status} ${text}`);
+  }
+  return JSON.parse(text || '[]') as unknown;
+}
+
 async function listQuestions(
   baseUrl: string,
   input: { directory?: string },
@@ -333,6 +358,7 @@ export const opencodeHttpClient = {
   createSession,
   sendPrompt,
   getSessionDiff,
+  getSessionMessages,
   listQuestions,
   replyQuestion,
   doRequest,

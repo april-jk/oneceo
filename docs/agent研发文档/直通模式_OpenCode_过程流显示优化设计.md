@@ -108,6 +108,10 @@
 1. `reasoning`
 2. `agent_message`
 3. `command_execution`
+4. `file_change`
+5. `diff`
+6. `approval_request`
+7. `tool_execution`
 
 其中用户最能感知“过程正在推进”的，是 `reasoning` 与最终 `agent_message`。
 
@@ -126,6 +130,63 @@
    - 相关字段需持久化：`itemType / command / exitCode / outputPreview`
    - 即使正文 `content` 为空，也必须保留到 history/store，因为卡片渲染依赖 metadata
    - 这样后续若要补命令卡片，不需要再次改后端存储协议
+   - 前端展示时，不能继续沿用原始 `eventType=item.completed`
+   - 进入工具卡片前应归一为展示态事件类型 `command.executed`
+   - 否则会掉进通用 `tool` 分支，只显示单调的 `tool` 胶囊
+   - 对写文件类 shell 命令（如 `cat <<EOF > file`、`tee file`、`cp`、`mv`），主卡片不再直接展示整条原始命令
+   - 主卡片应优先显示：
+     - 操作语义，例如 `文件修改 / 复制文件 / 移动文件`
+     - 目标文件名，例如 `index.html`
+   - 原始长命令只放在 tooltip / 详情弹窗中
+   - 原因：这类命令本质仍是 `command_execution`，不是原生 diff；页面不应把整段 heredoc 当主正文
+4. `file_change` 类型
+   - 显示为 `新建文件 / 更新文件 / 删除文件` 卡片
+   - 点击后联动右侧内容预览或变更面板
+5. `diff` 类型
+   - 若事件中已带文件列表或变更对象，显示为 `变更草案` 卡片
+   - 若缺少结构化文件列表，则退回普通 markdown/文本展示
+6. `approval_request` 类型
+   - 显示为 `需要授权` 状态胶囊
+   - 同时把授权说明正文显示出来
+7. `tool_execution` 类型
+   - 若具备工具名/输出摘要，则按轻量工具卡片展示
+   - 若缺少结构化字段，则退回普通正文块
+8. `stderr.line / stdout.line`
+   - 对 `executor=codex` 默认不进入主对话区
+   - 例如 `codex_core::rollout::list: state db missing rollout path ...` 这类内部运行日志，不属于用户可消费消息
+   - 这类内容保留在 runtime/调试层即可，不应污染主聊天流
+9. 原子消息 hover 详情
+   - `tool` / `command_execution` 类卡片在 hover 时显示结构化详情
+   - 至少包含：工具名、命令、工作目录、目标路径或输出摘要
+   - tooltip 使用多行文本，保证长命令和多字段信息仍可读
+   - 当详情文本过长时，tooltip 只显示前三行摘要
+   - 同时提供 `展示更多` 入口，点击后通过独立浮窗展示完整信息
+   - 这样长命令、大段 shell heredoc 或大块代码不会直接塞满 hover 层
+
+### 4.0.2 Codex 多轮历史一致性
+
+实测发现 Codex 续聊不仅有执行层问题，还有历史层问题：
+
+1. 对已存在 session 再次调用 `/sessions` 时，不能继续把 `initialMessage` 作为新的 `user_input` 落库
+2. Codex 的真实用户输入应以 `codex_user_input` 为准，并在 history 中映射回 `user_input`
+3. `executor_event` 必须带稳定 `messageKey`
+   - 否则实时 WS 与 `loadHistory(reconcile)` 会把同一条消息当成两条不同记录
+4. history 合并逻辑不能只“跳过已存在 key”，还应允许用同 key 的新版本覆盖旧版本 metadata
+
+因此本轮补充规则：
+
+1. 已存在 sandbox session 再发消息时，不再通过 `/sessions initialMessage` 重复落用户消息
+2. `codex_user_input` 进入 history 时要正常显示为用户消息
+3. Codex 的实时消息与持久化消息使用统一 `messageKey` 规则
+4. reconcile/history 合并按 key 做 upsert，而不是单纯 append
+5. `codex_user_input` 持久化时优先复用前端 `clientMessageKey`
+   - 这样乐观显示的用户消息与后端确认后的用户消息能合并成同一条
+6. `executor_event` 的前端去重不能只看 `eventType + content`
+   - 因为多个不同 Codex 原子 item 会共享：
+     - `eventType = item.completed`
+     - `content = Codex 事件: item.completed`
+   - 去重必须同时纳入 `itemId + itemType`
+   - 否则会把第二条及之后的 `command_execution / file_change / agent_message` 误吞掉
 
 这样处理的目的不是让 Codex “更吵”，而是把真正有阅读价值的原子步骤稳定显示出来，同时把纯控制信号与低价值命令噪音继续留在调试层。
 
@@ -438,6 +499,12 @@ assistant 真正的文本回答仍然保留，但要和中间过程分层：
    - 文本/思考流不再直接消费原始 `message.part.updated` 快照
    - 后端会对连续 full-text snapshot 反推出 delta
    - SSE 路由改为优先复用归一后的实时文本流消息
+8. `Codex` 原子消息已进一步增强：
+   - `file_change` 会显示为 `新建文件 / 更新文件 / 删除文件` 卡片
+   - 点击文件变更卡片会联动右侧内容预览的 `更改` 面板
+   - 右侧预览面板会为 `file_change` 生成最小结构化 diff 项，即使没有原生 patch 文本也能看到目标文件
+   - `command_execution` 会按命令语义补轻量分类，如 `目录检查 / 搜索 / 文件查看 / 文件修改`
+   - 以上规则只挂在 `executor=codex` 分支，不影响 `OpenCode` 现有展示
 
 后续如需继续增强，可在此基础上补：
 

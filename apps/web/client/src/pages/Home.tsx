@@ -18,11 +18,15 @@ import {
   Loader2,
   FilePlus,
   FilePenLine,
+  FileSearch,
   FileText,
   FileDiff,
+  FolderSearch2,
+  Search,
   Terminal,
   ChevronDown,
   ChevronRight,
+  Trash2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -37,6 +41,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
@@ -1592,12 +1603,19 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
+      if (eventType === "stderr.line" || eventType === "stdout.line") {
+        continue;
+      }
+
       flushProgress();
       if (itemType === "command_execution") {
         const commandText =
           asText(metadata.command) ||
           asText(item.command) ||
           "Shell 命令";
+        const commandCard = getCodexCommandCardCopy(commandText);
+        const targetPath =
+          asText(metadata.targetPath) || extractCodexCommandTargetPath(commandText);
         const outputPreview =
           asText(metadata.outputPreview) ||
           asText(item.aggregated_output);
@@ -1625,6 +1643,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
               command: commandText,
               stdout: outputPreview,
               status: statusText,
+              commandCategory: commandCard.category,
+              targetPath: targetPath || undefined,
               ...(exitCode !== null && Number.isFinite(exitCode)
                 ? { exitCode: String(exitCode) }
                 : {}),
@@ -1633,12 +1653,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           content: outputPreview,
           metadata: {
             ...metadata,
+            eventType: "command.executed",
             event: {
               type: "command.executed",
               properties: {
                 command: commandText,
                 stdout: outputPreview,
                 status: statusText,
+                commandCategory: commandCard.category,
+                targetPath: targetPath || undefined,
                 ...(exitCode !== null && Number.isFinite(exitCode)
                   ? { exitCode: String(exitCode) }
                   : {}),
@@ -1646,11 +1669,126 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
             },
             compactOutput: true,
             toolName: "bash",
+            commandCategory: commandCard.category,
+            targetPath: targetPath || undefined,
           },
           messageIndex: index,
           messageKey: message.messageKey,
         });
         continue;
+      }
+
+      if (itemType === "file_change") {
+        const fileChanges = extractCodexFileChanges(metadata, item);
+        if (fileChanges.length === 0) {
+          continue;
+        }
+        const primary = fileChanges[0];
+        const primaryPath = primary?.path || "";
+        const primaryLabel = mapCodexFileChangeLabel(primary?.kind || "");
+        const contentLabel =
+          fileChanges.length > 1
+            ? `${primaryLabel} · ${fileChanges.length} 个文件`
+            : `${primaryLabel} · ${getFilename(primaryPath) || "文件"}`;
+
+        items.push({
+          kind: "opencode_tool",
+          eventType: "file.changed",
+          event: {
+            type: "file.changed",
+            properties: {
+              file: primaryPath,
+              path: primaryPath,
+              label: primaryLabel,
+              files: fileChanges,
+              status:
+                asText(metadata.itemStatus) ||
+                asText(item.status) ||
+                "completed",
+            },
+          },
+          content: contentLabel,
+          metadata: {
+            ...metadata,
+            eventType: "file.changed",
+            event: {
+              type: "file.changed",
+              properties: {
+                file: primaryPath,
+                path: primaryPath,
+                label: primaryLabel,
+                files: fileChanges,
+                status:
+                  asText(metadata.itemStatus) ||
+                  asText(item.status) ||
+                  "completed",
+              },
+            },
+          },
+          messageIndex: index,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      if (itemType === "approval_request") {
+        const approvalText =
+          asText(metadata.approvalText) ||
+          content ||
+          "Codex 需要进一步授权后才能继续执行。";
+        items.push({
+          kind: "capsule",
+          label: "需要授权",
+          tone: "system",
+          messageKey: message.messageKey,
+        });
+        pushAgentMarkdown(approvalText, message.messageKey, "Codex");
+        continue;
+      }
+
+      if (itemType === "diff") {
+        const fileChanges = extractCodexFileChanges(metadata, item);
+        if (fileChanges.length > 0) {
+          const primary = fileChanges[0];
+          items.push({
+            kind: "opencode_tool",
+            eventType: "file.changed",
+            event: {
+              type: "file.changed",
+              properties: {
+                file: primary?.path || "",
+                path: primary?.path || "",
+                label: "变更草案",
+                files: fileChanges,
+                status:
+                  asText(metadata.itemStatus) ||
+                  asText(item.status) ||
+                  "completed",
+              },
+            },
+            content: primary?.path ? `变更草案 · ${getFilename(primary.path)}` : "变更草案",
+            metadata: {
+              ...metadata,
+              eventType: "file.changed",
+              event: {
+                type: "file.changed",
+                properties: {
+                  file: primary?.path || "",
+                  path: primary?.path || "",
+                  label: "变更草案",
+                  files: fileChanges,
+                  status:
+                    asText(metadata.itemStatus) ||
+                    asText(item.status) ||
+                    "completed",
+                },
+              },
+            },
+            messageIndex: index,
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
       }
 
       if (!content) {
@@ -2811,6 +2949,161 @@ function getDirectory(path: string | undefined) {
   return normalized.slice(0, idx + 1);
 }
 
+type CodexCommandCategory =
+  | "list"
+  | "search"
+  | "read"
+  | "write"
+  | "command";
+
+function normalizeShellCommand(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) return "";
+  const bashLcMatch = trimmed.match(/^(?:\/bin\/)?(?:ba)?sh\s+-lc\s+(.+)$/i);
+  if (bashLcMatch?.[1]) {
+    return bashLcMatch[1].trim().replace(/^['"]|['"]$/g, "");
+  }
+  return trimmed;
+}
+
+function inferCodexCommandCategory(command: string): CodexCommandCategory {
+  const normalized = normalizeShellCommand(command).toLowerCase();
+  if (!normalized) return "command";
+  if (
+    normalized.startsWith("ls") ||
+    normalized.startsWith("tree") ||
+    normalized.startsWith("find ")
+  ) {
+    return "list";
+  }
+  if (
+    normalized.startsWith("rg ") ||
+    normalized.startsWith("grep ") ||
+    normalized.includes(" grep ") ||
+    normalized.includes(" rg ")
+  ) {
+    return "search";
+  }
+  if (
+    normalized.startsWith("cat ") ||
+    normalized.startsWith("sed ") ||
+    normalized.startsWith("head ") ||
+    normalized.startsWith("tail ")
+  ) {
+    return "read";
+  }
+  if (
+    normalized.includes(">") ||
+    normalized.includes("tee ") ||
+    normalized.includes("cat <<") ||
+    normalized.startsWith("cp ") ||
+    normalized.startsWith("mv ")
+  ) {
+    return "write";
+  }
+  return "command";
+}
+
+function stripShellQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function extractCodexCommandTargetPath(command: string): string {
+  const normalized = normalizeShellCommand(command);
+  if (!normalized) return "";
+
+  const heredocMatch = normalized.match(/(?:^|\s)>\s*([^\n]+)/);
+  if (heredocMatch?.[1]) {
+    const token = stripShellQuotes(heredocMatch[1].trim().split(/\s+/)[0] || "");
+    if (token) return token;
+  }
+
+  const teeMatch = normalized.match(/\btee\s+([^\s|]+)/);
+  if (teeMatch?.[1]) {
+    return stripShellQuotes(teeMatch[1]);
+  }
+
+  const cpOrMvMatch = normalized.match(/^(?:cp|mv)\s+\S+\s+(\S+)/);
+  if (cpOrMvMatch?.[1]) {
+    return stripShellQuotes(cpOrMvMatch[1]);
+  }
+
+  return "";
+}
+
+function inferCodexWriteLabel(command: string): string {
+  const normalized = normalizeShellCommand(command).toLowerCase();
+  if (normalized.startsWith("mv ")) return "移动文件";
+  if (normalized.startsWith("cp ")) return "复制文件";
+  if (normalized.includes(">>")) return "追加文件";
+  if (normalized.includes("cat <<") || normalized.includes(">") || normalized.includes("tee ")) {
+    return "文件修改";
+  }
+  return "文件修改";
+}
+
+function getCodexCommandCardCopy(command: string) {
+  const category = inferCodexCommandCategory(command);
+  switch (category) {
+    case "list":
+      return { category, title: "目录检查", icon: FolderSearch2 };
+    case "search":
+      return { category, title: "搜索", icon: Search };
+    case "read":
+      return { category, title: "文件查看", icon: FileSearch };
+    case "write":
+      return { category, title: "文件修改", icon: FilePenLine };
+    default:
+      return { category, title: "Shell 执行", icon: Terminal };
+  }
+}
+
+type CodexFileChange = {
+  kind: string;
+  path: string;
+};
+
+function extractCodexFileChanges(
+  metadata: Record<string, unknown>,
+  item?: Record<string, unknown>,
+): CodexFileChange[] {
+  const metadataChanges = Array.isArray(metadata.fileChanges)
+    ? metadata.fileChanges
+    : [];
+  const itemChanges = Array.isArray(item?.changes) ? item.changes : [];
+  const source = metadataChanges.length > 0 ? metadataChanges : itemChanges;
+  return source
+    .map((change) => toRecord(change))
+    .map((change) => ({
+      kind: asText(change.kind),
+      path: asText(change.path) || asText(change.file),
+    }))
+    .filter((change) => change.path);
+}
+
+function mapCodexFileChangeLabel(kind: string): string {
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === "add" || normalized === "create" || normalized === "created") {
+    return "新建文件";
+  }
+  if (
+    normalized === "delete" ||
+    normalized === "deleted" ||
+    normalized === "remove" ||
+    normalized === "removed"
+  ) {
+    return "删除文件";
+  }
+  return "更新文件";
+}
+
 function getToolInfo(tool: string, input: Record<string, unknown>) {
   const lower = tool.toLowerCase();
   switch (lower) {
@@ -2876,6 +3169,25 @@ function summarizeTooltipLines(lines: Array<string | null | undefined>) {
     .join("\n");
 }
 
+function buildDetailPreview(value: string, maxLines = 3, maxCharsPerLine = 120) {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line, index, arr) => line || arr.length === 1 || index < arr.length - 1);
+  const normalizedLines = lines.length > 0 ? lines : [value.trim()];
+  const previewLines = normalizedLines.slice(0, maxLines).map((line) => {
+    if (line.length <= maxCharsPerLine) return line;
+    return `${line.slice(0, maxCharsPerLine)}...`;
+  });
+  const truncated =
+    normalizedLines.length > maxLines ||
+    previewLines.some((line, index) => line !== normalizedLines[index]);
+  return {
+    preview: previewLines.join("\n").trim(),
+    truncated,
+  };
+}
+
 export function buildOpencodeAtomicTooltip(input: {
   eventType: string;
   toolName: string;
@@ -2915,28 +3227,51 @@ export function buildOpencodeAtomicTooltip(input: {
   const cwd = asText(toolInput.cwd) || asText(properties.cwd);
   const pattern = asText(toolInput.pattern) || asText(properties.pattern);
   const url = asText(toolInput.url) || asText(properties.url);
+  const shortOutput = truncateText(output, 240).text;
+  const toolLabel = input.toolName ? `工具: ${input.toolName}` : "";
+  const fileList = Array.isArray((properties as Record<string, unknown>).files)
+    ? ((properties as Record<string, unknown>).files as unknown[])
+        .map((item) => toRecord(item))
+        .map((item) => ({
+          kind: asText(item.kind) || asText(item.status),
+          path: asText(item.path) || asText(item.file),
+        }))
+        .filter((item) => item.path)
+    : [];
 
   if (toolKey === "bash" || input.eventType === "command.executed") {
     return summarizeTooltipLines([
+      toolLabel,
       baseCommand ? `命令: ${baseCommand}` : "",
       cwd ? `目录: ${cwd}` : "",
+      shortOutput ? `输出摘要: ${shortOutput}` : "",
     ]);
   }
 
   if (toolKey === "read") {
-    return filePath ? `读取文件: ${filePath}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      filePath ? `读取文件: ${filePath}` : "",
+    ]);
   }
 
   if (toolKey === "write") {
-    return filePath ? `写入文件: ${filePath}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      filePath ? `写入文件: ${filePath}` : "",
+    ]);
   }
 
   if (toolKey === "edit") {
-    return filePath ? `编辑文件: ${filePath}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      filePath ? `编辑文件: ${filePath}` : "",
+    ]);
   }
 
   if (toolKey === "grep") {
     return summarizeTooltipLines([
+      toolLabel,
       pattern ? `搜索模式: ${pattern}` : "",
       filePath ? `范围: ${filePath}` : "",
     ]);
@@ -2944,17 +3279,24 @@ export function buildOpencodeAtomicTooltip(input: {
 
   if (toolKey === "glob") {
     return summarizeTooltipLines([
+      toolLabel,
       pattern ? `匹配模式: ${pattern}` : "",
       filePath ? `范围: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "list") {
-    return filePath ? `列出目录: ${filePath}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      filePath ? `列出目录: ${filePath}` : "",
+    ]);
   }
 
   if (toolKey === "webfetch") {
-    return url ? `抓取地址: ${url}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      url ? `抓取地址: ${url}` : "",
+    ]);
   }
 
   if (toolKey === "apply_patch") {
@@ -2969,22 +3311,43 @@ export function buildOpencodeAtomicTooltip(input: {
       return "应用补丁";
     }
     return summarizeTooltipLines([
+      toolLabel,
       "补丁目标文件:",
       ...files.slice(0, 6).map((file) => `- ${file}`),
       files.length > 6 ? `- 以及另外 ${files.length - 6} 个文件` : "",
     ]);
   }
 
-  if (input.eventType.startsWith("file.")) {
-    return filePath ? `文件路径: ${filePath}` : "";
+  if (input.eventType.startsWith("file.") || input.eventType === "file.changed") {
+    if (fileList.length > 0) {
+      return summarizeTooltipLines([
+        toolLabel,
+        ...fileList
+          .slice(0, 6)
+          .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`),
+        fileList.length > 6 ? `以及另外 ${fileList.length - 6} 个文件` : "",
+      ]);
+    }
+    return summarizeTooltipLines([
+      toolLabel,
+      filePath ? `文件路径: ${filePath}` : "",
+    ]);
   }
 
   if (toolKey === "task") {
     const description = asText(toolInput.description) || asText(properties.description);
-    return description ? `子任务: ${description}` : "";
+    return summarizeTooltipLines([
+      toolLabel,
+      description ? `子任务: ${description}` : "",
+    ]);
   }
 
-  return "";
+  return summarizeTooltipLines([
+    toolLabel,
+    baseCommand ? `命令: ${baseCommand}` : "",
+    filePath ? `路径: ${filePath}` : "",
+    shortOutput ? `输出摘要: ${shortOutput}` : "",
+  ]);
 }
 
 function OpencodeToolCard({
@@ -2998,6 +3361,7 @@ function OpencodeToolCard({
     messageIndex?: number | null;
   }) => void;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const metadata = item.metadata || {};
   const { eventType, part, toolName, properties } =
     getOpencodeEventInfo(metadata);
@@ -3043,11 +3407,28 @@ function OpencodeToolCard({
 
     if (!title) return capsule;
 
+    const preview = buildDetailPreview(title);
+
     return (
       <Tooltip>
         <TooltipTrigger asChild>{capsule}</TooltipTrigger>
-        <TooltipContent>
-          <p className="max-w-xs break-words">{title}</p>
+        <TooltipContent className="max-w-md space-y-2">
+          <p className="whitespace-pre-wrap break-all text-xs leading-5">
+            {preview.preview}
+          </p>
+          {preview.truncated ? (
+            <button
+              type="button"
+              className="text-[11px] font-medium underline underline-offset-2"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDetailOpen(true);
+              }}
+            >
+              展示更多
+            </button>
+          ) : null}
         </TooltipContent>
       </Tooltip>
     );
@@ -3092,9 +3473,35 @@ function OpencodeToolCard({
         subtitle: getFilename(filePath),
       };
     } else if (eventType === "command.executed") {
+      const category = asText(metadata.commandCategory).toLowerCase();
       info = {
-        title: "命令执行",
+        title:
+          category === "list"
+            ? "目录检查"
+            : category === "search"
+              ? "搜索"
+              : category === "read"
+                ? "文件查看"
+                : category === "write"
+                  ? "文件修改"
+                  : "命令执行",
         subtitle: asText(properties.command),
+      };
+    } else if (eventType === "file.changed") {
+      const files = Array.isArray((properties as Record<string, unknown>).files)
+        ? ((properties as Record<string, unknown>).files as unknown[])
+            .map((item) => toRecord(item))
+            .filter((item) => asText(item.path) || asText(item.file))
+        : [];
+      const first = files[0] || {};
+      info = {
+        title:
+          asText(properties.label) ||
+          mapCodexFileChangeLabel(asText(first.kind)),
+        subtitle:
+          files.length > 1
+            ? `${files.length} 个文件`
+            : getFilename(asText(first.path) || asText(first.file)),
       };
     } else if (eventType.startsWith("pty.")) {
       info = {
@@ -3124,9 +3531,26 @@ function OpencodeToolCard({
     Object.keys(metaInfo).length > 0,
   );
   const summaryText = info.subtitle || "";
+  const detailTitle = `${info.title}${summaryText ? ` · ${summaryText}` : ""}`;
+  const wrapWithDetailDialog = (content: ReactNode) => (
+    <>
+      {content}
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{detailTitle}</DialogTitle>
+            <DialogDescription>工具原子消息完整信息</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
+            {explanationText}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 
   if (isDiffEvent) {
-    return (
+    return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -3280,7 +3704,7 @@ function OpencodeToolCard({
     if (todos.length === 0) {
       return null;
     }
-    return (
+    return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -3438,6 +3862,12 @@ function OpencodeToolCard({
       asText(properties.command) ||
       asText(input.command) ||
       asText(properties.cmd);
+    const commandCard = getCodexCommandCardCopy(commandText);
+    const targetPath =
+      asText(metadata.targetPath) ||
+      asText(properties.targetPath) ||
+      extractCodexCommandTargetPath(commandText);
+    const writeLike = commandCard.category === "write";
     const rawOutput =
       asText(properties.stdout) ||
       asText(properties.output) ||
@@ -3454,7 +3884,15 @@ function OpencodeToolCard({
         : statusText === "completed" || exitCodeText === "0"
           ? "成功"
           : "执行";
-    return (
+    const capsuleText =
+      writeLike && targetPath
+        ? `${inferCodexWriteLabel(commandText)} · ${getFilename(targetPath) || targetPath}`
+        : `${commandCard.title} · ${statusLabel}`;
+    const inlineSummary =
+      writeLike && targetPath
+        ? `通过 shell ${inferCodexWriteLabel(commandText)}：${targetPath}`
+        : "";
+    return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -3463,11 +3901,16 @@ function OpencodeToolCard({
       >
         <div className="space-y-2">
           <EventCapsule
-            icon={Terminal}
-            text={`Shell 执行 · ${statusLabel}`}
+            icon={commandCard.icon}
+            text={capsuleText}
             title={explanationText || commandHint || undefined}
           />
-          {commandText ? (
+          {writeLike && inlineSummary ? (
+            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+              {inlineSummary}
+            </div>
+          ) : null}
+          {commandText && !writeLike ? (
             <div className="rounded-md bg-slate-900 px-3 py-2 text-xs text-slate-100 font-mono">
               {commandText}
             </div>
@@ -3492,11 +3935,63 @@ function OpencodeToolCard({
     );
   }
 
+  if (eventType === "file.changed") {
+    const files = Array.isArray((properties as Record<string, unknown>).files)
+      ? ((properties as Record<string, unknown>).files as unknown[])
+          .map((item) => toRecord(item))
+          .map((item) => ({
+            kind: asText(item.kind),
+            path: asText(item.path) || asText(item.file),
+          }))
+          .filter((item) => item.path)
+      : [];
+    const primary = files[0];
+    const primaryPath =
+      primary?.path || asText(properties.file) || asText(properties.path);
+    const label =
+      asText(properties.label) || mapCodexFileChangeLabel(primary?.kind || "");
+    const text =
+      files.length > 1
+        ? `${label || "文件变更"} · ${files.length} 个文件`
+        : `${label || "文件变更"} · ${getFilename(primaryPath) || "文件"}`;
+    const icon =
+      label === "新建文件"
+        ? FilePlus
+        : label === "删除文件"
+          ? Trash2
+          : FilePenLine;
+    return wrapWithDetailDialog(
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        {onOpenDiffPreview ? (
+          <button
+            type="button"
+            onClick={() =>
+              onOpenDiffPreview?.({
+                filePath: primaryPath || null,
+                messageIndex: item.messageIndex,
+              })
+            }
+            className="text-left"
+          >
+            <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+          </button>
+        ) : (
+          <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+        )}
+      </motion.div>
+    );
+  }
+
   if (eventType.startsWith("file.")) {
     const filePath = asText(properties.file) || asText(properties.path);
     const label =
       eventType === "file.watcher.updated" ? "文件监听" : "文件更新";
-    return (
+    return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -3531,7 +4026,7 @@ function OpencodeToolCard({
     );
   }
 
-  return (
+  return wrapWithDetailDialog(
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}

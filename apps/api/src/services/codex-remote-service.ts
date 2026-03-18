@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { OsacMessage } from '../clients/osac-client';
 import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
-import { taskCreationSessionDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
+import { e2bConnector } from '../connectors/e2b-connector';
 import { osacAgentService } from './osac-agent-service';
 import { osacConnectionManager } from './osac-connection-manager';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
-import { touchSandbox } from './sandbox-activity-service';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import { archiveSandboxWorkspace } from './sandbox-archive-service';
+import { setSandboxMetadata, touchSandbox } from './sandbox-activity-service';
+import { resolveCodexArchiveDotCodexPath, resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import { buildTimelineMessageKey, normalizeMessageTimelineMetadata } from '../utils/task-message-identity';
 
 type CodexDirectInput = {
   taskSessionId: string;
@@ -34,6 +37,11 @@ type CodexEventListener = (payload: CodexEventListenerPayload) => void | Promise
 type CodexRuntimeBinding = {
   orchestratorSessionId: string;
   executorSessionId?: string;
+  previousExecutorSessionId?: string;
+  codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+  codexRestoreAt?: string;
+  codexRestoreSourceKey?: string;
+  codexRestoreFailureReason?: string;
   generation?: number;
 };
 
@@ -87,6 +95,22 @@ function summarizeCodexEvent(eventType: string, event: Record<string, unknown>):
 function buildCodexEventMetadata(event: Record<string, unknown>): Record<string, unknown> {
   const item = extractCodexItem(event);
   const exitCodeValue = item.exit_code;
+  const fileChanges = Array.isArray(item.changes)
+    ? item.changes
+        .map((change) => toRecord(change))
+        .filter((change) => Object.keys(change).length > 0)
+        .map((change) => ({
+          kind: asString(change.kind) || undefined,
+          path: asString(change.path) || undefined,
+        }))
+        .filter((change) => change.kind || change.path)
+    : [];
+  const filePaths = fileChanges
+    .map((change) => change.path)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const approvalOptions = Array.isArray(item.options)
+    ? item.options.map((option) => asString(option)).filter(Boolean)
+    : [];
   const exitCode =
     typeof exitCodeValue === 'number' && Number.isFinite(exitCodeValue)
       ? exitCodeValue
@@ -99,8 +123,17 @@ function buildCodexEventMetadata(event: Record<string, unknown>): Record<string,
     itemType: asString(item.type) || undefined,
     itemStatus: asString(item.status) || undefined,
     itemText: compactCodexMetadataText(item.text ?? item.content ?? item.message),
+    toolName: compactCodexMetadataText(item.tool ?? item.name),
     command: compactCodexMetadataText(item.command),
     outputPreview: compactCodexMetadataText(item.aggregated_output),
+    approvalText: compactCodexMetadataText(item.prompt ?? item.instructions ?? item.question),
+    ...(approvalOptions.length > 0 ? { approvalOptions } : {}),
+    ...(fileChanges.length > 0
+      ? {
+          fileChanges,
+          filePaths,
+        }
+      : {}),
     ...(exitCode !== undefined && Number.isFinite(exitCode) ? { exitCode } : {}),
   };
 }
@@ -111,6 +144,9 @@ function shouldPersistCodexEvent(eventType: string, event: Record<string, unknow
   const item = extractCodexItem(event);
   const itemType = asString(item.type).toLowerCase();
   if (normalized === 'thread.started' || normalized === 'item.started') {
+    return false;
+  }
+  if (normalized === 'stderr.line' || normalized === 'stdout.line') {
     return false;
   }
   if (normalized === 'item.completed') {
@@ -152,6 +188,12 @@ async function resolveRuntimeBinding(
   return {
     orchestratorSessionId,
     executorSessionId: asString(runtime.executorSessionId) || undefined,
+    previousExecutorSessionId: asString(runtime.previousExecutorSessionId) || undefined,
+    codexRestoreStatus:
+      (asString(runtime.codexRestoreStatus) as CodexRuntimeBinding['codexRestoreStatus']) || undefined,
+    codexRestoreAt: asString(runtime.codexRestoreAt) || undefined,
+    codexRestoreSourceKey: asString(runtime.codexRestoreSourceKey) || undefined,
+    codexRestoreFailureReason: asString(runtime.codexRestoreFailureReason) || undefined,
     generation:
       typeof runtime.generation === 'number' && Number.isFinite(runtime.generation) && runtime.generation > 0
         ? Math.floor(runtime.generation)
@@ -196,6 +238,24 @@ export class CodexRemoteService {
     return Boolean(session && session.mode === 'sandbox');
   }
 
+  private prepareTimelineMetadata(
+    messageType: string,
+    metadataInput: Record<string, unknown>,
+    options?: { createdAt?: string; seed?: number }
+  ): Record<string, unknown> {
+    const createdAt = options?.createdAt || new Date().toISOString();
+    const metadata = normalizeMessageTimelineMetadata(metadataInput, createdAt, options?.seed || 0);
+    return {
+      ...metadata,
+      timelineCursor: metadata.timelineCursor ?? metadata.sessionEventSeq ?? metadata.timestamp,
+      messageKey: buildTimelineMessageKey({
+        messageType,
+        metadata,
+        createdAt,
+      }),
+    };
+  }
+
   private async resolveTargetSession(
     orchestratorSessionId: string,
     payload: Record<string, unknown>
@@ -215,9 +275,11 @@ export class CodexRemoteService {
     role: 'user' | 'agent' | 'system',
     messageType: string,
     content: string,
-    metadata: Record<string, unknown>
-  ) {
-    await taskCreationFileMemoryStore.addMessage(sessionId, role, messageType, content, metadata);
+    metadata: Record<string, unknown>,
+    options?: { createdAt?: string; seed?: number }
+  ): Promise<Record<string, unknown>> {
+    const preparedMetadata = this.prepareTimelineMetadata(messageType, metadata, options);
+    await taskCreationFileMemoryStore.addMessage(sessionId, role, messageType, content, preparedMetadata);
     try {
       await taskCreationSessionDAO.addMessage({
         id: randomUUID(),
@@ -225,25 +287,169 @@ export class CodexRemoteService {
         role,
         messageType,
         content,
-        metadata,
+        metadata: preparedMetadata,
+        ...(options?.createdAt ? { createdAt: new Date(options.createdAt) } : {}),
       });
     } catch (error) {
       console.warn('[CODEX_REMOTE_DB_MESSAGE_FAILED]', { sessionId, messageType, error });
     }
+    return preparedMetadata;
   }
 
   private async updateRuntimeBinding(
     taskSessionId: string,
-    input: { orchestratorSessionId: string; executorSessionId?: string }
+    input: {
+      orchestratorSessionId: string;
+      executorSessionId?: string;
+      previousExecutorSessionId?: string;
+      codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+      codexRestoreAt?: string;
+      codexRestoreSourceKey?: string;
+      codexRestoreFailureReason?: string;
+    }
   ) {
     await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
       orchestratorSessionId: input.orchestratorSessionId,
       executor: 'codex',
       executorSessionId: input.executorSessionId || undefined,
+      previousExecutorSessionId: input.previousExecutorSessionId || undefined,
+      codexRestoreStatus: input.codexRestoreStatus,
+      codexRestoreAt: input.codexRestoreAt,
+      codexRestoreSourceKey: input.codexRestoreSourceKey,
+      codexRestoreFailureReason: input.codexRestoreFailureReason,
     });
   }
 
+  private async updateRestoreMetadata(
+    orchestratorSessionId: string,
+    input: {
+      codexRestoreStatus: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+      codexRestoreAt?: string;
+      codexRestoreSourceKey?: string;
+      previousExecutorSessionId?: string;
+      codexRestoreFailureReason?: string;
+    }
+  ) {
+    await setSandboxMetadata(orchestratorSessionId, {
+      codexRestoreStatus: input.codexRestoreStatus,
+      codexRestoreAt: input.codexRestoreAt || new Date().toISOString(),
+      codexRestoreSourceKey: input.codexRestoreSourceKey || undefined,
+      previousExecutorSessionId: input.previousExecutorSessionId || undefined,
+      codexRestoreFailureReason: input.codexRestoreFailureReason || undefined,
+    });
+  }
+
+  private async updateActiveExecutorMetadata(
+    orchestratorSessionId: string,
+    input: {
+      executorSessionId?: string;
+      eventType?: string;
+      turnCompletedAt?: string;
+    }
+  ) {
+    await setSandboxMetadata(orchestratorSessionId, {
+      codexActiveExecutorSessionId: input.executorSessionId || undefined,
+      lastExecutorSessionId: input.executorSessionId || undefined,
+      codexLastEventType: input.eventType || undefined,
+      codexLastTurnCompletedAt: input.turnCompletedAt || undefined,
+      codexStateSyncRequired: input.executorSessionId ? true : undefined,
+    });
+  }
+
+  private async emitRestoreStatus(
+    taskSessionId: string,
+    payload: {
+      orchestratorSessionId: string;
+      executorSessionId?: string;
+      content: string;
+      stage?: 'executing' | 'failed';
+      tone?: 'system' | 'error';
+      codexRestoreStatus: 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+      codexRestoreAt: string;
+      codexRestoreSourceKey?: string;
+      previousExecutorSessionId?: string;
+      codexRestoreFailureReason?: string;
+    }
+  ) {
+    const metadata = this.prepareTimelineMetadata(
+      payload.tone === 'error' ? 'error' : 'status_update',
+      {
+        executor: 'codex',
+        orchestratorSessionId: payload.orchestratorSessionId,
+        executorSessionId: payload.executorSessionId || undefined,
+        opencodeSessionId: payload.executorSessionId || undefined,
+        codexRestoreStatus: payload.codexRestoreStatus,
+        codexRestoreAt: payload.codexRestoreAt,
+        codexRestoreSourceKey: payload.codexRestoreSourceKey || undefined,
+        previousExecutorSessionId: payload.previousExecutorSessionId || undefined,
+        codexRestoreFailureReason: payload.codexRestoreFailureReason || undefined,
+      }
+    );
+    await this.persistMessage(
+      taskSessionId,
+      'agent',
+      payload.tone === 'error' ? 'error' : 'status_update',
+      payload.content,
+      metadata
+    );
+    await this.notify({
+      taskSessionId,
+      message: {
+        type: payload.tone === 'error' ? 'error' : 'status_update',
+        content: payload.content,
+        metadata,
+        stage: payload.stage,
+        tone: payload.tone,
+      },
+    });
+  }
+
+  private async hasCodexSessionState(
+    orchestratorSessionId: string,
+    taskSessionId: string,
+    executorSessionId: string,
+    metadata?: Record<string, unknown>
+  ): Promise<boolean> {
+    const codexDotCodexPath =
+      asString(metadata?.codexDotCodexPath) || resolveCodexArchiveDotCodexPath(taskSessionId);
+    if (!codexDotCodexPath || !executorSessionId) {
+      return false;
+    }
+    const command = `
+set -euo pipefail
+state_dir=${JSON.stringify(`${codexDotCodexPath.replace(/\/+$/, '')}/sessions`)}
+target=${JSON.stringify(executorSessionId)}
+if [ ! -d "$state_dir" ]; then
+  exit 0
+fi
+match="$(find "$state_dir" -type f -name "*$target*.jsonl" -print -quit 2>/dev/null || true)"
+if [ -n "$match" ]; then
+  printf 'found'
+  exit 0
+fi
+fallback="$(find "$state_dir" -type f -name '*.jsonl' -print -quit 2>/dev/null || true)"
+if [ -n "$fallback" ]; then
+  printf 'fallback'
+fi
+`;
+    try {
+      const result: any = await e2bConnector.runCommand(orchestratorSessionId, command, {
+        timeoutMs: 20_000,
+      });
+      const output = asString(result?.stdout || result?.output);
+      return output === 'found' || output === 'fallback';
+    } catch {
+      return false;
+    }
+  }
+
   private async ensureRuntime(taskSessionId: string, title?: string, fallbackOrchestratorSessionId?: string) {
+    const currentSession = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    const previousRuntime = currentSession?.runtime || {};
+    const previousOrchestratorSessionId = asString(previousRuntime.orchestratorSessionId);
+    const previousRestoreStatus = asString(previousRuntime.codexRestoreStatus).toLowerCase();
+    const previousExecutorSessionId =
+      asString(previousRuntime.previousExecutorSessionId) || asString(previousRuntime.executorSessionId);
     const provision = await sandboxAgentProvisionService.provisionWithLock({
       executor: 'codex',
       metadata: {
@@ -252,25 +458,173 @@ export class CodexRemoteService {
         executor: 'codex',
       },
     });
-    const runtime =
-      (await resolveRuntimeBinding(taskSessionId, fallbackOrchestratorSessionId || provision.sessionId)) || {
-        orchestratorSessionId: provision.sessionId,
-      };
-    const orchestratorSessionId = runtime.orchestratorSessionId;
-    const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
+    const orchestratorSessionId = provision.sessionId;
+    const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
+    const envMetadata = toRecord(environment?.metadata);
+    const restoreSourceKey = asString(envMetadata.r2RestoreSourceKey) || asString(envMetadata.r2ArchiveKey) || undefined;
     const workspacePath = resolveOpencodeWorkspacePath(taskSessionId);
     await osacAgentService.ensureExecutorRuntime(orchestratorSessionId, {
       executor: 'codex',
       workspacePath,
     });
-    await this.updateRuntimeBinding(taskSessionId, {
-      orchestratorSessionId,
-      executorSessionId: runtime.executorSessionId,
-    });
+    let activeExecutorSessionId =
+      asString(previousRuntime.executorSessionId) ||
+      asString(previousRuntime.previousExecutorSessionId) ||
+      undefined;
+    const isRecoveredSandboxGeneration =
+      Boolean(previousExecutorSessionId) &&
+      (Boolean(previousOrchestratorSessionId && previousOrchestratorSessionId !== orchestratorSessionId) ||
+        asString(envMetadata.restoreStatus).toLowerCase() === 'restored');
+    const stateRestored =
+      asString(envMetadata.restoreStatus).toLowerCase() === 'restored' ||
+      (previousExecutorSessionId
+        ? await this.hasCodexSessionState(
+            orchestratorSessionId,
+            taskSessionId,
+            previousExecutorSessionId,
+            envMetadata
+          )
+        : false);
+
+    if (isRecoveredSandboxGeneration && !stateRestored) {
+      const restoreAt = new Date().toISOString();
+      const reason = '未找到 Codex 会话状态归档，无法恢复原上下文';
+      await this.updateRuntimeBinding(taskSessionId, {
+        orchestratorSessionId,
+        executorSessionId: '',
+        previousExecutorSessionId,
+        codexRestoreStatus: 'state_restore_failed',
+        codexRestoreAt: restoreAt,
+        codexRestoreSourceKey: restoreSourceKey,
+        codexRestoreFailureReason: reason,
+      });
+      await this.updateRestoreMetadata(orchestratorSessionId, {
+        codexRestoreStatus: 'state_restore_failed',
+        codexRestoreAt: restoreAt,
+        codexRestoreSourceKey: restoreSourceKey,
+        previousExecutorSessionId,
+        codexRestoreFailureReason: reason,
+      });
+      await this.emitRestoreStatus(taskSessionId, {
+        orchestratorSessionId,
+        content: reason,
+        stage: 'failed',
+        tone: 'error',
+        codexRestoreStatus: 'state_restore_failed',
+        codexRestoreAt: restoreAt,
+        codexRestoreSourceKey: restoreSourceKey,
+        previousExecutorSessionId,
+        codexRestoreFailureReason: reason,
+      });
+      throw new Error(reason);
+    }
+
+    if (stateRestored && previousExecutorSessionId && previousRestoreStatus !== 'session_restored') {
+      const restoreAt = new Date().toISOString();
+      try {
+        const resumed = await osacAgentService.resumeExecutorSession(orchestratorSessionId, {
+          executor: 'codex',
+          executorSessionId: previousExecutorSessionId,
+          workspacePath,
+        });
+        activeExecutorSessionId = resumed.executorSessionId || previousExecutorSessionId;
+        await this.updateRuntimeBinding(taskSessionId, {
+          orchestratorSessionId,
+          executorSessionId: activeExecutorSessionId,
+          previousExecutorSessionId,
+          codexRestoreStatus: 'session_restored',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          codexRestoreFailureReason: '',
+        });
+        await this.updateRestoreMetadata(orchestratorSessionId, {
+          codexRestoreStatus: 'session_restored',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          previousExecutorSessionId,
+          codexRestoreFailureReason: '',
+        });
+        await this.emitRestoreStatus(taskSessionId, {
+          orchestratorSessionId,
+          executorSessionId: activeExecutorSessionId,
+          content: 'Codex 历史会话已恢复，正在沿用原上下文继续执行。',
+          stage: 'executing',
+          tone: 'system',
+          codexRestoreStatus: 'session_restored',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          previousExecutorSessionId,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await this.updateRuntimeBinding(taskSessionId, {
+          orchestratorSessionId,
+          executorSessionId: '',
+          previousExecutorSessionId,
+          codexRestoreStatus: 'session_restore_failed',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          codexRestoreFailureReason: reason,
+        });
+        await this.updateRestoreMetadata(orchestratorSessionId, {
+          codexRestoreStatus: 'session_restore_failed',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          previousExecutorSessionId,
+          codexRestoreFailureReason: reason,
+        });
+        await this.emitRestoreStatus(taskSessionId, {
+          orchestratorSessionId,
+          content: `Codex 历史会话恢复失败：${reason}`,
+          stage: 'failed',
+          tone: 'error',
+          codexRestoreStatus: 'session_restore_failed',
+          codexRestoreAt: restoreAt,
+          codexRestoreSourceKey: restoreSourceKey,
+          previousExecutorSessionId,
+          codexRestoreFailureReason: reason,
+        });
+        throw new Error(`Codex 历史会话恢复失败，请检查恢复状态后再继续：${reason}`);
+      }
+    } else {
+      await this.updateRuntimeBinding(taskSessionId, {
+        orchestratorSessionId,
+        executorSessionId: activeExecutorSessionId,
+        previousExecutorSessionId:
+          previousOrchestratorSessionId && previousOrchestratorSessionId !== orchestratorSessionId
+            ? previousExecutorSessionId || undefined
+            : asString(previousRuntime.previousExecutorSessionId) || undefined,
+        codexRestoreStatus:
+          previousRestoreStatus === 'session_restore_failed' || previousRestoreStatus === 'state_restore_failed'
+            ? (previousRuntime.codexRestoreStatus as any)
+            : 'not_needed',
+        codexRestoreAt: asString(previousRuntime.codexRestoreAt) || undefined,
+        codexRestoreSourceKey: asString(previousRuntime.codexRestoreSourceKey) || restoreSourceKey,
+        codexRestoreFailureReason:
+          previousRestoreStatus === 'session_restore_failed' || previousRestoreStatus === 'state_restore_failed'
+            ? asString(previousRuntime.codexRestoreFailureReason) || undefined
+            : '',
+      });
+      await this.updateRestoreMetadata(orchestratorSessionId, {
+        codexRestoreStatus:
+          previousRestoreStatus === 'session_restore_failed' || previousRestoreStatus === 'state_restore_failed'
+            ? (previousRuntime.codexRestoreStatus as any)
+            : 'not_needed',
+        codexRestoreAt: asString(previousRuntime.codexRestoreAt) || new Date().toISOString(),
+        codexRestoreSourceKey: asString(previousRuntime.codexRestoreSourceKey) || restoreSourceKey,
+        previousExecutorSessionId: asString(previousRuntime.previousExecutorSessionId) || undefined,
+        codexRestoreFailureReason:
+          previousRestoreStatus === 'session_restore_failed' || previousRestoreStatus === 'state_restore_failed'
+            ? asString(previousRuntime.codexRestoreFailureReason) || undefined
+            : '',
+      });
+    }
+
+    const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
     return {
       session,
       orchestratorSessionId,
-      executorSessionId: runtime.executorSessionId,
+      executorSessionId: activeExecutorSessionId,
       workspacePath,
     };
   }
@@ -308,6 +662,10 @@ export class CodexRemoteService {
       orchestratorSessionId: accepted.orchestratorSessionId,
       executorSessionId: accepted.executorSessionId,
     });
+    await this.updateActiveExecutorMetadata(accepted.orchestratorSessionId, {
+      executorSessionId: accepted.executorSessionId,
+      eventType: 'input.accepted',
+    });
     await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, 'codex');
     await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
       status: 'in_progress',
@@ -327,6 +685,7 @@ export class CodexRemoteService {
       input.source === 'agent' ? 'codex_agent_input' : 'codex_user_input',
       content,
       {
+        ...(input.clientMessageKey ? { messageKey: input.clientMessageKey } : {}),
         executor: 'codex',
         orchestratorSessionId: accepted.orchestratorSessionId,
         executorSessionId: accepted.executorSessionId,
@@ -335,6 +694,10 @@ export class CodexRemoteService {
         timestamp: inputTimestamp,
         sessionEventSeq: inputTimestamp * 1000,
         ...(input.clientMessageKey ? { clientMessageKey: input.clientMessageKey } : {}),
+      },
+      {
+        createdAt: new Date(inputTimestamp).toISOString(),
+        seed: inputTimestamp % 1000,
       }
     );
 
@@ -370,17 +733,27 @@ export class CodexRemoteService {
         orchestratorSessionId,
         executorSessionId,
       });
+      await this.updateActiveExecutorMetadata(orchestratorSessionId, {
+        executorSessionId,
+        eventType:
+          message.type === 'EXECUTOR_EVENT'
+            ? asString(payload.eventType) || 'executor.event'
+            : message.type.toLowerCase(),
+      });
     }
 
     if (message.type === 'EXECUTOR_SESSION_READY') {
       const content = 'Codex 会话已建立，正在等待执行...';
-      const metadata = {
+      const metadata = this.prepareTimelineMetadata('status_update', {
         executor: 'codex',
         orchestratorSessionId,
         executorSessionId: executorSessionId || undefined,
         opencodeSessionId: executorSessionId || undefined,
         workspacePath: asString(payload.workspacePath) || undefined,
-      };
+      }, {
+        createdAt: new Date().toISOString(),
+        seed: Number(payload.seq || 0),
+      });
       if (!this.isDirectSession(session)) {
         await this.persistMessage(session.id, 'agent', 'status_update', content, metadata);
       }
@@ -399,13 +772,16 @@ export class CodexRemoteService {
 
     if (message.type === 'EXECUTOR_INPUT_ACCEPTED') {
       const content = 'Codex 已接收输入，正在执行...';
-      const metadata = {
+      const metadata = this.prepareTimelineMetadata('status_update', {
         executor: 'codex',
         orchestratorSessionId,
         executorSessionId: executorSessionId || undefined,
         opencodeSessionId: executorSessionId || undefined,
         status: asString(payload.status) || 'accepted',
-      };
+      }, {
+        createdAt: new Date().toISOString(),
+        seed: Number(payload.seq || 0),
+      });
       if (!this.isDirectSession(session)) {
         await this.persistMessage(session.id, 'agent', 'status_update', content, metadata);
       }
@@ -424,14 +800,17 @@ export class CodexRemoteService {
 
     if (message.type === 'EXECUTOR_ERROR') {
       const content = asString(payload.message) || 'Codex 执行失败';
-      const metadata = {
+      const metadata = this.prepareTimelineMetadata('error', {
         executor: 'codex',
         orchestratorSessionId,
         executorSessionId: executorSessionId || undefined,
         opencodeSessionId: executorSessionId || undefined,
         code: asString(payload.code) || undefined,
         stage: asString(payload.stage) || undefined,
-      };
+      }, {
+        createdAt: new Date().toISOString(),
+        seed: Number(payload.seq || 0),
+      });
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'failed',
         stage: 'failed',
@@ -454,7 +833,12 @@ export class CodexRemoteService {
     const event = toRecord(payload.event);
     const content = summarizeCodexEvent(eventType, event);
     const stage = mapEventStage(eventType);
-    const metadata = {
+    const eventCreatedAt = new Date(
+      typeof payload.timestamp === 'number' && Number.isFinite(payload.timestamp) && payload.timestamp > 0
+        ? payload.timestamp
+        : Date.now()
+    ).toISOString();
+    const metadata = this.prepareTimelineMetadata('executor_event', {
       executor: 'codex',
       orchestratorSessionId,
       executorSessionId: executorSessionId || undefined,
@@ -464,9 +848,13 @@ export class CodexRemoteService {
       timestamp: payload.timestamp,
       seq: payload.seq,
       ...buildCodexEventMetadata(event),
-    };
+    }, {
+      createdAt: eventCreatedAt,
+      seed: Number(payload.seq || 0),
+    });
 
     if (stage === 'completed') {
+      const completedAt = new Date().toISOString();
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'completed',
         stage: 'completed',
@@ -476,6 +864,18 @@ export class CodexRemoteService {
       } catch (error) {
         console.warn('[CODEX_REMOTE_STATUS_DB_COMPLETE_FAILED]', { sessionId: session.id, error });
       }
+      await this.updateActiveExecutorMetadata(orchestratorSessionId, {
+        executorSessionId: executorSessionId || undefined,
+        eventType: eventType || 'turn.completed',
+        turnCompletedAt: completedAt,
+      });
+      void archiveSandboxWorkspace(orchestratorSessionId, 'codex_turn_completed').catch((error) => {
+        console.warn('[CODEX_REMOTE_ARCHIVE_AFTER_COMPLETED_FAILED]', {
+          sessionId: session.id,
+          orchestratorSessionId,
+          error,
+        });
+      });
     } else if (stage === 'failed') {
       await taskCreationFileMemoryStore.updateSessionState(session.id, {
         status: 'failed',
@@ -492,7 +892,10 @@ export class CodexRemoteService {
       return;
     }
 
-    await this.persistMessage(session.id, 'agent', 'executor_event', content, metadata);
+    await this.persistMessage(session.id, 'agent', 'executor_event', content, metadata, {
+      createdAt: eventCreatedAt,
+      seed: Number(payload.seq || 0),
+    });
     await this.notify({
       taskSessionId: session.id,
       message: {

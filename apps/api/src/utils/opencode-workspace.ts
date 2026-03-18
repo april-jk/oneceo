@@ -48,3 +48,11 @@ export function resolveLegacyOpencodeStatePath(workspaceRoot?: string | null): s
   }
   return `${normalized.replace(/\/+$/, '')}/.opencode`;
 }
+
+export function resolveCodexArchiveHomePath(taskSessionId: string): string {
+  return `${resolveOpencodeStatePath(taskSessionId)}/codex-home`;
+}
+
+export function resolveCodexArchiveDotCodexPath(taskSessionId: string): string {
+  return `${resolveCodexArchiveHomePath(taskSessionId)}/.codex`;
+}

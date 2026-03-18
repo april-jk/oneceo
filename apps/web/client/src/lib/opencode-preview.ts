@@ -199,6 +199,43 @@ function getOpencodeEventInfo(metadata: Record<string, unknown>): OpencodeEventI
   };
 }
 
+function extractCodexItem(metadata: Record<string, unknown>): Record<string, unknown> {
+  return toRecord(toRecord(metadata.event).item);
+}
+
+function mapCodexFileChangeStatus(kind: string): StructuredFileDiff["status"] {
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === "add" || normalized === "create" || normalized === "created") {
+    return "added";
+  }
+  if (
+    normalized === "delete" ||
+    normalized === "deleted" ||
+    normalized === "remove" ||
+    normalized === "removed"
+  ) {
+    return "deleted";
+  }
+  return "modified";
+}
+
+function buildCodexFileChangeDiffs(metadata: Record<string, unknown>): StructuredFileDiff[] {
+  const item = extractCodexItem(metadata);
+  const changes = Array.isArray(item.changes) ? item.changes : [];
+  return changes.reduce<StructuredFileDiff[]>((acc, change) => {
+    const record = toRecord(change);
+    const file = asText(record.path);
+    if (!file) return acc;
+    acc.push({
+      file,
+      before: "",
+      after: "",
+      status: mapCodexFileChangeStatus(asText(record.kind)),
+    });
+    return acc;
+  }, []);
+}
+
 function pickTimestamp(metadata: Record<string, unknown>, event: Record<string, unknown>) {
   const candidates = [
     metadata.at,
@@ -684,6 +721,29 @@ export function buildPreviewItems(messages: AgentMessage[]) {
   const mutationByPartId = new Map<string, MutationCandidate>();
 
   messages.forEach((message, index) => {
+    if (message.type === "executor_event") {
+      const metadata = toRecord(message.metadata);
+      if (asText(metadata.executor).toLowerCase() !== "codex") return;
+      const item = extractCodexItem(metadata);
+      const itemType =
+        asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
+      if (itemType !== "file_change") return;
+
+      const files = buildCodexFileChangeDiffs(metadata);
+      if (files.length === 0) return;
+
+      diffItems.push({
+        id: `diff-${index}-codex-file_change`,
+        title: buildDiffTitle(files, "codex.file_change", diffItems.length),
+        files,
+        source: "codex.file_change",
+        createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+        eventIndex: index,
+        relatedEventIndexes: [index],
+      });
+      return;
+    }
+
     if (message.type !== "opencode_event") return;
     const metadata = toRecord(message.metadata);
     const info = getOpencodeEventInfo(metadata);

@@ -363,8 +363,9 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
       )
     : [];
   const inferredRuntime = inferRuntimeFromMessages(normalizedMessages, orchestratorSessionId);
+  const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
   const inferredExecutor =
-    asText(inferredRuntime.executor) || (inferredRuntime.executorSessionId ? 'opencode' : '');
+    asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
   const hasSandboxHistory = Array.isArray(messages)
     ? messages.some((message) => {
         const messageType = asText(message.messageType);
@@ -388,10 +389,15 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     runtime: orchestratorSessionId
       ? {
           generation: inferredRuntime.generation,
+          codexRestoreStatus: mergedRuntime.codexRestoreStatus as any,
+          codexRestoreAt: mergedRuntime.codexRestoreAt,
+          codexRestoreSourceKey: mergedRuntime.codexRestoreSourceKey,
+          previousExecutorSessionId: mergedRuntime.previousExecutorSessionId,
+          codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
           orchestratorSessionId,
-          executor: inferredRuntime.executor || (inferredRuntime.opencodeSessionId ? 'opencode' : undefined),
-          executorSessionId: inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId,
-          opencodeSessionId: inferredRuntime.opencodeSessionId,
+          executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
+          opencodeSessionId: mergedRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
         }
       : undefined,
@@ -440,8 +446,9 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
     : [];
 
   const inferredRuntime = inferRuntimeFromMessages(normalizedRecentMessages, orchestratorSessionId);
+  const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
   const inferredExecutor =
-    asText(inferredRuntime.executor) || (inferredRuntime.executorSessionId ? 'opencode' : '');
+    asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
   const hasSandboxSignals =
     Boolean(orchestratorSessionId) ||
     Boolean(inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId) ||
@@ -483,10 +490,15 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
     runtime: orchestratorSessionId
       ? {
           generation: inferredRuntime.generation,
+          codexRestoreStatus: mergedRuntime.codexRestoreStatus as any,
+          codexRestoreAt: mergedRuntime.codexRestoreAt,
+          codexRestoreSourceKey: mergedRuntime.codexRestoreSourceKey,
+          previousExecutorSessionId: mergedRuntime.previousExecutorSessionId,
+          codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
           orchestratorSessionId,
-          executor: inferredRuntime.executor || (inferredRuntime.opencodeSessionId ? 'opencode' : undefined),
-          executorSessionId: inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId,
-          opencodeSessionId: inferredRuntime.opencodeSessionId,
+          executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
+          opencodeSessionId: mergedRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
         }
       : undefined,
@@ -508,6 +520,11 @@ async function hydrateFileSessionFromDb(sessionId: string) {
       executor: record.runtime.executor || record.executor,
       executorSessionId: record.runtime.executorSessionId || record.runtime.opencodeSessionId,
       opencodeSessionId: record.runtime.opencodeSessionId,
+      codexRestoreStatus: record.runtime.codexRestoreStatus as any,
+      codexRestoreAt: record.runtime.codexRestoreAt,
+      codexRestoreSourceKey: record.runtime.codexRestoreSourceKey,
+      previousExecutorSessionId: record.runtime.previousExecutorSessionId,
+      codexRestoreFailureReason: record.runtime.codexRestoreFailureReason,
     });
   }
   if (record.driver) {
@@ -836,8 +853,10 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
     orchestratorSessionId: provision.sessionId,
     executor,
-    executorSessionId: '',
-    opencodeSessionId: '',
+    executorSessionId: executor === 'codex' ? session.runtime?.executorSessionId || undefined : '',
+    opencodeSessionId: executor === 'opencode' ? '' : undefined,
+    previousExecutorSessionId:
+      executor === 'codex' ? session.runtime?.executorSessionId || undefined : undefined,
   });
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
@@ -1094,6 +1113,17 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'command',
     'outputPreview',
     'exitCode',
+    'fileChanges',
+    'filePaths',
+    'commandCategory',
+    'targetPath',
+    'approvalText',
+    'approvalOptions',
+    'codexRestoreStatus',
+    'codexRestoreAt',
+    'codexRestoreSourceKey',
+    'previousExecutorSessionId',
+    'codexRestoreFailureReason',
   ]) {
     if (metadata[key] !== undefined) {
       slim[key] = metadata[key];
@@ -1331,7 +1361,17 @@ function annotateRuntimeGenerations<T extends { metadata?: Record<string, unknow
 function inferRuntimeFromMessages(
   messages: Array<{ metadata?: Record<string, unknown>; createdAt?: string; messageType?: string }>,
   orchestratorSessionId?: string | null
-): { generation?: number; executor?: string; executorSessionId?: string; opencodeSessionId?: string } {
+): {
+  generation?: number;
+  executor?: string;
+  executorSessionId?: string;
+  opencodeSessionId?: string;
+  codexRestoreStatus?: string;
+  codexRestoreAt?: string;
+  codexRestoreSourceKey?: string;
+  previousExecutorSessionId?: string;
+  codexRestoreFailureReason?: string;
+} {
   const targetOrchestrator = asText(orchestratorSessionId);
   const ordered = annotateRuntimeGenerations(messages);
   const matched = ordered.filter((item) => {
@@ -1356,6 +1396,37 @@ function inferRuntimeFromMessages(
     executor: executor || undefined,
     executorSessionId,
     opencodeSessionId,
+    codexRestoreStatus: asText(metadata.codexRestoreStatus) || undefined,
+    codexRestoreAt: asText(metadata.codexRestoreAt) || undefined,
+    codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || undefined,
+    previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || undefined,
+    codexRestoreFailureReason: asText(metadata.codexRestoreFailureReason) || undefined,
+  };
+}
+
+function mergeCodexRuntimeMetadata(
+  runtime: {
+    generation?: number;
+    executor?: string;
+    executorSessionId?: string;
+    opencodeSessionId?: string;
+    codexRestoreStatus?: string;
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
+  },
+  environmentMetadata?: Record<string, unknown> | null
+) {
+  const metadata = pickRecord(environmentMetadata);
+  return {
+    ...runtime,
+    codexRestoreStatus: asText(metadata.codexRestoreStatus) || runtime.codexRestoreStatus,
+    codexRestoreAt: asText(metadata.codexRestoreAt) || runtime.codexRestoreAt,
+    codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || runtime.codexRestoreSourceKey,
+    previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || runtime.previousExecutorSessionId,
+    codexRestoreFailureReason:
+      asText(metadata.codexRestoreFailureReason) || runtime.codexRestoreFailureReason,
   };
 }
 
@@ -1692,11 +1763,17 @@ async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
   try {
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
     if (!environment) return null;
+    const metadata = pickRecord(environment.metadata);
     return {
       status: environment.status,
-      provider: (environment.metadata as any)?.sandboxProvider || undefined,
+      provider: metadata.sandboxProvider || undefined,
       updatedAt: environment.updatedAt,
       sandboxId: environment.sessionId,
+      codexRestoreStatus: asText(metadata.codexRestoreStatus) || undefined,
+      codexRestoreAt: asText(metadata.codexRestoreAt) || undefined,
+      codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || undefined,
+      previousExecutorSessionId: asText(metadata.previousExecutorSessionId) || undefined,
+      codexRestoreFailureReason: asText(metadata.codexRestoreFailureReason) || undefined,
     };
   } catch (error) {
     console.warn('[TASK_CREATION_RUNTIME_STATUS_FAILED]', sessionId, error);
@@ -2042,7 +2119,7 @@ router.post('/sessions', async (req, res) => {
     }
 
     let persistedInitialMessage = false;
-    if (initialMessage) {
+    if (initialMessage && isNewSession) {
       const history = await taskCreationFileMemoryStore.getMessages(session.id);
       const last = history.length > 0 ? history[history.length - 1] : null;
       const isDuplicateTail =

@@ -77,7 +77,7 @@ oneceo 后续要支持 `sandbox + codex` 直通模式，但现有 OSAC 明显是
 
 1. 还没有真正的多 executor registry
 2. 还没有 `history get`
-3. Codex `resume` 语义目前仍依赖 CLI 参数与本地 bookkeeping
+3. Codex `resume` 语义目前仍依赖 CLI 与本地 bookkeeping
 4. 还没有完整覆盖 oneceo 所有 workspace/deploy 类接口
 
 ## 6. 编译与验证
@@ -87,14 +87,14 @@ oneceo 后续要支持 `sandbox + codex` 直通模式，但现有 OSAC 明显是
 ```bash
 cd OSAC_client
 PATH=/opt/homebrew/bin:$PATH go test ./...
-PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/osac-linux-amd64_v1.1.2.fix23 ./cmd/osac
-PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags debug -o dist/osac-linux-amd64_v1.1.2.fix23_debug ./cmd/osac
+PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/osac-linux-amd64_v1.1.2.fix24 ./cmd/osac
+PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags debug -o dist/osac-linux-amd64_v1.1.2.fix24_debug ./cmd/osac
 ```
 
 产物：
 
-- `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix23`
-- `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix23_debug`
+- `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24`
+- `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24_debug`
 
 当前二进制大小约 `11M`。
 
@@ -107,9 +107,13 @@ PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tag
 2. Codex template 内没有 `opencode`
    - 这会导致旧版 OSAC 的 `GET_SESSION_LIST`、probe、bridge ready 逻辑报错
    - 典型报错：`exec: "opencode": executable file not found in $PATH`
-3. 因此 OSAC 追加了 `fix23` 修正：
+3. 因此 OSAC 先追加了 `fix23` 修正：
    - 当 sandbox 内不存在 `opencode` 时，相关 probe 与 `GET_SESSION_LIST` 返回空会话列表，而不是失败
-4. 修正后，oneceo API 侧已经可以通过：
+4. 在真实多轮续聊时，又追加了 `fix24` 修正：
+   - 原因：`codex manager` 把 `workspace` 通过 `-C` 传给了 `codex exec resume`
+   - 问题：`codex exec resume` 不支持 `-C/--cd`，导致第二轮输入报错 `unexpected argument '-C' found`
+   - 修正：统一改为通过 `exec.Cmd.Dir` 传入 workspace，不再把 `-C` 注入 Codex CLI 参数
+5. 修正后，oneceo API 侧已经可以通过：
    - `EXECUTOR_RUNTIME_ENSURE`
    - `EXECUTOR_INPUT_SEND`
    在真实 sandbox 内驱动 Codex，并收到：

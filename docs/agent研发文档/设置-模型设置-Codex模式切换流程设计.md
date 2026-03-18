@@ -162,8 +162,8 @@ oneceo 不能照搬它“服务端直接跑 codex sdk/cli”的部署方式，�
 3. 已完成本地测试：
    - `cd OSAC_client && PATH=/opt/homebrew/bin:$PATH go test ./...`
 4. 已完成 Linux amd64 编译：
-   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix23`
-   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix23_debug`
+   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24`
+   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24_debug`
 
 边界说明：
 
@@ -199,6 +199,64 @@ oneceo 不能照搬它“服务端直接跑 codex sdk/cli”的部署方式，�
 
 - Codex template 内没有 `opencode` 可执行文件，因此 OSAC 不能再把 `GET_SESSION_LIST`、probe 或 bridge ready 检查硬绑定到 OpenCode。
 - 为兼容现有前端恢复逻辑，Codex 事件当前仍保留 `opencodeSessionId` 兼容别名，但真实身份字段必须以 `driver + executorSessionId` 为准。
+
+### 5.5 多轮续聊修正
+
+在真实多轮对话联调中，发现同一 `taskSessionId` 的第二轮输入会触发：
+
+- `error: unexpected argument '-C' found`
+- `Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]`
+
+根因不是 session 绑定错误，而是 OSAC 的 `codex manager` 在首轮与续聊共用了同一套 CLI 参数拼装逻辑，把 `workspace` 通过 `-C <dir>` 传给了：
+
+- `codex exec`
+- `codex exec resume`
+
+其中只有 `codex exec` 支持 `-C/--cd`，`codex exec resume` 并不支持该参数，因此续聊必然失败。
+
+本轮修正原则：
+
+1. 不做 resume 特判补丁
+2. 统一把 workspace 通过进程工作目录 `cmd.Dir` 传入
+3. 首轮与续聊共用同一套正确的进程启动语义
+
+修正后实测结果：
+
+1. 同一会话第二轮输入不再出现 `unexpected argument '-C' found`
+2. 第二轮已能在同一 `orchestratorSessionId` 下继续执行真实 Codex 任务
+3. 第二轮事件流已包含：
+   - `turn.started`
+   - `item.completed`
+   - `command_execution`
+   - `reasoning`
+
+### 5.6 多轮消息一致性修正
+
+在继续针对 Codex 多轮对话做真实验证时，又暴露出两类“看起来像续聊失败，实际是消息层不一致”的问题：
+
+1. 主对话区出现无意义内部日志：
+   - `codex_core::rollout::list: state db missing rollout path ...`
+2. 第二轮发送后，第一轮问候语、上一轮用户消息会在主对话区被重新拼接一遍
+
+这两个问题的根因分别是：
+
+1. `stderr.line / stdout.line` 被当成普通 `executor_event` 进入了聊天流
+2. Codex 的实时消息与历史消息没有使用同一套稳定 `messageKey`
+3. 前端对已存在 session 仍会再次调用 `/sessions` 并携带 `initialMessage`
+4. history 映射层把 `codex_user_input` 丢掉了，导致用户轮次在 reconcile 时只能依赖另一条预写入消息
+
+本轮修正原则：
+
+1. `stderr.line / stdout.line` 不进入 Codex 主对话区，也不再持久化为聊天正文
+2. Codex realtime/history 统一使用稳定 `messageKey`
+3. 已存在 session 再发送消息时，不再通过 `/sessions` 重复写入 `initialMessage`
+4. `codex_user_input` 在历史恢复时映射回 `user_input`
+
+本轮真实 smoke 结果：
+
+1. 第二条用户消息仅落库 1 次
+2. `state db missing rollout path` 噪音消息落库次数为 0
+3. 当前 smoke 中 Codex 消息 `messageKey` 无重复
 
 ## 6. 设置切换流程设计
 

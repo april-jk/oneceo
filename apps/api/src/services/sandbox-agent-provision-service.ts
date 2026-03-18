@@ -13,6 +13,8 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
 import {
+  resolveCodexArchiveDotCodexPath,
+  resolveCodexArchiveHomePath,
   resolveLegacyOpencodeStatePath,
   resolveOpencodeStatePath,
   resolveOpencodeWorkspacePath,
@@ -487,6 +489,147 @@ async function ensureWorkspaceLayout(sessionId: string, taskSessionId?: string) 
     throw lastError;
   }
   return { workspaceRoot, stateRoot };
+}
+
+function resolveCodexArchivePaths(taskSessionId?: string | null, stateRoot?: string | null): {
+  codexArchiveHome: string | null;
+  codexDotCodexPath: string | null;
+} {
+  const safeTaskSessionId = pickString(taskSessionId);
+  if (safeTaskSessionId) {
+    return {
+      codexArchiveHome: resolveCodexArchiveHomePath(safeTaskSessionId),
+      codexDotCodexPath: resolveCodexArchiveDotCodexPath(safeTaskSessionId),
+    };
+  }
+  const normalizedStateRoot = pickString(stateRoot);
+  if (!normalizedStateRoot) {
+    return {
+      codexArchiveHome: null,
+      codexDotCodexPath: null,
+    };
+  }
+  const base = normalizedStateRoot.replace(/\/+$/, '');
+  return {
+    codexArchiveHome: `${base}/codex-home`,
+    codexDotCodexPath: `${base}/codex-home/.codex`,
+  };
+}
+
+async function ensureCodexHomeMapping(
+  sessionId: string,
+  input: {
+    taskSessionId?: string | null;
+    stateRoot?: string | null;
+  }
+): Promise<{ codexArchiveHome: string; codexDotCodexPath: string }> {
+  const { codexArchiveHome, codexDotCodexPath } = resolveCodexArchivePaths(
+    input.taskSessionId,
+    input.stateRoot
+  );
+  if (!codexArchiveHome || !codexDotCodexPath) {
+    throw new Error('missing codex archive home');
+  }
+
+  const command = `
+set -euo pipefail
+archive_home=${shellEscape(codexArchiveHome)}
+archive_codex=${shellEscape(codexDotCodexPath)}
+runtime_codex='/home/user/.codex'
+
+mkdir -p "$archive_home" "$archive_codex"
+mkdir -p "$archive_codex/sessions" "$archive_codex/tmp" "$archive_codex/shell_snapshots"
+
+if [ -L "$runtime_codex" ]; then
+  current_target="$(readlink "$runtime_codex" || true)"
+  if [ "$current_target" = "$archive_codex" ]; then
+    exit 0
+  fi
+fi
+
+if [ -d "$runtime_codex" ] && [ ! -L "$runtime_codex" ]; then
+  cp -a "$runtime_codex"/. "$archive_codex"/ || true
+  rm -rf "$runtime_codex"
+fi
+
+ln -sfn "$archive_codex" "$runtime_codex"
+`;
+  const probeCommand = `
+set -euo pipefail
+archive_codex=${shellEscape(codexDotCodexPath)}
+runtime_codex='/home/user/.codex'
+
+if [ ! -e "$archive_codex" ]; then
+  exit 0
+fi
+if [ -L "$runtime_codex" ]; then
+  current_target="$(readlink "$runtime_codex" || true)"
+  if [ "$current_target" = "$archive_codex" ]; then
+    printf 'READY:%s' "$current_target"
+    exit 0
+  fi
+fi
+exit 0
+`;
+  const attempts = Math.max(2, Number(process.env.CODEX_HOME_MAPPING_ATTEMPTS || 3));
+  const delayMs = Math.max(500, Number(process.env.CODEX_HOME_MAPPING_DELAY_MS || 1200));
+  let lastError: unknown = null;
+  const extractCommandOutput = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+      const result = (value as any).result;
+      const output =
+        String(result?.stdout || result?.output || (value as any).stdout || (value as any).output || '').trim();
+      if (output) return output;
+    }
+    return '';
+  };
+  const runProbe = async (): Promise<boolean> => {
+    try {
+      const probe: any = await e2bConnector.runCommand(sessionId, probeCommand, { timeoutMs: 10_000 });
+      const output = String(probe?.stdout || probe?.output || '').trim();
+      return output.startsWith('READY:');
+    } catch (probeError) {
+      lastError = lastError || probeError;
+      const output = extractCommandOutput(probeError);
+      return output.startsWith('READY:');
+    }
+  };
+
+  if (await runProbe()) {
+    return {
+      codexArchiveHome,
+      codexDotCodexPath,
+    };
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (await runProbe()) {
+      return {
+        codexArchiveHome,
+        codexDotCodexPath,
+      };
+    }
+
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  const lastResult = lastError && typeof lastError === 'object' ? (lastError as any).result : null;
+  const detail = [
+    lastError instanceof Error ? lastError.message : String(lastError || 'codex home mapping failed'),
+    lastResult?.stdout ? `stdout=${String(lastResult.stdout).trim()}` : '',
+    lastResult?.stderr ? `stderr=${String(lastResult.stderr).trim()}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+  throw new Error(detail || 'codex home mapping failed');
 }
 
 function shellEscape(value: string): string {
@@ -981,6 +1124,8 @@ export class SandboxAgentProvisionService {
     const layout = await runStep('workspace_prepare', () => ensureWorkspaceLayout(sessionId, taskSessionId || undefined));
     const workspaceRoot = layout?.workspaceRoot || null;
     const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
+    let codexArchiveHome: string | null = null;
+    let codexDotCodexPath: string | null = null;
 
     if (!isReused) {
       const restored = await restoreWorkspaceIfArchived(sessionId);
@@ -1027,6 +1172,14 @@ export class SandboxAgentProvisionService {
       await runStep('neko_debug', () => ensureNekoDebug(sessionId));
     } else if (executor === 'codex') {
       await runStep('codex_present', () => assertCodexReady(sessionId));
+      const codexHomeMapping = await runStep('codex_home_mapping', () =>
+        ensureCodexHomeMapping(sessionId, {
+          taskSessionId,
+          stateRoot,
+        })
+      );
+      codexArchiveHome = codexHomeMapping.codexArchiveHome;
+      codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
       const reusableBridge = await canReuseOsacBridge({
         endpoint: osacEndpoint,
         authToken: osacAuthToken,
@@ -1059,8 +1212,8 @@ export class SandboxAgentProvisionService {
     }
 
     const mergedMetadata: Record<string, unknown> = {
-      ...(existingEnvironment?.metadata || {}),
-      ...(input.metadata || {}),
+      ...(((existingEnvironment?.metadata as Record<string, unknown> | undefined) || {})),
+      ...(((input.metadata as Record<string, unknown> | undefined) || {})),
       sandboxProvider: 'e2b',
       sandboxExecutor: executor,
       executor,
@@ -1069,6 +1222,8 @@ export class SandboxAgentProvisionService {
       opencodeHost: host,
       opencodeWorkspaceRoot: workspaceRoot || undefined,
       opencodeStateRoot: stateRoot || undefined,
+      codexArchiveHome: codexArchiveHome || undefined,
+      codexDotCodexPath: codexDotCodexPath || undefined,
       osacEndpoint: osacEndpoint || undefined,
       osacHost: osacHost || undefined,
       osacHostPort: osacHostPort || undefined,

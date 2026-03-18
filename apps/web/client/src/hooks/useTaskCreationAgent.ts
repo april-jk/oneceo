@@ -677,7 +677,10 @@ function isCodexControlStatusContent(metadataRaw: unknown, contentRaw?: string):
 }
 
 function hasMeaningfulExecutorEventText(metadataRaw: unknown, contentRaw?: string): boolean {
-  const { normalizedEventType, text } = getExecutorEventInfo(metadataRaw, contentRaw);
+  const { executor, normalizedEventType, text } = getExecutorEventInfo(metadataRaw, contentRaw);
+  if (executor === 'codex' && (normalizedEventType === 'stderr.line' || normalizedEventType === 'stdout.line')) {
+    return false;
+  }
   if (!text) {
     return false;
   }
@@ -700,11 +703,14 @@ function hasMeaningfulExecutorEventText(metadataRaw: unknown, contentRaw?: strin
 
 function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): boolean {
   const metadata = toRecord(metadataRaw);
-  const { normalizedEventType, event } = getExecutorEventInfo(metadataRaw, contentRaw);
+  const { executor, normalizedEventType, event } = getExecutorEventInfo(metadataRaw, contentRaw);
   const item = toRecord(event.item);
   const itemType =
     asText(metadata.itemType).toLowerCase() ||
     asText(item.type).toLowerCase();
+  if (executor === 'codex' && (normalizedEventType === 'stderr.line' || normalizedEventType === 'stdout.line')) {
+    return false;
+  }
   if (!normalizedEventType) {
     return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
   }
@@ -727,7 +733,13 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
     return false;
   }
   if (normalizedEventType === 'item.completed') {
-    if (itemType === 'command_execution') {
+    if (
+      itemType === 'command_execution' ||
+      itemType === 'file_change' ||
+      itemType === 'diff' ||
+      itemType === 'approval_request' ||
+      itemType === 'tool_execution'
+    ) {
       return true;
     }
     return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
@@ -1087,6 +1099,7 @@ function resolveAgentMessageKey(message: Partial<AgentMessage>): string {
   const generation = asPositiveInt(metadata.runtimeGeneration);
   const generationSegment = generation ?? 'na';
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
+  const timelineCursor = asPositiveInt(metadata.timelineCursor);
   const createdAt =
     asFiniteNumber(metadata.timestamp) ??
     (asText(metadata.createdAt) ? Date.parse(asText(metadata.createdAt)) : null) ??
@@ -1116,6 +1129,10 @@ function resolveAgentMessageKey(message: Partial<AgentMessage>): string {
 
   if (sessionEventSeq !== null) {
     return `runtime:${generationSegment}:${sessionEventSeq}:${message.type || 'message'}`;
+  }
+
+  if (timelineCursor !== null) {
+    return `runtime:${generationSegment}:${timelineCursor}:${message.type || 'message'}`;
   }
 
   const id = asText(message.id);
@@ -1221,6 +1238,8 @@ function mergeRealtimeMessage(
     message.type === 'executor_event' &&
     lastMessage?.type === 'executor_event' &&
     asText(toRecord(lastMessage.metadata).eventType).toLowerCase() === asText(toRecord(message.metadata).eventType).toLowerCase() &&
+    asText(toRecord(lastMessage.metadata).itemType).toLowerCase() === asText(toRecord(message.metadata).itemType).toLowerCase() &&
+    asText(toRecord(lastMessage.metadata).itemId) === asText(toRecord(message.metadata).itemId) &&
     (message.content || '').trim() &&
     (message.content || '').trim() === (lastMessage?.content || '').trim();
   if (isDuplicateExecutorTail) {
@@ -1584,11 +1603,25 @@ function getHistoryMessageKey(message: Partial<AgentMessage>): string {
 
 function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
   const merged = [...base];
-  const seen = new Set(base.map((item) => getHistoryMessageKey(item)));
+  const indexByKey = new Map<string, number>();
+  base.forEach((item, index) => {
+    indexByKey.set(getHistoryMessageKey(item), index);
+  });
   for (const item of incoming) {
     const key = getHistoryMessageKey(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex !== undefined) {
+      merged[existingIndex] = normalizeAgentMessageIdentity({
+        ...merged[existingIndex],
+        ...item,
+        metadata: {
+          ...toRecord(merged[existingIndex]?.metadata),
+          ...toRecord(item?.metadata),
+        },
+      });
+      continue;
+    }
+    indexByKey.set(key, merged.length);
     merged.push(item);
   }
   return merged;
@@ -1680,12 +1713,11 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
   if (
     messageType === 'session_started' ||
     messageType === 'opencode_agent_input' ||
-    messageType === 'codex_user_input' ||
     messageType === 'codex_agent_input'
   ) {
     return null;
   }
-  if (messageType === 'opencode_user_input') {
+  if (messageType === 'opencode_user_input' || messageType === 'codex_user_input') {
     return {
       id,
       messageKey,
@@ -3386,6 +3418,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
     const altusMode = readAltusMode();
     if (altusMode === 'sandbox') {
+      const executor = readExecutor();
       if (!activeSessionId) {
         const provisionalId =
           (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -3401,11 +3434,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             sessionId: activeSessionId,
             title: text.slice(0, 80),
             mode: 'sandbox',
-            executor: readExecutor(),
-            initialMessage: text,
-            initialMessageType: 'user_input',
+            executor,
+            ...(executor === 'codex'
+              ? {}
+              : {
+                  initialMessage: text,
+                  initialMessageType: 'user_input' as const,
+                }),
           });
-          prePersistedUserInput = true;
+          prePersistedUserInput = executor !== 'codex';
           try {
             window.dispatchEvent(
               new CustomEvent('task-creation-session-updated', {
@@ -3532,7 +3569,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           ...(nextOrchestratorId ? { orchestratorSessionId: nextOrchestratorId } : undefined),
           ...(nextOpencodeId ? { opencodeSessionId: nextOpencodeId } : undefined),
           altusMode: 'sandbox',
-          executor: readExecutor(),
+          executor,
+          ...(executor === 'codex' ? { clientMessageKey: messageKey } : undefined),
           ...(prePersistedUserInput ? { prePersistedUserInput: true } : undefined),
         },
       });

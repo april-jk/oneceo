@@ -998,7 +998,18 @@ function formatPreviewTimestamp(value?: string | null) {
 }
 
 function shouldRefreshFromMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.type !== "opencode_event") return false;
+  if (!message) return false;
+  if (message.type === "executor_event") {
+    const metadata = toRecord(message.metadata);
+    if (asText(metadata.executor).toLowerCase() !== "codex") return false;
+    const event = toRecord(metadata.event);
+    const item = toRecord(event.item);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const itemType =
+      asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
+    return eventType === "item.completed" && itemType === "file_change";
+  }
+  if (message.type !== "opencode_event") return false;
   const metadata = toRecord(message.metadata);
   const event = toRecord(metadata.event);
   const rawPayload = toRecord(metadata.rawPayload);
@@ -4205,7 +4216,14 @@ function DiffBlock({
     return effectiveFiles
       .map((file) => {
         const stats = computeFileStats(file);
-        if (stats.additions === 0 && stats.deletions === 0) {
+        const hasRenderableLines = file.hunks.some(
+          (hunk) => hunk.lines.length > 0,
+        );
+        if (
+          stats.additions === 0 &&
+          stats.deletions === 0 &&
+          !hasRenderableLines
+        ) {
           return null;
         }
         const mode = resolveDiffDisplayMode(stats);
@@ -4787,6 +4805,26 @@ function parseStructuredDiffs(files?: StructuredFileDiff[]): DiffFile[] {
       ops = diffLines(beforeLines, afterLines);
     }
     const rows = buildDiffRows(ops);
+    if (rows.length === 0 && file.status) {
+      rows.push({
+        leftLine: null,
+        rightLine: null,
+        leftText:
+          file.status === "added"
+            ? "文件已创建，暂无可展示的 diff 详情"
+            : file.status === "deleted"
+              ? "文件已删除，暂无可展示的 diff 详情"
+              : "文件已更新，暂无可展示的 diff 详情",
+        rightText:
+          file.status === "added"
+            ? "文件已创建，暂无可展示的 diff 详情"
+            : file.status === "deleted"
+              ? "文件已删除，暂无可展示的 diff 详情"
+              : "文件已更新，暂无可展示的 diff 详情",
+        leftType: "context",
+        rightType: "context",
+      });
+    }
     const diffFile: DiffFile = {
       id: `struct-${index}`,
       oldPath: file.status === "added" ? null : file.file,

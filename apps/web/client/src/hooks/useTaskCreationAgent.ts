@@ -15,6 +15,7 @@ import {
   getOpencodeEventStreamUrl,
   getTaskCreationSession,
   listOsacMessages,
+  resolveTaskCreationSessionTitle,
   startTaskCreationRuntime,
   touchTaskCreationRuntime,
   type TaskCreationHistoryMessage,
@@ -99,6 +100,73 @@ export function buildPendingSandboxPromptDispatchKey(
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+const WEAK_INTENT_TITLE_INPUTS = new Set([
+  '你好',
+  '您好',
+  '嗨',
+  'hi',
+  'hello',
+  'hey',
+  '在吗',
+  '有人吗',
+  'help',
+  '帮我一下',
+  '开始',
+  '继续',
+  'ok',
+  'okay',
+  '好的',
+  '收到',
+  '1',
+  '？',
+  '?',
+]);
+
+function normalizeSessionTitleInput(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function toComparableSessionTitleInput(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[，。、“”"'!！?？,.；;:：()\[\]{}<>《》【】\-_`~]/g, '')
+    .replace(/\s+/g, '');
+}
+
+function shouldAttemptSessionTitleResolve(value: string): boolean {
+  const normalized = normalizeSessionTitleInput(value);
+  if (!normalized) return false;
+  const comparable = toComparableSessionTitleInput(normalized);
+  if (!comparable || WEAK_INTENT_TITLE_INPUTS.has(comparable) || comparable.length <= 2) {
+    return false;
+  }
+  if (normalized.length >= 12) return true;
+  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
+    normalized
+  );
+}
+
+function dispatchTaskCreationSessionUpdated(detail: {
+  sessionId: string;
+  title?: string;
+  status?: string;
+}) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent('task-creation-session-updated', {
+        detail: {
+          sessionId: detail.sessionId,
+          ...(detail.title ? { title: detail.title } : {}),
+          ...(detail.status ? { status: detail.status } : {}),
+        },
+      })
+    );
+  } catch {
+    // ignore dispatch failures
+  }
 }
 
 function pickOsacMessageText(message: OsacMessageRecord | null): string | null {
@@ -2531,27 +2599,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           resolveAgentMessageKey(message);
         console.log('[TaskCreationAgent] 收到消息:', message);
         const altusMode = readAltusMode();
-        const dispatchSessionUpdated = (
-          targetSessionId: string,
-          detail?: {
-            title?: string;
-            status?: string;
-          }
-        ) => {
-          try {
-            window.dispatchEvent(
-              new CustomEvent('task-creation-session-updated', {
-                detail: {
-                  sessionId: targetSessionId,
-                  ...(detail?.title ? { title: detail.title } : {}),
-                  ...(detail?.status ? { status: detail.status } : {}),
-                },
-              })
-            );
-          } catch {
-            // ignore dispatch failures
-          }
-        };
       if (message.type === 'error') {
         const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
         if (!shouldDisplayErrorText(errorText)) {
@@ -2600,7 +2647,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             startRuntimeOnNextSessionRef.current = false;
             void ensureRuntimeRef.current(messageSessionId);
           }
-          dispatchSessionUpdated(messageSessionId, {
+          dispatchTaskCreationSessionUpdated({
+            sessionId: messageSessionId,
             status: nextStatus,
           });
         }
@@ -2628,7 +2676,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           if (messageSessionId) {
             window.setTimeout(() => {
               const terminalStatus = resolveRealtimeSessionStatus(message);
-              dispatchSessionUpdated(messageSessionId, {
+              dispatchTaskCreationSessionUpdated({
+                sessionId: messageSessionId,
                 status:
                   terminalStatus === 'completed'
                     ? 'completed'
@@ -3383,6 +3432,21 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       )
     );
 
+    if (targetSessionId && shouldAttemptSessionTitleResolve(input)) {
+      void resolveTaskCreationSessionTitle(targetSessionId, input)
+        .then((result) => {
+          if (result?.resolved && typeof result.title === 'string' && result.title.trim()) {
+            dispatchTaskCreationSessionUpdated({
+              sessionId: targetSessionId,
+              title: result.title.trim(),
+            });
+          }
+        })
+        .catch((error) => {
+          console.warn('[TaskCreationAgent] managed title resolve failed:', error);
+        });
+    }
+
     sendOrQueueMessage({
       type: 'user_input',
       content: input,
@@ -3432,7 +3496,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         try {
           await createTaskCreationSession({
             sessionId: activeSessionId,
-            title: text.slice(0, 80),
             mode: 'sandbox',
             executor,
             ...(executor === 'codex'
@@ -3443,18 +3506,23 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
                 }),
           });
           prePersistedUserInput = executor !== 'codex';
-          try {
-            window.dispatchEvent(
-              new CustomEvent('task-creation-session-updated', {
-                detail: {
+          dispatchTaskCreationSessionUpdated({
+            sessionId: activeSessionId,
+            status: 'in_progress',
+          });
+          if (shouldAttemptSessionTitleResolve(text)) {
+            try {
+              const resolved = await resolveTaskCreationSessionTitle(activeSessionId, text);
+              if (resolved?.resolved && typeof resolved.title === 'string' && resolved.title.trim()) {
+                dispatchTaskCreationSessionUpdated({
                   sessionId: activeSessionId,
-                  title: text.slice(0, 80),
+                  title: resolved.title.trim(),
                   status: 'in_progress',
-                },
-              })
-            );
-          } catch {
-            // ignore dispatch failures
+                });
+              }
+            } catch (error) {
+              console.warn('[TaskCreationAgent] sandbox title resolve failed:', error);
+            }
           }
         } catch (error) {
           console.warn('[TaskCreationAgent] 预创建会话失败，继续走 WS 发送:', error);
@@ -3605,10 +3673,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setPendingSandboxPrompt,
   ]);
 
-  const ensureSession = useCallback(async (title?: string) => {
+  const ensureSession = useCallback(async (_title?: string) => {
     const existing = (sessionId || '').trim();
     if (existing) return existing;
-    const created = await createTaskCreationDraftSession(title);
+    const created = await createTaskCreationDraftSession();
     const nextSessionId = (created.id || '').trim();
     if (!nextSessionId) {
       throw new Error('draft session id missing');

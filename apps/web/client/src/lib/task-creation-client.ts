@@ -53,6 +53,11 @@ export type TaskCreationRuntimeStatus = {
   provider?: string;
   updatedAt?: string;
   sandboxId?: string;
+  codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";
+  codexRestoreAt?: string;
+  codexRestoreSourceKey?: string;
+  previousExecutorSessionId?: string;
+  codexRestoreFailureReason?: string;
 };
 
 export type TaskCreationUploadedAttachment = {
@@ -183,6 +188,11 @@ export type TaskCreationSessionDetail = {
     executor?: "opencode" | "claudecode" | "codex";
     executorSessionId?: string;
     opencodeSessionId?: string;
+    codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
     updatedAt?: string;
   };
   runtimeStatus?: TaskCreationRuntimeStatus | null;

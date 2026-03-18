@@ -97,6 +97,17 @@ export class TaskCreationSessionDAO {
       'command',
       'outputPreview',
       'exitCode',
+      'fileChanges',
+      'filePaths',
+      'commandCategory',
+      'targetPath',
+      'approvalText',
+      'approvalOptions',
+      'codexRestoreStatus',
+      'codexRestoreAt',
+      'codexRestoreSourceKey',
+      'previousExecutorSessionId',
+      'codexRestoreFailureReason',
     ]) {
       if (metadata[key] !== undefined) {
         slim[key] = metadata[key];

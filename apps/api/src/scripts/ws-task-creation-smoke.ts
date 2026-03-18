@@ -6,6 +6,7 @@ const wsUrl = process.env.TASK_CREATION_WS_URL || 'ws://localhost:4000/ws/task-c
 const userInput =
   process.env.TASK_CREATION_INPUT || '新建一个 贪吃蛇的html并设计功能，单文件即可';
 const waitMs = Number(process.env.TASK_CREATION_WAIT_MS || 150000);
+const directMode = String(process.env.TASK_CREATION_DIRECT || '').trim() === '1';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,7 +110,20 @@ async function main() {
     }, waitMs);
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'user_input', content: userInput }));
+      ws.send(
+        JSON.stringify(
+          directMode
+            ? {
+                type: 'opencode_input',
+                content: userInput,
+                metadata: {
+                  altusMode: 'sandbox',
+                  executor: 'opencode',
+                },
+              }
+            : { type: 'user_input', content: userInput }
+        )
+      );
     });
 
     ws.on('message', (data) => {
@@ -154,6 +168,13 @@ async function main() {
           clearTimeout(timeout);
           resolve();
         }
+      }
+      if (
+        msg.type === 'opencode_status' &&
+        typeof msg.sessionId === 'string' &&
+        msg.sessionId.trim()
+      ) {
+        sessionId = msg.sessionId.trim();
       }
       const messageOutcome = detectCompletionFromMessage(msg);
       if (messageOutcome === 'failed') {

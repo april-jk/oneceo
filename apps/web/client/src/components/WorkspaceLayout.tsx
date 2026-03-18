@@ -12,25 +12,45 @@ interface WorkspaceLayoutProps {
   children: React.ReactNode;
   selectedProjectId?: string | null;
   onProjectSelect?: (projectId: string | null) => void;
+  fluid?: boolean;
+  lockViewport?: boolean;
 }
 
 export default function WorkspaceLayout({
   children,
   selectedProjectId,
   onProjectSelect,
+  fluid = false,
+  lockViewport = false,
 }: WorkspaceLayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
-    <div className="min-h-screen bg-background">
-      <Sidebar 
-        collapsed={sidebarCollapsed} 
+    <div
+      className={
+        lockViewport
+          ? "h-screen overflow-hidden bg-background"
+          : "min-h-screen bg-background"
+      }
+    >
+      <Sidebar
+        collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         selectedProjectId={selectedProjectId}
         onProjectSelect={onProjectSelect}
       />
-      <main className={`${sidebarCollapsed ? 'ml-20' : 'ml-64'} pt-4 pb-4 min-h-screen transition-all duration-300`}>
-        <div className="container py-0">{children}</div>
+      <main
+        className={`${sidebarCollapsed ? "ml-20" : "ml-64"} pt-4 pb-4 transition-all duration-300 ${lockViewport ? "h-screen overflow-hidden" : "min-h-screen"}`}
+      >
+        <div
+          className={
+            fluid
+              ? `w-full py-0 ${lockViewport ? "h-full overflow-hidden px-3 sm:px-4 lg:px-5" : "px-3 sm:px-4 lg:px-5"}`
+              : "container py-0"
+          }
+        >
+          {children}
+        </div>
       </main>
     </div>
   );

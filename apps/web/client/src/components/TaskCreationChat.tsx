@@ -1,6 +1,6 @@
 /**
  * 任务创建对话组件
- * 
+ *
  * 显示与任务创建智能体的对话流程
  */
 
@@ -9,7 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Loader2, Send, CheckCircle2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useTaskCreationAgent, type AgentMessage } from "@/hooks/useTaskCreationAgent";
+import {
+  useTaskCreationAgent,
+  type AgentMessage,
+} from "@/hooks/useTaskCreationAgent";
 import { motion, AnimatePresence } from "framer-motion";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AttachmentChipList from "@/components/AttachmentChipList";
@@ -27,7 +30,9 @@ interface TaskCreationChatProps {
   initialAttachments?: File[];
 }
 
-function getMessageAttachments(message: AgentMessage): UploadedTaskAttachment[] {
+function getMessageAttachments(
+  message: AgentMessage,
+): UploadedTaskAttachment[] {
   const raw = message?.metadata?.attachments;
   if (!Array.isArray(raw)) return [];
   return raw.filter((item): item is UploadedTaskAttachment => {
@@ -86,24 +91,36 @@ export default function TaskCreationChat({
       if (hasAttachments) {
         targetSessionId = await ensureSession(text || "已添加附件");
         uploadedAttachments = await Promise.all(
-          initialAttachments.map((file) => uploadTaskCreationAttachment(targetSessionId!, file))
+          initialAttachments.map((file) =>
+            uploadTaskCreationAttachment(targetSessionId!, file),
+          ),
         );
       }
 
-      await sendChatInput(appendAttachmentsToPrompt(baseText, uploadedAttachments), {
-        sessionId: targetSessionId,
-        metadata: uploadedAttachments.length
-          ? {
-              attachments: uploadedAttachments,
-              originalInput: text || "已添加附件",
-            }
-          : undefined,
-      });
+      await sendChatInput(
+        appendAttachmentsToPrompt(baseText, uploadedAttachments),
+        {
+          sessionId: targetSessionId,
+          metadata: uploadedAttachments.length
+            ? {
+                attachments: uploadedAttachments,
+                originalInput: text || "已添加附件",
+              }
+            : undefined,
+        },
+      );
     })().catch((error) => {
       console.error("任务创建附件发送失败:", error);
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     });
-  }, [ensureSession, initialAttachments, initialInput, isConnected, sendChatInput, sessionId]);
+  }, [
+    ensureSession,
+    initialAttachments,
+    initialInput,
+    isConnected,
+    sendChatInput,
+    sessionId,
+  ]);
 
   const handleAnswerSubmit = () => {
     if (userAnswer.trim()) {
@@ -113,8 +130,8 @@ export default function TaskCreationChat({
   };
 
   return (
-    <div className="flex flex-col md:flex-row gap-4">
-      <div className="flex-1 space-y-4 min-w-0">
+    <div className="flex h-full min-h-0 flex-col gap-4 md:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
         <div className="flex items-center justify-end gap-2">
           <Button
             type="button"
@@ -127,105 +144,107 @@ export default function TaskCreationChat({
           </Button>
         </div>
 
-        {/* 连接状态 */}
-        {!isConnected && (
-          <Card className="p-4 bg-yellow-50 border-yellow-200">
-            <div className="flex items-center gap-2 text-yellow-800">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-sm">正在连接智能体...</span>
-            </div>
-          </Card>
-        )}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-white shadow-sm">
+          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto overscroll-contain p-4">
+            {!isConnected && (
+              <Card className="border-yellow-200 bg-yellow-50 p-4">
+                <div className="flex items-center gap-2 text-yellow-800">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">正在连接智能体...</span>
+                </div>
+              </Card>
+            )}
 
-        {/* 消息列表 */}
-        <div className="space-y-3 max-h-[400px] overflow-y-auto">
-          <AnimatePresence>
-            {messages.map((message, index) => (
+            <AnimatePresence>
+              {messages.map((message, index) => (
+                <motion.div
+                  key={index}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <MessageCard message={message} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+
+            {isProcessing && !currentQuestion && (
               <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.3 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex items-center gap-2 text-muted-foreground"
               >
-                <MessageCard message={message} />
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-sm">智能体正在处理...</span>
               </motion.div>
-            ))}
-          </AnimatePresence>
+            )}
+          </div>
 
-          {/* 处理中指示器 */}
-          {isProcessing && !currentQuestion && (
+          {currentQuestion && (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-2 text-muted-foreground"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="shrink-0 border-t border-border/70 bg-slate-50/70 p-4"
             >
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-sm">智能体正在处理...</span>
+              <Card className="border-blue-200 bg-blue-50 p-4">
+                <p className="mb-3 text-sm font-medium text-blue-900">
+                  {currentQuestion.question}
+                </p>
+
+                {currentQuestion.options &&
+                currentQuestion.options.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {currentQuestion.options.map((option, index) => (
+                      <Button
+                        key={index}
+                        variant="outline"
+                        className="h-auto py-3 text-sm"
+                        onClick={() => answerQuestion(option)}
+                      >
+                        {option}
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      value={userAnswer}
+                      onChange={(e) => setUserAnswer(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleAnswerSubmit();
+                        }
+                      }}
+                      placeholder="请输入您的回答..."
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={handleAnswerSubmit}
+                      disabled={!userAnswer.trim()}
+                      size="icon"
+                    >
+                      <Send className="w-4 h-4" />
+                    </Button>
+                  </div>
+                )}
+              </Card>
             </motion.div>
           )}
         </div>
-
-        {/* 澄清问题输入 */}
-        {currentQuestion && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-3"
-          >
-            <Card className="p-4 bg-blue-50 border-blue-200">
-              <p className="text-sm font-medium text-blue-900 mb-3">
-                {currentQuestion.question}
-              </p>
-
-              {/* 如果有选项，显示按钮 */}
-              {currentQuestion.options && currentQuestion.options.length > 0 ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {currentQuestion.options.map((option, index) => (
-                    <Button
-                      key={index}
-                      variant="outline"
-                      className="h-auto py-3 text-sm"
-                      onClick={() => answerQuestion(option)}
-                    >
-                      {option}
-                    </Button>
-                  ))}
-                </div>
-              ) : (
-                // 否则显示输入框
-                <div className="flex gap-2">
-                  <Input
-                    value={userAnswer}
-                    onChange={(e) => setUserAnswer(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        handleAnswerSubmit();
-                      }
-                    }}
-                    placeholder="请输入您的回答..."
-                    className="flex-1"
-                  />
-                  <Button
-                    onClick={handleAnswerSubmit}
-                    disabled={!userAnswer.trim()}
-                    size="icon"
-                  >
-                    <Send className="w-4 h-4" />
-                  </Button>
-                </div>
-              )}
-            </Card>
-          </motion.div>
-        )}
       </div>
 
-      <OpencodePreviewPanel
-        messages={messages}
-        sessionId={sessionId}
-        open={previewOpen}
-        onToggle={() => setPreviewOpen(false)}
-      />
+      {previewOpen ? (
+        <div className="min-h-0 min-w-0 md:w-[min(44%,32rem)] md:min-w-[20rem]">
+          <OpencodePreviewPanel
+            messages={messages}
+            sessionId={sessionId}
+            open={previewOpen}
+            onToggle={() => setPreviewOpen(false)}
+            className="h-full min-h-0"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -295,7 +314,9 @@ function MessageCard({ message }: { message: AgentMessage }) {
           <p className="text-sm font-medium text-foreground">
             {getAgentName(message.agent)}
           </p>
-          <p className="text-sm text-muted-foreground mt-1">{message.content}</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {message.content}
+          </p>
           {attachments.length ? (
             <AttachmentChipList attachments={attachments} className="mt-3" />
           ) : null}

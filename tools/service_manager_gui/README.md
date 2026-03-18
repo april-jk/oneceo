@@ -13,6 +13,10 @@ macOS GUI tool for starting, stopping, restarting, and inspecting the local OneC
 - Show per-service retry policy hints for timeout/failure handling
 - Include a bottom log panel that tails the selected service log file
 - Prioritize button actions over background polling; service actions can force-release the target port when needed
+- Split refresh work and user-triggered actions into separate thread pools so auto-refresh does not block button operations
+- Probe service status in parallel and discard stale refresh payloads before they overwrite newer UI state
+- Treat start/stop/restart/kill-port buttons as non-blocking command dispatch; the UI no longer waits with disabled controls
+- Disable automatic log polling by default and rely on manual refresh plus post-action refresh to reduce UI contention
 
 ## Run From Source
 

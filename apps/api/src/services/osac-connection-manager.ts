@@ -37,6 +37,10 @@ function isFixedSessionMode(): boolean {
   return toBool(process.env.OSAC_USE_FIXED_SANDBOX_SESSION, false);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class OsacConnectionManager {
   private connections = new Map<string, ConnectionEntry>();
   private messageBuffers = new Map<string, OsacMessage[]>();
@@ -210,13 +214,30 @@ export class OsacConnectionManager {
     }
 
     const probe = (async () => {
-      await entry.handle.request(
-        {
-          type: 'GET_SESSION_LIST',
-          payload: { maxCount: 1, format: 'json' },
-        },
-        (message) => message.type === 'SESSION_LIST_RESPONSE'
-      );
+      const maxAttempts = Math.max(2, Number(process.env.OSAC_BRIDGE_READY_ATTEMPTS || 3));
+      const delayMs = Math.max(150, Number(process.env.OSAC_BRIDGE_READY_DELAY_MS || 600));
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await entry.handle.request(
+            {
+              type: 'GET_SESSION_LIST',
+              payload: { maxCount: 1, format: 'json' },
+            },
+            (message) => message.type === 'SESSION_LIST_RESPONSE'
+          );
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt >= maxAttempts) {
+            break;
+          }
+          await sleep(delayMs);
+        }
+      }
+
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
     })();
 
     this.bridgeReady.set(sessionId, probe);
@@ -572,6 +593,7 @@ export class OsacConnectionManager {
     const messageType = typeof message?.type === 'string' ? message.type.toLowerCase() : 'unknown';
     const shouldCountAsActivity =
       messageType.startsWith('opencode_') ||
+      messageType.startsWith('executor_') ||
       messageType.startsWith('command_') ||
       messageType.startsWith('sandbox_webhook');
     if (shouldCountAsActivity) {

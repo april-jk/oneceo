@@ -43,9 +43,9 @@ import {
   Crown,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { useTranslation } from 'react-i18next';
-import React from 'react';
-import { listTaskCreationSessions } from '@/lib/task-creation-client';
+import { useTranslation } from "react-i18next";
+import React from "react";
+import { listTaskCreationSessions } from "@/lib/task-creation-client";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface SidebarProps {
@@ -56,7 +56,13 @@ interface SidebarProps {
   onProjectSelect?: (projectId: string | null) => void;
 }
 
-export default function Sidebar({ className = "", collapsed = false, onToggleCollapse, selectedProjectId, onProjectSelect }: SidebarProps) {
+export default function Sidebar({
+  className = "",
+  collapsed = false,
+  onToggleCollapse,
+  selectedProjectId,
+  onProjectSelect,
+}: SidebarProps) {
   const SESSION_PREVIEW_COUNT = 3;
   const [location, setLocation] = useLocation();
   const { t } = useTranslation();
@@ -64,11 +70,14 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
-  const [sessionTasks, setSessionTasks] = React.useState<Array<{
-    sessionId: string;
-    title: string;
-    status: string;
-  }>>([]);
+  const [sessionTasks, setSessionTasks] = React.useState<
+    Array<{
+      sessionId: string;
+      title: string;
+      status: string;
+      updatedAt?: string;
+    }>
+  >([]);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const LIST_POLL_MS = 30000;
@@ -78,18 +87,35 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
     const load = async (force = false) => {
       if (disposed) return;
       if (listLoadingRef.current) return;
-      if (!force && document.visibilityState !== 'visible') return;
+      if (!force && document.visibilityState !== "visible") return;
       const now = Date.now();
       if (!force && now - lastListFetchRef.current < 3000) return;
       listLoadingRef.current = true;
       try {
-        const list = await listTaskCreationSessions('all');
+        const list = await listTaskCreationSessions("all");
         if (disposed) return;
-        const mapped = list.map((session: any) => ({
-          sessionId: session.id,
-          title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
-          status: session.status || "in_progress",
-        }));
+        const mapped = list
+          .map((session: any, index: number) => ({
+            sessionId: session.id,
+            title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+            status: session.status || "in_progress",
+            updatedAt:
+              typeof session.updatedAt === "string" && session.updatedAt.trim()
+                ? session.updatedAt
+                : undefined,
+            originalIndex: index,
+          }))
+          .sort((left, right) => {
+            const leftTime = Date.parse(left.updatedAt || "");
+            const rightTime = Date.parse(right.updatedAt || "");
+            const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+            const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+            if (safeRightTime !== safeLeftTime) {
+              return safeRightTime - safeLeftTime;
+            }
+            return left.originalIndex - right.originalIndex;
+          })
+          .map(({ originalIndex, ...session }) => session);
         setSessionTasks(mapped);
         lastListFetchRef.current = Date.now();
       } catch {
@@ -99,49 +125,108 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       }
     };
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === "visible") {
         void load(true);
       }
     };
-    const onSessionUpdated = () => {
+    const onSessionUpdated = (event: Event) => {
+      const detail =
+        event instanceof CustomEvent &&
+        event.detail &&
+        typeof event.detail === "object"
+          ? (event.detail as {
+              sessionId?: string;
+              title?: string;
+              status?: string;
+            })
+          : null;
+      const patchedSessionId =
+        typeof detail?.sessionId === "string" && detail.sessionId.trim()
+          ? detail.sessionId.trim()
+          : "";
+      const patchedTitle =
+        typeof detail?.title === "string" && detail.title.trim()
+          ? detail.title.trim()
+          : "";
+      const patchedStatus =
+        typeof detail?.status === "string" && detail.status.trim()
+          ? detail.status.trim()
+          : "";
+      if (patchedSessionId) {
+        setSessionTasks((prev) => {
+          const nowIso = new Date().toISOString();
+          const index = prev.findIndex(
+            (session) => session.sessionId === patchedSessionId,
+          );
+          if (index >= 0) {
+            const next = [...prev];
+            const current = next[index];
+            next[index] = {
+              ...current,
+              title: patchedTitle || current.title,
+              status: patchedStatus || current.status,
+              updatedAt: nowIso,
+            };
+            return next;
+          }
+          if (patchedTitle) {
+            return [
+              {
+                sessionId: patchedSessionId,
+                title: patchedTitle,
+                status: patchedStatus || "in_progress",
+                updatedAt: nowIso,
+              },
+              ...prev,
+            ];
+          }
+          return prev;
+        });
+      }
       void load(true);
+      window.setTimeout(() => {
+        void load(true);
+      }, 4000);
     };
     void load(true);
     const timer = window.setInterval(() => {
       void load(false);
     }, LIST_POLL_MS);
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('task-creation-session-updated', onSessionUpdated);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("task-creation-session-updated", onSessionUpdated);
     return () => {
       disposed = true;
       window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('task-creation-session-updated', onSessionUpdated);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener(
+        "task-creation-session-updated",
+        onSessionUpdated,
+      );
     };
   }, []);
 
   const toggleProject = (projectId: string) => {
-    setExpandedProjects(prev => 
-      prev.includes(projectId) 
-        ? prev.filter(id => id !== projectId)
-        : [...prev, projectId]
+    setExpandedProjects((prev) =>
+      prev.includes(projectId)
+        ? prev.filter((id) => id !== projectId)
+        : [...prev, projectId],
     );
   };
 
   const toggleManager = (managerId: string) => {
-    setExpandedManagers(prev => 
-      prev.includes(managerId) 
-        ? prev.filter(id => id !== managerId)
-        : [...prev, managerId]
+    setExpandedManagers((prev) =>
+      prev.includes(managerId)
+        ? prev.filter((id) => id !== managerId)
+        : [...prev, managerId],
     );
   };
 
   const navItems = [
-    { icon: PlusCircle, label: t('sidebar.newTask'), href: "/new-task" },
-    { icon: Search, label: t('sidebar.search'), href: "/search" },
-    { icon: Library, label: t('sidebar.library'), href: "/library" },
-    { icon: FolderOpen, label: t('sidebar.projects'), href: "/projects" },
-    { icon: Network, label: t('sidebar.ceoView'), href: "/ceo-view" },
+    { icon: PlusCircle, label: t("sidebar.newTask"), href: "/new-task" },
+    { icon: Search, label: t("sidebar.search"), href: "/search" },
+    { icon: Library, label: t("sidebar.library"), href: "/library" },
+    { icon: FolderOpen, label: t("sidebar.projects"), href: "/projects" },
+    { icon: Network, label: t("sidebar.ceoView"), href: "/ceo-view" },
   ];
 
   const projectsData = [
@@ -156,17 +241,15 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           tasks: [
             { id: "t1", name: "API 设计与实现", status: "in_progress" },
             { id: "t2", name: "数据库优化", status: "completed" },
-          ]
+          ],
         },
         {
           id: "m2",
           name: "运营经理",
           type: "operations",
-          tasks: [
-            { id: "t3", name: "用户增长策略", status: "in_progress" },
-          ]
-        }
-      ]
+          tasks: [{ id: "t3", name: "用户增长策略", status: "in_progress" }],
+        },
+      ],
     },
     {
       id: "2",
@@ -176,30 +259,53 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
           id: "m3",
           name: "设计经理",
           type: "design",
-          tasks: [
-            { id: "t4", name: "UI/UX 设计", status: "in_progress" },
-          ]
-        }
-      ]
+          tasks: [{ id: "t4", name: "UI/UX 设计", status: "in_progress" }],
+        },
+      ],
     },
     {
       id: "3",
       name: "voiceClone",
-      managers: []
+      managers: [],
     },
     {
       id: "4",
       name: "AI员工",
-      managers: []
+      managers: [],
     },
     {
       id: "5",
       name: "opencode相关",
-      managers: []
+      managers: [],
     },
   ];
-  const sessionPreviewList = sessionTasks.slice(0, SESSION_PREVIEW_COUNT);
-  const hiddenSessionCount = Math.max(sessionTasks.length - SESSION_PREVIEW_COUNT, 0);
+  const activeSessionId = React.useMemo(() => {
+    const matched = location.match(/^\/session\/([^/?]+)/);
+    return matched?.[1] || null;
+  }, [location]);
+  const orderedSessionTasks = React.useMemo(() => {
+    if (!activeSessionId) {
+      return sessionTasks;
+    }
+    const activeIndex = sessionTasks.findIndex(
+      (session) => session.sessionId === activeSessionId,
+    );
+    if (activeIndex <= 0) {
+      return sessionTasks;
+    }
+    const next = [...sessionTasks];
+    const [activeSession] = next.splice(activeIndex, 1);
+    next.unshift(activeSession);
+    return next;
+  }, [activeSessionId, sessionTasks]);
+  const sessionPreviewList = orderedSessionTasks.slice(
+    0,
+    SESSION_PREVIEW_COUNT,
+  );
+  const hiddenSessionCount = Math.max(
+    orderedSessionTasks.length - SESSION_PREVIEW_COUNT,
+    0,
+  );
   const hasSessionOverflow = hiddenSessionCount > 0;
   const formatSessionStatus = (status: string) => {
     if (status === "completed") return "完成";
@@ -209,19 +315,19 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
   return (
     <aside
-      className={`fixed left-4 top-4 bottom-4 ${collapsed ? 'w-16' : 'w-60'} bg-sidebar border border-sidebar-border flex flex-col shadow-lg rounded-3xl backdrop-blur-sm transition-all duration-300 ${className}`}
+      className={`fixed left-4 top-4 bottom-4 ${collapsed ? "w-16" : "w-60"} overflow-hidden bg-sidebar border border-sidebar-border flex flex-col shadow-lg rounded-3xl backdrop-blur-sm transition-all duration-300 ${className}`}
     >
       {/* Logo */}
-      <div className={`h-14 flex items-center ${collapsed ? "px-3 justify-center" : "px-4 justify-between"} border-b border-sidebar-border relative`}>
-        <Link href="/">
-          <div className={`flex items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer shrink-0`}>
-            <img 
-              src="/logo.png"
-              alt="oneceo"
-              className="w-8 h-8 rounded-xl"
-            />
+      <div
+        className={`h-14 flex items-center ${collapsed ? "px-3 justify-center" : "px-4 justify-between"} border-b border-sidebar-border relative`}
+      >
+        <Link href="/" className="min-w-0 flex-1">
+          <div
+            className={`flex min-w-0 items-center ${collapsed ? "justify-center" : "gap-2"} cursor-pointer`}
+          >
+            <img src="/logo.png" alt="oneceo" className="w-8 h-8 rounded-xl" />
             {!collapsed && (
-              <span className="font-semibold text-sidebar-foreground text-base">
+              <span className="truncate font-semibold text-sidebar-foreground text-base">
                 oneceo
               </span>
             )}
@@ -245,7 +351,9 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
 
       {/* Navigation */}
       <ScrollArea className="flex-1">
-        <div className={`p-3 space-y-1 ${collapsed ? "items-center" : ""}`}>
+        <div
+          className={`space-y-1 p-2.5 ${collapsed ? "items-center" : "pr-3"}`}
+        >
           {navItems.map((item, index) => {
             const Icon = item.icon;
             const isActive = location === item.href;
@@ -260,16 +368,20 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                     isNewTask
                       ? "bg-foreground hover:bg-foreground/90 text-background"
                       : isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                  }`}
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                  } ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
                   onClick={() => {
                     setLocation(`/new-task?new=${Date.now()}`);
                     onProjectSelect?.(null);
                   }}
                 >
                   <Icon className="w-4 h-4" />
-                  {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
+                  {!collapsed && (
+                    <span className="min-w-0 truncate text-sm font-medium">
+                      {item.label}
+                    </span>
+                  )}
                 </Button>
               );
             }
@@ -282,12 +394,16 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                     isNewTask
                       ? "bg-foreground hover:bg-foreground/90 text-background"
                       : isActive
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                  }`}
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                  } ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
                 >
                   <Icon className="w-4 h-4" />
-                  {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
+                  {!collapsed && (
+                    <span className="min-w-0 truncate text-sm font-medium">
+                      {item.label}
+                    </span>
+                  )}
                 </Button>
               </Link>
             );
@@ -297,164 +413,196 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
         {!collapsed && <Separator className="my-3 bg-sidebar-border" />}
 
         {/* Projects Section */}
-        {!collapsed && <div className="px-3 pb-3">
-          <div className="flex items-center justify-between mb-2 px-3">
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              {t('sidebar.projects').toUpperCase()}
-            </span>
-            <Button variant="ghost" size="icon" className="h-6 w-6">
-              <PlusCircle className="w-4 h-4" />
-            </Button>
-          </div>
-          <div className="space-y-1">
-            {projectsData.map((project) => {
-              const isExpanded = expandedProjects.includes(project.id);
-              return (
-                <div key={project.id} className="space-y-0.5">
-                  {/* Project */}
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0"
-                      onClick={() => toggleProject(project.id)}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown className="w-3.5 h-3.5" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="flex-1 min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                      onClick={() => onProjectSelect?.(project.id)}
-                    >
-                      <FolderOpen className="w-3.5 h-3.5" />
-                      <span className="text-sm truncate min-w-0">{project.name}</span>
-                    </Button>
-                  </div>
-
-                  {/* Managers */}
-                  {isExpanded && project.managers.length > 0 && (
-                    <div className="ml-7 space-y-0.5">
-                      {project.managers.map((manager) => {
-                        const isManagerExpanded = expandedManagers.includes(manager.id);
-                        return (
-                          <div key={manager.id} className="space-y-0.5">
-                            {/* Manager */}
-                            <div className="flex items-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 shrink-0"
-                                onClick={() => toggleManager(manager.id)}
-                              >
-                                {isManagerExpanded ? (
-                                  <ChevronDown className="w-3 h-3" />
-                                ) : (
-                                  <ChevronRight className="w-3 h-3" />
-                                )}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                className="flex-1 min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                              >
-                                <User className="w-3 h-3" />
-                                <span className="text-xs truncate min-w-0">{manager.name}</span>
-                              </Button>
-                            </div>
-
-                            {/* Tasks */}
-                            {isManagerExpanded && manager.tasks.length > 0 && (
-                              <div className="ml-6 space-y-0.5">
-                                {manager.tasks.map((task: any) => (
-                                  <Link key={task.id} href={`/task/${project.id}/${manager.id}/${task.id}`}>
-                                    <Button
-                                      variant="ghost"
-                                      className="w-full min-w-0 justify-start gap-2 h-6 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                                    >
-                                      <CheckCircle2 className={`w-3 h-3 ${task.status === 'completed' ? 'text-green-500' : 'text-muted-foreground'}`} />
-                                      <span className="text-xs truncate min-w-0">{task.name}</span>
-                                    </Button>
-                                  </Link>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {hasSessionOverflow && (
-            <Button
-              variant="ghost"
-              className="w-full justify-start gap-2 h-8 px-3 mt-1 text-muted-foreground hover:text-sidebar-foreground"
-              onClick={() => setTasksDialogOpen(true)}
-            >
-              <span className="text-sm">
-                {t('sidebar.viewMore')} ({hiddenSessionCount})
+        {!collapsed && (
+          <div className="px-2.5 pb-2.5 pr-3">
+            <div className="mb-2 flex min-w-0 items-center justify-between gap-2 px-3">
+              <span className="truncate text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                {t("sidebar.projects").toUpperCase()}
               </span>
-            </Button>
-          )}
-
-          {sessionTasks.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {sessionPreviewList.map((session) => (
-                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
-                  <Button
-                    variant="ghost"
-                    className="w-full min-w-0 justify-start gap-2 h-7 px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                  >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span className="text-xs truncate flex-1 min-w-0 text-left">{session.title}</span>
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {formatSessionStatus(session.status)}
-                    </span>
-                  </Button>
-                </Link>
-              ))}
+              <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
+                <PlusCircle className="w-4 h-4" />
+              </Button>
             </div>
-          )}
-        </div>}
+            <div className="space-y-1">
+              {projectsData.map((project) => {
+                const isExpanded = expandedProjects.includes(project.id);
+                return (
+                  <div key={project.id} className="space-y-0.5">
+                    {/* Project */}
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => toggleProject(project.id)}
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="flex-1 min-w-0 justify-start gap-2 h-7 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                        onClick={() => onProjectSelect?.(project.id)}
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span className="text-sm truncate min-w-0">
+                          {project.name}
+                        </span>
+                      </Button>
+                    </div>
+
+                    {/* Managers */}
+                    {isExpanded && project.managers.length > 0 && (
+                      <div className="ml-7 space-y-0.5">
+                        {project.managers.map((manager) => {
+                          const isManagerExpanded = expandedManagers.includes(
+                            manager.id,
+                          );
+                          return (
+                            <div key={manager.id} className="space-y-0.5">
+                              {/* Manager */}
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 shrink-0"
+                                  onClick={() => toggleManager(manager.id)}
+                                >
+                                  {isManagerExpanded ? (
+                                    <ChevronDown className="w-3 h-3" />
+                                  ) : (
+                                    <ChevronRight className="w-3 h-3" />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  className="flex-1 min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                >
+                                  <User className="w-3 h-3" />
+                                  <span className="text-xs truncate min-w-0">
+                                    {manager.name}
+                                  </span>
+                                </Button>
+                              </div>
+
+                              {/* Tasks */}
+                              {isManagerExpanded &&
+                                manager.tasks.length > 0 && (
+                                  <div className="ml-6 space-y-0.5">
+                                    {manager.tasks.map((task: any) => (
+                                      <Link
+                                        key={task.id}
+                                        href={`/task/${project.id}/${manager.id}/${task.id}`}
+                                      >
+                                        <Button
+                                          variant="ghost"
+                                          className="w-full min-w-0 justify-start gap-2 h-6 overflow-hidden px-2 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                                        >
+                                          <CheckCircle2
+                                            className={`w-3 h-3 ${task.status === "completed" ? "text-green-500" : "text-muted-foreground"}`}
+                                          />
+                                          <span className="text-xs truncate min-w-0">
+                                            {task.name}
+                                          </span>
+                                        </Button>
+                                      </Link>
+                                    ))}
+                                  </div>
+                                )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {hasSessionOverflow && (
+              <Button
+                variant="ghost"
+                className="mt-1 h-8 w-full min-w-0 justify-start gap-2 overflow-hidden px-3 text-muted-foreground hover:text-sidebar-foreground"
+                onClick={() => setTasksDialogOpen(true)}
+              >
+                <span className="truncate text-sm">
+                  {t("sidebar.viewMore")} ({hiddenSessionCount})
+                </span>
+              </Button>
+            )}
+
+            {sessionTasks.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {sessionPreviewList.map((session) => (
+                  <Link
+                    key={session.sessionId}
+                    href={`/session/${session.sessionId}?view=history`}
+                  >
+                    <Button
+                      variant="ghost"
+                      className="grid h-7 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      <span className="text-xs truncate flex-1 min-w-0 text-left">
+                        {session.title}
+                      </span>
+                      <span className="w-9 truncate text-right text-[10px] text-muted-foreground">
+                        {formatSessionStatus(session.status)}
+                      </span>
+                    </Button>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {!collapsed && <Separator className="my-3 bg-sidebar-border" />}
 
         {/* All Tasks */}
-        {!collapsed && <div className="px-3 pb-3">
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-3 h-9 px-3 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-            onClick={() => setTasksDialogOpen(true)}
-          >
-            <FileText className="w-4 h-4" />
-            <span className="text-sm font-medium">{t('sidebar.allTasks')}</span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {sessionTasks.length}
-            </span>
-          </Button>
-        </div>}
+        {!collapsed && (
+          <div className="px-2.5 pb-2.5 pr-3">
+            <Button
+              variant="ghost"
+              className="grid h-9 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-hidden rounded-xl px-3 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
+              onClick={() => setTasksDialogOpen(true)}
+            >
+              <FileText className="h-4 w-4" />
+              <span className="truncate text-sm font-medium text-left">
+                {t("sidebar.allTasks")}
+              </span>
+              <span className="truncate text-right text-xs text-muted-foreground">
+                {orderedSessionTasks.length}
+              </span>
+            </Button>
+          </div>
+        )}
       </ScrollArea>
 
       {/* Bottom Section */}
       <div
-        className="border-t border-sidebar-border p-3"
+        className="border-t border-sidebar-border p-2.5"
         onMouseEnter={() => setSettingsMenuOpen(true)}
         onMouseLeave={() => setSettingsMenuOpen(false)}
       >
-        <DropdownMenu open={settingsMenuOpen} onOpenChange={setSettingsMenuOpen}>
+        <DropdownMenu
+          open={settingsMenuOpen}
+          onOpenChange={setSettingsMenuOpen}
+        >
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150`}
+              className={`w-full ${collapsed ? "justify-center px-0" : "justify-start gap-3 px-3"} h-9 rounded-xl text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150 ${collapsed ? "" : "min-w-0 overflow-hidden"}`}
               onClick={() => openSettingsDialog({ tab: "settings" })}
             >
               <Settings className="w-4 h-4" />
-              {!collapsed && <span className="text-sm font-medium">{t('sidebar.settings')}</span>}
+              {!collapsed && (
+                <span className="min-w-0 truncate text-sm font-medium">
+                  {t("sidebar.settings")}
+                </span>
+              )}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -481,13 +629,19 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <Coins className="w-4 h-4 text-amber-500" />
-                    <span className="text-sm font-medium text-foreground">Credits</span>
+                    <span className="text-sm font-medium text-foreground">
+                      Credits
+                    </span>
                   </div>
-                  <span className="text-sm font-bold text-foreground">13,639</span>
+                  <span className="text-sm font-bold text-foreground">
+                    13,639
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Crown className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs text-muted-foreground">Pro Member</span>
+                  <span className="text-xs text-muted-foreground">
+                    Pro Member
+                  </span>
                 </div>
               </div>
             </div>
@@ -511,28 +665,33 @@ export default function Sidebar({ className = "", collapsed = false, onToggleCol
       <Dialog open={tasksDialogOpen} onOpenChange={setTasksDialogOpen}>
         <DialogContent className="max-w-2xl p-0 gap-0 flex flex-col h-[80vh] max-h-[80vh] min-h-[420px] overflow-hidden">
           <DialogHeader className="px-6 pt-6 pb-4 border-b">
-            <DialogTitle>{t('sidebar.allTasks')}</DialogTitle>
+            <DialogTitle>{t("sidebar.allTasks")}</DialogTitle>
             <DialogDescription>
-              {`共 ${sessionTasks.length} 个任务会话`}
+              {`共 ${orderedSessionTasks.length} 个任务会话`}
             </DialogDescription>
           </DialogHeader>
           <ScrollArea className="flex-1 min-h-0 px-4 py-4 pr-6">
-            {sessionTasks.length === 0 ? (
+            {orderedSessionTasks.length === 0 ? (
               <div className="text-sm text-muted-foreground px-2 py-6 text-center">
                 暂无任务会话
               </div>
             ) : (
               <div className="space-y-2">
-                {sessionTasks.map((session) => (
-                <Link key={session.sessionId} href={`/session/${session.sessionId}?view=history`}>
+                {orderedSessionTasks.map((session) => (
+                  <Link
+                    key={session.sessionId}
+                    href={`/session/${session.sessionId}?view=history`}
+                  >
                     <Button
                       variant="ghost"
-                      className="w-full min-w-0 justify-between h-10 px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+                      className="w-full min-w-0 justify-between h-10 overflow-hidden px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                       onClick={() => setTasksDialogOpen(false)}
                     >
                       <span className="flex items-center gap-2 min-w-0">
                         <FileText className="w-4 h-4 shrink-0" />
-                        <span className="text-sm truncate min-w-0">{session.title}</span>
+                        <span className="text-sm truncate min-w-0">
+                          {session.title}
+                        </span>
                       </span>
                       <span className="text-xs text-muted-foreground shrink-0">
                         {formatSessionStatus(session.status)}

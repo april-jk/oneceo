@@ -28,7 +28,11 @@ export default async function runScenario(ctx: ScenarioContext) {
   const firstOpencodeEventCount = firstMessages.filter((msg) => msg.messageType === 'opencode_event').length;
   const secondOpencodeEventCount = secondMessages.filter((msg) => msg.messageType === 'opencode_event').length;
 
-  const userInputs = secondMessages.filter((msg) => msg.messageType === 'user_input').map((msg) => normalizeText(msg.content));
+  const userInputs = secondMessages
+    .filter(
+      (msg) => msg.messageType === 'user_input' || msg.messageType === 'opencode_user_input'
+    )
+    .map((msg) => normalizeText(msg.content));
 
   assert.ok(firstMessages.length > 0, '首次拉取消息为空');
   assert.ok(secondMessages.length >= firstMessages.length, '二次拉取消息数量不应减少');

@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { ensureDatabaseConnection } from '../config/database';
 import { e2bConfig } from '../config/e2b-config';
+import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
@@ -8,7 +12,13 @@ import {
 import { e2bConnector } from '../connectors/e2b-connector';
 import { opencodeHttpClient } from '../connectors/opencode-http-client';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveCodexArchiveDotCodexPath,
+  resolveCodexArchiveHomePath,
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
@@ -28,6 +38,7 @@ type ProvisionInput = {
   idempotencyKey?: string;
   bind?: Record<string, unknown>;
   requestBaseUrl?: string;
+  executor?: 'opencode' | 'codex' | 'claudecode' | string;
 };
 
 type ProvisionResult = {
@@ -55,15 +66,78 @@ type ProvisionResult = {
   trafficAccessToken?: string | null;
 };
 
+type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode';
+
 function pickString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();
   return null;
 }
 
-async function resolveReusableSandbox(taskSessionId: string) {
+function normalizeProvisionExecutor(value: unknown): ProvisionExecutor {
+  const normalized = pickString(value)?.toLowerCase();
+  if (normalized === 'codex') return 'codex';
+  if (normalized === 'claudecode') return 'claudecode';
+  return 'opencode';
+}
+
+function resolveProvisionTemplate(executor: ProvisionExecutor): string {
+  if (executor === 'codex') {
+    return e2bConfig.codexTemplate;
+  }
+  return e2bConfig.template;
+}
+
+function resolveExecutorRemoteBaseDir(
+  executor: ProvisionExecutor,
+  workspaceRoot?: string | null
+): string {
+  const configured = (osacBootstrapConfig.remoteBaseDir || '').trim();
+  if (executor !== 'codex') {
+    return configured || '/opt/.altus/opencode';
+  }
+
+  if (configured && configured !== '/opt/.altus/opencode') {
+    return configured;
+  }
+
+  const normalizedWorkspace = pickString(workspaceRoot);
+  if (normalizedWorkspace) {
+    const trimmed = normalizedWorkspace.replace(/\/+$/, '');
+    const workspaceMarker = trimmed.indexOf('/workspaces/');
+    if (workspaceMarker > 0) {
+      return trimmed.slice(0, workspaceMarker);
+    }
+    const stateMarker = trimmed.indexOf('/state/');
+    if (stateMarker > 0) {
+      return trimmed.slice(0, stateMarker);
+    }
+    const idx = trimmed.lastIndexOf('/');
+    if (idx > 0) {
+      const parent = trimmed.slice(0, idx);
+      if (parent.endsWith('/workspaces') || parent.endsWith('/state')) {
+        const parentIdx = parent.lastIndexOf('/');
+        if (parentIdx > 0) {
+          return parent.slice(0, parentIdx);
+        }
+      }
+      return parent;
+    }
+  }
+
+  return '/home/user/.altus/opencode';
+}
+
+async function resolveReusableSandbox(taskSessionId: string, executor: ProvisionExecutor) {
   const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
   const orchestratorSessionId = pickString(session?.runtime?.orchestratorSessionId);
   if (!orchestratorSessionId) return null;
+
+  const sessionExecutor = normalizeProvisionExecutor(
+    session?.runtime?.executor || session?.executor || session?.driver
+  );
+  if (sessionExecutor !== executor) {
+    return null;
+  }
 
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   if (!environment || environment.status !== 'ready') return null;
@@ -71,6 +145,12 @@ async function resolveReusableSandbox(taskSessionId: string) {
   const metadata = (environment.metadata || {}) as Record<string, unknown>;
   const boundTaskSessionId = pickString(metadata.taskSessionId);
   if (boundTaskSessionId && boundTaskSessionId !== taskSessionId) {
+    return null;
+  }
+  const sandboxExecutor = normalizeProvisionExecutor(
+    metadata.sandboxExecutor || metadata.executor || session?.runtime?.executor || session?.executor || session?.driver
+  );
+  if (sandboxExecutor !== executor) {
     return null;
   }
 
@@ -84,8 +164,12 @@ function buildSandboxEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   const passthrough = [
     'OPENAI_API_KEY',
+    'CODEX_API_KEY',
     'OPENAI_BASE_URL',
     'OPENAI_API_BASE',
+    'OPENAI_MODEL',
+    'CODEX_BASE_URL',
+    'CODEX_MODEL',
     'ANTHROPIC_API_KEY',
     'GEMINI_API_KEY',
     'OPENCODE_API_KEY',
@@ -98,6 +182,45 @@ function buildSandboxEnv(): Record<string, string> {
     if (value && value.trim()) {
       env[key] = value.trim();
     }
+  }
+  if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) {
+    env.CODEX_API_KEY = env.OPENAI_API_KEY;
+  }
+  if (!env.OPENAI_API_KEY && env.CODEX_API_KEY) {
+    env.OPENAI_API_KEY = env.CODEX_API_KEY;
+  }
+  if (!env.OPENAI_BASE_URL) {
+    if (env.CODEX_BASE_URL) {
+      env.OPENAI_BASE_URL = env.CODEX_BASE_URL;
+    } else if (env.OPENCODE_BASE_URL) {
+      env.OPENAI_BASE_URL = env.OPENCODE_BASE_URL;
+    } else if (env.OPENAI_API_BASE) {
+      env.OPENAI_BASE_URL = env.OPENAI_API_BASE;
+    }
+  }
+  if (!env.OPENAI_API_BASE && env.OPENAI_BASE_URL) {
+    env.OPENAI_API_BASE = env.OPENAI_BASE_URL;
+  }
+  if (!env.CODEX_BASE_URL) {
+    const mirroredBase = env.OPENAI_BASE_URL || env.OPENAI_API_BASE || env.OPENCODE_BASE_URL || '';
+    if (mirroredBase) {
+      env.CODEX_BASE_URL = mirroredBase;
+    }
+  }
+  if (!env.OPENAI_MODEL) {
+    const mirroredModel = env.CODEX_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim();
+    if (mirroredModel) {
+      env.OPENAI_MODEL = mirroredModel;
+    }
+  }
+  if (!env.CODEX_MODEL) {
+    const mirroredModel = env.OPENAI_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim();
+    if (mirroredModel) {
+      env.CODEX_MODEL = mirroredModel;
+    }
+  }
+  if (env.CODEX_BASE_URL && !env.OPENAI_BASE_URL) {
+    env.OPENAI_BASE_URL = env.CODEX_BASE_URL;
   }
   const providerRaw = (process.env.OPENCODE_PROVIDER_ID || '').trim();
   if (providerRaw) {
@@ -114,6 +237,65 @@ function buildSandboxEnv(): Record<string, string> {
   }
   env.XDG_RUNTIME_DIR = '/tmp';
   return env;
+}
+
+async function fileExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveLocalOsacBinaryPath(): Promise<string> {
+  const candidates = [osacBootstrapConfig.osacBinaryPath];
+  const localDistDirs = [
+    path.resolve(process.cwd(), 'OSAC_client/dist'),
+    path.resolve(process.cwd(), '../OSAC_client/dist'),
+    path.resolve(process.cwd(), '../../OSAC_client/dist'),
+  ];
+  for (const localDistDir of localDistDirs) {
+    try {
+      const entries = await fs.readdir(localDistDir);
+      const matched = entries
+        .filter((entry) => /^osac-linux-amd64/.test(entry))
+        .sort()
+        .reverse();
+      for (const entry of matched) {
+        candidates.push(path.join(localDistDir, entry));
+      }
+    } catch {
+      // ignore local dist scan failures for this directory
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
+    if (await fileExists(resolved)) {
+      return resolved;
+    }
+  }
+
+  throw new Error(`OSAC binary not found; checked ${candidates.filter(Boolean).join(', ')}`);
+}
+
+async function resolveE2bPublicHost(sessionId: string, port: number): Promise<string> {
+  const attempts = Math.max(3, Number(process.env.E2B_PUBLIC_HOST_ATTEMPTS || 12));
+  const delayMs = Math.max(250, Number(process.env.E2B_PUBLIC_HOST_DELAY_MS || 1000));
+  let lastError: unknown = null;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await e2bConnector.getSandboxHost(sessionId, port);
+    } catch (error) {
+      lastError = error;
+      if (index + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'sandbox host unavailable'));
 }
 
 type OpencodeConfigPayload = {
@@ -221,10 +403,13 @@ function buildOpencodeConfig(
   const apiKeyEnv =
     (envs.OPENAI_API_KEY && 'OPENAI_API_KEY') || (envs.OPENCODE_API_KEY && 'OPENCODE_API_KEY') || 'OPENAI_API_KEY';
 
+  const resolvedBaseUrl = (envs[baseUrlEnv] || '').trim();
+  const resolvedApiKey = (envs[apiKeyEnv] || '').trim();
+
   const providerBase: Record<string, unknown> = {
     options: {
-      baseURL: `{env:${baseUrlEnv}}`,
-      apiKey: `{env:${apiKeyEnv}}`,
+      baseURL: resolvedBaseUrl || `{env:${baseUrlEnv}}`,
+      apiKey: resolvedApiKey || `{env:${apiKeyEnv}}`,
     },
     models: {
       [modelId]: {
@@ -267,25 +452,225 @@ async function writeOpencodeConfig(
   const config = buildOpencodeConfig(envs, extraMcpEntries);
   const configDir = '$HOME/.config/opencode';
   const configPath = `${configDir}/opencode.json`;
-  const command = `mkdir -p ${configDir}
-cat <<'EOF' > ${configPath}
-${config}
-EOF`;
+  const commandLines = [
+    `mkdir -p ${configDir}`,
+    `rm -f ${configDir}/opencode.jsonc`,
+    `cat <<'EOF' > ${configPath}`,
+    config,
+    'EOF',
+  ];
+  const command = `${commandLines.join('\n')}
+`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
 }
 
-async function ensureWorkspace(sessionId: string, taskSessionId?: string) {
+async function ensureWorkspaceLayout(sessionId: string, taskSessionId?: string) {
   if (!taskSessionId) return null;
   const workspaceRoot = resolveOpencodeWorkspacePath(taskSessionId);
-  if (!workspaceRoot) return null;
-  const command = `mkdir -p ${shellEscape(workspaceRoot)}`;
-  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
-  return workspaceRoot;
+  const stateRoot = resolveOpencodeStatePath(taskSessionId);
+  if (!workspaceRoot || !stateRoot) return null;
+  const command = `mkdir -p ${shellEscape(workspaceRoot)} ${shellEscape(stateRoot)}`;
+  const maxAttempts = Math.max(3, Number(process.env.E2B_WORKSPACE_PREPARE_ATTEMPTS || 5));
+  const delayMs = Math.max(500, Number(process.env.E2B_WORKSPACE_PREPARE_DELAY_MS || 1500));
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
+      return { workspaceRoot, stateRoot };
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 >= maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return { workspaceRoot, stateRoot };
+}
+
+function resolveCodexArchivePaths(taskSessionId?: string | null, stateRoot?: string | null): {
+  codexArchiveHome: string | null;
+  codexDotCodexPath: string | null;
+} {
+  const safeTaskSessionId = pickString(taskSessionId);
+  if (safeTaskSessionId) {
+    return {
+      codexArchiveHome: resolveCodexArchiveHomePath(safeTaskSessionId),
+      codexDotCodexPath: resolveCodexArchiveDotCodexPath(safeTaskSessionId),
+    };
+  }
+  const normalizedStateRoot = pickString(stateRoot);
+  if (!normalizedStateRoot) {
+    return {
+      codexArchiveHome: null,
+      codexDotCodexPath: null,
+    };
+  }
+  const base = normalizedStateRoot.replace(/\/+$/, '');
+  return {
+    codexArchiveHome: `${base}/codex-home`,
+    codexDotCodexPath: `${base}/codex-home/.codex`,
+  };
+}
+
+async function ensureCodexHomeMapping(
+  sessionId: string,
+  input: {
+    taskSessionId?: string | null;
+    stateRoot?: string | null;
+  }
+): Promise<{ codexArchiveHome: string; codexDotCodexPath: string }> {
+  const { codexArchiveHome, codexDotCodexPath } = resolveCodexArchivePaths(
+    input.taskSessionId,
+    input.stateRoot
+  );
+  if (!codexArchiveHome || !codexDotCodexPath) {
+    throw new Error('missing codex archive home');
+  }
+
+  const command = `
+set -euo pipefail
+archive_home=${shellEscape(codexArchiveHome)}
+archive_codex=${shellEscape(codexDotCodexPath)}
+runtime_codex='/home/user/.codex'
+
+mkdir -p "$archive_home" "$archive_codex"
+mkdir -p "$archive_codex/sessions" "$archive_codex/tmp" "$archive_codex/shell_snapshots"
+
+if [ -L "$runtime_codex" ]; then
+  current_target="$(readlink "$runtime_codex" || true)"
+  if [ "$current_target" = "$archive_codex" ]; then
+    exit 0
+  fi
+fi
+
+if [ -d "$runtime_codex" ] && [ ! -L "$runtime_codex" ]; then
+  cp -a "$runtime_codex"/. "$archive_codex"/ || true
+  rm -rf "$runtime_codex"
+fi
+
+ln -sfn "$archive_codex" "$runtime_codex"
+`;
+  const probeCommand = `
+set -euo pipefail
+archive_codex=${shellEscape(codexDotCodexPath)}
+runtime_codex='/home/user/.codex'
+
+if [ ! -e "$archive_codex" ]; then
+  exit 0
+fi
+if [ -L "$runtime_codex" ]; then
+  current_target="$(readlink "$runtime_codex" || true)"
+  if [ "$current_target" = "$archive_codex" ]; then
+    printf 'READY:%s' "$current_target"
+    exit 0
+  fi
+fi
+exit 0
+`;
+  const attempts = Math.max(2, Number(process.env.CODEX_HOME_MAPPING_ATTEMPTS || 3));
+  const delayMs = Math.max(500, Number(process.env.CODEX_HOME_MAPPING_DELAY_MS || 1200));
+  let lastError: unknown = null;
+  const extractCommandOutput = (value: unknown): string => {
+    if (value && typeof value === 'object') {
+      const result = (value as any).result;
+      const output =
+        String(result?.stdout || result?.output || (value as any).stdout || (value as any).output || '').trim();
+      if (output) return output;
+    }
+    return '';
+  };
+  const runProbe = async (): Promise<boolean> => {
+    try {
+      const probe: any = await e2bConnector.runCommand(sessionId, probeCommand, { timeoutMs: 10_000 });
+      const output = String(probe?.stdout || probe?.output || '').trim();
+      return output.startsWith('READY:');
+    } catch (probeError) {
+      lastError = lastError || probeError;
+      const output = extractCommandOutput(probeError);
+      return output.startsWith('READY:');
+    }
+  };
+
+  if (await runProbe()) {
+    return {
+      codexArchiveHome,
+      codexDotCodexPath,
+    };
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (await runProbe()) {
+      return {
+        codexArchiveHome,
+        codexDotCodexPath,
+      };
+    }
+
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  const lastResult = lastError && typeof lastError === 'object' ? (lastError as any).result : null;
+  const detail = [
+    lastError instanceof Error ? lastError.message : String(lastError || 'codex home mapping failed'),
+    lastResult?.stdout ? `stdout=${String(lastResult.stdout).trim()}` : '',
+    lastResult?.stderr ? `stderr=${String(lastResult.stderr).trim()}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+  throw new Error(detail || 'codex home mapping failed');
 }
 
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function resolveOpencodeDataHome(stateRoot?: string | null): string | null {
+  return pickString(stateRoot);
+}
+
+async function migrateLegacyWorkspaceState(
+  sessionId: string,
+  workspaceRoot?: string | null,
+  stateRoot?: string | null
+) {
+  const normalizedWorkspace = pickString(workspaceRoot);
+  const normalizedState = pickString(stateRoot);
+  const legacyRoot = resolveLegacyOpencodeStatePath(normalizedWorkspace);
+  if (!normalizedWorkspace || !normalizedState || !legacyRoot) {
+    return;
+  }
+
+  const command = `
+set -euo pipefail
+legacy_root=${shellEscape(legacyRoot)}
+state_root=${shellEscape(normalizedState)}
+mkdir -p "$(dirname "$state_root")"
+
+if [[ -d "$legacy_root" ]]; then
+  if [[ -z "$(find "$state_root" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    rm -rf "$state_root"
+    mv "$legacy_root" "$state_root"
+  else
+    rm -rf "$legacy_root"
+  fi
+fi
+
+mkdir -p "$state_root"
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30_000 });
 }
 
 function buildSandboxVerifyScript(): string {
@@ -433,6 +818,15 @@ opencode --version >/dev/null 2>&1 || true
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
 }
 
+async function assertCodexReady(sessionId: string) {
+  const command = `
+set -euo pipefail
+command -v codex >/dev/null 2>&1
+codex --version >/dev/null 2>&1 || true
+`;
+  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+}
+
 async function waitForSandboxCommands(sessionId: string) {
   const maxAttempts = Math.max(5, Number(process.env.E2B_COMMANDS_READY_ATTEMPTS || 10));
   const delayMs = Math.max(500, Number(process.env.E2B_COMMANDS_READY_DELAY_MS || 1000));
@@ -454,6 +848,7 @@ async function startOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
+  stateRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   try {
@@ -463,7 +858,12 @@ async function startOpencodeServer(
     // proceed to start server
   }
 
-  const inlineEnv = Object.entries(envs)
+  const inlineEnv = Object.entries({
+    ...envs,
+    ...(resolveOpencodeDataHome(stateRoot)
+      ? { XDG_DATA_HOME: resolveOpencodeDataHome(stateRoot)! }
+      : {}),
+  })
     .map(([key, value]) => `${key}=${shellEscape(value)}`)
     .join(' ');
   const command = `${inlineEnv} opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1`;
@@ -501,11 +901,133 @@ async function restartOpencodeServer(
   sessionId: string,
   baseUrl: string,
   envs: Record<string, string>,
+  stateRoot?: string | null,
   trafficAccessToken?: string | null
 ) {
   await stopOpencodeServer(sessionId);
   await new Promise((resolve) => setTimeout(resolve, 500));
-  await startOpencodeServer(sessionId, baseUrl, envs, trafficAccessToken);
+  await startOpencodeServer(sessionId, baseUrl, envs, stateRoot, trafficAccessToken);
+}
+
+async function ensureOsacBridge(
+  sessionId: string,
+  input: {
+    executor: ProvisionExecutor;
+    workspaceRoot?: string | null;
+    authToken?: string | null;
+  }
+): Promise<{
+  osacEndpoint: string;
+  osacHost: string;
+  osacAuthToken: string;
+  osacRemoteBinary: string;
+}> {
+  const osacBinaryPath = await resolveLocalOsacBinaryPath();
+  const osacBuffer = await fs.readFile(osacBinaryPath);
+  const remoteBaseDir = resolveExecutorRemoteBaseDir(input.executor, input.workspaceRoot);
+  const remoteBinaryName = osacBootstrapConfig.osacBinaryName || 'osac';
+  const remoteBinary = `${remoteBaseDir.replace(/\/+$/, '')}/${remoteBinaryName}`;
+  const osacLogDir = `${remoteBaseDir.replace(/\/+$/, '')}/log`;
+  const osacTmpDir = `${remoteBaseDir.replace(/\/+$/, '')}/tmp`;
+  const osacLockPath = `${remoteBaseDir.replace(/\/+$/, '')}/osac.lock`;
+  const authToken = pickString(input.authToken) || `e2b_${randomUUID().replace(/-/g, '')}`;
+  const workspaceRoot = pickString(input.workspaceRoot) || '';
+
+  await e2bConnector.runCommand(
+    sessionId,
+    `mkdir -p ${shellEscape(remoteBaseDir)} ${shellEscape(osacLogDir)} ${shellEscape(osacTmpDir)}`,
+    { timeoutMs: 30_000 }
+  );
+  await e2bConnector.writeFile(sessionId, remoteBinary, osacBuffer);
+
+  const envParts = [
+    `OSAC_AUTH_TOKEN=${shellEscape(authToken)}`,
+    `OSAC_LISTEN_ADDR=':${osacBootstrapConfig.osacPort}'`,
+    `OSAC_LOG_DIR=${shellEscape(osacLogDir)}`,
+    `OSAC_UPDATE_TMP=${shellEscape(osacTmpDir)}`,
+    `OSAC_INSTANCE_LOCK_PATH=${shellEscape(osacLockPath)}`,
+    `OSAC_CODEX_PATH='codex'`,
+    `OSAC_CODEX_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
+    `OSAC_OPENCODE_PATH='opencode'`,
+    `OSAC_OPENCODE_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
+    `OSAC_LLM_PROXY_ENABLE='false'`,
+  ];
+  const startCommand = `
+set -euo pipefail
+chmod +x ${shellEscape(remoteBinary)}
+pkill -x ${shellEscape(remoteBinaryName)} || true
+rm -f ${shellEscape(osacLockPath)}
+nohup env ${envParts.join(' ')} ${shellEscape(remoteBinary)} >> ${shellEscape(`${osacLogDir}/osac.log`)} 2>&1 < /dev/null &
+sleep 1
+if command -v ss >/dev/null 2>&1; then
+  ss -ltnp | grep -E ':${osacBootstrapConfig.osacPort}\\b' || true
+else
+  netstat -ltnp | grep -E ':${osacBootstrapConfig.osacPort}\\b' || true
+fi
+`;
+  await e2bConnector.runCommand(sessionId, startCommand, { timeoutMs: 30_000 });
+
+  const osacHost = await resolveE2bPublicHost(sessionId, osacBootstrapConfig.osacPort);
+  const protocol = osacHost.startsWith('localhost') || osacHost.startsWith('127.') ? 'ws' : 'wss';
+
+  return {
+    osacEndpoint: `${protocol}://${osacHost}${osacBootstrapConfig.osacPathSuffix}`,
+    osacHost,
+    osacAuthToken: authToken,
+    osacRemoteBinary: remoteBinary,
+  };
+}
+
+async function waitForOsacBridgeReady(input: {
+  endpoint: string;
+  authToken: string;
+}): Promise<void> {
+  const statusUrl = input.endpoint.replace(/^ws/i, 'http').replace(/\/ws$/, '/status');
+  const attempts = Math.max(5, Number(process.env.OSAC_READY_ATTEMPTS || 20));
+  const delayMs = Math.max(250, Number(process.env.OSAC_READY_DELAY_MS || 1000));
+  let lastError: unknown = null;
+
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      const response = await fetch(statusUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${input.authToken}`,
+        },
+      });
+      if (response.ok) {
+        return;
+      }
+      lastError = new Error(`status=${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (index + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError || 'osac bridge not ready'));
+}
+
+async function canReuseOsacBridge(input: {
+  endpoint?: string | null;
+  authToken?: string | null;
+}): Promise<boolean> {
+  const endpoint = pickString(input.endpoint);
+  const authToken = pickString(input.authToken);
+  if (!endpoint || !authToken) {
+    return false;
+  }
+  try {
+    await waitForOsacBridgeReady({ endpoint, authToken });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
@@ -524,8 +1046,15 @@ export class SandboxAgentProvisionService {
       ...baseEnvs,
       ...connectorBootstrap.processEnvs,
     };
+    const stateRoot = input.taskSessionId ? resolveOpencodeStatePath(input.taskSessionId) : undefined;
     await writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries);
-    await restartOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken);
+    await restartOpencodeServer(
+      sessionId,
+      baseUrl,
+      opencodeEnvs,
+      stateRoot,
+      trafficAccessToken
+    );
     return {
       baseUrl,
       trafficAccessToken,
@@ -534,18 +1063,20 @@ export class SandboxAgentProvisionService {
 
   async provisionWithLock(input: ProvisionInput): Promise<ProvisionResult> {
     const taskSessionId = pickString(input.metadata?.taskSessionId);
+    const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
     if (!taskSessionId) {
       return this.provision(input);
     }
-    const existing = provisionLocks.get(taskSessionId);
+    const lockKey = `${taskSessionId}:${executor}`;
+    const existing = provisionLocks.get(lockKey);
     if (existing) {
       return existing;
     }
     const promise = this.provision(input)
       .finally(() => {
-        provisionLocks.delete(taskSessionId);
+        provisionLocks.delete(lockKey);
       });
-    provisionLocks.set(taskSessionId, promise);
+    provisionLocks.set(lockKey, promise);
     return promise;
   }
 
@@ -562,14 +1093,20 @@ export class SandboxAgentProvisionService {
 
     const envInput = buildSandboxEnv();
     const taskSessionId = pickString(input.metadata?.taskSessionId) || undefined;
-    const reusable = taskSessionId ? await resolveReusableSandbox(taskSessionId) : null;
+    const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
+    const selectedTemplate = resolveProvisionTemplate(executor);
+    const reusable = taskSessionId ? await resolveReusableSandbox(taskSessionId, executor) : null;
 
     const environment = reusable
       ? reusable.environment
       : await runStep('open_environment', () =>
           sandboxEnvironmentService.openEnvironment({
-            metadata: input.metadata || {},
+            metadata: {
+              ...(input.metadata || {}),
+              sandboxExecutor: executor,
+            },
             envs: envInput,
+            templateOverride: selectedTemplate,
           })
         );
 
@@ -579,17 +1116,16 @@ export class SandboxAgentProvisionService {
     const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
     const trafficAccessToken =
       (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
-
-    const host = await runStep('sandbox_host', () => e2bConnector.getSandboxHost(sessionId, e2bConfig.opencodePort));
-    const baseUrl = `https://${host}`;
+    const existingEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    const existingMetadata = ((existingEnvironment?.metadata || {}) as Record<string, unknown>) || {};
 
     await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
-    await runStep('opencode_present', () => assertOpencodeReady(sessionId));
-    await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
 
-    const workspaceRoot = await runStep('workspace_prepare', () => ensureWorkspace(sessionId, taskSessionId || undefined));
-
-    await ensurePlaywrightDeps(sessionId);
+    const layout = await runStep('workspace_prepare', () => ensureWorkspaceLayout(sessionId, taskSessionId || undefined));
+    const workspaceRoot = layout?.workspaceRoot || null;
+    const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
+    let codexArchiveHome: string | null = null;
+    let codexDotCodexPath: string | null = null;
 
     if (!isReused) {
       const restored = await restoreWorkspaceIfArchived(sessionId);
@@ -598,37 +1134,105 @@ export class SandboxAgentProvisionService {
       }
     }
 
-    const connectorBootstrap = await runStep('opencode_connector_config', () =>
-      resolveAttachedConnectorBootstrap(taskSessionId)
-    );
-    const opencodeEnvs = {
-      ...envInput,
-      ...connectorBootstrap.processEnvs,
-    };
+    let baseUrl: string | undefined;
+    let host: string | undefined;
+    let osacEndpoint: string | null = pickString(existingMetadata.osacEndpoint);
+    let osacHost: string | null = pickString(existingMetadata.osacHost);
+    let osacHostPort: number | null = null;
+    let osacConnectionMode: string | null = pickString(existingMetadata.osacConnectionMode) || null;
+    let osacAuthToken: string | null = pickString(existingMetadata.osacAuthToken);
 
-    await runStep('opencode_config', () =>
-      writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
-    );
-    await runStep('opencode_start', () =>
-      startOpencodeServer(sessionId, baseUrl, opencodeEnvs, trafficAccessToken)
-    );
-    await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
-    await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
-    await runStep('neko_debug', () => ensureNekoDebug(sessionId));
+    if (executor === 'opencode') {
+      host = await runStep('sandbox_host', () => resolveE2bPublicHost(sessionId, e2bConfig.opencodePort));
+      baseUrl = `https://${host}`;
 
-    const existing = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+      await runStep('opencode_present', () => assertOpencodeReady(sessionId));
+      await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
+      await ensurePlaywrightDeps(sessionId);
+      await runStep('opencode_state_migrate', () => migrateLegacyWorkspaceState(sessionId, workspaceRoot, stateRoot));
+
+      const connectorBootstrap = await runStep('opencode_connector_config', () =>
+        resolveAttachedConnectorBootstrap(taskSessionId)
+      );
+      const opencodeEnvs = {
+        ...envInput,
+        ...connectorBootstrap.processEnvs,
+      };
+
+      await runStep('opencode_config', () =>
+        writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
+      );
+      await runStep('opencode_start', () =>
+        isReused
+          ? restartOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
+          : startOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
+      );
+      await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
+      await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
+      await runStep('neko_debug', () => ensureNekoDebug(sessionId));
+    } else if (executor === 'codex') {
+      await runStep('codex_present', () => assertCodexReady(sessionId));
+      const codexHomeMapping = await runStep('codex_home_mapping', () =>
+        ensureCodexHomeMapping(sessionId, {
+          taskSessionId,
+          stateRoot,
+        })
+      );
+      codexArchiveHome = codexHomeMapping.codexArchiveHome;
+      codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
+      const reusableBridge = await canReuseOsacBridge({
+        endpoint: osacEndpoint,
+        authToken: osacAuthToken,
+      });
+      if (reusableBridge) {
+        osacHostPort = Number(existingMetadata.osacHostPort || osacBootstrapConfig.osacPort) || osacBootstrapConfig.osacPort;
+        osacConnectionMode = pickString(existingMetadata.osacConnectionMode) || 'direct';
+      } else {
+        const bridge = await runStep('osac_bridge', () =>
+          ensureOsacBridge(sessionId, {
+            executor,
+            workspaceRoot,
+            authToken: osacAuthToken,
+          })
+        );
+        osacEndpoint = bridge.osacEndpoint;
+        osacHost = bridge.osacHost;
+        osacHostPort = osacBootstrapConfig.osacPort;
+        osacConnectionMode = 'direct';
+        osacAuthToken = bridge.osacAuthToken;
+        await runStep('osac_ready', () =>
+          waitForOsacBridgeReady({
+            endpoint: bridge.osacEndpoint,
+            authToken: bridge.osacAuthToken,
+          })
+        );
+      }
+    } else {
+      throw new Error(`unsupported sandbox executor: ${executor}`);
+    }
+
     const mergedMetadata: Record<string, unknown> = {
-      ...(existing?.metadata || {}),
-      ...(input.metadata || {}),
+      ...(((existingEnvironment?.metadata as Record<string, unknown> | undefined) || {})),
+      ...(((input.metadata as Record<string, unknown> | undefined) || {})),
       sandboxProvider: 'e2b',
+      sandboxExecutor: executor,
+      executor,
       opencodeBaseUrl: baseUrl,
-      opencodePort: e2bConfig.opencodePort,
+      opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
       opencodeHost: host,
       opencodeWorkspaceRoot: workspaceRoot || undefined,
+      opencodeStateRoot: stateRoot || undefined,
+      codexArchiveHome: codexArchiveHome || undefined,
+      codexDotCodexPath: codexDotCodexPath || undefined,
+      osacEndpoint: osacEndpoint || undefined,
+      osacHost: osacHost || undefined,
+      osacHostPort: osacHostPort || undefined,
+      osacConnectionMode: osacConnectionMode || undefined,
+      osacAuthToken: osacAuthToken || undefined,
       e2b: {
-        ...(existing?.metadata as any)?.e2b,
+        ...(existingEnvironment?.metadata as any)?.e2b,
         sandboxId: sessionId,
-        template: e2bConfig.template,
+        template: selectedTemplate,
         timeoutMs: e2bConfig.timeoutMs,
         trafficAccessToken: trafficAccessToken,
       },
@@ -638,20 +1242,22 @@ export class SandboxAgentProvisionService {
     if (taskSessionId) {
       await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
         orchestratorSessionId: sessionId,
+        executor,
       });
+      await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
     }
 
-    await touchSandbox(sessionId, 'provisioned');
+    await touchSandbox(sessionId, `provisioned_${executor}`);
 
     return {
       sessionId,
       vmName: null,
       vmIpAddress: null,
-      osacEndpoint: baseUrl,
-      osacHost: host,
-      osacHostPort: e2bConfig.opencodePort,
-      osacConnectionMode: 'e2b-opencode',
-      osacAuthToken: null,
+      osacEndpoint,
+      osacHost,
+      osacHostPort,
+      osacConnectionMode,
+      osacAuthToken,
       status: 'ready',
       sandboxStatus: 'ready',
       allocationSource: reusable ? 'reused_session' : 'cold_start',
@@ -660,11 +1266,11 @@ export class SandboxAgentProvisionService {
       bootstrap: {
         osacBinaryUrl: '',
         opencodeBinaryUrl: '',
-        osacPort: 0,
-        osacPathSuffix: '',
+        osacPort: osacBootstrapConfig.osacPort,
+        osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
       },
       opencodeBaseUrl: baseUrl,
-      opencodePort: e2bConfig.opencodePort,
+      opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
       trafficAccessToken,
     };
   }

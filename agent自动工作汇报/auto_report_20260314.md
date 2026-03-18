@@ -1,0 +1,109 @@
+## 2026-03-14
+
+- 做了什么：
+  - 在新电脑上使用 Homebrew 安装并启用了 `node@22`，通过 `corepack` 激活了仓库要求的 `pnpm@10.4.1`。
+  - 在仓库根目录执行 `pnpm install --frozen-lockfile`，完成 workspace 依赖安装并验证 `tsx`、`esbuild`、`prisma` 可用。
+  - 启动并验证了 `apps/api` 与 `apps/web`，确认本地可访问 `http://localhost:4000/health` 和 `http://localhost:3000`。
+- 遇到什么：
+  - 根目录 `start-mac.sh` 在本机上会提示启动成功，但后台进程未稳定保活。
+  - 当前 shell 开启了本地代理，直接 `curl localhost` 会被代理拦截，需要显式绕过代理验证本地端口。
+- 计划如何解决：
+  - 当前先通过独立终端会话保持 `api` 与 `web` 运行，确保开发可继续。
+  - 后续如需长期复用一键启动脚本，再单独排查 `start-mac.sh` 的后台保活方式与 PID 记录逻辑。
+  - 继续沿着 `sandbox -> OpenCode -> SSE` 链路排查直通模式“无实时回复”问题，并补上最小可见性修复。
+
+- 做了什么：
+  - 复核了新建直通会话 `帮我开发2048小游戏` 的实时链路，确认 SSE 可以连接，但 OpenCode 新会话在开始执行后很快出现上游 `422 Unsupported request body`。
+  - 修复前端把 `opencode_error` 历史消息静默丢弃的问题，并让后端在 OpenCode 失败时主动推送可显示的 `error` 消息。
+  - 调整 Sandbox 生成的 `opencode.json`，优先写入字面 `baseURL` / `apiKey`，避免当前 OpenCode 版本对 `{env:...}` 占位解析不稳定。
+- 遇到什么：
+  - 当前上游模型网关对 OpenCode 发出的请求体不兼容，导致会话没有实际 assistant 文本流，只留下 very early 事件后失败。
+  - `e2bConnector.runCommand` 在同一命令中拉起后台 mock 服务时会把进程组一起终止，不利于在 Sandbox 内直接抓取 OpenCode 原始请求体。
+- 计划如何解决：
+  - 先验证错误消息在实时流与历史重载中的可见性恢复。
+  - 再继续隔离 OpenCode 发往上游的具体请求体，确认是哪组字段触发 `422`，决定是改 provider 配置还是切换兼容链路。
+  - 进一步放宽直通模式的启动窗口期重试，避免 sandbox / OpenCode 尚未就绪时过早向前端回传 `fetch failed`。
+
+- 做了什么：
+  - 修复 `tools/service_manager_gui/service_manager_gui.py` 的后台刷新占用问题，把自动状态刷新、日志刷新、用户按钮动作拆到独立线程池。
+  - 将服务状态采样改为按服务并行执行，并为状态/日志结果增加请求序号，丢弃过期刷新结果。
+  - 在用户执行启动/停止/重启/强杀端口时短暂暂停低优先级自动刷新，避免后台轮询继续抢占控制器资源。
+  - 同步更新 `docs/20260308_service_manager_gui.md` 与工具 README，记录新的并发策略。
+- 遇到什么：
+  - 现有实现虽然已使用裸线程，但后台刷新与按钮动作没有做任务分池，旧轮询结果也可能回写覆盖新状态。
+  - Tkinter 关闭窗口时如果线程池已关闭，必须额外处理提交失败和回调收尾，否则容易留下假忙状态。
+- 计划如何解决：
+  - 继续做源码级验证，至少确认脚本可编译、`--self-check` 可运行。
+  - 如用户继续反馈 GUI 仍有交互卡顿，再补更细的采样超时与刷新间隔调优。
+
+- 做了什么：
+  - 排查了任务创建会话相关接口在数据库瞬时超时时的报错链路，确认 `DrizzleQueryError` 会从 `resolveTaskSessionRecord` 透传到 `OpenCode` 事件流入口。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 增加数据库瞬时异常识别与 503 降级，给会话列表增加 stale cache 回退，并避免 `opencode/events` 入口出现未捕获异常。
+  - 更新 `docs/database-integration.md`，补充任务创建链路的数据库瞬时异常处理说明。
+- 遇到什么：
+  - 当前数据库本身可连通，但连接池偶发超时会让查询接口抛出 `Connection terminated due to connection timeout`，并触发历史会话查询失败。
+  - `opencode/events` 路由之前没有包裹数据库读取异常，属于明确的进程稳定性缺口。
+- 计划如何解决：
+  - 重启 API 进程并复测会话列表、会话详情与 `opencode/events` 入口，确认降级行为符合预期。
+  - 如仍有数据库抖动，再继续排查连接池参数与 Railway 侧连接上限。
+
+- 做了什么：
+  - 复核了 OpenCode 归档恢复设计，补充“同一 task session 会经历多次 sandbox 世代”的约束。
+  - 在文件内存态的 runtime 绑定里加入世代计数，并修正为：当 `orchestratorSessionId` 变化时自动清空旧 `opencodeSessionId`，只在新 sandbox 验证恢复成功后才允许回填。
+  - 调整前端任务创建 hook，不再从历史消息反推当前 runtime，改为只信后端返回的 authoritative runtime，并在 runtime 返回不含 `opencodeSessionId` 时主动清空旧值。
+- 遇到什么：
+  - 当前会话导出里出现了“新 sandbox + 旧 opencode session”的混合态，说明旧会话 ID 会在重建 sandbox 后继续残留。
+  - 前端历史加载逻辑会把旧消息里的 runtime 元数据重新写回当前状态，放大了多世代混线问题。
+- 计划如何解决：
+  - 继续验证导出结构与消息接口，确认旧世代历史不会再污染当前 runtime。
+  - 如仍存在多次重建历史混线，再补显式 generation/attempt 分组展示与导出结构。
+
+- 做了什么：
+  - 在 `apps/api/src/agents/task-creation/file-memory-store.ts` 为新写入的会话消息自动补齐 `runtimeGeneration`，让当前世代信息随消息持久化。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 增加历史消息 generation 推断与边界注入逻辑，并让 DB 恢复出的 runtime 可从历史消息反推出 `generation/opencodeSessionId`。
+  - 在 `apps/api/src/utils/opencode-history-recovery.ts` 为原生 OpenCode 历史消息补齐 `runtimeGeneration`。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 调整流式去重 key，把 `runtimeGeneration` 纳入 key，避免同一个 `opencodeSessionId` 在新旧 sandbox 恢复后串流合并。
+- 遇到什么：
+  - 现有前端流式合并逻辑只按 `opencodeSessionId + partId` 去重；一旦同一 OpenCode 会话在新 sandbox 中恢复，旧世代和新世代的文本流会被错误拼接。
+  - 本地临时启动的新 API 进程暴露出独立的数据库 SSL 配置问题，导致无法用该新进程完整复测数据库链路；因此本轮验证以模块加载、前端类型检查和旧进程上的历史接口结果为主。
+- 计划如何解决：
+  - 在数据库配置恢复后，重新用真实会话跑一轮 `session detail/messages/opencode events` 联调，确认 generation 边界和当前 runtime 回填都能稳定工作。
+  - 如 UI 仍显得混乱，再继续把 generation 边界显式下沉到导出结构和前端分组展示，而不是只依赖消息列表中的 `status_update` 边界提示。
+
+- 做了什么：
+  - 使用 Playwright 前台复测历史会话 `bdba3a3c-77db-458f-a624-393e03e69282`，确认页面实际已进入聊天态，但恢复后继续对话时报 `未找到 OpenCode baseUrl（metadata.opencodeBaseUrl）`。
+  - 追查数据库中的 sandbox 环境记录，确认旧 E2B sandbox `ie3j8lpe9fi23hb41ic02` 的 metadata 缺失 `opencodeBaseUrl/opencodeHost/opencodePort/opencodeWorkspaceRoot`。
+  - 新增 `sandbox-runtime-metadata-service`，在续写/读取运行时信息时按当前 E2B host 自动回填缺失 metadata，避免旧会话恢复后首次续写直接失败。
+- 遇到什么：
+  - 旧 sandbox 记录虽然 `status=ready`，但 metadata 只有基础 E2B 信息和 debug 字段，缺少 OpenCode 运行时访问地址，导致 `/opencode/events` 和直通续写同时报错。
+  - 这个问题不会通过单纯刷新前端解决，必须在后端读取 runtime 时兜底修复旧数据。
+- 计划如何解决：
+  - 重启 API 进程后，用同一个 Playwright 会话再次发送续写消息，确认旧 session 能直接恢复并继续执行。
+  - 如果修复后仍感到“不流畅”，继续针对前端高频轮询链路做第二轮收敛，减少重复请求。
+
+- 做了什么：
+  - 针对“会话页首屏完全依赖远程 sandbox/OpenCode 历史”的体验问题，新增设计文档 `docs/agent研发文档/直通模式最近50条消息热缓存与增量历史加载设计.md`。
+  - 文档明确了三层消息模型：数据库 recent cache、上滑触发的 older history backfill、底部 live tail。
+  - 文档同时补充了页面刷新/重连后的查看进度保持方案，包括 sessionStorage view cache 与 scroll anchor 恢复。
+- 遇到什么：
+  - 现有实现把“首屏消息恢复”“用户上滑加载的更老历史”“底部实时消息”混在一个数组里，天然容易在重连或刷新后发生整体替换。
+  - 单纯依赖 OpenCode 原生历史会放大 sandbox 启停对用户的可见影响，不适合作为会话首屏唯一来源。
+- 计划如何解决：
+  - 等用户审核并确认该设计后，再按 Phase A-D 顺序开发：
+    - recent cache 表与接口
+    - 首屏 recent cache 优先
+    - older history 增量加载
+    - 刷新后查看进度恢复
+
+- 做了什么：
+  - 在 `apps/api/src/db/schema.ts`、`apps/api/src/db/migrate.ts` 新增 `task_session_recent_messages`，用于保存每个会话最近 50 条热缓存消息。
+  - 在 `apps/api/src/db/dao/task-creation-session.dao.ts` 把最近消息缓存接入 `addMessage/addMessages`，并在每次写入后自动 trim 到 50 条。
+  - 在 `apps/api/src/routes/task-creation-routes.ts` 新增 `/messages/recent` 与 `/messages/history`，并抽出统一的历史解析 helper，保留现有 `/messages` 兼容。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 增加 recent bootstrap、older history 分页、sessionStorage 视图缓存与重连后历史合并逻辑。
+  - 在 `apps/web/client/src/pages/Home.tsx` 接入滚动容器管理：顶部触发 older history、prepend 后保持 scrollTop、刷新后恢复滚动位置。
+- 遇到什么：
+  - 前端历史加载原来是单路 `/messages` 全量替换，需要先拆出可复用的历史归一化逻辑，否则 recent/history 两条新接口接入后会继续造成重连重置。
+  - 本地后端模块导入默认强依赖 `DATABASE_URL`，验证时需要使用占位连接串，只做路由模块装载而不做真实 DB 联调。
+- 计划如何解决：
+  - 下一轮直接用 Playwright 走真实前台流程，检查“点击会话秒开最近消息”“上滑触发 older history”“刷新后保留查看进度”三个场景是否都成立。
+  - 如发现 older/history 与 live tail 仍有串扰，再继续收敛消息去重 key 和前端滚动恢复策略。

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
-import { buildChatItems } from '@/pages/Home';
+import { buildChatItems, buildOpencodeAtomicTooltip } from '@/pages/Home';
 import { buildPreviewItems } from '@/lib/opencode-preview';
 
 function sessionDiffEvent(): AgentMessage {
@@ -212,7 +212,20 @@ describe('03_diff_dedupe_render', () => {
   it('ignores session.diff and keeps one diff card for duplicated apply_patch payload', () => {
     const messages: AgentMessage[] = [sessionDiffEvent(), applyPatchEvent(), applyPatchEvent()];
     const items = buildChatItems(messages);
-    const diffCards = items.filter((item) => item.kind === 'opencode_tool');
+    const diffCards = items.flatMap((item) => {
+      if (item.kind === 'opencode_tool') {
+        return [item];
+      }
+      if (item.kind === 'opencode_turn') {
+        return item.assistantParts
+          .filter((part) => part.kind === 'tool')
+          .map((part) => ({
+            kind: 'opencode_tool' as const,
+            eventType: part.eventType,
+          }));
+      }
+      return [];
+    });
 
     expect(diffCards).toHaveLength(1);
     expect(diffCards[0].eventType).toBe('message.part.updated');
@@ -256,6 +269,47 @@ describe('03_diff_dedupe_render', () => {
     const { diffItems } = buildPreviewItems(messages);
 
     expect(diffItems).toHaveLength(0);
+  });
+
+  it('builds hover explanation text for shell commands', () => {
+    const tooltip = buildOpencodeAtomicTooltip({
+      eventType: 'message.part.updated',
+      toolName: 'bash',
+      properties: {},
+      toolInput: {
+        command: 'npm install',
+        cwd: '/workspace/app',
+      },
+    });
+
+    expect(tooltip).toContain('命令: npm install');
+    expect(tooltip).toContain('目录: /workspace/app');
+  });
+
+  it('builds hover explanation text for write path', () => {
+    const tooltip = buildOpencodeAtomicTooltip({
+      eventType: 'message.part.updated',
+      toolName: 'write',
+      properties: {},
+      toolInput: {
+        filePath: 'src/generated/report.ts',
+      },
+    });
+
+    expect(tooltip).toBe('写入文件: src/generated/report.ts');
+  });
+
+  it('builds hover explanation text for apply_patch target files', () => {
+    const tooltip = buildOpencodeAtomicTooltip({
+      eventType: 'message.part.updated',
+      toolName: 'apply_patch',
+      properties: {},
+      toolInput: {},
+      metadata: applyPatchEvent('src/index.ts').metadata as Record<string, unknown>,
+    });
+
+    expect(tooltip).toContain('补丁目标文件:');
+    expect(tooltip).toContain('- src/index.ts');
   });
 
   it('keeps session.diff text when write tool is inferred from content only', () => {

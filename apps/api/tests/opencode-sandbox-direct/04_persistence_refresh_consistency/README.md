@@ -14,4 +14,4 @@
 
 - 第二次消息数不小于第一次
 - opencode_event 数量不倒退
-- 本次 suite 发送的 user_input 全部可在历史中找到
+- 本次 suite 发送的 `user_input / opencode_user_input` 全部可在历史中找到

@@ -1,0 +1,136 @@
+## 2026-03-18
+
+- 修复 Codex 同一会话多轮续聊失败问题；根因是 OSAC `codex manager` 给 `codex exec resume` 透传了不支持的 `-C` 参数，现已改为统一使用 `exec.Cmd.Dir` 传递 workspace。
+- 已编译新二进制：
+  - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24`
+  - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24_debug`
+- 已完成真实多轮 smoke：同一 `taskSessionId` 第二轮输入不再报 `unexpected argument '-C' found`，Codex 已在同一远程 sandbox 内继续执行。
+- 已继续优化 Codex 多轮消息一致性：
+  - `stderr.line / stdout.line` 不再进入主对话区与历史持久化
+  - 已存在 session 再发送消息时，不再通过 `/sessions initialMessage` 重复写入用户消息
+  - `codex_user_input` 在 history 中恢复为正常用户消息
+  - Codex realtime/history 统一稳定 `messageKey`，避免 reconcile 时重复拼接上一轮内容
+  - `codex_user_input` 现在优先复用前端 `clientMessageKey`，乐观用户消息与后端确认消息会合并成同一条
+  - 工具原子消息 hover 已改为“三行摘要 + 展示更多弹窗”，避免长命令或大段代码直接塞满 tooltip
+- 真实多轮 smoke 结果：
+  - 第二条用户消息落库次数为 1
+  - `state db missing rollout path` 噪音落库次数为 0
+  - messageKey 无重复
+- 已完成 Codex richer atomic message 第一轮落地：
+  - `file_change` 已接入主对话区，显示为 `新建文件 / 更新文件 / 删除文件` 卡片
+  - 文件变更卡片已联动右侧 `内容预览 -> 更改` 面板
+  - 预览面板已支持基于 Codex `file_change` 生成最小结构化 diff 项
+  - 即使 Codex 未提供原生 patch 正文，也能在预览面板里看到变更文件和“暂无 diff 详情”占位
+  - `command_execution` 已补轻量分类，搜索/列目录/查看文件/文件修改类命令不再都显示成单调的 `Shell 执行`
+- 本轮验证：
+  - `apps/web` 执行 `pnpm exec tsc --noEmit` 通过
+  - `apps/api` 导入 `codex-remote-service.ts` 通过
+  - 使用 `apps/api/data/task-creation-memory.json` 的真实 Codex `file_change` 样本回放后，`buildPreviewItems()` 已能产出 `diff-*-codex-file_change` 预览项
+- 已补专项设计文档：
+  - [Codex状态归档恢复设计.md](/Users/watson/codingProj/oneceo/docs/agent研发文档/Codex状态归档恢复设计.md)
+- 本次设计结论：
+  - oneceo 当前已经具备 `workspace + state` 的归档恢复底座
+  - Codex 当前缺的是 `stateRoot` 约定、旧 `executorSessionId` 的恢复校验，以及恢复失败后的明确失败语义
+  - 设计已进一步收紧为 `session-level recovery`
+  - 对 Codex 来说：
+    - 只恢复 workspace 不算成功
+    - 自动新建新 thread 不算成功
+    - 只有恢复同一 `executorSessionId`、同一上下文连续性才算成功
+  - 同时已明确写入硬约束：
+    - 不修改 OpenCode 已验证恢复逻辑
+    - Codex 必须新建专属恢复流程
+- 已完成 Codex session 级恢复 A/B 实测，共 10 个样本：
+  - 默认 `workspace + stateRoot` 归档不能恢复 Codex session
+  - 单纯改 `HOME / XDG_* / CODEX_HOME` 也不能稳定恢复旧 session
+  - 关键发现：Codex 的真实 session 状态文件落在 `/home/user/.codex/sessions/.../rollout-<executorSessionId>.jsonl`
+  - 这解释了为什么当前归档恢复只能救回文件，救不回同一段对话上下文
+- 设计文档已据实修订：
+  - Codex 后续必须新增专属 `ensureCodexHomeMapping()` 流程
+  - 目标不是继续猜测 `stateRoot`，而是把 `/home/user/.codex` 显式映射到可归档的 `stateRoot/codex-home/.codex`
+  - 只有在该目录恢复后还能继续使用原 `executorSessionId`，才算 session 恢复成功
+- 已按设计落地 Codex 专属归档恢复实现：
+  - `sandbox-agent-provision-service.ts` 新增 `ensureCodexHomeMapping()`
+  - Codex provision 现在会把 `/home/user/.codex` 显式映射到 `{stateRoot}/codex-home/.codex`
+  - `sandbox-archive-service.ts` 已补 `codexArchiveHome / codexDotCodexPath` 元数据
+  - `opencode-workspace.ts` 已补 Codex 专属归档目录解析函数
+  - `codex-remote-service.ts` 已补平台级恢复状态机与显式 `resume`
+  - `task-creation-routes.ts / file-memory-store.ts` 已补 Codex 恢复状态写回与明细返回
+- 已完成实现后的 2 轮真实 A/B sandbox 验证，均成功：
+  - sandbox A 生成只存在于上下文中的 memory token
+  - 关闭 A 后归档恢复到 sandbox B
+  - B 使用原 `executorSessionId` 继续对话成功返回 memory token
+  - 说明已经达到 session 级恢复，不是仅文件恢复
+- 已把成功方案沉淀为文档最佳实践：
+  - 关键结论是 `/home/user/.codex` 必须作为 Codex 真实状态目录对待
+  - 最佳实践已明确目录约定、映射顺序、验收标准和禁止事项
+  - 后续扩展其他 executor 时，必须先找到其真实状态目录，不能再靠环境变量猜测
+- 平台级补充验证结论：
+  - 模块加载通过
+  - 平台现在在“找不到归档状态”时会明确报 `未找到 Codex 会话状态归档，无法恢复原上下文`
+  - 不再允许恢复失败后静默新建新 thread
+- 已继续从源头补强 Codex 状态保存成功率：
+  - `sandbox-archive-service.ts` 新增 Codex 专属归档前就绪校验
+  - 当 sandbox 上已有活动 `executorSessionId` 时，归档前必须先在 `{stateRoot}/codex-home/.codex/sessions` 中验到对应 `rollout-<executorSessionId>.jsonl`
+  - 验不到时直接拒绝上传，避免再生成“缺状态文件但 tar 已上传”的坏归档
+  - 归档成功后会额外写回：
+    - `codexArchivedExecutorSessionId`
+    - `codexArchiveVerifiedAt`
+    - `codexArchiveVerifiedRollout`
+    - `codexArchiveReady=true`
+    - `codexStateSyncRequired=false`
+- 本轮验证：
+  - `sandbox-archive-service.ts` 模块导入通过：`codex-archive-verify-import-ok`
+  - 真实底层 A/B 恢复再次通过：
+    - `taskSessionId = codex_restore_current_1773834591242_699`
+    - `executorSessionId = 019d00c8-2723-7d20-b99e-12282c31378f`
+    - 文件与 memory token 都成功恢复，确认没有破坏已成功的 session 恢复路径
+  - 平台级 smoke 仍暴露一条独立问题：
+    - 源 sandbox 已有完整归档元数据
+    - 但新 sandbox 个别样本未进入 `restoreWorkspaceIfArchived()` 成功态
+    - 这说明“源头保存缺失”已被收口，剩余波动更偏向恢复触发侧，不是归档侧
+- 已修复 `codex_home_mapping` 的误报问题：
+  - 根因不是 E2B 配额/并发，而是 E2B `runCommand()` 在某些探测型 shell 命令上会出现：
+    - `stdout` 已返回成功标记
+    - 但 SDK 仍抛 `exit status 1`
+  - 受影响点是 Codex 的 `/home/user/.codex` 映射探测
+  - 现已改为：
+    - 先 probe，已正确映射则直接返回
+    - probe 异常时继续读取 `error.result.stdout`
+    - 若输出中已有 `READY:`，则视为成功，不再误报 provision 失败
+- 真实回放验证：
+  - 失败会话 `2d591395-c923-44f2-bb69-876726bc9405`
+  - 复用 sandbox `ibzt2209vixy2b55comrh`
+  - 修复后已成功继续走到：
+    - `EXECUTOR_RUNTIME_ENSURE`
+    - `EXECUTOR_INPUT_SEND`
+  - `sendUserInput()` 已返回 `orchestratorSessionId + executorSessionId`，说明 `codex_home_mapping` 误报已解除
+- 已继续优化 Codex 消息显示正确性：
+  - 修复前端对 Codex `executor_event` 的去重过粗问题
+  - 之前只按 `eventType + content` 去重，导致多个 `item.completed` 原子消息被误吞
+  - 现已把 `itemId + itemType` 纳入去重条件，避免第二条及之后的 `command_execution / file_change / agent_message` 丢失
+  - 同时修复 Codex 工具卡片的展示态 `eventType`
+    - `command_execution -> command.executed`
+    - `file_change -> file.changed`
+  - 这样页面不再只显示单调的 `tool` 胶囊，而会正确命中 `目录检查 / 搜索 / 文件修改 / 新建文件` 等语义化卡片
+- 本轮验证：
+  - `apps/web` 执行 `pnpm exec tsc --noEmit` 通过
+  - 结合用户提供的 Codex 导出会话确认：
+    - 当前缺失的原子消息主要来自多个 `item.completed` 共享占位内容
+    - 这次修复后，Codex 历史中的第二条 `command_execution` 不会再被前端误判为重复消息
+- 已继续按 Codex item 语义补强消息展示：
+  - 后端 metadata 现在额外保留：
+    - `fileChanges / filePaths`
+    - `targetPath`
+    - `approvalText / approvalOptions`
+  - 前端已补这些 Codex item 分支：
+    - `command_execution`
+    - `file_change`
+    - `diff`
+    - `approval_request`
+    - `tool_execution`（兜底展示）
+  - 对写文件类 shell 命令，主卡片不再直接铺整条 heredoc
+    - 现在优先显示 `文件修改 · index.html`
+    - 并显示 `通过 shell 文件修改：index.html`
+    - 原始长命令只放在详情层
+- 本轮额外验证：
+  - `apps/api` 受影响模块导入通过：`codex-display-metadata-import-ok`

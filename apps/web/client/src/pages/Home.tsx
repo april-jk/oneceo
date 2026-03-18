@@ -3038,6 +3038,44 @@ function extractCodexCommandTargetPath(command: string): string {
   return "";
 }
 
+function extractCodexWritePayloadPreview(command: string): {
+  kind: "heredoc" | "command";
+  text: string;
+  truncated: boolean;
+} | null {
+  const normalized = normalizeShellCommand(command);
+  if (!normalized) return null;
+
+  const markerMatch = normalized.match(/<<['"]?([A-Za-z0-9_]+)['"]?/);
+  if (!markerMatch) {
+    return null;
+  }
+  const marker = markerMatch[1];
+  const lines = normalized.split(/\r?\n/);
+  if (lines.length <= 1) {
+    return null;
+  }
+  const payloadLines: string[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = stripShellQuotes(line.trim());
+    if (trimmed === marker) {
+      break;
+    }
+    payloadLines.push(line);
+  }
+  const payloadText = payloadLines.join("\n").trim();
+  if (!payloadText) {
+    return null;
+  }
+  const preview = truncateText(payloadText, 2400);
+  return {
+    kind: "heredoc",
+    text: preview.text,
+    truncated: preview.truncated,
+  };
+}
+
 function inferCodexWriteLabel(command: string): string {
   const normalized = normalizeShellCommand(command).toLowerCase();
   if (normalized.startsWith("mv ")) return "移动文件";
@@ -3381,6 +3419,7 @@ function OpencodeToolCard({
     asText(toolState.status) ||
     asText(properties.status) ||
     (error ? "error" : "unknown");
+  const isCodexExecutor = asText(metadata.executor).toLowerCase() === "codex";
 
   const isDiffEvent = (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
@@ -3531,7 +3570,8 @@ function OpencodeToolCard({
     Object.keys(metaInfo).length > 0,
   );
   const summaryText = info.subtitle || "";
-  const detailTitle = `${info.title}${summaryText ? ` · ${summaryText}` : ""}`;
+  let detailTitle = `${info.title}${summaryText ? ` · ${summaryText}` : ""}`;
+  let detailBodyText = explanationText;
   const wrapWithDetailDialog = (content: ReactNode) => (
     <>
       {content}
@@ -3542,7 +3582,7 @@ function OpencodeToolCard({
             <DialogDescription>工具原子消息完整信息</DialogDescription>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
-            {explanationText}
+            {detailBodyText}
           </div>
         </DialogContent>
       </Dialog>
@@ -3892,6 +3932,28 @@ function OpencodeToolCard({
       writeLike && targetPath
         ? `通过 shell ${inferCodexWriteLabel(commandText)}：${targetPath}`
         : "";
+    if (isCodexExecutor && writeLike) {
+      const resolvedLabel = inferCodexWriteLabel(commandText);
+      const resolvedPath = targetPath || "";
+      const resolvedFileName = getFilename(resolvedPath) || "文件";
+      const writePayloadPreview = extractCodexWritePayloadPreview(commandText);
+      const commandPreview = truncateText(commandText || "", 2400);
+      detailTitle = `${resolvedLabel} · ${resolvedFileName}`;
+      detailBodyText = [
+        `操作: ${resolvedLabel}`,
+        resolvedPath ? `目标文件: ${resolvedPath}` : "",
+        writePayloadPreview ? "写入内容预览:" : commandText ? "命令摘要:" : "",
+        writePayloadPreview ? writePayloadPreview.text : commandText ? commandPreview.text : "",
+        writePayloadPreview?.truncated
+          ? "写入内容已截断，请结合工作区文件预览查看完整结果。"
+          : commandText && commandPreview.truncated
+            ? "命令内容已截断，请结合工作区文件预览查看完整结果。"
+            : "",
+        !commandText && explanationText ? explanationText : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}

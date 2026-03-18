@@ -1,6 +1,38 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
+export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+
+export function deriveSessionDriver(input: {
+  mode?: 'altus' | 'sandbox' | string;
+  executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  fallbackDriver?: SessionDriver | string;
+}): SessionDriver | undefined {
+  const mode = typeof input.mode === 'string' ? input.mode.trim() : '';
+  const executor = typeof input.executor === 'string' ? input.executor.trim() : '';
+  const fallback = typeof input.fallbackDriver === 'string' ? input.fallbackDriver.trim() : '';
+
+  if (mode === 'altus') {
+    return 'altus';
+  }
+
+  if (mode === 'sandbox') {
+    if (executor === 'opencode' || executor === 'codex' || executor === 'claudecode') {
+      return executor;
+    }
+    if (fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+      return fallback;
+    }
+    return undefined;
+  }
+
+  if (fallback === 'altus' || fallback === 'opencode' || fallback === 'codex' || fallback === 'claudecode') {
+    return fallback;
+  }
+
+  return undefined;
+}
+
 export interface FileSessionMessage {
   id: string;
   role: 'user' | 'agent' | 'system';
@@ -18,10 +50,19 @@ export interface FileSessionRecord {
   phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
   phaseCycle?: number;
   mode?: 'altus' | 'sandbox';
+  driver?: SessionDriver;
   executor?: 'opencode' | 'claudecode' | 'codex' | string;
   runtime?: {
+    generation?: number;
     orchestratorSessionId?: string;
+    executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    executorSessionId?: string;
     opencodeSessionId?: string;
+    codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
     updatedAt?: string;
   };
   pendingQuestion?: string;
@@ -281,6 +322,7 @@ class TaskCreationFileMemoryStore {
         phase: 'ideation',
         phaseCycle: 0,
         mode: 'altus',
+        driver: 'altus',
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -339,20 +381,35 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
 
       const terminal = session.status === 'completed' || session.status === 'failed';
-      if (terminal && !payload.status) {
+      const requestedStatus = payload.status;
+      const requestedStage = payload.stage;
+      const requestedPhase = payload.phase;
+      const forceTerminal = requestedStatus === 'completed' || requestedStatus === 'failed';
+      const allowBackward = forceTerminal || Boolean(payload.allowBackward);
+
+      if (terminal && !allowBackward && !requestedStatus) {
         return;
       }
-      if (terminal && payload.status && payload.status !== session.status) {
+      if (terminal && requestedStatus && requestedStatus !== session.status && !allowBackward) {
         return;
       }
 
-      let nextStatus: TaskStatus = payload.status || session.status;
-      let nextPhase: TaskPhase | undefined = payload.phase || session.phase;
-      let nextStage: TaskStage | undefined = payload.stage || session.stage;
-      const forceTerminal = nextStatus === 'completed' || nextStatus === 'failed';
-      const allowBackward = forceTerminal || Boolean(payload.allowBackward);
+      let nextStatus: TaskStatus = requestedStatus || session.status;
+      let nextPhase: TaskPhase | undefined = requestedPhase || session.phase;
+      let nextStage: TaskStage | undefined = requestedStage || session.stage;
       const currentPhase = session.phase as TaskPhase | undefined;
       const currentStage = session.stage as TaskStage | undefined;
+
+      const reopeningFromTerminal =
+        allowBackward &&
+        terminal &&
+        nextStatus === session.status &&
+        ((nextStage && nextStage !== 'completed' && nextStage !== 'failed') ||
+          (nextPhase && nextPhase !== 'delivery'));
+
+      if (reopeningFromTerminal) {
+        nextStatus = 'in_progress';
+      }
 
       if (nextStatus === 'waiting_user') {
         nextStage = 'clarifying';
@@ -422,8 +479,25 @@ class TaskCreationFileMemoryStore {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      if (session.mode === mode) return;
+      if (session.mode === mode) {
+        const nextDriver = deriveSessionDriver({
+          mode,
+          executor: session.executor,
+          fallbackDriver: session.driver,
+        });
+        if (nextDriver && session.driver !== nextDriver) {
+          session.driver = nextDriver;
+          session.updatedAt = new Date().toISOString();
+          await this.writeMemory(memory);
+        }
+        return;
+      }
       session.mode = mode;
+      session.driver = deriveSessionDriver({
+        mode,
+        executor: session.executor,
+        fallbackDriver: session.driver,
+      });
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -435,8 +509,38 @@ class TaskCreationFileMemoryStore {
       const memory = await this.readMemory();
       const session = memory.sessions.find((s) => s.id === sessionId);
       if (!session) return;
-      if (session.executor === executor) return;
+      if (session.executor === executor) {
+        const nextDriver = deriveSessionDriver({
+          mode: session.mode,
+          executor,
+          fallbackDriver: session.driver,
+        });
+        if (nextDriver && session.driver !== nextDriver) {
+          session.driver = nextDriver;
+          session.updatedAt = new Date().toISOString();
+          await this.writeMemory(memory);
+        }
+        return;
+      }
       session.executor = executor;
+      session.driver = deriveSessionDriver({
+        mode: session.mode,
+        executor,
+        fallbackDriver: session.driver,
+      });
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
+    if (!driver) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.driver === driver) return;
+      session.driver = driver;
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -444,7 +548,18 @@ class TaskCreationFileMemoryStore {
 
   async updateRuntimeBinding(
     sessionId: string,
-    runtime: { orchestratorSessionId?: string; opencodeSessionId?: string }
+    runtime: {
+      generation?: number;
+      orchestratorSessionId?: string;
+      executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      executorSessionId?: string;
+      opencodeSessionId?: string;
+      codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+      codexRestoreAt?: string;
+      codexRestoreSourceKey?: string;
+      previousExecutorSessionId?: string;
+      codexRestoreFailureReason?: string;
+    }
   ): Promise<void> {
     await this.withLock(async () => {
       const memory = await this.readMemory();
@@ -452,20 +567,105 @@ class TaskCreationFileMemoryStore {
       if (!session) return;
 
       const current = session.runtime || {};
+      const currentOrchestrator = current.orchestratorSessionId || undefined;
       const nextOrchestrator =
         runtime.orchestratorSessionId !== undefined
           ? runtime.orchestratorSessionId || undefined
-          : current.orchestratorSessionId;
+          : currentOrchestrator;
+      const orchestratorChanged =
+        runtime.orchestratorSessionId !== undefined && nextOrchestrator !== currentOrchestrator;
+      const currentExecutor =
+        typeof current.executor === 'string' && current.executor.trim()
+          ? current.executor.trim()
+          : undefined;
+      const requestedExecutor =
+        runtime.executor !== undefined
+          ? String(runtime.executor || '').trim() || undefined
+          : runtime.opencodeSessionId !== undefined
+            ? 'opencode'
+            : currentExecutor;
+      const currentExecutorSessionId = current.executorSessionId || current.opencodeSessionId || undefined;
+      const currentPreviousExecutorSessionId = current.previousExecutorSessionId || undefined;
+      const nextExecutorSessionId =
+        runtime.executorSessionId !== undefined
+          ? runtime.executorSessionId || undefined
+          : runtime.opencodeSessionId !== undefined
+            ? runtime.opencodeSessionId || undefined
+            : orchestratorChanged
+              ? undefined
+              : currentExecutorSessionId;
       const nextOpencode =
         runtime.opencodeSessionId !== undefined
           ? runtime.opencodeSessionId || undefined
-          : current.opencodeSessionId;
+          : requestedExecutor === 'opencode'
+            ? runtime.executorSessionId !== undefined
+              ? runtime.executorSessionId || undefined
+              : orchestratorChanged
+                ? undefined
+                : current.opencodeSessionId || current.executorSessionId || undefined
+            : undefined;
+      const nextPreviousExecutorSessionId =
+        runtime.previousExecutorSessionId !== undefined
+          ? runtime.previousExecutorSessionId || undefined
+          : orchestratorChanged && currentExecutorSessionId
+            ? currentExecutorSessionId
+            : currentPreviousExecutorSessionId;
+      const nextCodexRestoreStatus =
+        runtime.codexRestoreStatus !== undefined
+          ? runtime.codexRestoreStatus || undefined
+          : current.codexRestoreStatus || undefined;
+      const nextCodexRestoreAt =
+        runtime.codexRestoreAt !== undefined
+          ? runtime.codexRestoreAt || undefined
+          : current.codexRestoreAt || undefined;
+      const nextCodexRestoreSourceKey =
+        runtime.codexRestoreSourceKey !== undefined
+          ? runtime.codexRestoreSourceKey || undefined
+          : current.codexRestoreSourceKey || undefined;
+      const nextCodexRestoreFailureReason =
+        runtime.codexRestoreFailureReason !== undefined
+          ? runtime.codexRestoreFailureReason || undefined
+          : current.codexRestoreFailureReason || undefined;
+      const currentGeneration =
+        typeof current.generation === 'number' && Number.isFinite(current.generation)
+          ? Math.max(0, Math.floor(current.generation))
+          : currentOrchestrator
+            ? 1
+            : 0;
+      const requestedGeneration =
+        typeof runtime.generation === 'number' && Number.isFinite(runtime.generation) && runtime.generation > 0
+          ? Math.floor(runtime.generation)
+          : 0;
+      const nextGeneration =
+        nextOrchestrator
+          ? requestedGeneration > 0
+            ? requestedGeneration
+            : orchestratorChanged
+              ? Math.max(1, currentGeneration + 1)
+              : Math.max(1, currentGeneration)
+          : 0;
 
       session.runtime = {
+        generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
+        executor: requestedExecutor,
+        executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,
+        codexRestoreStatus: nextCodexRestoreStatus,
+        codexRestoreAt: nextCodexRestoreAt,
+        codexRestoreSourceKey: nextCodexRestoreSourceKey,
+        previousExecutorSessionId: nextPreviousExecutorSessionId,
+        codexRestoreFailureReason: nextCodexRestoreFailureReason,
         updatedAt: new Date().toISOString(),
       };
+      const derivedDriver = deriveSessionDriver({
+        mode: session.mode,
+        executor: session.executor || requestedExecutor,
+        fallbackDriver: session.driver,
+      });
+      if (derivedDriver) {
+        session.driver = derivedDriver;
+      }
       session.updatedAt = new Date().toISOString();
       await this.writeMemory(memory);
     });
@@ -561,6 +761,14 @@ class TaskCreationFileMemoryStore {
         ...seqAttached.metadata,
         timestamp: effectiveTimestamp,
       };
+      if (
+        messageMetadata.runtimeGeneration === undefined &&
+        typeof session.runtime?.generation === 'number' &&
+        Number.isFinite(session.runtime.generation) &&
+        session.runtime.generation > 0
+      ) {
+        messageMetadata.runtimeGeneration = Math.floor(session.runtime.generation);
+      }
       session.messages.push({
         id: this.createId('msg'),
         role,
@@ -617,6 +825,14 @@ class TaskCreationFileMemoryStore {
           ...seqAttached.metadata,
           timestamp: itemTimestamp,
         };
+        if (
+          messageMetadata.runtimeGeneration === undefined &&
+          typeof session.runtime?.generation === 'number' &&
+          Number.isFinite(session.runtime.generation) &&
+          session.runtime.generation > 0
+        ) {
+          messageMetadata.runtimeGeneration = Math.floor(session.runtime.generation);
+        }
         session.messages.push({
           id: this.createId('msg'),
           role: item.role,
@@ -658,6 +874,23 @@ class TaskCreationFileMemoryStore {
     const memory = await this.readMemory();
     const candidates = memory.sessions
       .filter((session) => session.runtime?.opencodeSessionId === target)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return candidates[0] || null;
+  }
+
+  async findSessionByExecutorSessionId(executorSessionId: string): Promise<FileSessionRecord | null> {
+    const target = executorSessionId.trim();
+    if (!target) return null;
+
+    const memory = await this.readMemory();
+    const candidates = memory.sessions
+      .filter((session) => {
+        const runtime = session.runtime || {};
+        return (
+          runtime.executorSessionId === target ||
+          runtime.opencodeSessionId === target
+        );
+      })
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
     return candidates[0] || null;
   }

@@ -60,6 +60,35 @@ function asObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function flattenErrorMessages(error: unknown): string[] {
+  const messages: string[] = [];
+  let current: any = error;
+  const visited = new Set<unknown>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const message = typeof current?.message === 'string' ? current.message.trim() : '';
+    if (message) {
+      messages.push(message);
+    }
+    current = current?.cause;
+  }
+  return messages;
+}
+
+function isTransientDatabaseError(error: unknown): boolean {
+  const messages = flattenErrorMessages(error).join(' | ').toLowerCase();
+  if (!messages) return false;
+  return (
+    messages.includes('drizzlequeryerror') ||
+    messages.includes('connection terminated due to connection timeout') ||
+    messages.includes('connection terminated unexpectedly') ||
+    messages.includes('timeout exceeded when trying to connect') ||
+    messages.includes('terminating connection due to administrator command') ||
+    messages.includes('too many clients already') ||
+    messages.includes('remaining connection slots are reserved')
+  );
+}
+
 function toPositiveMs(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
@@ -75,67 +104,91 @@ export async function touchSandbox(
   if (!sessionId) return;
   if (!options?.force && !shouldTouch(sessionId)) return;
   const now = new Date().toISOString();
-  await updateMetadata(sessionId, {
-    lastActiveAt: now,
-    lastActiveReason: reason,
-    ...(options?.extra || {}),
-  });
+  try {
+    await updateMetadata(sessionId, {
+      lastActiveAt: now,
+      lastActiveReason: reason,
+      ...(options?.extra || {}),
+    });
+  } catch (error) {
+    if (isTransientDatabaseError(error)) {
+      console.warn('[SANDBOX_ACTIVITY] touch skipped due to transient db error', sessionId, error);
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function setSandboxMetadata(sessionId: string, patch: Record<string, unknown>): Promise<void> {
   if (!sessionId) return;
-  await updateMetadata(sessionId, patch);
+  try {
+    await updateMetadata(sessionId, patch);
+  } catch (error) {
+    if (isTransientDatabaseError(error)) {
+      console.warn('[SANDBOX_ACTIVITY] metadata update skipped due to transient db error', sessionId, error);
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function markSandboxDirty(sessionId: string, reason: string): Promise<void> {
   if (!sessionId) return;
   const now = new Date().toISOString();
-  if (dirtySessions.has(sessionId)) {
-    await updateMetadata(sessionId, {
-      lastActiveAt: now,
-      lastActiveReason: reason,
-    });
-    return;
-  }
-  if (!shouldMarkDirty(sessionId)) {
-    await updateMetadata(sessionId, {
-      lastActiveAt: now,
-      lastActiveReason: reason,
-    });
-    return;
-  }
-  const env = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-  if (!env) return;
+  try {
+    if (dirtySessions.has(sessionId)) {
+      await updateMetadata(sessionId, {
+        lastActiveAt: now,
+        lastActiveReason: reason,
+      });
+      return;
+    }
+    if (!shouldMarkDirty(sessionId)) {
+      await updateMetadata(sessionId, {
+        lastActiveAt: now,
+        lastActiveReason: reason,
+      });
+      return;
+    }
+    const env = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+    if (!env) return;
 
-  const metadata = (env.metadata || {}) as Record<string, unknown>;
-  const alreadyDirty = extractPendingArchiveUpdate(metadata);
-  if (alreadyDirty) {
+    const metadata = (env.metadata || {}) as Record<string, unknown>;
+    const alreadyDirty = extractPendingArchiveUpdate(metadata);
+    if (alreadyDirty) {
+      dirtySessions.add(sessionId);
+      await updateMetadata(sessionId, {
+        lastActiveAt: now,
+        lastActiveReason: reason,
+      });
+      return;
+    }
+
+    const currentStatus = asText((metadata as any).archiveStatus).toLowerCase();
+    const pendingSince = asText((metadata as any).archivePendingSince) || now;
+    const patch: Record<string, unknown> = {
+      lastActiveAt: now,
+      lastActiveReason: reason,
+      pendingArchiveUpdate: true,
+      archiveDirty: true,
+      archivePendingSince: pendingSince,
+      lastDirtyAt: now,
+      lastDirtyReason: reason,
+      lastDirtyBy: 'sandbox_activity',
+    };
+    if (currentStatus !== 'in_progress') {
+      patch.archiveStatus = 'pending_update';
+    }
+    const next = mergeMetadata(metadata, patch);
+    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, next);
     dirtySessions.add(sessionId);
-    await updateMetadata(sessionId, {
-      lastActiveAt: now,
-      lastActiveReason: reason,
-    });
-    return;
+  } catch (error) {
+    if (isTransientDatabaseError(error)) {
+      console.warn('[SANDBOX_ACTIVITY] dirty mark skipped due to transient db error', sessionId, error);
+      return;
+    }
+    throw error;
   }
-
-  const currentStatus = asText((metadata as any).archiveStatus).toLowerCase();
-  const pendingSince = asText((metadata as any).archivePendingSince) || now;
-  const patch: Record<string, unknown> = {
-    lastActiveAt: now,
-    lastActiveReason: reason,
-    pendingArchiveUpdate: true,
-    archiveDirty: true,
-    archivePendingSince: pendingSince,
-    lastDirtyAt: now,
-    lastDirtyReason: reason,
-    lastDirtyBy: 'sandbox_activity',
-  };
-  if (currentStatus !== 'in_progress') {
-    patch.archiveStatus = 'pending_update';
-  }
-  const next = mergeMetadata(metadata, patch);
-  await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, next);
-  dirtySessions.add(sessionId);
 }
 
 export async function clearSandboxDirty(
@@ -145,13 +198,21 @@ export async function clearSandboxDirty(
   if (!sessionId) return;
   dirtySessions.delete(sessionId);
   const now = new Date().toISOString();
-  await updateMetadata(sessionId, {
-    pendingArchiveUpdate: false,
-    archiveDirty: false,
-    archivePendingSince: null,
-    lastDirtyFlushedAt: now,
-    ...(patch || {}),
-  });
+  try {
+    await updateMetadata(sessionId, {
+      pendingArchiveUpdate: false,
+      archiveDirty: false,
+      archivePendingSince: null,
+      lastDirtyFlushedAt: now,
+      ...(patch || {}),
+    });
+  } catch (error) {
+    if (isTransientDatabaseError(error)) {
+      console.warn('[SANDBOX_ACTIVITY] clear dirty skipped due to transient db error', sessionId, error);
+      return;
+    }
+    throw error;
+  }
 }
 
 export function extractLastActiveAt(metadata: Record<string, unknown> | null | undefined): string | null {

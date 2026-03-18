@@ -6,10 +6,15 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { e2bConfig } from '../config/e2b-config';
 import { osacConnectionManager } from './osac-connection-manager';
 import { opencodeEventStreamService } from './opencode-event-stream-service';
-import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
+import {
+  resolveLegacyOpencodeStatePath,
+  resolveOpencodeStatePath,
+  resolveOpencodeWorkspacePath,
+} from '../utils/opencode-workspace';
 import { auditOsacAction } from '../utils/osac-audit';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { sessionConnectorService } from './session-connector-service';
+import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 
 type OpencodePartInput = {
   type: string;
@@ -18,6 +23,10 @@ type OpencodePartInput = {
   url?: string;
   name?: string;
 };
+
+type ExecutorName = 'opencode' | 'codex' | 'claudecode';
+
+type ExecutorPartInput = OpencodePartInput;
 
 type OpencodeHttpResponse = {
   requestId?: string;
@@ -30,6 +39,16 @@ type RuntimeInfo = {
   baseUrl: string;
   trafficAccessToken?: string | null;
   workspaceRoot?: string;
+  stateRoot?: string;
+};
+
+type SandboxPromptDispatchResult = {
+  accepted: boolean;
+  sent: boolean;
+  responseHeadSeen: boolean;
+  status: number;
+  detail: string;
+  rc: number;
 };
 
 function asString(value: unknown): string {
@@ -44,26 +63,29 @@ function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknow
   return resolveOpencodeWorkspacePath(sessionId);
 }
 
+function resolveStateRoot(sessionId: string, metadata: Record<string, unknown>, workspaceRoot?: string) {
+  const explicit = asString(metadata.opencodeStateRoot);
+  if (explicit) return explicit;
+  const taskSessionId = asString(metadata.taskSessionId);
+  if (taskSessionId) return resolveOpencodeStatePath(taskSessionId);
+  const legacy = resolveLegacyOpencodeStatePath(workspaceRoot);
+  return legacy || resolveOpencodeStatePath(sessionId);
+}
+
 async function resolveRuntime(sessionId: string): Promise<RuntimeInfo> {
   await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
-  const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-  if (!environment) {
+  const ensured = await ensureSandboxRuntimeMetadata(sessionId);
+  if (!ensured) {
     throw new Error(`未找到执行环境: ${sessionId}`);
   }
-  const metadata = (environment.metadata || {}) as Record<string, unknown>;
-  const baseUrl =
-    asString(metadata.opencodeBaseUrl) ||
-    asString((metadata.opencode as Record<string, unknown>)?.baseUrl) ||
-    asString(metadata.osacEndpoint);
-  if (!baseUrl) {
-    throw new Error('未找到 OpenCode baseUrl（metadata.opencodeBaseUrl）');
-  }
-  const trafficAccessToken =
-    asString((metadata.e2b as Record<string, unknown>)?.trafficAccessToken) ||
-    asString(metadata.trafficAccessToken) ||
-    null;
-  const workspaceRoot = resolveWorkspaceRoot(sessionId, metadata);
-  return { baseUrl, trafficAccessToken, workspaceRoot };
+  const workspaceRoot = resolveWorkspaceRoot(sessionId, ensured.metadata);
+  const stateRoot = resolveStateRoot(sessionId, ensured.metadata, workspaceRoot);
+  return {
+    baseUrl: ensured.baseUrl,
+    trafficAccessToken: ensured.trafficAccessToken,
+    workspaceRoot,
+    stateRoot,
+  };
 }
 
 function buildSyntheticMessage(
@@ -78,6 +100,29 @@ function buildSyntheticMessage(
       orchestratorSessionId: sessionId,
     },
   };
+}
+
+function createOsacRequestId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeExecutorName(value: unknown): ExecutorName {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === 'codex') return 'codex';
+  if (normalized === 'claudecode') return 'claudecode';
+  return 'opencode';
+}
+
+function asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
+  const payload = message?.payload;
+  return payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+}
+
+function throwExecutorError(message: OsacMessage): never {
+  const payload = asPayloadRecord(message);
+  const errorCode = asString(payload.code) || 'executor_error';
+  const errorMessage = asString(payload.message) || 'executor request failed';
+  throw new Error(`${errorCode}: ${errorMessage}`);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -115,6 +160,9 @@ function getErrorMessage(error: unknown): string {
 }
 
 function preferSandboxPromptDispatch(): boolean {
+  // OpenCode's POST /session/:id/message can stay open long enough to hit our HTTP timeout
+  // even after the prompt has already been accepted. Default to in-sandbox fire-and-forget
+  // dispatch so timeout fallback does not duplicate the same user turn.
   return String(process.env.OPENCODE_PROMPT_PREFER_SANDBOX || 'true')
     .trim()
     .toLowerCase() !== 'false';
@@ -128,7 +176,9 @@ async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
     // start server if not ready
   }
 
-  const command = `nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
+  const opencodeDataHome = asString(runtime.stateRoot);
+  const envPrefix = opencodeDataHome ? `XDG_DATA_HOME=${shellEscape(opencodeDataHome)} ` : '';
+  const command = `${envPrefix}nohup opencode serve --hostname ${e2bConfig.opencodeHost} --port ${e2bConfig.opencodePort} > /tmp/opencode-server.log 2>&1 &`;
   await e2bConnector.runCommand(sessionId, command, { timeoutMs: 30000 });
 
   const maxAttempts = Math.max(5, Number(process.env.OPENCODE_SERVER_START_ATTEMPTS || 20));
@@ -150,7 +200,7 @@ async function ensureOpencodeServer(sessionId: string, runtime: RuntimeInfo) {
 async function dispatchPromptInSandbox(
   sessionId: string,
   input: { opencodeSessionId: string; parts: OpencodePartInput[]; workspacePath?: string }
-) {
+): Promise<SandboxPromptDispatchResult> {
   const directory = input.workspacePath ? `?directory=${encodeURIComponent(input.workspacePath)}` : '';
   const url = `http://127.0.0.1:${e2bConfig.opencodePort}/session/${encodeURIComponent(
     input.opencodeSessionId
@@ -176,11 +226,12 @@ request = (
     "Connection: close\\r\\n\\r\\n"
 ).encode('utf-8') + body
 
-result = {"ok": False, "status": 0, "detail": ""}
+result = {"accepted": False, "sent": False, "responseHeadSeen": False, "status": 0, "detail": ""}
 try:
     sock = socket.create_connection((host, int(port)), timeout=5)
     try:
         sock.sendall(request)
+        result["sent"] = True
         sock.settimeout(2)
         head = b""
         try:
@@ -189,21 +240,43 @@ try:
             head = b""
         status = 0
         preview = ""
+        response_head_seen = False
         if head:
+            response_head_seen = True
             preview = head.decode('utf-8', 'ignore').splitlines()[0][:180]
             if preview.startswith("HTTP/"):
                 parts = preview.split()
                 if len(parts) >= 2 and parts[1].isdigit():
                     status = int(parts[1])
         # status=0 means response head not observed in short timeout; request is already sent.
-        ok = status == 0 or status < 400 or status == 409
-        result = {"ok": ok, "status": status, "detail": preview}
+        accepted = status == 0 or status < 400 or status == 409
+        result = {
+            "accepted": accepted,
+            "sent": True,
+            "responseHeadSeen": response_head_seen,
+            "status": status,
+            "detail": preview,
+        }
+    except Exception as e:
+        result = {
+            "accepted": bool(result.get("sent")) and int(result.get("status", 0) or 0) == 0,
+            "sent": bool(result.get("sent")),
+            "responseHeadSeen": bool(result.get("responseHeadSeen")),
+            "status": int(result.get("status", 0) or 0),
+            "detail": str(e),
+        }
     finally:
         sock.close()
 except Exception as e:
-    result = {"ok": False, "status": 0, "detail": str(e)}
+    result = {
+        "accepted": False,
+        "sent": bool(result.get("sent")),
+        "responseHeadSeen": bool(result.get("responseHeadSeen")),
+        "status": int(result.get("status", 0) or 0),
+        "detail": str(e),
+    }
 print("OCPROMPT_RESULT=" + json.dumps(result, ensure_ascii=False, separators=(",", ":")))
-sys.exit(0 if result.get("ok") else 1)
+sys.exit(0 if result.get("accepted") else 1)
 PY
 __oc_prompt_rc=$?
 echo "__OCPROMPT_RC__=\${__oc_prompt_rc}"
@@ -218,13 +291,17 @@ exit 0
     .map((line) => line.trim())
     .find((line) => line.startsWith('OCPROMPT_RESULT='));
 
-  let ok = false;
+  let accepted = false;
+  let sent = false;
+  let responseHeadSeen = false;
   let status = 0;
   let detail = '';
   if (jsonLine) {
     try {
       const parsed = JSON.parse(jsonLine.slice('OCPROMPT_RESULT='.length)) as Record<string, unknown>;
-      ok = Boolean(parsed.ok);
+      accepted = Boolean(parsed.accepted ?? parsed.ok);
+      sent = Boolean(parsed.sent);
+      responseHeadSeen = Boolean(parsed.responseHeadSeen);
       status = Number(parsed.status || 0);
       detail = String(parsed.detail || '');
     } catch (error) {
@@ -232,10 +309,14 @@ exit 0
     }
   }
 
-  if (!ok || rc !== 0) {
-    const statusLabel = status ? `status=${status}` : 'status=unknown';
-    throw new Error(`sandbox prompt dispatch failed: ${statusLabel}; rc=${rc}; detail=${detail || 'none'}`);
-  }
+  return {
+    accepted,
+    sent,
+    responseHeadSeen,
+    status,
+    detail,
+    rc,
+  };
 }
 
 export class OsacAgentService {
@@ -457,6 +538,23 @@ PY`;
       runtime.trafficAccessToken || undefined
     );
     return JSON.parse(response.body || '{}');
+  }
+
+  async getSessionMessages(
+    sessionId: string,
+    input: { opencodeSessionId: string; workspacePath?: string }
+  ) {
+    await touchSandbox(sessionId, 'sdk_get_session_messages');
+    const runtime = await resolveRuntime(sessionId);
+    await ensureOpencodeServer(sessionId, runtime);
+    return opencodeHttpClient.getSessionMessages(
+      runtime.baseUrl,
+      {
+        sessionId: input.opencodeSessionId,
+        directory: input.workspacePath || runtime.workspaceRoot,
+      },
+      runtime.trafficAccessToken || undefined
+    );
   }
 
   async getSessionDiff(sessionId: string, opencodeSessionId: string) {
@@ -693,11 +791,34 @@ PY`;
 
     if (preferSandboxPromptDispatch()) {
       try {
-        await dispatchPromptInSandbox(sessionId, {
+        const sandboxResult = await dispatchPromptInSandbox(sessionId, {
           opencodeSessionId: input.opencodeSessionId,
           parts: input.parts || [],
           workspacePath: input.workspacePath || runtime.workspaceRoot,
         });
+        if (!sandboxResult.accepted) {
+          const sandboxMessage = `status=${sandboxResult.status || 'unknown'}; rc=${sandboxResult.rc}; detail=${sandboxResult.detail || 'none'}`;
+          if (logFallback) {
+            console.warn('[OPENCODE_PROMPT_SANDBOX_FAILED] fallback to http:', sandboxResult);
+          }
+          try {
+            await sendViaHttp();
+          } catch (httpError) {
+            const httpMessage = getErrorMessage(httpError);
+            if (!isRetryablePromptError(httpError)) {
+              throw new Error(`opencode prompt failed: sandbox=${sandboxMessage}; http=${httpMessage}`);
+            }
+            await ensureOpencodeServer(sessionId, runtime);
+            try {
+              await sendViaHttp();
+            } catch (retryError) {
+              const retryMessage = getErrorMessage(retryError);
+              throw new Error(
+                `opencode prompt failed after sandbox+http retry: sandbox=${sandboxMessage}; http=${httpMessage}; retry=${retryMessage}`
+              );
+            }
+          }
+        }
       } catch (sandboxError) {
         const sandboxMessage = getErrorMessage(sandboxError);
         if (logFallback) {
@@ -762,6 +883,236 @@ PY`;
     await touchSandbox(sessionId, 'opencode_prompt_accepted');
     return { opencodeSessionId: input.opencodeSessionId };
   }
+
+  async ensureExecutorRuntime(
+    sessionId: string,
+    input: { executor: ExecutorName | string; workspacePath?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_runtime');
+    auditOsacAction('EXECUTOR_RUNTIME_ENSURE', { sessionId, executor, requestId });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_RUNTIME_ENSURE',
+        payload: {
+          requestId,
+          executor,
+          workspacePath: input.workspacePath || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_RUNTIME_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      workspacePath: asString(payload.workspacePath) || input.workspacePath || undefined,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+    };
+  }
+
+  async createExecutorSession(
+    sessionId: string,
+    input: { executor: ExecutorName | string; workspacePath?: string; title?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_create');
+    auditOsacAction('EXECUTOR_SESSION_CREATE', { sessionId, executor, requestId });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_SESSION_CREATE',
+        payload: {
+          requestId,
+          executor,
+          workspacePath: input.workspacePath || undefined,
+          title: input.title || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_SESSION_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId),
+    };
+  }
+
+  async resumeExecutorSession(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string; workspacePath?: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_resume');
+    auditOsacAction('EXECUTOR_SESSION_RESUME', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_SESSION_RESUME',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+          workspacePath: input.workspacePath || undefined,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_SESSION_READY' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+    };
+  }
+
+  async sendExecutorInput(
+    sessionId: string,
+    input: {
+      executor: ExecutorName | string;
+      executorSessionId?: string;
+      workspacePath?: string;
+      parts: ExecutorPartInput[];
+    }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_input');
+    auditOsacAction('EXECUTOR_INPUT_SEND', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_INPUT_SEND',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId || undefined,
+          workspacePath: input.workspacePath || undefined,
+          parts: input.parts || [],
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_INPUT_ACCEPTED' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      orchestratorSessionId: asString(payload.orchestratorSessionId) || sessionId,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId || '',
+      status: asString(payload.status) || 'accepted',
+    };
+  }
+
+  async interruptExecutor(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_interrupt');
+    auditOsacAction('EXECUTOR_INTERRUPT', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_INTERRUPT',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_STATUS_RESPONSE' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      executor,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+      status: asString(payload.status) || 'unknown',
+      running: Boolean(payload.running),
+    };
+  }
+
+  async getExecutorStatus(
+    sessionId: string,
+    input: { executor: ExecutorName | string; executorSessionId: string }
+  ) {
+    const executor = normalizeExecutorName(input.executor);
+    const requestId = createOsacRequestId('executor_status');
+    auditOsacAction('EXECUTOR_STATUS_GET', {
+      sessionId,
+      executor,
+      executorSessionId: input.executorSessionId,
+      requestId,
+    });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'EXECUTOR_STATUS_GET',
+        payload: {
+          requestId,
+          executor,
+          executorSessionId: input.executorSessionId,
+        },
+      },
+      (message) =>
+        message.type === 'EXECUTOR_STATUS_RESPONSE' ||
+        message.type === 'EXECUTOR_ERROR'
+    );
+    if (reply.type === 'EXECUTOR_ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    const status = toRecord(payload.status);
+    return {
+      executor,
+      executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,
+      status: asString(status.status) || 'unknown',
+      running: Boolean(status.running),
+      workspacePath: asString(status.workspacePath) || undefined,
+      transport: asString(status.transport) || undefined,
+      lastEventType: asString(status.lastEventType) || undefined,
+      resolvedSessionId: asString(status.resolvedSessionId) || undefined,
+    };
+  }
+
   listMessages(sessionId: string, limit?: number) {
     return osacConnectionManager.listMessages(sessionId, limit);
   }

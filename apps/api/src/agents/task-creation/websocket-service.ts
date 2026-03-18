@@ -11,9 +11,31 @@ import { getPublicErrorMessage } from '../../utils/error-response';
 import { taskCreationFileMemoryStore } from './file-memory-store';
 import { AwaitingUserInputError, isAwaitingUserInputError, isRecoverableAgentError } from './errors';
 import { randomUUID } from 'crypto';
+import { codexRemoteService } from '../../services/codex-remote-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
+import { sandboxExecutorRegistry } from '../../services/sandbox-executor-registry';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { taskCreationSessionDAO } from '../../db/dao';
+import { directModeEntryService } from '../../services/direct-mode-entry-service';
+import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
+
+function normalizeDirectOpencodeErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || '');
+  const normalized = raw.toLowerCase();
+  if (
+    normalized.includes('fetch failed') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('und_err_socket') ||
+    normalized.includes('timeout') ||
+    normalized.includes('network')
+  ) {
+    return getPublicErrorMessage('执行环境启动较慢，请稍后再试');
+  }
+  return raw || getPublicErrorMessage('OpenCode 执行失败');
+}
 
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
@@ -24,6 +46,7 @@ export class TaskCreationWebSocketService {
   private clarificationTimers: Map<string, NodeJS.Timeout> = new Map();
   private autoContinueCounts: Map<string, number> = new Map();
   private opencodeUnsubscribe: (() => void) | null = null;
+  private codexUnsubscribe: (() => void) | null = null;
 
   /**
    * 初始化 WebSocket 服务器
@@ -34,8 +57,22 @@ export class TaskCreationWebSocketService {
       console.error('[WebSocket] 服务异常:', error);
     });
     opencodeRemoteService.initialize();
+    codexRemoteService.initialize();
     if (!this.opencodeUnsubscribe) {
       this.opencodeUnsubscribe = opencodeRemoteService.subscribe(async ({ taskSessionId, message }) => {
+        this.sendToSessionClients(taskSessionId, {
+          type: message.type as any,
+          content: message.content,
+          metadata: message.metadata,
+          stage: message.stage as any,
+          phase: message.phase as any,
+          tone: message.tone as any,
+          sessionId: taskSessionId,
+        } as WebSocketMessage, { skipPersistence: true });
+      });
+    }
+    if (!this.codexUnsubscribe) {
+      this.codexUnsubscribe = codexRemoteService.subscribe(async ({ taskSessionId, message }) => {
         this.sendToSessionClients(taskSessionId, {
           type: message.type as any,
           content: message.content,
@@ -239,10 +276,19 @@ export class TaskCreationWebSocketService {
         plan: message.plan,
       } as Record<string, unknown>;
       const orchestratorSessionId = String(metadata.orchestratorSessionId || '').trim();
+      const executor = String(metadata.executor || '').trim();
+      const executorSessionId =
+        String(metadata.executorSessionId || '').trim() ||
+        String(metadata.opencodeSessionId || '').trim();
       const opencodeSessionId = String(metadata.opencodeSessionId || '').trim();
-      if (orchestratorSessionId || opencodeSessionId) {
+      if (executor) {
+        void taskCreationFileMemoryStore.updateSessionExecutor(sessionId, executor as any);
+      }
+      if (orchestratorSessionId || executorSessionId || opencodeSessionId) {
         void taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
           orchestratorSessionId: orchestratorSessionId || undefined,
+          executor: executor || undefined,
+          executorSessionId: executorSessionId || undefined,
           opencodeSessionId: opencodeSessionId || undefined,
         });
       }
@@ -544,6 +590,8 @@ export class TaskCreationWebSocketService {
 
     const orchestratorSessionId = String((message.metadata as any)?.orchestratorSessionId || '').trim();
     const workspacePath = String((message.metadata as any)?.workspacePath || '').trim();
+    const executor = sandboxExecutorRegistry.resolveExecutor((message.metadata as any)?.executor);
+    const clientMessageKey = String((message.metadata as any)?.messageKey || '').trim() || undefined;
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
     const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
 
@@ -557,7 +605,6 @@ export class TaskCreationWebSocketService {
           '会话已创建'
         );
         await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
-        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
         await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
         await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
           stage: 'executing',
@@ -593,7 +640,6 @@ export class TaskCreationWebSocketService {
       }
       if (!createdSession) {
         await taskCreationFileMemoryStore.updateSessionMode(taskSessionId, 'sandbox');
-        const executor = String((message.metadata as any)?.executor || '').trim() || 'opencode';
         await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
       }
 
@@ -633,11 +679,109 @@ export class TaskCreationWebSocketService {
         }
       }
 
-      const accepted = await opencodeRemoteService.sendUserInput({
+      const entryDecision = await directModeEntryService.decide({
+        content: message.content || '',
+      });
+      if (entryDecision.action === 'platform_capability') {
+        const capabilityLabel = directModeEntryService.getCapabilityDisplayName(entryDecision);
+        this.sendToClient(clientId, {
+          type: 'status_update' as any,
+          sessionId: taskSessionId,
+          content: `已识别为${capabilityLabel}请求，正在调用平台服务...`,
+          tone: 'system' as any,
+          metadata: {
+            directModeIntercepted: true,
+            capabilityId: entryDecision.capabilityId,
+            decisionReason: entryDecision.reason,
+            interceptSource: entryDecision.source,
+            executionMode: 'direct_platform_capability',
+          },
+        });
+
+        try {
+          const capabilityResult = await directModeEntryService.execute(entryDecision, {
+            taskSessionId,
+            content: message.content || '',
+            orchestratorSessionId: orchestratorSessionId || undefined,
+            workspacePath: workspacePath || undefined,
+          });
+
+          await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+            status: 'completed',
+            stage: 'completed',
+          });
+          try {
+            await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'completed');
+          } catch (error) {
+            console.warn('[DIRECT_CAPABILITY_STATUS_DB_COMPLETE_FAILED]', error);
+          }
+
+          this.sendToClient(clientId, {
+            type: 'agent_message' as any,
+            agent: 'system',
+            sessionId: taskSessionId,
+            content: capabilityResult.message,
+            tone: 'system' as any,
+            metadata: {
+              ...(capabilityResult.metadata || {}),
+              directModeIntercepted: true,
+              capabilityId: capabilityResult.capabilityId,
+              decisionReason: entryDecision.reason,
+              interceptSource: entryDecision.source,
+              executionMode: 'direct_platform_capability',
+            },
+          });
+
+          this.sendToClient(clientId, {
+            type: 'status_update' as any,
+            sessionId: taskSessionId,
+            content: `${capabilityLabel}已完成`,
+            stage: 'completed' as any,
+            tone: 'system' as any,
+            metadata: {
+              directModeIntercepted: true,
+              capabilityId: capabilityResult.capabilityId,
+              outcome: 'completed',
+              executionMode: 'direct_platform_capability',
+            },
+          });
+          return;
+        } catch (error) {
+          const errorMessage = getPublicErrorMessage(getDirectModeDeploymentErrorMessage(error));
+          await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+            status: 'failed',
+            stage: 'failed',
+          });
+          try {
+            await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'failed');
+          } catch (dbError) {
+            console.warn('[DIRECT_CAPABILITY_STATUS_DB_FAILED_FAILED]', dbError);
+          }
+          this.sendToClient(clientId, {
+            type: 'status_update' as any,
+            sessionId: taskSessionId,
+            content: errorMessage,
+            stage: 'failed' as any,
+            tone: 'error' as any,
+            metadata: {
+              directModeIntercepted: true,
+              capabilityId: entryDecision.capabilityId,
+              outcome: 'failed',
+              decisionReason: entryDecision.reason,
+              interceptSource: entryDecision.source,
+              executionMode: 'direct_platform_capability',
+            },
+          });
+          return;
+        }
+      }
+
+      const accepted = await sandboxExecutorRegistry.sendUserInput(executor, {
         taskSessionId,
         content: message.content || '',
         orchestratorSessionId: orchestratorSessionId || undefined,
         workspacePath: workspacePath || undefined,
+        clientMessageKey,
       });
 
       // 直通模式下给前端一个“已接收”回执，并同步当前 opencodeSessionId，
@@ -647,9 +791,14 @@ export class TaskCreationWebSocketService {
         {
           type: 'opencode_status' as any,
           sessionId: taskSessionId,
-          content: 'OpenCode 已接收输入，正在执行...',
+          content:
+            accepted.executor === 'opencode'
+              ? 'OpenCode 已接收输入，正在执行...'
+              : `${accepted.executor} 已接收输入，正在执行...`,
           metadata: {
             orchestratorSessionId: accepted.orchestratorSessionId,
+            executor: accepted.executor,
+            executorSessionId: accepted.executorSessionId,
             opencodeSessionId: accepted.opencodeSessionId,
             executionMode: 'sandbox_direct',
           },
@@ -659,7 +808,7 @@ export class TaskCreationWebSocketService {
 
       // 直通模式不注入额外状态消息，避免污染 OpenCode 原始对话流。
     } catch (error) {
-      const errText = error instanceof Error ? error.message : 'OpenCode 执行失败';
+      const errText = normalizeDirectOpencodeErrorMessage(error);
       this.sendToClient(clientId, {
         type: 'error' as any,
         sessionId: taskSessionId,
@@ -751,6 +900,10 @@ export class TaskCreationWebSocketService {
     if (this.opencodeUnsubscribe) {
       this.opencodeUnsubscribe();
       this.opencodeUnsubscribe = null;
+    }
+    if (this.codexUnsubscribe) {
+      this.codexUnsubscribe();
+      this.codexUnsubscribe = null;
     }
   }
 }

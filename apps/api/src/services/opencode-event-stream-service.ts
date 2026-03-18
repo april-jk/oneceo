@@ -83,6 +83,11 @@ type SessionBinding = {
   updatedAt: number;
 };
 
+type MessageRoleEntry = {
+  role: string;
+  updatedAt: number;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -95,6 +100,173 @@ function asText(value: unknown): string {
 
 function asTrimmedText(value: unknown): string {
   return asText(value).trim();
+}
+
+function normalizeEventPath(value: unknown): string {
+  const text = asTrimmedText(value);
+  if (!text) return '';
+  return text.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+}
+
+function isInternalWorkspacePath(path: string): boolean {
+  const normalized = normalizeEventPath(path).toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('/.opencode/') ||
+    normalized.includes('/.git/') ||
+    normalized.includes('/node_modules/')
+  );
+}
+
+function pickEventPathPreview(event: Record<string, unknown>): string[] {
+  const properties =
+    event.properties && typeof event.properties === 'object'
+      ? (event.properties as Record<string, unknown>)
+      : {};
+  const rawPaths = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizeEventPath(value);
+    if (normalized) {
+      rawPaths.add(normalized);
+    }
+  };
+
+  push(event.directory);
+  push(properties.path);
+  push(properties.file);
+  push(properties.target);
+  push(properties.cwd);
+
+  const part =
+    properties.part && typeof properties.part === 'object'
+      ? (properties.part as Record<string, unknown>)
+      : {};
+  push(part.path);
+  push(part.file);
+
+  const diff = Array.isArray(properties.diff) ? properties.diff : [];
+  for (const item of diff) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    push(record.path);
+    push(record.file);
+    push(record.oldPath);
+    push(record.newPath);
+  }
+
+  return Array.from(rawPaths);
+}
+
+function buildSessionDiffPreview(event: Record<string, unknown>): Record<string, unknown> | null {
+  const properties =
+    event.properties && typeof event.properties === 'object'
+      ? (event.properties as Record<string, unknown>)
+      : {};
+  const diff = Array.isArray(properties.diff) ? properties.diff : [];
+  if (diff.length === 0) return null;
+
+  const preview = diff
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const path =
+        normalizeEventPath(record.path) ||
+        normalizeEventPath(record.file) ||
+        normalizeEventPath(record.newPath) ||
+        normalizeEventPath(record.oldPath);
+      if (!path || isInternalWorkspacePath(path)) {
+        return null;
+      }
+      return {
+        path,
+        type: asTrimmedText(record.type) || asTrimmedText(record.status) || 'updated',
+      };
+    })
+    .filter((item): item is { path: string; type: string } => Boolean(item))
+    .slice(0, 20);
+
+  return {
+    diffCount: diff.length,
+    files: preview,
+  };
+}
+
+function projectEventForTransport(eventType: string, event: Record<string, unknown>): Record<string, unknown> {
+  const properties =
+    event.properties && typeof event.properties === 'object'
+      ? (event.properties as Record<string, unknown>)
+      : {};
+  const part =
+    properties.part && typeof properties.part === 'object'
+      ? (properties.part as Record<string, unknown>)
+      : {};
+
+  const projected: Record<string, unknown> = {
+    type: eventType || asTrimmedText(event.type) || 'unknown',
+  };
+
+  const directory = normalizeEventPath(event.directory);
+  if (directory) {
+    projected.directory = directory;
+  }
+
+  if (eventType === 'session.diff') {
+    const diffPreview = buildSessionDiffPreview(event);
+    projected.properties = diffPreview ? diffPreview : {};
+    return projected;
+  }
+
+  const nextProperties: Record<string, unknown> = {};
+  const role = asTrimmedText(properties.role);
+  if (role) nextProperties.role = role;
+  const state = asTrimmedText(properties.state) || asTrimmedText(properties.status);
+  if (state) nextProperties.state = state;
+  const path = normalizeEventPath(properties.path) || normalizeEventPath(properties.file);
+  if (path) nextProperties.path = path;
+  const command = asTrimmedText(properties.command) || asTrimmedText(properties.name);
+  if (command) nextProperties.command = command;
+  const text = asTrimmedText(properties.text) || asTrimmedText(properties.message);
+  if (text) nextProperties.text = text.slice(0, 500);
+
+  if (Object.keys(part).length > 0) {
+    const projectedPart: Record<string, unknown> = {};
+    const partId = asTrimmedText(part.id) || asTrimmedText(properties.partId);
+    if (partId) projectedPart.id = partId;
+    const partType = asTrimmedText(part.type) || asTrimmedText(properties.type);
+    if (partType) projectedPart.type = partType;
+    const partTool = asTrimmedText(part.tool) || asTrimmedText(part.name);
+    if (partTool) projectedPart.tool = partTool;
+    const partPath = normalizeEventPath(part.path) || normalizeEventPath(part.file);
+    if (partPath) projectedPart.path = partPath;
+    const partText = asTrimmedText(part.text) || asTrimmedText(part.content);
+    if (partText) projectedPart.text = partText.slice(0, 500);
+    if (Object.keys(projectedPart).length > 0) {
+      nextProperties.part = projectedPart;
+    }
+  }
+
+  if (Object.keys(nextProperties).length > 0) {
+    projected.properties = nextProperties;
+  }
+  return projected;
+}
+
+function shouldSkipInternalWorkspaceEvent(eventType: string, event: Record<string, unknown>): boolean {
+  const lowerType = asTrimmedText(eventType || event.type).toLowerCase();
+  const paths = pickEventPathPreview(event);
+  if (paths.length === 0) {
+    return false;
+  }
+  const nonInternalPaths = paths.filter((path) => !isInternalWorkspacePath(path));
+  if (nonInternalPaths.length > 0) {
+    return false;
+  }
+  return (
+    lowerType === 'session.diff' ||
+    lowerType.startsWith('file.') ||
+    lowerType.startsWith('message.part.') ||
+    lowerType === 'command.executed'
+  );
 }
 
 function asFinitePositiveNumber(value: unknown): number | null {
@@ -208,6 +380,7 @@ export class OpencodeEventStreamService {
   private retryIntervalMs = Number(process.env.OPENCODE_EVENT_RETRY_INTERVAL_MS || 1500);
   private streamTextState = new Map<string, { text: string; updatedAt: number }>();
   private streamTextMaxEntries = Number(process.env.OPENCODE_EVENT_STREAM_STATE_MAX || 1000);
+  private messageRoles = new Map<string, MessageRoleEntry>();
   private sessionBindings = new Map<string, SessionBinding>();
   private sessionBindingTtlMs = Number(process.env.OPENCODE_EVENT_BINDING_TTL_MS || 15000);
   private persistQueue: PersistEntry[] = [];
@@ -319,7 +492,7 @@ export class OpencodeEventStreamService {
         ? (properties.part as Record<string, unknown>)
         : {};
     const partType = (asTrimmedText(part.type) || asTrimmedText(properties.type)).toLowerCase();
-    if (partType && partType !== 'text') {
+    if (partType && partType !== 'text' && partType !== 'reasoning') {
       return null;
     }
     const delta = asTrimmedText(properties.delta);
@@ -384,6 +557,21 @@ export class OpencodeEventStreamService {
         if (text) return this.compactText(text, 320);
         return partStatus ? `[Text] ${partStatus}` : '[Text] updated';
       }
+      if (partType === 'reasoning') {
+        const text =
+          asTrimmedText(part.text) ||
+          asTrimmedText(part.content) ||
+          asTrimmedText(properties.text);
+        if (text) return this.compactText(text, 320);
+        return partStatus ? `[Reasoning] ${partStatus}` : '[Reasoning] 思考中';
+      }
+      if (partType === 'step-start') {
+        return '[Step] 开始执行';
+      }
+      if (partType === 'step-finish') {
+        const reason = asTrimmedText(part.reason) || asTrimmedText(properties.reason);
+        return reason ? `[Step] ${reason}` : '[Step] 完成';
+      }
       if (partType === 'file') {
         const filePath = asTrimmedText(part.path) || asTrimmedText(properties.path);
         return filePath ? `[File] ${filePath}` : '[File] updated';
@@ -439,6 +627,7 @@ export class OpencodeEventStreamService {
     const sessionEventSeq = hasValidInputSeq
       ? input.sessionEventSeq
       : buildSessionEventSeq(input.seq, input.timestamp);
+    const projectedEvent = projectEventForTransport(input.eventType, input.event);
     const metadata: Record<string, unknown> = {
       orchestratorSessionId: input.orchestratorSessionId,
       opencodeSessionId: input.opencodeSessionId || undefined,
@@ -446,8 +635,8 @@ export class OpencodeEventStreamService {
       seq: input.seq,
       timestamp: input.timestamp,
       ...(typeof sessionEventSeq === 'number' ? { sessionEventSeq } : {}),
-      event: input.event,
-      rawPayload: { eventType: input.eventType, event: input.event },
+      event: projectedEvent,
+      rawPayload: { eventType: input.eventType, event: projectedEvent },
     };
 
     const stream = this.extractStreamContentForDisplay(input.eventType, input.event);
@@ -471,6 +660,87 @@ export class OpencodeEventStreamService {
 
   private buildStreamKey(orchestratorSessionId: string, opencodeSessionId: string | undefined, partId: string) {
     return `${orchestratorSessionId}::${opencodeSessionId || ''}::${partId || 'text'}`;
+  }
+
+  private buildMessageRoleKey(
+    orchestratorSessionId: string,
+    opencodeSessionId: string | undefined,
+    messageId: string
+  ) {
+    return `${orchestratorSessionId}::${opencodeSessionId || ''}::${messageId}`;
+  }
+
+  private pruneMessageRoles() {
+    const maxEntries = 4000;
+    if (this.messageRoles.size <= maxEntries) return;
+    const entries = Array.from(this.messageRoles.entries()).sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+    const removeCount = entries.length - maxEntries;
+    for (let i = 0; i < removeCount; i += 1) {
+      this.messageRoles.delete(entries[i][0]);
+    }
+  }
+
+  private enrichEventRole(
+    orchestratorSessionId: string,
+    opencodeSessionId: string | undefined,
+    event: Record<string, unknown>
+  ): Record<string, unknown> {
+    const eventType = asTrimmedText(event.type);
+    const properties =
+      event.properties && typeof event.properties === 'object'
+        ? { ...(event.properties as Record<string, unknown>) }
+        : {};
+    const part =
+      properties.part && typeof properties.part === 'object'
+        ? { ...(properties.part as Record<string, unknown>) }
+        : {};
+    const info =
+      properties.info && typeof properties.info === 'object'
+        ? (properties.info as Record<string, unknown>)
+        : {};
+
+    const explicitRole =
+      asTrimmedText(properties.role) ||
+      asTrimmedText(part.role) ||
+      asTrimmedText(info.role);
+    const infoMessageId = asTrimmedText(info.id);
+    const partMessageId = asTrimmedText(part.messageID) || asTrimmedText(part.messageId);
+
+    if (eventType === 'message.updated' && infoMessageId && explicitRole) {
+      this.messageRoles.set(
+        this.buildMessageRoleKey(orchestratorSessionId, opencodeSessionId, infoMessageId),
+        { role: explicitRole.toLowerCase(), updatedAt: Date.now() }
+      );
+      this.pruneMessageRoles();
+      if (!properties.role) {
+        properties.role = explicitRole.toLowerCase();
+      }
+      return {
+        ...event,
+        properties,
+      };
+    }
+
+    if (explicitRole || !partMessageId) {
+      return event;
+    }
+
+    const cached = this.messageRoles.get(
+      this.buildMessageRoleKey(orchestratorSessionId, opencodeSessionId, partMessageId)
+    );
+    if (!cached?.role) {
+      return event;
+    }
+
+    properties.role = cached.role;
+    if (Object.keys(part).length > 0 && !part.role) {
+      part.role = cached.role;
+      properties.part = part;
+    }
+    return {
+      ...event,
+      properties,
+    };
   }
 
   private extractEventInfo(event: Record<string, unknown>) {
@@ -564,7 +834,7 @@ export class OpencodeEventStreamService {
       : typeof properties.type === 'string'
         ? properties.type
         : '';
-    if (partType && partType.toLowerCase() !== 'text') {
+    if (partType && partType.toLowerCase() !== 'text' && partType.toLowerCase() !== 'reasoning') {
       return event;
     }
     const partId =
@@ -789,6 +1059,23 @@ export class OpencodeEventStreamService {
     info: { partType: string },
     content: string
   ): boolean {
+    const lowerEventType = String(eventType || '').trim().toLowerCase();
+    const lowerPartType = String(info.partType || '').trim().toLowerCase();
+
+    // 文本消息的正式持久化由 opencode-remote-service 的 final aggregate 负责。
+    // 这里不再把 SSE 过程态事件写入正式消息存储，避免 recent/history 被 delta、message.updated、
+    // reasoning/step-start 等临时片段污染。
+    if (lowerEventType === 'message.updated') return false;
+    if (lowerEventType === 'message.final' || lowerEventType === 'message.completed' || lowerEventType === 'message.done') {
+      return false;
+    }
+    if (lowerEventType === 'message.part.updated' || lowerEventType === 'message.part.delta') {
+      if (lowerPartType === 'tool' || lowerPartType === 'file') {
+        return Boolean(content);
+      }
+      return false;
+    }
+
     if (content) return true;
     if (eventType.startsWith('file.')) return true;
     if (eventType.startsWith('pty.')) return true;
@@ -813,6 +1100,9 @@ export class OpencodeEventStreamService {
       const binding = this.getCachedBinding(orchestratorSessionId) || await this.resolveBoundSession(orchestratorSessionId);
       if (!binding || binding.mode !== 'sandbox') return;
       const eventType = payload.eventType;
+      if (shouldSkipInternalWorkspaceEvent(eventType, payload.event)) {
+        return;
+      }
       const info = this.extractEventInfo(payload.event);
       if (info.role === 'user') {
         return;
@@ -932,10 +1222,15 @@ export class OpencodeEventStreamService {
                   payloadRecord.event && typeof payloadRecord.event === 'object'
                     ? (payloadRecord.event as Record<string, unknown>)
                     : (normalized as Record<string, unknown>);
-                const fastEvent = this.applyStreamDelta(
+                const enrichedEvent = this.enrichEventRole(
                   input.orchestratorSessionId,
                   opencodeSessionId,
                   eventRecord
+                );
+                const fastEvent = this.applyStreamDelta(
+                  input.orchestratorSessionId,
+                  opencodeSessionId,
+                  enrichedEvent
                 );
                 const fastPayload = {
                   opencodeSessionId,

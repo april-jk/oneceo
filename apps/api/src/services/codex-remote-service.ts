@@ -108,10 +108,15 @@ function buildCodexEventMetadata(event: Record<string, unknown>): Record<string,
 function shouldPersistCodexEvent(eventType: string, event: Record<string, unknown>, content: string): boolean {
   const normalized = eventType.trim().toLowerCase();
   const normalizedContent = content.trim().toLowerCase();
+  const item = extractCodexItem(event);
+  const itemType = asString(item.type).toLowerCase();
   if (normalized === 'thread.started' || normalized === 'item.started') {
     return false;
   }
   if (normalized === 'item.completed') {
+    if (itemType === 'command_execution') {
+      return true;
+    }
     return Boolean(content.trim()) && normalizedContent !== `codex 事件: ${normalized}`;
   }
   if (normalized === 'turn.completed' && normalizedContent === 'completed') {

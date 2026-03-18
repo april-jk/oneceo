@@ -699,7 +699,12 @@ function hasMeaningfulExecutorEventText(metadataRaw: unknown, contentRaw?: strin
 }
 
 function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): boolean {
-  const { normalizedEventType } = getExecutorEventInfo(metadataRaw, contentRaw);
+  const metadata = toRecord(metadataRaw);
+  const { normalizedEventType, event } = getExecutorEventInfo(metadataRaw, contentRaw);
+  const item = toRecord(event.item);
+  const itemType =
+    asText(metadata.itemType).toLowerCase() ||
+    asText(item.type).toLowerCase();
   if (!normalizedEventType) {
     return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
   }
@@ -722,6 +727,9 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
     return false;
   }
   if (normalizedEventType === 'item.completed') {
+    if (itemType === 'command_execution') {
+      return true;
+    }
     return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
   }
   return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);

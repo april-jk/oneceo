@@ -58,6 +58,11 @@ export interface FileSessionRecord {
     executor?: 'opencode' | 'claudecode' | 'codex' | string;
     executorSessionId?: string;
     opencodeSessionId?: string;
+    codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+    codexRestoreAt?: string;
+    codexRestoreSourceKey?: string;
+    previousExecutorSessionId?: string;
+    codexRestoreFailureReason?: string;
     updatedAt?: string;
   };
   pendingQuestion?: string;
@@ -549,6 +554,11 @@ class TaskCreationFileMemoryStore {
       executor?: 'opencode' | 'claudecode' | 'codex' | string;
       executorSessionId?: string;
       opencodeSessionId?: string;
+      codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
+      codexRestoreAt?: string;
+      codexRestoreSourceKey?: string;
+      previousExecutorSessionId?: string;
+      codexRestoreFailureReason?: string;
     }
   ): Promise<void> {
     await this.withLock(async () => {
@@ -575,6 +585,7 @@ class TaskCreationFileMemoryStore {
             ? 'opencode'
             : currentExecutor;
       const currentExecutorSessionId = current.executorSessionId || current.opencodeSessionId || undefined;
+      const currentPreviousExecutorSessionId = current.previousExecutorSessionId || undefined;
       const nextExecutorSessionId =
         runtime.executorSessionId !== undefined
           ? runtime.executorSessionId || undefined
@@ -593,6 +604,28 @@ class TaskCreationFileMemoryStore {
                 ? undefined
                 : current.opencodeSessionId || current.executorSessionId || undefined
             : undefined;
+      const nextPreviousExecutorSessionId =
+        runtime.previousExecutorSessionId !== undefined
+          ? runtime.previousExecutorSessionId || undefined
+          : orchestratorChanged && currentExecutorSessionId
+            ? currentExecutorSessionId
+            : currentPreviousExecutorSessionId;
+      const nextCodexRestoreStatus =
+        runtime.codexRestoreStatus !== undefined
+          ? runtime.codexRestoreStatus || undefined
+          : current.codexRestoreStatus || undefined;
+      const nextCodexRestoreAt =
+        runtime.codexRestoreAt !== undefined
+          ? runtime.codexRestoreAt || undefined
+          : current.codexRestoreAt || undefined;
+      const nextCodexRestoreSourceKey =
+        runtime.codexRestoreSourceKey !== undefined
+          ? runtime.codexRestoreSourceKey || undefined
+          : current.codexRestoreSourceKey || undefined;
+      const nextCodexRestoreFailureReason =
+        runtime.codexRestoreFailureReason !== undefined
+          ? runtime.codexRestoreFailureReason || undefined
+          : current.codexRestoreFailureReason || undefined;
       const currentGeneration =
         typeof current.generation === 'number' && Number.isFinite(current.generation)
           ? Math.max(0, Math.floor(current.generation))
@@ -618,6 +651,11 @@ class TaskCreationFileMemoryStore {
         executor: requestedExecutor,
         executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,
+        codexRestoreStatus: nextCodexRestoreStatus,
+        codexRestoreAt: nextCodexRestoreAt,
+        codexRestoreSourceKey: nextCodexRestoreSourceKey,
+        previousExecutorSessionId: nextPreviousExecutorSessionId,
+        codexRestoreFailureReason: nextCodexRestoreFailureReason,
         updatedAt: new Date().toISOString(),
       };
       const derivedDriver = deriveSessionDriver({

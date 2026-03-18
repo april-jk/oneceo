@@ -4,6 +4,14 @@ import { buildClientIdentityHeaders } from "@/lib/client-identity";
 export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string;
+  isFavorite?: boolean;
+  projectId?: string | null;
+  projectName?: string | null;
+  shareEnabled?: boolean;
+  shareToken?: string | null;
   status?: string;
   stage?: string;
   phase?: string;
@@ -177,6 +185,14 @@ export type TaskCreationDatabaseRowsPage = {
 export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string;
+  isFavorite?: boolean;
+  projectId?: string | null;
+  projectName?: string | null;
+  shareEnabled?: boolean;
+  shareToken?: string | null;
   status?: string;
   stage?: string;
   phase?: string;
@@ -387,6 +403,35 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
   return result.data;
 }
 
+export async function resolveTaskCreationSessionTitle(
+  sessionId: string,
+  message: string
+): Promise<{
+  id: string;
+  title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string | null;
+  resolved?: boolean;
+} | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/title/resolve`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      message,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: any };
+  return result?.data || null;
+}
+
 export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
@@ -401,6 +446,58 @@ export async function getTaskCreationSession(sessionId: string): Promise<TaskCre
   }
   const result = (await response.json()) as { data?: TaskCreationSessionDetail };
   return result?.data || null;
+}
+
+export async function renameTaskCreationSessionTitle(
+  sessionId: string,
+  title: string
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/title/rename`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function toggleTaskCreationSessionFavorite(
+  sessionId: string,
+  favorite: boolean
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/favorite`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ favorite }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationSession(sessionId: string): Promise<void> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }
 
 export async function getTaskCreationDebugInfo(sessionId: string): Promise<TaskCreationDebugInfo | null> {

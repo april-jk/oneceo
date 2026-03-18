@@ -125,6 +125,28 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const recentHistoryHydrationQueuedAt = new Map<string, number>();
 const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
+const DEFAULT_SESSION_TITLE = '新建任务会话';
+const WEAK_INTENT_TITLE_INPUTS = new Set([
+  '你好',
+  '您好',
+  '嗨',
+  'hi',
+  'hello',
+  'hey',
+  '在吗',
+  '有人吗',
+  'help',
+  '帮我一下',
+  '开始',
+  '继续',
+  'ok',
+  'okay',
+  '好的',
+  '收到',
+  '1',
+  '？',
+  '?',
+]);
 
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
@@ -215,6 +237,14 @@ function toSessionSummary(session: any) {
   return {
     id: session.id,
     title: session.title,
+    titleLocked: Boolean(session.titleLocked),
+    titleSource: session.titleSource,
+    titleResolvedAt: session.titleResolvedAt,
+    isFavorite: Boolean(session.isFavorite),
+    projectId: session.projectId || null,
+    projectName: session.projectName || null,
+    shareEnabled: Boolean(session.shareEnabled),
+    shareToken: session.shareToken || null,
     status: session.status,
     stage: normalizedStage,
     phase: session.phase,
@@ -381,6 +411,11 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
   return {
     id: session.id,
     title: String(titleCandidate).trim().slice(0, 80) || '新建任务会话',
+    isFavorite: false,
+    projectId: null,
+    projectName: null,
+    shareEnabled: false,
+    shareToken: null,
     status,
     stage,
     mode: sandboxExecutor ? 'sandbox' : undefined,
@@ -748,7 +783,9 @@ async function buildSessionSummaryFromDb(limit: number) {
       messages?.find((message) => message.role === 'user' && asText(message.content))?.content || '';
     const title =
       description?.title ||
-      String(firstUserMessage).trim().slice(0, 80) ||
+      (isExplicitSessionTitleInput(String(firstUserMessage))
+        ? deriveResolvedSessionTitle(firstUserMessage)
+        : '') ||
       `任务会话 ${String(session.id).slice(-6)}`;
     result.push({
       id: session.id,
@@ -763,13 +800,13 @@ async function buildSessionSummaryFromDb(limit: number) {
   return result;
 }
 
-async function createDraftTaskSession(title: string, userId: string) {
+async function createDraftTaskSession(title: string | undefined, userId: string) {
   const created = await taskCreationSessionDAO.createSession({
     id: randomUUID(),
     userId,
     status: 'in_progress',
   });
-  await taskCreationFileMemoryStore.createSession(title, created.id);
+  await taskCreationFileMemoryStore.createSession(title || DEFAULT_SESSION_TITLE, created.id);
   await taskCreationFileMemoryStore.updateSessionStatus(created.id, 'in_progress');
   return created.id;
 }
@@ -1014,6 +1051,40 @@ function shouldAllowPrivateRemoteAttachmentHosts() {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSessionTitleText(value: unknown): string {
+  return asText(value).replace(/\s+/g, ' ').trim();
+}
+
+function toComparableTitleText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[，。、“”"'!！?？,.；;:：()\[\]{}<>《》【】\-_`~]/g, '')
+    .replace(/\s+/g, '');
+}
+
+function isWeakIntentTitleInput(value: string): boolean {
+  const comparable = toComparableTitleText(value);
+  if (!comparable) return true;
+  if (WEAK_INTENT_TITLE_INPUTS.has(comparable)) return true;
+  if (comparable.length <= 2) return true;
+  return false;
+}
+
+function isExplicitSessionTitleInput(value: string): boolean {
+  const normalized = normalizeSessionTitleText(value);
+  if (!normalized) return false;
+  if (isWeakIntentTitleInput(normalized)) return false;
+  if (normalized.length >= 12) return true;
+  return /(帮我|请|请帮|分析|排查|修复|开发|实现|优化|重构|设计|生成|创建|制作|写|继续|修改|整理|总结|如何|怎么|为什么|报错|bug|问题|页面|功能|css|html|nodejs|代码|接口|数据库|deploy|build|fix|debug|analy[sz]e|implement|optimi[sz]e|refactor|create|write)/i.test(
+    normalized
+  );
+}
+
+function deriveResolvedSessionTitle(value: unknown): string {
+  return normalizeSessionTitleText(value).slice(0, 80);
 }
 
 function asPositiveInt(value: unknown): number | null {
@@ -2082,13 +2153,15 @@ router.post('/sessions', async (req, res) => {
       ? await taskCreationFileMemoryStore.getSession(effectiveSessionId)
       : null;
     const isNewSession = !existingSession;
+    const normalizedRequestedTitle = deriveResolvedSessionTitle(requestedTitle);
     const title =
-      requestedTitle ||
-      (initialMessage ? initialMessage.slice(0, 80) : '') ||
-      '新建任务会话';
+      (normalizedRequestedTitle && !isWeakIntentTitleInput(normalizedRequestedTitle)
+        ? normalizedRequestedTitle
+        : '') ||
+      DEFAULT_SESSION_TITLE;
 
     const session = await taskCreationFileMemoryStore.createSession(
-      title,
+      isNewSession ? title : '',
       effectiveSessionId
     );
 
@@ -2298,7 +2371,11 @@ router.get('/sessions', async (req, res) => {
 router.post('/sessions/draft', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const title = asText(req.body?.title).slice(0, 80) || '新建任务会话';
+    const requestedTitle = deriveResolvedSessionTitle(req.body?.title);
+    const title =
+      requestedTitle && !isWeakIntentTitleInput(requestedTitle)
+        ? requestedTitle
+        : DEFAULT_SESSION_TITLE;
     const sessionId = await createDraftTaskSession(title, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     return res.json({
@@ -2313,6 +2390,136 @@ router.post('/sessions/draft', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '创建草稿会话失败'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
+  try {
+    currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    const input = normalizeSessionTitleText(req.body?.message);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在',
+      });
+    }
+
+    const titleLocked = Boolean(session.titleLocked);
+    const currentTitle = asText(session.title) || DEFAULT_SESSION_TITLE;
+    if (!input || titleLocked || !isExplicitSessionTitleInput(input)) {
+      return res.json({
+        success: true,
+        data: {
+          id: session.id,
+          title: currentTitle,
+          titleLocked,
+          titleSource: session.titleSource || 'placeholder',
+          titleResolvedAt: session.titleResolvedAt || null,
+          resolved: false,
+        },
+      });
+    }
+
+    const nextTitle = deriveResolvedSessionTitle(input) || DEFAULT_SESSION_TITLE;
+    await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
+      lock: true,
+      source: 'first_explicit_user_input',
+    });
+    const updated = await resolveTaskSessionRecord(session.id);
+    return res.json({
+      success: true,
+      data: {
+        id: session.id,
+        title: updated?.title || nextTitle,
+        titleLocked: Boolean(updated?.titleLocked),
+        titleSource: updated?.titleSource || 'first_explicit_user_input',
+        titleResolvedAt: updated?.titleResolvedAt || null,
+        resolved: true,
+      },
+    });
+  } catch (error: any) {
+    console.error('解析会话标题失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('解析会话标题失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/title/rename', async (req, res) => {
+  try {
+    currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在',
+      });
+    }
+
+    const nextTitle = deriveResolvedSessionTitle(req.body?.title);
+    if (!nextTitle) {
+      return res.status(400).json({
+        success: false,
+        error: '标题不能为空',
+      });
+    }
+
+    await taskCreationFileMemoryStore.updateSessionTitle(session.id, nextTitle, {
+      lock: true,
+      source: 'manual',
+      force: true,
+    });
+    const updated = await resolveTaskSessionRecord(session.id);
+    return res.json({
+      success: true,
+      data: toSessionSummary(updated || { ...session, title: nextTitle, titleLocked: true, titleSource: 'manual' }),
+    });
+  } catch (error: any) {
+    console.error('重命名会话失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('重命名会话失败，请稍后重试'),
+    });
+  }
+});
+
+router.post('/sessions/:sessionId/favorite', async (req, res) => {
+  try {
+    currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: '会话不存在',
+      });
+    }
+    const favorite = Boolean(req.body?.favorite);
+    await taskCreationFileMemoryStore.updateSessionFavorite(session.id, favorite);
+    const updated = await resolveTaskSessionRecord(session.id);
+    return res.json({
+      success: true,
+      data: toSessionSummary(updated || { ...session, isFavorite: favorite }),
+    });
+  } catch (error: any) {
+    console.error('更新会话收藏状态失败:', error);
+    if (isTransientDatabaseError(error)) {
+      return respondDatabaseUnavailable(res);
+    }
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage('更新会话收藏状态失败，请稍后重试'),
     });
   }
 });
@@ -4297,6 +4504,7 @@ router.delete('/sessions/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
 
     await taskCreationSessionDAO.deleteSession(sessionId);
+    await taskCreationFileMemoryStore.deleteSession(sessionId);
 
     res.json({
       success: true,

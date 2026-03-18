@@ -132,6 +132,11 @@
     - 现在优先显示 `文件修改 · index.html`
     - 并显示 `通过 shell 文件修改：index.html`
     - 原始长命令只放在详情层
+  - 已进一步修复 Codex 写文件命令的详情弹窗：
+    - 详情标题不再显示整条 `/bin/bash -lc "cat <<EOF ..."` 原始命令
+    - 现在统一显示语义化标题，例如 `文件修改 · index.html`
+    - 详情正文改成 `操作 / 目标文件 / 写入内容预览` 结构
+    - 若能从 heredoc 中提取真实写入内容，则优先显示写入内容，不再把整段 shell 命令当成主体
 - 本轮额外验证：
   - `apps/api` 受影响模块导入通过：`codex-display-metadata-import-ok`
 

@@ -194,4 +194,5 @@
   - 已确认 Codex `item.completed` 原始事件会返回 `reasoning / agent_message / command_execution`
   - `reasoning` 与最终 `agent_message` 现在会在前端按 `Codex` 作者头部 + markdown 正文显示
   - 后端已把 `executor / itemType / itemId / itemStatus / itemText / command / outputPreview / exitCode` 写入 metadata，并进入 DB/API history slim metadata
-  - 当前命令类 `command_execution` 先只保留元数据，不默认铺到主对话区，避免过程流再次变吵
+  - `command_execution` 已接入轻量命令卡片：默认仅显示 `Shell 执行` 胶囊、命令本身和短摘要，不展开完整输出，继续避免过程流变吵
+  - 同时补了持久化规则：即使 `command_execution` 的 `content` 为空，也必须保留 `executor_event`，否则刷新后无法从 history 重建命令卡片

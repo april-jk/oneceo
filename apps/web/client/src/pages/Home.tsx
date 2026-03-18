@@ -1593,6 +1593,66 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       flushProgress();
+      if (itemType === "command_execution") {
+        const commandText =
+          asText(metadata.command) ||
+          asText(item.command) ||
+          "Shell 命令";
+        const outputPreview =
+          asText(metadata.outputPreview) ||
+          asText(item.aggregated_output);
+        const exitCodeValue =
+          metadata.exitCode ??
+          item.exit_code ??
+          item.exitCode;
+        const exitCode =
+          typeof exitCodeValue === "number" && Number.isFinite(exitCodeValue)
+            ? exitCodeValue
+            : typeof exitCodeValue === "string" && exitCodeValue.trim()
+              ? Number(exitCodeValue)
+              : null;
+        const statusText =
+          asText(metadata.itemStatus) ||
+          asText(item.status) ||
+          (exitCode === 0 ? "completed" : exitCode !== null ? "failed" : "");
+
+        items.push({
+          kind: "opencode_tool",
+          eventType: "command.executed",
+          event: {
+            type: "command.executed",
+            properties: {
+              command: commandText,
+              stdout: outputPreview,
+              status: statusText,
+              ...(exitCode !== null && Number.isFinite(exitCode)
+                ? { exitCode: String(exitCode) }
+                : {}),
+            },
+          },
+          content: outputPreview,
+          metadata: {
+            ...metadata,
+            event: {
+              type: "command.executed",
+              properties: {
+                command: commandText,
+                stdout: outputPreview,
+                status: statusText,
+                ...(exitCode !== null && Number.isFinite(exitCode)
+                  ? { exitCode: String(exitCode) }
+                  : {}),
+              },
+            },
+            compactOutput: true,
+            toolName: "bash",
+          },
+          messageIndex: index,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
       if (!content) {
         continue;
       }
@@ -3373,6 +3433,7 @@ function OpencodeToolCard({
   }
 
   if (eventType === "command.executed") {
+    const compactOutput = metadata.compactOutput === true;
     const commandText =
       asText(properties.command) ||
       asText(input.command) ||
@@ -3384,6 +3445,15 @@ function OpencodeToolCard({
       output ||
       error;
     const { text: outputText, truncated } = truncateText(rawOutput, 1200);
+    const previewText = truncateText(rawOutput, 180).text;
+    const exitCodeText = asText(properties.exitCode);
+    const statusText = asText(properties.status).toLowerCase();
+    const statusLabel =
+      statusText === "failed" || error || exitCodeText === "127"
+        ? "失败"
+        : statusText === "completed" || exitCodeText === "0"
+          ? "成功"
+          : "执行";
     return (
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -3394,7 +3464,7 @@ function OpencodeToolCard({
         <div className="space-y-2">
           <EventCapsule
             icon={Terminal}
-            text="Shell 执行"
+            text={`Shell 执行 · ${statusLabel}`}
             title={explanationText || commandHint || undefined}
           />
           {commandText ? (
@@ -3402,12 +3472,17 @@ function OpencodeToolCard({
               {commandText}
             </div>
           ) : null}
-          {outputText ? (
+          {compactOutput && previewText ? (
+            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+              {previewText}
+            </div>
+          ) : null}
+          {!compactOutput && outputText ? (
             <div className="rounded-md bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono whitespace-pre-wrap">
               {outputText}
             </div>
           ) : null}
-          {truncated ? (
+          {!compactOutput && truncated ? (
             <div className="text-[11px] text-slate-500">
               输出已截断，请查看日志
             </div>

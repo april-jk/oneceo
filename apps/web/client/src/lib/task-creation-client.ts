@@ -17,6 +17,7 @@ export type TaskCreationSessionSummary = {
   phase?: string;
   driver?: "altus" | "opencode" | "claudecode" | "codex";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   updatedAt?: string;
 };
 
@@ -25,6 +26,7 @@ export type CreateTaskCreationSessionInput = {
   title?: string;
   mode?: "sandbox" | "altus";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   initialMessage?: string;
   initialMessageType?: "user_input" | "user_response";
 };
@@ -198,10 +200,12 @@ export type TaskCreationSessionDetail = {
   phase?: string;
   driver?: "altus" | "opencode" | "claudecode" | "codex";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
     executor?: "opencode" | "claudecode" | "codex";
+    transport?: "sdk" | "app_server";
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";

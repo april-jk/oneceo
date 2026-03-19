@@ -6,7 +6,7 @@
 
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO, taskSessionWorkspaceCacheDAO } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
 import {
   deriveSessionDriver,
@@ -252,6 +252,7 @@ function toSessionSummary(session: any) {
     driver: session.driver,
     mode: session.mode,
     executor: session.executor,
+    codexExecutionMode: session.codexExecutionMode,
     runtime: session.runtime,
     pendingQuestion: session.pendingQuestion,
     pendingOptions: session.pendingOptions,
@@ -396,6 +397,7 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
   const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
   const inferredExecutor =
     asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
+  const inferredTransport = asText(mergedRuntime.transport) || undefined;
   const hasSandboxHistory = Array.isArray(messages)
     ? messages.some((message) => {
         const messageType = asText(message.messageType);
@@ -420,6 +422,12 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
     stage,
     mode: sandboxExecutor ? 'sandbox' : undefined,
     executor: sandboxExecutor || undefined,
+    codexExecutionMode:
+      sandboxExecutor === 'codex'
+        ? inferredTransport === 'app_server'
+          ? 'ws'
+          : 'sdk'
+        : undefined,
     driver: sandboxExecutor ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor }) : undefined,
     runtime: orchestratorSessionId
       ? {
@@ -431,6 +439,7 @@ async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRec
           codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
           orchestratorSessionId,
           executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          transport: mergedRuntime.transport,
           executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
           opencodeSessionId: mergedRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
@@ -484,6 +493,7 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
   const mergedRuntime = mergeCodexRuntimeMetadata(inferredRuntime, pickRecord(env?.metadata));
   const inferredExecutor =
     asText(mergedRuntime.executor) || (mergedRuntime.executorSessionId ? 'opencode' : '');
+  const inferredTransport = asText(mergedRuntime.transport) || undefined;
   const hasSandboxSignals =
     Boolean(orchestratorSessionId) ||
     Boolean(inferredRuntime.executorSessionId || inferredRuntime.opencodeSessionId) ||
@@ -521,6 +531,12 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
     stage,
     mode: hasSandboxSignals ? 'sandbox' : undefined,
     executor: sandboxExecutor || undefined,
+    codexExecutionMode:
+      sandboxExecutor === 'codex'
+        ? inferredTransport === 'app_server'
+          ? 'ws'
+          : 'sdk'
+        : undefined,
     driver: hasSandboxSignals ? deriveSessionDriver({ mode: 'sandbox', executor: sandboxExecutor || 'opencode' }) : undefined,
     runtime: orchestratorSessionId
       ? {
@@ -532,6 +548,7 @@ async function buildLightweightFileSessionFromDb(sessionId: string): Promise<Fil
           codexRestoreFailureReason: mergedRuntime.codexRestoreFailureReason,
           orchestratorSessionId,
           executor: mergedRuntime.executor || (mergedRuntime.opencodeSessionId ? 'opencode' : undefined),
+          transport: mergedRuntime.transport,
           executorSessionId: mergedRuntime.executorSessionId || mergedRuntime.opencodeSessionId,
           opencodeSessionId: mergedRuntime.opencodeSessionId,
           updatedAt: toIso(env?.updatedAt as any),
@@ -553,6 +570,7 @@ async function hydrateFileSessionFromDb(sessionId: string) {
       generation: record.runtime.generation,
       orchestratorSessionId: record.runtime.orchestratorSessionId,
       executor: record.runtime.executor || record.executor,
+      transport: record.runtime.transport,
       executorSessionId: record.runtime.executorSessionId || record.runtime.opencodeSessionId,
       opencodeSessionId: record.runtime.opencodeSessionId,
       codexRestoreStatus: record.runtime.codexRestoreStatus as any,
@@ -561,6 +579,9 @@ async function hydrateFileSessionFromDb(sessionId: string) {
       previousExecutorSessionId: record.runtime.previousExecutorSessionId,
       codexRestoreFailureReason: record.runtime.codexRestoreFailureReason,
     });
+  }
+  if (record.codexExecutionMode === 'sdk' || record.codexExecutionMode === 'ws') {
+    await taskCreationFileMemoryStore.updateSessionCodexExecutionMode(record.id, record.codexExecutionMode);
   }
   if (record.driver) {
     await taskCreationFileMemoryStore.updateSessionDriver(record.id, record.driver);
@@ -992,6 +1013,133 @@ async function readOpencodeFile(
     throw new Error('opencode file content invalid');
   }
   return data;
+}
+
+type SandboxWorkspaceNode = {
+  path: string;
+  type: 'file' | 'directory';
+};
+
+function buildWorkspaceDirCacheKey(input: {
+  path: string;
+  cursor: number;
+  limit: number;
+  includeIgnored: boolean;
+}) {
+  return JSON.stringify({
+    path: normalizeWorkspacePath(input.path),
+    cursor: input.cursor,
+    limit: input.limit,
+    includeIgnored: input.includeIgnored,
+  });
+}
+
+function resolveWorkspaceExecutor(session?: FileSessionRecord | null): string {
+  return String(session?.runtime?.executor || session?.driver || '').trim().toLowerCase();
+}
+
+function resolveWorkspaceAbsolutePath(workspaceRoot: string, relativePath: string): string {
+  const root = workspaceRoot.replace(/\/+$/, '');
+  const normalized = normalizeWorkspacePath(relativePath);
+  return normalized ? `${root}/${normalized}` : root;
+}
+
+async function listSandboxDirectory(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  dir: string
+): Promise<SandboxWorkspaceNode[]> {
+  const result: any = await e2bConnector.runCommand(
+    orchestratorSessionId,
+    `python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(os.environ["ONECEO_WORKSPACE_ROOT"]).resolve()
+rel = os.environ.get("ONECEO_DIR_PATH", "").strip()
+target = (root / rel).resolve() if rel else root
+
+if not str(target).startswith(str(root)):
+    print("workspace path escape", file=sys.stderr)
+    sys.exit(2)
+
+if not target.exists():
+    print("directory not found", file=sys.stderr)
+    sys.exit(3)
+
+if not target.is_dir():
+    print("not a directory", file=sys.stderr)
+    sys.exit(4)
+
+items = []
+for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+    rel_path = child.relative_to(root).as_posix()
+    items.append({
+        "path": rel_path,
+        "type": "directory" if child.is_dir() else "file",
+    })
+
+print(json.dumps(items, ensure_ascii=False))
+PY`,
+    {
+      timeoutMs: 20_000,
+      envs: {
+        ONECEO_WORKSPACE_ROOT: workspaceRoot,
+        ONECEO_DIR_PATH: normalizeWorkspacePath(dir),
+      },
+    }
+  );
+
+  const stdout = String(result?.stdout || result?.output || '').trim();
+  if (!stdout) {
+    throw new Error('sandbox directory list empty');
+  }
+  const parsed = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) {
+    throw new Error('sandbox directory list invalid');
+  }
+  return parsed as SandboxWorkspaceNode[];
+}
+
+async function buildWorkspaceTreeFromSandbox(input: {
+  orchestratorSessionId: string;
+  workspaceRoot: string;
+  maxDepth: number;
+  maxEntries: number;
+}) {
+  const items: Array<{ path: string; type: 'file' | 'dir' }> = [];
+  const queue: Array<{ path: string; depth: number }> = [{ path: '', depth: 0 }];
+  const seenDirs = new Set<string>();
+
+  while (queue.length > 0 && items.length < input.maxEntries) {
+    const current = queue.shift()!;
+    const nodes = await listSandboxDirectory(
+      input.orchestratorSessionId,
+      input.workspaceRoot,
+      current.path
+    );
+    for (const node of nodes) {
+      const normalizedPath = normalizeWorkspacePath(node.path);
+      if (!normalizedPath) continue;
+      const type = node.type === 'directory' ? 'dir' : 'file';
+      if (type === 'dir' && current.depth >= input.maxDepth) {
+        continue;
+      }
+      items.push({ path: normalizedPath, type });
+      if (items.length >= input.maxEntries) break;
+      if (type === 'dir' && current.depth + 1 <= input.maxDepth && !seenDirs.has(normalizedPath)) {
+        seenDirs.add(normalizedPath);
+        queue.push({ path: normalizedPath, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return {
+    root: input.workspaceRoot,
+    items,
+  };
 }
 
 function normalizeWorkspacePath(input: string): string {
@@ -1435,6 +1583,7 @@ function inferRuntimeFromMessages(
 ): {
   generation?: number;
   executor?: string;
+  transport?: string;
   executorSessionId?: string;
   opencodeSessionId?: string;
   codexRestoreStatus?: string;
@@ -1459,12 +1608,14 @@ function inferRuntimeFromMessages(
     asText(metadata.executor) ||
     (messageType.startsWith('codex_') ? 'codex' : '') ||
     (rawExecutorSessionId ? 'opencode' : '');
+  const transport = asText(metadata.transport) || undefined;
   const opencodeSessionId = legacySessionId || rawExecutorSessionId || undefined;
   const executorSessionId = rawExecutorSessionId || undefined;
   const executor = inferredExecutor;
   return {
     generation: normalizeRuntimeGenerationValue(metadata.runtimeGeneration) || undefined,
     executor: executor || undefined,
+    transport,
     executorSessionId,
     opencodeSessionId,
     codexRestoreStatus: asText(metadata.codexRestoreStatus) || undefined,
@@ -2139,11 +2290,12 @@ function updateSseClientCursor(key: string, cursor: number) {
 router.post('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.resolve(req);
-    const requestedSessionId = asText(req.body?.sessionId);
-    const requestedTitle = asText(req.body?.title);
-    const requestedMode = asText(req.body?.mode);
-    const requestedExecutor = asText(req.body?.executor);
-    const requestedDriver = asText(req.body?.driver);
+  const requestedSessionId = asText(req.body?.sessionId);
+  const requestedTitle = asText(req.body?.title);
+  const requestedMode = asText(req.body?.mode);
+  const requestedExecutor = asText(req.body?.executor);
+  const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
+  const requestedDriver = asText(req.body?.driver);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -2170,6 +2322,16 @@ router.post('/sessions', async (req, res) => {
     }
     if (requestedExecutor) {
       await taskCreationFileMemoryStore.updateSessionExecutor(session.id, requestedExecutor);
+    }
+    if (requestedExecutor === 'codex' && (requestedCodexExecutionMode === 'sdk' || requestedCodexExecutionMode === 'ws')) {
+      await taskCreationFileMemoryStore.updateSessionCodexExecutionMode(
+        session.id,
+        requestedCodexExecutionMode as 'sdk' | 'ws'
+      );
+      await taskCreationFileMemoryStore.updateRuntimeBinding(session.id, {
+        executor: 'codex',
+        transport: requestedCodexExecutionMode === 'ws' ? 'app_server' : 'sdk',
+      });
     }
     const derivedDriver =
       (requestedDriver as FileSessionRecord['driver']) ||
@@ -3614,6 +3776,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const tenantKey = resolveTenantKey(req);
     const rawPath = String(req.query.path || '').trim();
     if (rawPath && isUnsafePath(rawPath)) {
       return res.status(400).json({
@@ -3628,9 +3791,33 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const includeIgnored = !['0', 'false', 'no'].includes(
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
+    const workspaceExecutor = resolveWorkspaceExecutor(session);
+    const dirCacheKey = buildWorkspaceDirCacheKey({
+      path: dirPath,
+      cursor,
+      limit,
+      includeIgnored,
+    });
+    const tryCodexDirFallback = async () => {
+      if (workspaceExecutor !== 'codex') return null;
+      const cached = await taskSessionWorkspaceCacheDAO.get({
+        sessionId,
+        tenantKey,
+        cacheType: 'dir',
+        cacheKey: dirCacheKey,
+      });
+      if (!cached?.data) return null;
+      return res.json({
+        success: true,
+        data: cached.data,
+        cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+      });
+    };
 
     const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
     if (!orchestratorSessionId) {
+      const fallback = await tryCodexDirFallback();
+      if (fallback) return fallback;
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未就绪，无法读取目录'),
@@ -3638,6 +3825,8 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
     if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      const fallback = await tryCodexDirFallback();
+      if (fallback) return fallback;
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未启动，无法读取目录'),
@@ -3645,8 +3834,11 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
 
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
-    await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
-    const nodes = await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, dirPath);
+    const nodes =
+      workspaceExecutor === 'codex'
+        ? await listSandboxDirectory(orchestratorSessionId, workspaceRoot, dirPath)
+        : (await ensureOpencodeServer(orchestratorSessionId, workspaceRoot),
+          await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, dirPath));
     const normalizedCandidates = nodes
       .map((node): { path: string; type: 'file' | 'dir'; ignored: boolean } | null => {
         const normalizedPath = normalizeWorkspacePath(node.path || '');
@@ -3671,6 +3863,26 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
 
     await touchSandbox(orchestratorSessionId, 'workspace_dir');
 
+    if (workspaceExecutor === 'codex') {
+      await taskSessionWorkspaceCacheDAO.upsert({
+        sessionId,
+        tenantKey,
+        cacheType: 'dir',
+        cacheKey: dirCacheKey,
+        data: {
+          root: workspaceRoot,
+          path: dirPath,
+          items: pageItems,
+          cursor: start,
+          total,
+          returned: pageItems.length,
+          limit,
+          hasMore: end < total,
+          nextCursor: end < total ? end : null,
+        },
+      });
+    }
+
     return res.json({
       success: true,
       data: {
@@ -3687,8 +3899,38 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     });
   } catch (error: any) {
     const { sessionId } = req.params;
+    const tenantKey = resolveTenantKey(req);
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const workspaceExecutor = resolveWorkspaceExecutor(session);
+    const rawPath = String(req.query.path || '').trim();
+    const dirPath = normalizeWorkspacePath(rawPath);
+    const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
+    const rawCursor = Number(req.query.cursor || 0);
+    const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
+    const includeIgnored = !['0', 'false', 'no'].includes(
+      String(req.query.includeIgnored ?? '1').trim().toLowerCase()
+    );
+    if (workspaceExecutor === 'codex') {
+      const cached = await taskSessionWorkspaceCacheDAO.get({
+        sessionId,
+        tenantKey,
+        cacheType: 'dir',
+        cacheKey: buildWorkspaceDirCacheKey({
+          path: dirPath,
+          cursor,
+          limit,
+          includeIgnored,
+        }),
+      });
+      if (cached?.data) {
+        return res.json({
+          success: true,
+          data: cached.data,
+          cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+        });
+      }
+    }
     if (isSandboxNotFoundError(error)) {
-      const session = await taskCreationFileMemoryStore.getSession(sessionId);
       const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
@@ -3716,6 +3958,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(req);
+    const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
       const cached = await taskCreationCacheStore.getWorkspaceTree(tenantKey, sessionId);
       if (cached) {
@@ -3725,10 +3968,40 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
           cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
         });
       }
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'tree',
+          cacheKey: '',
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
     }
 
     const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
     if (!orchestratorSessionId) {
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'tree',
+          cacheKey: '',
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未就绪，无法读取工作区'),
@@ -3736,6 +4009,21 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
     if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'tree',
+          cacheKey: '',
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未启动，无法读取工作区'),
@@ -3746,13 +4034,21 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const maxDepth = clampNumber(Number(req.query.depth || 6), 1, 8);
     const maxEntries = clampNumber(Number(req.query.maxEntries || 2000), 200, 5000);
 
-    await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
-    const parsed = await buildWorkspaceTreeFromOpencode({
-      orchestratorSessionId,
-      workspaceRoot,
-      maxDepth,
-      maxEntries,
-    });
+    const parsed =
+      workspaceExecutor === 'codex'
+        ? await buildWorkspaceTreeFromSandbox({
+            orchestratorSessionId,
+            workspaceRoot,
+            maxDepth,
+            maxEntries,
+          })
+        : (await ensureOpencodeServer(orchestratorSessionId, workspaceRoot),
+          await buildWorkspaceTreeFromOpencode({
+            orchestratorSessionId,
+            workspaceRoot,
+            maxDepth,
+            maxEntries,
+          }));
     await touchSandbox(orchestratorSessionId, 'workspace_tree');
 
     const ttlMs = clampNumber(
@@ -3761,6 +4057,15 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       60000
     );
     await taskCreationCacheStore.setWorkspaceTree(tenantKey, sessionId, parsed, ttlMs);
+    if (workspaceExecutor === 'codex') {
+      await taskSessionWorkspaceCacheDAO.upsert({
+        sessionId,
+        tenantKey,
+        cacheType: 'tree',
+        cacheKey: '',
+        data: parsed as Record<string, unknown>,
+      });
+    }
 
     return res.json({
       success: true,
@@ -3770,8 +4075,23 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   } catch (error: any) {
     const tenantKey = resolveTenantKey(req);
     const { sessionId } = req.params;
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (resolveWorkspaceExecutor(session) === 'codex') {
+      const dbCached = await taskSessionWorkspaceCacheDAO.get({
+        sessionId,
+        tenantKey,
+        cacheType: 'tree',
+        cacheKey: '',
+      });
+      if (dbCached?.data) {
+        return res.json({
+          success: true,
+          data: dbCached.data,
+          cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+        });
+      }
+    }
     if (isSandboxNotFoundError(error)) {
-      const session = await taskCreationFileMemoryStore.getSession(sessionId);
       const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
@@ -3816,6 +4136,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(req);
+    const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
       const cached = await taskCreationCacheStore.getWorkspaceFile(tenantKey, sessionId, normalizedPath);
       if (cached) {
@@ -3825,10 +4146,40 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
           cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
         });
       }
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'file',
+          cacheKey: normalizedPath,
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
     }
 
     const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
     if (!orchestratorSessionId) {
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'file',
+          cacheKey: normalizedPath,
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未就绪，无法读取文件'),
@@ -3836,6 +4187,21 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
     if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      if (workspaceExecutor === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'file',
+          cacheKey: normalizedPath,
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
+      }
       return res.status(409).json({
         success: false,
         error: getPublicErrorMessage('执行环境未启动，无法读取文件'),
@@ -3844,17 +4210,46 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const maxBytes = clampNumber(Number(req.query.maxBytes || 200000), 20000, 500000);
-
-    await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
-    const content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
-    const isBinary = content.type !== 'text' || content.encoding === 'base64';
-    const mimeType = resolveMimeType(normalizedPath, content.mimeType);
-    const previewType = detectPreviewType(normalizedPath, mimeType, isBinary);
     const maxBinaryBytes = clampNumber(
       Number(req.query.maxBinaryBytes || 2 * 1024 * 1024),
       64 * 1024,
       10 * 1024 * 1024
     );
+
+    let content:
+      | OpencodeFileContent
+      | {
+          type: 'text' | 'binary';
+          content: string;
+          encoding?: string;
+          mimeType?: string;
+        };
+    let isBinary: boolean;
+    let mimeType: string;
+
+    if (workspaceExecutor === 'codex') {
+      const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
+      const bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      const buffer = Buffer.from(bytes);
+      const hasNullByte = buffer.includes(0);
+      const textContent = hasNullByte ? '' : buffer.toString('utf8');
+      const binaryHeuristic = hasNullByte || textContent.includes('\uFFFD');
+      isBinary = binaryHeuristic;
+      mimeType = resolveMimeType(normalizedPath);
+      content = {
+        type: isBinary ? 'binary' : 'text',
+        content: isBinary ? buffer.toString('base64') : textContent,
+        encoding: isBinary ? 'base64' : 'utf8',
+        mimeType,
+      };
+    } else {
+      await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
+      content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
+      isBinary = content.type !== 'text' || content.encoding === 'base64';
+      mimeType = resolveMimeType(normalizedPath, content.mimeType);
+    }
+
+    const previewType = detectPreviewType(normalizedPath, mimeType, isBinary);
 
     let parsed:
       | {
@@ -3925,6 +4320,15 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
+    if (workspaceExecutor === 'codex') {
+      await taskSessionWorkspaceCacheDAO.upsert({
+        sessionId,
+        tenantKey,
+        cacheType: 'file',
+        cacheKey: normalizedPath,
+        data: parsed as Record<string, unknown>,
+      });
+    }
     await touchSandbox(orchestratorSessionId, 'workspace_file');
 
     return res.json({
@@ -3935,11 +4339,27 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   } catch (error: any) {
     const tenantKey = resolveTenantKey(req);
     const { sessionId } = req.params;
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (isSandboxNotFoundError(error)) {
-      const session = await taskCreationFileMemoryStore.getSession(sessionId);
       const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
+      }
+      const normalizedPath = String(req.query.path || '').trim().replace(/\\/g, '/');
+      if (resolveWorkspaceExecutor(session) === 'codex') {
+        const dbCached = await taskSessionWorkspaceCacheDAO.get({
+          sessionId,
+          tenantKey,
+          cacheType: 'file',
+          cacheKey: normalizedPath,
+        });
+        if (dbCached?.data) {
+          return res.json({
+            success: true,
+            data: dbCached.data,
+            cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+          });
+        }
       }
       return res.status(409).json({
         success: false,
@@ -3948,6 +4368,21 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     }
     const relativePath = String(req.query.path || '').trim();
     const normalizedPath = relativePath.replace(/\\/g, '/');
+    if (resolveWorkspaceExecutor(session) === 'codex') {
+      const dbCached = await taskSessionWorkspaceCacheDAO.get({
+        sessionId,
+        tenantKey,
+        cacheType: 'file',
+        cacheKey: normalizedPath,
+      });
+      if (dbCached?.data) {
+        return res.json({
+          success: true,
+          data: dbCached.data,
+          cache: { hit: true, stale: true, source: 'db_workspace_cache' },
+        });
+      }
+    }
     const fallback = await taskCreationCacheStore.getWorkspaceFile(tenantKey, sessionId, normalizedPath, {
       allowStale: true,
     });

@@ -9,6 +9,7 @@ export type PreviewDiffItem = {
   createdAt?: string | null;
   eventIndex?: number;
   relatedEventIndexes?: number[];
+  canonicalFile?: string | null;
 };
 
 export type StructuredFileDiff = {
@@ -221,7 +222,9 @@ function mapCodexFileChangeStatus(kind: string): StructuredFileDiff["status"] {
 
 function buildCodexFileChangeDiffs(metadata: Record<string, unknown>): StructuredFileDiff[] {
   const item = extractCodexItem(metadata);
-  const changes = Array.isArray(item.changes) ? item.changes : [];
+  const metadataChanges = Array.isArray(metadata.fileChanges) ? metadata.fileChanges : [];
+  const itemChanges = Array.isArray(item.changes) ? item.changes : [];
+  const changes = metadataChanges.length > 0 ? metadataChanges : itemChanges;
   return changes.reduce<StructuredFileDiff[]>((acc, change) => {
     const record = toRecord(change);
     const file = asText(record.path);
@@ -719,6 +722,45 @@ export function buildPreviewItems(messages: AgentMessage[]) {
   const seenDiffs = new Set<string>();
   const mutationCandidates: MutationCandidate[] = [];
   const mutationByPartId = new Map<string, MutationCandidate>();
+  const codexTurnFilePaths = new Map<string, string[]>();
+  const codexTurnLastDiffIndex = new Map<string, number>();
+  const codexTurnHasDiff = new Set<string>();
+
+  const mergeCodexTurnPath = (turnId: string, path: string) => {
+    const normalizedTurnId = turnId.trim();
+    const normalizedPath = path.trim();
+    if (!normalizedTurnId || !normalizedPath) return;
+    const existing = codexTurnFilePaths.get(normalizedTurnId) || [];
+    if (existing.includes(normalizedPath)) return;
+    codexTurnFilePaths.set(normalizedTurnId, [...existing, normalizedPath]);
+  };
+
+  messages.forEach((message) => {
+    if (message.type !== "executor_event") return;
+    const metadata = toRecord(message.metadata);
+    if (asText(metadata.executor).toLowerCase() !== "codex") return;
+    const item = extractCodexItem(metadata);
+    const itemType =
+      asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
+    const appServerMethod = asText(metadata.appServerMethod).toLowerCase();
+    const turnId = asText(metadata.turnId);
+    if (!turnId) return;
+
+    if (appServerMethod === "turn/diff/updated") {
+      codexTurnHasDiff.add(turnId);
+    }
+
+    if (itemType === "file_change" || itemType === "filechange") {
+      const files = buildCodexFileChangeDiffs(metadata);
+      files.forEach((file) => {
+        if (file.file) mergeCodexTurnPath(turnId, file.file);
+      });
+      const metadataPaths = Array.isArray(metadata.filePaths)
+        ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
+        : [];
+      metadataPaths.forEach((path) => mergeCodexTurnPath(turnId, path));
+    }
+  });
 
   messages.forEach((message, index) => {
     if (message.type === "executor_event") {
@@ -727,9 +769,96 @@ export function buildPreviewItems(messages: AgentMessage[]) {
       const item = extractCodexItem(metadata);
       const itemType =
         asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
-      if (itemType !== "file_change") return;
+      const appServerMethod = asText(metadata.appServerMethod).toLowerCase();
+      const turnId = asText(metadata.turnId);
+
+      if (appServerMethod === "turn/diff/updated") {
+        if (turnId) {
+          codexTurnLastDiffIndex.set(turnId, index);
+        }
+      }
+    }
+  });
+
+  messages.forEach((message, index) => {
+    if (message.type === "executor_event") {
+      const metadata = toRecord(message.metadata);
+      if (asText(metadata.executor).toLowerCase() !== "codex") return;
+      const item = extractCodexItem(metadata);
+      const itemType =
+        asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
+      const appServerMethod = asText(metadata.appServerMethod).toLowerCase();
+      const turnId = asText(metadata.turnId);
+
+      if (appServerMethod === "turn/diff/updated") {
+        if (turnId && codexTurnLastDiffIndex.get(turnId) !== index) {
+          return;
+        }
+        const diff = asText(metadata.diff);
+        if (!isEmptyDiffText(diff)) {
+          const turnPaths = turnId ? (codexTurnFilePaths.get(turnId) || []) : [];
+          const titlePayload =
+            turnPaths.length > 0
+              ? turnPaths.map((file) => ({
+                  file,
+                  before: "",
+                  after: "",
+                  status: "modified" as const,
+                }))
+              : diff;
+          const payload: DiffPayload = { kind: "text", text: diff };
+          const signature = buildDiffSignature(payload);
+          if (!signature || !seenDiffs.has(signature)) {
+            if (signature) seenDiffs.add(signature);
+            diffItems.push({
+              id: `diff-${index}-codex-turn-diff`,
+              title: buildDiffTitle(titlePayload, "codex.turn_diff", diffItems.length),
+              diff,
+              source: "codex.turn_diff",
+              createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+              eventIndex: index,
+              relatedEventIndexes: [index],
+              canonicalFile: turnPaths.length === 1 ? normalizePath(turnPaths[0] || "") : null,
+            });
+          }
+        }
+      }
+
+      if (itemType !== "file_change" && itemType !== "filechange") return;
+      if (turnId && codexTurnHasDiff.has(turnId)) return;
 
       const files = buildCodexFileChangeDiffs(metadata);
+      const metadataChanges = Array.isArray(metadata.fileChanges) ? metadata.fileChanges : [];
+      const diffTexts = metadataChanges
+        .map((change) => toRecord(change))
+        .map((change) => asText(change.diff))
+        .filter((value) => !isEmptyDiffText(value));
+
+      if (files.length === 0 && diffTexts.length === 0) return;
+
+      const latestDiffText = diffTexts.length > 0 ? diffTexts[diffTexts.length - 1] : "";
+      if (latestDiffText) {
+        const payload: DiffPayload = { kind: "text", text: latestDiffText };
+        const signature = buildDiffSignature(payload);
+        if (!signature || !seenDiffs.has(signature)) {
+          if (signature) seenDiffs.add(signature);
+          const titlePayload: StructuredFileDiff[] | string =
+            files.length > 0 ? files : latestDiffText;
+          diffItems.push({
+            id: `diff-${index}-codex-file-change-text`,
+            title: buildDiffTitle(titlePayload, "codex.file_change", diffItems.length),
+            diff: latestDiffText,
+            source: "codex.file_change",
+            createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+            eventIndex: index,
+            relatedEventIndexes: [index],
+            canonicalFile:
+              files.length === 1 ? normalizePath(files[0]?.file || "") : null,
+          });
+        }
+        return;
+      }
+
       if (files.length === 0) return;
 
       diffItems.push({
@@ -740,6 +869,8 @@ export function buildPreviewItems(messages: AgentMessage[]) {
         createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
         eventIndex: index,
         relatedEventIndexes: [index],
+        canonicalFile:
+          files.length === 1 ? normalizePath(files[0]?.file || "") : null,
       });
       return;
     }
@@ -791,6 +922,8 @@ export function buildPreviewItems(messages: AgentMessage[]) {
               createdAt,
               eventIndex: index,
               relatedEventIndexes: [index],
+              canonicalFile:
+                structured.length === 1 ? normalizePath(structured[0]?.file || "") : null,
             });
           }
         }
@@ -819,6 +952,7 @@ export function buildPreviewItems(messages: AgentMessage[]) {
               createdAt,
               eventIndex: index,
               relatedEventIndexes: [index],
+              canonicalFile: normalizePath(extractFileFromApplyPatch(block.text) || "") || null,
             });
           });
         } else {
@@ -831,6 +965,7 @@ export function buildPreviewItems(messages: AgentMessage[]) {
             createdAt,
             eventIndex: index,
             relatedEventIndexes: [index],
+            canonicalFile: normalizePath(extractFileFromApplyPatch(output) || "") || null,
           });
         }
       }
@@ -871,6 +1006,8 @@ export function buildPreviewItems(messages: AgentMessage[]) {
           createdAt,
           eventIndex: index,
           relatedEventIndexes: [candidate.messageIndex, index],
+          canonicalFile:
+            filteredFiles.length === 1 ? normalizePath(filteredFiles[0]?.file || "") : null,
         });
       } else {
         const diffPayload: DiffPayload = { kind: "text", text: payload };
@@ -892,6 +1029,7 @@ export function buildPreviewItems(messages: AgentMessage[]) {
               createdAt,
               eventIndex: index,
               relatedEventIndexes: [candidate.messageIndex, index],
+              canonicalFile: normalizePath(extractFileFromUnifiedDiff(block.text) || "") || null,
             });
           });
         } else {
@@ -904,6 +1042,7 @@ export function buildPreviewItems(messages: AgentMessage[]) {
             createdAt,
             eventIndex: index,
             relatedEventIndexes: [candidate.messageIndex, index],
+            canonicalFile: normalizePath(extractFileFromUnifiedDiff(payload) || "") || null,
           });
         }
       }
@@ -913,5 +1052,25 @@ export function buildPreviewItems(messages: AgentMessage[]) {
 
   });
 
-  return { diffItems };
+  return { diffItems: collapseRecentCodexDiffItems(diffItems) };
+}
+
+function collapseRecentCodexDiffItems(items: PreviewDiffItem[]): PreviewDiffItem[] {
+  const latestCodexIndexByFile = new Map<string, number>();
+
+  items.forEach((item, index) => {
+    const source = (item.source || "").toLowerCase();
+    const canonicalFile = normalizePath(item.canonicalFile || "");
+    if (!source.startsWith("codex.") || !canonicalFile) return;
+    latestCodexIndexByFile.set(canonicalFile, index);
+  });
+
+  if (latestCodexIndexByFile.size === 0) return items;
+
+  return items.filter((item, index) => {
+    const source = (item.source || "").toLowerCase();
+    const canonicalFile = normalizePath(item.canonicalFile || "");
+    if (!source.startsWith("codex.") || !canonicalFile) return true;
+    return latestCodexIndexByFile.get(canonicalFile) === index;
+  });
 }

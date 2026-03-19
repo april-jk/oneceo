@@ -86,6 +86,36 @@ export const taskSessionRecentMessages = pgTable(
   })
 );
 
+export const taskSessionWorkspaceCache = pgTable(
+  'task_session_workspace_cache',
+  {
+    id: uuid('id').primaryKey(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    tenantKey: text('tenant_key').notNull(),
+    cacheType: text('cache_type').notNull(),
+    cacheKey: text('cache_key').notNull(),
+    data: jsonb('data').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionCacheUnique: uniqueIndex('idx_task_session_workspace_cache_session_unique').on(
+      table.sessionId,
+      table.tenantKey,
+      table.cacheType,
+      table.cacheKey
+    ),
+    sessionIdIdx: index('idx_task_session_workspace_cache_session_id').on(table.sessionId),
+    sessionTypeIdx: index('idx_task_session_workspace_cache_session_type').on(
+      table.sessionId,
+      table.cacheType
+    ),
+    updatedAtIdx: index('idx_task_session_workspace_cache_updated_at').on(table.updatedAt),
+  })
+);
+
 /**
  * 意图识别结果表
  * 
@@ -253,6 +283,8 @@ export type NewConversationMessage = typeof conversationMessages.$inferInsert;
 
 export type TaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferSelect;
 export type NewTaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferInsert;
+export type TaskSessionWorkspaceCache = typeof taskSessionWorkspaceCache.$inferSelect;
+export type NewTaskSessionWorkspaceCache = typeof taskSessionWorkspaceCache.$inferInsert;
 
 export type IntentRecognitionResult = typeof intentRecognitionResults.$inferSelect;
 export type NewIntentRecognitionResult = typeof intentRecognitionResults.$inferInsert;

@@ -2,6 +2,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+export type CodexExecutionMode = 'sdk' | 'ws';
+export type CodexTransportMode = 'sdk' | 'app_server';
 
 export function deriveSessionDriver(input: {
   mode?: 'altus' | 'sandbox' | string;
@@ -60,10 +62,12 @@ export interface FileSessionRecord {
   mode?: 'altus' | 'sandbox';
   driver?: SessionDriver;
   executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  codexExecutionMode?: CodexExecutionMode;
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
     executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    transport?: CodexTransportMode | string;
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
@@ -548,6 +552,22 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async updateSessionCodexExecutionMode(
+    sessionId: string,
+    codexExecutionMode: FileSessionRecord['codexExecutionMode']
+  ): Promise<void> {
+    if (codexExecutionMode !== 'sdk' && codexExecutionMode !== 'ws') return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.codexExecutionMode === codexExecutionMode) return;
+      session.codexExecutionMode = codexExecutionMode;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
   async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
     if (!driver) return;
     await this.withLock(async () => {
@@ -687,6 +707,7 @@ class TaskCreationFileMemoryStore {
       generation?: number;
       orchestratorSessionId?: string;
       executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      transport?: CodexTransportMode | string;
       executorSessionId?: string;
       opencodeSessionId?: string;
       codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
@@ -719,6 +740,16 @@ class TaskCreationFileMemoryStore {
           : runtime.opencodeSessionId !== undefined
             ? 'opencode'
             : currentExecutor;
+      const currentTransport =
+        typeof current.transport === 'string' && current.transport.trim()
+          ? current.transport.trim()
+          : undefined;
+      const requestedTransport =
+        runtime.transport !== undefined
+          ? String(runtime.transport || '').trim() || undefined
+          : requestedExecutor === 'codex'
+            ? currentTransport
+            : undefined;
       const currentExecutorSessionId = current.executorSessionId || current.opencodeSessionId || undefined;
       const currentPreviousExecutorSessionId = current.previousExecutorSessionId || undefined;
       const nextExecutorSessionId =
@@ -784,6 +815,7 @@ class TaskCreationFileMemoryStore {
         generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
         executor: requestedExecutor,
+        transport: requestedTransport,
         executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,
         codexRestoreStatus: nextCodexRestoreStatus,

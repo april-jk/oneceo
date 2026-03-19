@@ -73,6 +73,8 @@ interface OpencodePreviewPanelProps {
   sessionId?: string | null;
   open: boolean;
   onToggle: () => void;
+  maximized?: boolean;
+  onToggleMaximized?: () => void;
   activeTab?: PreviewTab;
   onTabChange?: (tab: PreviewTab) => void;
   selectedDiffId?: string | null;
@@ -100,6 +102,8 @@ export default function OpencodePreviewPanel({
   sessionId,
   open,
   onToggle,
+  maximized = false,
+  onToggleMaximized,
   activeTab,
   onTabChange,
   selectedDiffId: controlledSelectedDiffId,
@@ -779,14 +783,24 @@ export default function OpencodePreviewPanel({
             {treeCount + diffItems.length}
           </span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggle}
-          className="h-7 rounded-full"
-        >
-          收起
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleMaximized}
+            className="h-7 rounded-full"
+          >
+            {maximized ? "还原" : "展开"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggle}
+            className="h-7 rounded-full"
+          >
+            收起
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground border-b border-border">

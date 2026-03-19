@@ -262,6 +262,7 @@ function compactText(value: string, maxLen: number = 320): string {
 // 注意：直通模式不应触发 Altus 编排与澄清逻辑，避免误走流程。
 const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
 const EXECUTOR_STORAGE_KEY = 'altus_executor';
+const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 const SSE_CLIENT_ID_STORAGE_KEY = 'task_creation_sse_client_id';
 
 function readAltusMode(): 'sandbox' | 'managed' {
@@ -290,6 +291,20 @@ function readExecutor(): 'opencode' | 'claudecode' | 'codex' {
     // ignore storage failures
   }
   return 'opencode';
+}
+
+function readCodexExecutionMode(): 'sdk' | 'ws' {
+  if (typeof window === 'undefined') return 'sdk';
+  try {
+    const stored = window.localStorage.getItem(CODEX_EXECUTION_MODE_STORAGE_KEY);
+    if (stored === 'ws' || stored === 'sdk') {
+      return stored;
+    }
+    window.localStorage.setItem(CODEX_EXECUTION_MODE_STORAGE_KEY, 'sdk');
+  } catch {
+    // ignore storage failures
+  }
+  return 'sdk';
 }
 
 function normalizeExecutor(value: unknown): 'opencode' | 'claudecode' | 'codex' {
@@ -803,14 +818,20 @@ function shouldDisplayExecutorEvent(metadataRaw: unknown, contentRaw?: string): 
   if (normalizedEventType === 'item.completed') {
     if (
       itemType === 'command_execution' ||
+      itemType === 'commandexecution' ||
       itemType === 'file_change' ||
+      itemType === 'filechange' ||
       itemType === 'diff' ||
       itemType === 'approval_request' ||
+      itemType === 'approvalrequest' ||
       itemType === 'tool_execution'
     ) {
       return true;
     }
     return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
+  }
+  if (normalizedEventType === 'turn/diff/updated') {
+    return true;
   }
   return hasMeaningfulExecutorEventText(metadataRaw, contentRaw);
 }
@@ -840,6 +861,8 @@ function resolveTerminalMessageOutcome(message: AgentMessage): 'completed' | 'fa
 
   if (message.type === 'executor_event') {
     const eventType = asText(metadata.eventType).toLowerCase();
+    const turnStatus = asText(metadata.turnStatus).toLowerCase();
+    if (eventType === 'turn.completed' && turnStatus === 'failed') return 'failed';
     if (eventType === 'turn.completed') return 'completed';
     if (eventType === 'turn.failed' || eventType === 'turn.interrupted') return 'failed';
 
@@ -3483,6 +3506,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const altusMode = readAltusMode();
     if (altusMode === 'sandbox') {
       const executor = readExecutor();
+      const codexExecutionMode = executor === 'codex' ? readCodexExecutionMode() : undefined;
       if (!activeSessionId) {
         const provisionalId =
           (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -3491,6 +3515,26 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         activeSessionId = provisionalId;
         bindSessionId(provisionalId);
       }
+      const messageKey = generateClientMessageKey('user');
+      const messageMetadata = {
+        ...(options?.metadata || {}),
+        messageKey,
+      };
+      setIsProcessing(true);
+      setCurrentQuestion(null);
+      setMessages((prev) =>
+        mergeRealtimeMessage(
+          prev,
+          {
+            messageKey,
+            type: 'user_input',
+            content: text,
+            metadata: messageMetadata,
+            sessionId: activeSessionId || undefined,
+          },
+          WELCOME_MESSAGE
+        )
+      );
       let prePersistedUserInput = false;
       if (activeSessionId) {
         try {
@@ -3498,6 +3542,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             sessionId: activeSessionId,
             mode: 'sandbox',
             executor,
+            ...(codexExecutionMode ? { codexExecutionMode } : {}),
             ...(executor === 'codex'
               ? {}
               : {
@@ -3536,7 +3581,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         runtimeEnabled && hasBoundRuntime && isSendableRuntimeStatus(normalizedRuntimeStatus);
       let nextOpencodeId = hasBoundRuntime ? (opencodeSessionId || '').trim() : '';
       let nextRuntimeStatus = normalizedRuntimeStatus;
-      if (activeSessionId && autoRuntime && runtimeEnabled) {
+      const shouldSkipAuthoritativeRuntimePreflight =
+        executor === 'codex' &&
+        codexExecutionMode === 'ws' &&
+        Boolean(nextOrchestratorId) &&
+        Boolean(runtimeEnabled) &&
+        isSendableRuntimeStatus(nextRuntimeStatus);
+      if (activeSessionId && autoRuntime && runtimeEnabled && !shouldSkipAuthoritativeRuntimePreflight) {
         try {
           const detail = await getTaskCreationSession(activeSessionId);
           const authoritativeOrchestratorId = (detail?.runtime?.orchestratorSessionId || '').trim();
@@ -3574,26 +3625,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (activeSessionId && nextOrchestratorId && runtimeEnabled) {
         setRuntimeStatus('executing');
       }
-      const messageKey = generateClientMessageKey('user');
-      const messageMetadata = {
-        ...(options?.metadata || {}),
-        messageKey,
-      };
-      setIsProcessing(true);
-      setCurrentQuestion(null);
-      setMessages((prev) =>
-        mergeRealtimeMessage(
-          prev,
-          {
-            messageKey,
-            type: 'user_input',
-            content: text,
-            metadata: messageMetadata,
-            sessionId: activeSessionId || undefined,
-          },
-          WELCOME_MESSAGE
-        )
-      );
       if (!nextOrchestratorId || !runtimeEnabled) {
         setPendingSandboxPrompt({
           sessionId: activeSessionId,
@@ -3638,6 +3669,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           ...(nextOpencodeId ? { opencodeSessionId: nextOpencodeId } : undefined),
           altusMode: 'sandbox',
           executor,
+          ...(codexExecutionMode ? { codexExecutionMode } : {}),
           ...(executor === 'codex' ? { clientMessageKey: messageKey } : undefined),
           ...(prePersistedUserInput ? { prePersistedUserInput: true } : undefined),
         },

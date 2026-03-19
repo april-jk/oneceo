@@ -154,6 +154,7 @@ export default function Home() {
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewMaximized, setPreviewMaximized] = useState(false);
   const [previewTab, setPreviewTab] = useState<
     "files" | "changes" | "debug" | "deployment"
   >("files");
@@ -553,7 +554,7 @@ export default function Home() {
     { label: "生成季度业务报告", icon: "💻" },
   ];
 
-  const chatItems = useMemo(() => buildChatItems(messages), [messages]);
+  const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
   const normalizePath = (value: string) =>
@@ -632,12 +633,20 @@ export default function Home() {
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
 
+  useEffect(() => {
+    if (!previewOpen && previewMaximized) {
+      setPreviewMaximized(false);
+    }
+  }, [previewOpen, previewMaximized]);
+
   const previewPanel = previewOpen ? (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
       <OpencodePreviewPanel
         messages={messages}
         sessionId={sessionId}
         open={previewOpen}
+        maximized={previewMaximized}
+        onToggleMaximized={() => setPreviewMaximized((prev) => !prev)}
         activeTab={previewTab}
         onTabChange={setPreviewTab}
         onToggle={() => setPreviewOpen(false)}
@@ -674,7 +683,14 @@ export default function Home() {
               variant="outline"
               size="sm"
               className="rounded-full"
-              onClick={() => setPreviewOpen((prev) => !prev)}
+              onClick={() => {
+                setPreviewOpen((prev) => {
+                  if (prev) {
+                    setPreviewMaximized(false);
+                  }
+                  return !prev;
+                });
+              }}
             >
               {previewOpen ? "收起预览" : "显示预览"}
             </Button>
@@ -1159,27 +1175,41 @@ export default function Home() {
                 className="flex h-full flex-1 min-h-0 overflow-hidden overscroll-none"
               >
                 {showDesktopPreview ? (
-                  <ResizablePanelGroup
-                    direction="horizontal"
-                    autoSaveId="task-creation-chat-layout"
-                    className="h-full min-h-0"
-                  >
-                    <ResizablePanel defaultSize={66} minSize={42}>
-                      <div className="h-full min-h-0 pr-2">{chatPanel}</div>
-                    </ResizablePanel>
-                    <ResizableHandle
-                      withHandle
-                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
-                    />
-                    <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
-                      <div className="h-full min-h-0 pl-2">{previewPanel}</div>
-                    </ResizablePanel>
-                  </ResizablePanelGroup>
+                  previewMaximized ? (
+                    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+                      <div className="h-full min-h-0 w-full">{previewPanel}</div>
+                    </div>
+                  ) : (
+                    <ResizablePanelGroup
+                      direction="horizontal"
+                      autoSaveId="task-creation-chat-layout"
+                      className="h-full min-h-0"
+                    >
+                      <ResizablePanel defaultSize={66} minSize={42}>
+                        <div className="h-full min-h-0 pr-2">{chatPanel}</div>
+                      </ResizablePanel>
+                      <ResizableHandle
+                        withHandle
+                        className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                      />
+                      <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
+                        <div className="h-full min-h-0 pl-2">{previewPanel}</div>
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
+                  )
                 ) : (
                   <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-                    <div className="flex-1 min-h-0">{chatPanel}</div>
+                    {!previewMaximized ? (
+                      <div className="flex-1 min-h-0">{chatPanel}</div>
+                    ) : null}
                     {showMobilePreview ? (
-                      <div className="h-[min(45vh,32rem)] min-h-[280px] shrink-0">
+                      <div
+                        className={
+                          previewMaximized
+                            ? "flex-1 min-h-0"
+                            : "h-[min(45vh,32rem)] min-h-[280px] shrink-0"
+                        }
+                      >
                         {previewPanel}
                       </div>
                     ) : null}
@@ -1232,8 +1262,18 @@ export type ChatItem =
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
-  | { kind: "agent"; markdown: string; author?: string; messageKey?: string }
-  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string }
+  | { kind: "agent"; markdown: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent_explanation";
+      markdown: string;
+      heading: string;
+      collapsedMarkdown?: string;
+      author?: string;
+      messageKey?: string;
+      active?: boolean;
+      showAuthor?: boolean;
+    }
+  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string; showAuthor?: boolean }
   | {
       kind: "capsule";
       label: string;
@@ -1322,6 +1362,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     value.replace(/\r\n/g, "\n").trim();
   const userTextSet = new Set<string>();
   const finalizedPartIds = new Set<string>();
+  const codexTurnFilePaths = new Map<string, string[]>();
+  const lastCodexDiffIndexByTurn = new Map<string, number>();
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -1347,6 +1389,49 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (eventInfo.eventType === "message.final") {
       const partId = getPartIdFromMetadata(metadata);
       if (partId) finalizedPartIds.add(partId);
+    }
+  }
+
+  const mergeCodexTurnFilePath = (turnId: string, path: string) => {
+    const normalizedTurnId = turnId.trim();
+    const normalizedPath = path.trim();
+    if (!normalizedTurnId || !normalizedPath) return;
+    const existing = codexTurnFilePaths.get(normalizedTurnId) || [];
+    if (existing.includes(normalizedPath)) return;
+    codexTurnFilePaths.set(normalizedTurnId, [...existing, normalizedPath]);
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type !== "executor_event") continue;
+    const metadata = toRecord(message.metadata);
+    const event = toRecord(metadata.event);
+    const item = toRecord(event.item);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const itemType =
+      asText(metadata.itemType).toLowerCase() ||
+      asText(item.type).toLowerCase();
+    const turnId = asText(metadata.turnId);
+
+    if (eventType === "turn/diff/updated" && turnId) {
+      lastCodexDiffIndexByTurn.set(turnId, index);
+    }
+
+    if (itemType === "file_change" || itemType === "filechange") {
+      const fileChanges = extractCodexFileChanges(metadata, item);
+      for (const change of fileChanges) {
+        if (turnId && change.path) {
+          mergeCodexTurnFilePath(turnId, change.path);
+        }
+      }
+      const filePaths = Array.isArray(metadata.filePaths)
+        ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
+        : [];
+      for (const path of filePaths) {
+        if (turnId && path) {
+          mergeCodexTurnFilePath(turnId, path);
+        }
+      }
     }
   }
 
@@ -1446,6 +1531,64 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       text,
       author,
       messageKey,
+    });
+  };
+
+  const extractCodexExplanationHeading = (markdown: string) => {
+    const headingFromMarkdown = extractThinkingHeading(markdown);
+    if (headingFromMarkdown) return headingFromMarkdown;
+    const strongHeading = markdown.match(/^\s*\*\*([^*\n]+)\*\*/m);
+    if (strongHeading?.[1]) {
+      const value = cleanHeadingText(strongHeading[1]);
+      if (value) return value;
+    }
+    const firstLine = markdown
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => cleanHeadingText(line))
+      .find(Boolean);
+    return firstLine || "思考中";
+  };
+
+  const extractCodexPlanCollapsedMarkdown = (markdown: string) => {
+    const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+    const todoLines = lines
+      .map((line) => line.trimEnd())
+      .filter((line) => /^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line));
+    if (todoLines.length === 0) return undefined;
+    return todoLines.join("\n");
+  };
+
+  const pushCodexExplanation = (
+    markdown: string,
+    messageKey?: string,
+    author?: string,
+    options?: {
+      collapsedMarkdown?: string;
+    },
+  ) => {
+    const normalized = normalizeForDedup(markdown);
+    if (!normalized) return;
+    const heading = extractCodexExplanationHeading(markdown);
+    const last = items[items.length - 1];
+    if (messageKey && last?.messageKey === messageKey) {
+      return;
+    }
+    if (
+      last?.kind === "agent_explanation" &&
+      normalizeForDedup(last.markdown) === normalized &&
+      (last.author || "") === (author || "")
+    ) {
+      return;
+    }
+    items.push({
+      kind: "agent_explanation",
+      markdown,
+      heading,
+      collapsedMarkdown: options?.collapsedMarkdown,
+      author,
+      messageKey,
+      active: false,
     });
   };
 
@@ -1568,6 +1711,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       const itemType =
         asText(metadata.itemType).toLowerCase() ||
         asText(item.type).toLowerCase();
+      const turnId = asText(metadata.turnId);
       const content =
         asText(item.text) ||
         asText(item.content) ||
@@ -1580,6 +1724,18 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       }
 
       if (eventType === "turn.completed") {
+        const turnStatus = asText(metadata.turnStatus).toLowerCase();
+        const errorMessage = asText(metadata.errorMessage) || content;
+        if (message.stage === "failed" || turnStatus === "failed") {
+          flushProgress();
+          items.push({
+            kind: "capsule",
+            label: errorMessage || "Codex 执行失败",
+            tone: "error",
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
         flushProgress();
         items.push({
           kind: "capsule",
@@ -1603,12 +1759,26 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
+      if (eventType === "turn/plan/updated") {
+        if (!content) {
+          continue;
+        }
+        pushCodexExplanation(content, message.messageKey, "Codex", {
+          collapsedMarkdown: extractCodexPlanCollapsedMarkdown(content),
+        });
+        continue;
+      }
+
       if (eventType === "stderr.line" || eventType === "stdout.line") {
         continue;
       }
 
+      if (eventType === "item/filechange/outputdelta") {
+        continue;
+      }
+
       flushProgress();
-      if (itemType === "command_execution") {
+      if (itemType === "command_execution" || itemType === "commandexecution") {
         const commandText =
           asText(metadata.command) ||
           asText(item.command) ||
@@ -1678,7 +1848,67 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
-      if (itemType === "file_change") {
+      if (eventType === "turn/diff/updated") {
+        if (turnId && lastCodexDiffIndexByTurn.get(turnId) !== index) {
+          continue;
+        }
+        const fileChanges = extractCodexFileChanges(metadata, item);
+        const filePaths = Array.isArray(metadata.filePaths)
+          ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
+          : [];
+        const turnPaths = turnId
+          ? (codexTurnFilePaths.get(turnId) || [])
+          : [];
+        const effectivePaths = filePaths.length > 0 ? filePaths : turnPaths;
+        const effectiveFiles =
+          fileChanges.length > 0
+            ? fileChanges
+            : effectivePaths.map((path) => ({ kind: "update", path }));
+        const primaryPath = fileChanges[0]?.path || effectivePaths[0] || "";
+        const fileCount = Math.max(fileChanges.length, effectivePaths.length);
+
+        items.push({
+          kind: "opencode_tool",
+          eventType: "file.changed",
+          event: {
+            type: "file.changed",
+            properties: {
+              file: primaryPath,
+              path: primaryPath,
+              label: "变更 Diff",
+              files: effectiveFiles,
+              diff: asText(metadata.diff) || undefined,
+              status: "completed",
+            },
+          },
+          content:
+            fileCount > 1
+              ? `变更 Diff · ${fileCount} 个文件`
+              : primaryPath
+                ? `变更 Diff · ${getFilename(primaryPath)}`
+                : "变更 Diff",
+          metadata: {
+            ...metadata,
+            eventType: "file.changed",
+            event: {
+              type: "file.changed",
+              properties: {
+                file: primaryPath,
+                path: primaryPath,
+                label: "变更 Diff",
+                files: effectiveFiles,
+                diff: asText(metadata.diff) || undefined,
+                status: "completed",
+              },
+            },
+          },
+          messageIndex: index,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      if (itemType === "file_change" || itemType === "filechange") {
         const fileChanges = extractCodexFileChanges(metadata, item);
         if (fileChanges.length === 0) {
           continue;
@@ -1731,7 +1961,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
-      if (itemType === "approval_request") {
+      if (itemType === "approval_request" || itemType === "approvalrequest") {
         const approvalText =
           asText(metadata.approvalText) ||
           content ||
@@ -1798,9 +2028,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (
         itemType === "reasoning" ||
         itemType === "agent_message" ||
+        itemType === "agentmessage" ||
         isLikelyMarkdownText(content)
       ) {
-        pushAgentMarkdown(content, message.messageKey, "Codex");
+        if (itemType === "reasoning") {
+          pushCodexExplanation(content, message.messageKey, "Codex");
+        } else {
+          pushAgentMarkdown(content, message.messageKey, "Codex");
+        }
       } else {
         pushAgentPlain(content, "Codex", message.messageKey);
       }
@@ -1923,8 +2158,52 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item || item.kind === "user") {
+      continue;
+    }
+    if (item.kind === "agent_explanation") {
+      item.active = true;
+    }
+    break;
+  }
+
   flushProgress();
   return items;
+}
+
+function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
+  const nextItems = [...items];
+  let previousAuthor = "";
+
+  for (let index = 0; index < nextItems.length; index += 1) {
+    const item = nextItems[index];
+    if (!item) continue;
+
+    if (
+      item.kind === "agent" ||
+      item.kind === "agent_plain" ||
+      item.kind === "agent_explanation"
+    ) {
+      const author = (item.author || "").trim();
+      if (!author) {
+        previousAuthor = "";
+        continue;
+      }
+      item.showAuthor = author !== previousAuthor;
+      previousAuthor = author;
+      continue;
+    }
+
+    if (item.kind === "capsule") {
+      continue;
+    }
+
+    previousAuthor = "";
+  }
+
+  return nextItems;
 }
 
 type DirectTurnDraft = {
@@ -2489,6 +2768,75 @@ function DirectMarkdownMessage({
   );
 }
 
+function CodexExplanationMessage({
+  markdown,
+  heading,
+  collapsedMarkdown,
+  active = false,
+  author = "Codex",
+  showAuthor = true,
+}: {
+  markdown: string;
+  heading: string;
+  collapsedMarkdown?: string;
+  active?: boolean;
+  author?: string;
+  showAuthor?: boolean;
+}) {
+  if (!active) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="space-y-1.5 text-sm text-foreground">
+          {showAuthor ? (
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {author}
+            </div>
+          ) : null}
+          <div className="text-sm leading-7 text-foreground">
+            {heading}
+          </div>
+          {collapsedMarkdown ? (
+            <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
+              <Streamdown>{collapsedMarkdown}</Streamdown>
+            </div>
+          ) : null}
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+    >
+      <div className="space-y-1.5 text-sm text-foreground">
+        {showAuthor ? (
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            {author}
+          </div>
+        ) : null}
+        <div className="relative overflow-hidden rounded-xl border border-slate-200/80 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.14),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm">
+          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-slate-500 to-transparent" />
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            {heading}
+          </div>
+          <div className="pr-4">
+            <DirectMarkdownMessage markdown={markdown} />
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function MessageBubble({
   item,
   onOpenDiffPreview,
@@ -2605,6 +2953,19 @@ function MessageBubble({
     );
   }
 
+  if (item.kind === "agent_explanation") {
+    return (
+      <CodexExplanationMessage
+        markdown={item.markdown}
+        heading={item.heading}
+        collapsedMarkdown={item.collapsedMarkdown}
+        active={item.active}
+        author={item.author}
+        showAuthor={item.showAuthor}
+      />
+    );
+  }
+
   if (item.kind === "user") {
     return (
       <motion.div
@@ -2644,9 +3005,11 @@ function MessageBubble({
         data-message-key={item.messageKey}
       >
         <div className="space-y-1.5 text-sm text-foreground">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            {item.author || "OpenCode"}
-          </div>
+          {item.showAuthor !== false ? (
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {item.author || "OpenCode"}
+            </div>
+          ) : null}
           <div className="whitespace-pre-wrap break-words leading-6">
             {item.text}
           </div>
@@ -2664,7 +3027,7 @@ function MessageBubble({
       data-message-key={item.messageKey}
     >
       <div className="space-y-1.5 text-sm text-foreground">
-        {item.author ? (
+        {item.author && item.showAuthor !== false ? (
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             {item.author}
           </div>
@@ -4022,6 +4385,22 @@ function OpencodeToolCard({
         : label === "删除文件"
           ? Trash2
           : FilePenLine;
+    detailTitle =
+      files.length > 1
+        ? `${label || "文件变更"} · ${files.length} 个文件`
+        : `${label || "文件变更"} · ${getFilename(primaryPath) || "文件"}`;
+    detailBodyText = [
+      `操作: ${label || "文件变更"}`,
+      primaryPath ? `目标文件: ${primaryPath}` : "",
+      files.length > 1
+        ? `涉及文件:\n${files
+            .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`)
+            .join("\n")}`
+        : "",
+      asText(properties.diff) ? "原生 Diff 已同步到内容预览面板，可点击卡片查看。" : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
     return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}

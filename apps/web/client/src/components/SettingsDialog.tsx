@@ -50,6 +50,7 @@ export function SettingsPanel({
   const [pushNotifications, setPushNotifications] = useState(true);
   const [theme, setTheme] = useState('light');
   const [executor, setExecutor] = useState('opencode');
+  const [codexExecutionMode, setCodexExecutionMode] = useState('sdk');
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
@@ -57,6 +58,7 @@ export function SettingsPanel({
   const [altusMode, setAltusMode] = useState('sandbox');
   const EXECUTOR_STORAGE_KEY = 'altus_executor';
   const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
+  const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 
   const handleLanguageChange = (lang: string) => {
     i18n.changeLanguage(lang);
@@ -66,6 +68,7 @@ export function SettingsPanel({
     if (typeof window === 'undefined') return;
     const storedExecutor = window.localStorage.getItem(EXECUTOR_STORAGE_KEY);
     const storedAltusMode = window.localStorage.getItem(ALTUS_MODE_STORAGE_KEY);
+    const storedCodexExecutionMode = window.localStorage.getItem(CODEX_EXECUTION_MODE_STORAGE_KEY);
     if (storedExecutor) {
       setExecutor(storedExecutor);
     } else {
@@ -76,18 +79,24 @@ export function SettingsPanel({
     } else {
       window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
     }
+    if (storedCodexExecutionMode === 'sdk' || storedCodexExecutionMode === 'ws') {
+      setCodexExecutionMode(storedCodexExecutionMode);
+    } else {
+      window.localStorage.setItem(CODEX_EXECUTION_MODE_STORAGE_KEY, codexExecutionMode);
+    }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
     window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
+    window.localStorage.setItem(CODEX_EXECUTION_MODE_STORAGE_KEY, codexExecutionMode);
     window.dispatchEvent(
       new CustomEvent('altus-settings-changed', {
-        detail: { executor, altusMode },
+        detail: { executor, altusMode, codexExecutionMode },
       })
     );
-  }, [executor, altusMode]);
+  }, [executor, altusMode, codexExecutionMode]);
 
   return (
     <div className="h-full">
@@ -260,6 +269,28 @@ export function SettingsPanel({
                       </SelectItem>
                     </SelectContent>
                   </Select>
+
+                  {executor === 'codex' && altusMode === 'sandbox' ? (
+                    <div className="space-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <div>
+                        <Label className="text-sm font-medium">{t('settings.codexModeLabel')}</Label>
+                        <p className="text-sm text-muted-foreground">{t('settings.codexModeDescription')}</p>
+                      </div>
+                      <Select value={codexExecutionMode} onValueChange={setCodexExecutionMode}>
+                        <SelectTrigger className="w-full max-w-xs rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl">
+                          <SelectItem value="sdk" className="rounded-md">
+                            {t('settings.codexModeSdk')}
+                          </SelectItem>
+                          <SelectItem value="ws" className="rounded-md">
+                            {t('settings.codexModeWs')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
                 </div>
               </TabsContent>
 

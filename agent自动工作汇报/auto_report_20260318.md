@@ -173,3 +173,50 @@
 - 计划如何解决：
   - 本轮先以 file-memory summary 链路落地第一阶段能力，保持 DB 主流程不动。
   - 二阶段再补分享和项目归属的真实后端能力。
+
+## Codex 纯 App Server 方案设计
+
+- 做了什么：
+  - 新增 [Codex纯AppServer模式实现设计.md](/Users/watson/codingProj/oneceo/docs/agent研发文档/Codex纯AppServer模式实现设计.md)
+  - 明确将 Codex 后续正式方向收敛为“纯 App Server 模式”
+  - 按功能拆分了设置切换、建会话、多轮对话、消息流、文件显示、原生 diff、审批、recent/history 缓冲、session 恢复、前端展示
+- 遇到什么：
+  - 当前 CLI/SDK 直通链路已经可用，但 richer item 尤其是原生 diff 语义不完整
+  - 若继续走“SDK + App Server 混合”，会形成双控制面和双事实来源
+- 计划如何解决：
+  - 先在测试分支验证 `codex app-server` 的真实 item 流
+  - 确认 `diff` 可稳定获取后，再按文档顺序切换 OSAC/API/前端主链路
+
+## Codex 纯 App Server 本地开发推进
+
+- 做了什么：
+  - 新增本地 App Server 启动层 [codex-app-server-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-service.ts)
+  - 新增协议归一化层 [codex-app-server-protocol.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-protocol.ts)
+  - 新增临时探针 [\_tmp_codex_app_server_probe.ts](/Users/watson/codingProj/oneceo/apps/api/scripts/_tmp/_tmp_codex_app_server_probe.ts)
+- 遇到什么：
+  - `codex app-server` 在 sandbox 内可以正常监听，但当前通过 E2B 公网 websocket 直连会返回 `502`
+  - 在 sandbox 内用常规 websocket client 连接 `ws://127.0.0.1:4321` 时，也没有完成标准 HTTP upgrade 握手
+- 计划如何解决：
+  - 后续本地实现切到 `stdio` 托管模式，仍然保持 pure app-server 协议，不把公网 websocket 作为主链路
+  - 先把 API 侧 App Server 适配层做出来，再接业务事件映射与前端展示
+  - 已补做本机 `stdio` 探针，确认真实存在：
+    - `fileChange.changes[].diff`
+    - `turn/diff/updated`
+    - `thread/read -> turn.items`
+  - 已补做本机 `thread/resume` 探针，确认跨 App Server 进程仍可沿用同一 `threadId` 继续上下文
+
+## Codex App Server API 适配层
+
+- 做了什么：
+  - 新增 [codex-app-server-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-service.ts)
+  - 新增 [codex-app-server-protocol.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-protocol.ts)
+  - 新增 [codex-app-server-turn-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-turn-service.ts)
+- 遇到什么：
+  - sandbox 内 `wss/ws` 入口目前不稳定，不适合作为主链路
+  - 但 stdio 模式下协议与续聊能力已被本机实测验证
+- 计划如何解决：
+  - 下一步把 `codex-remote-service` 切到 App Server turn 结果映射
+  - 再把 `fileChange.diff / turn/diff/updated` 接进平台消息与预览面板
+  - 目前已补到 `codex-remote-service` 的实验接线，但默认仍保持旧 OSAC 链路
+  - 原因是 sandbox 内 App Server 真实返回与本机 stdio 不一致，暂未稳定拿到 `fileChange/diff`
+- App Server 方向今天补齐了关键结论：sandbox 内 `codex app-server` 失败的根因不是缺少 diff，而是认证方式不对。把认证从临时 env 透传改成写 `~/.codex/config.toml + auth.json` 后，已在 E2B sandbox `iyg2r9150vczz3kxvpfog` 上实测拿到 `reasoning + fileChange + turn/diff/updated + agentMessage`。没有修改本地 `.env`，只改了本地代码和测试链路。

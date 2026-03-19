@@ -7,3 +7,4 @@ export * from './sandbox-execution-environment.dao';
 export * from './user-connector-account.dao';
 export * from './task-session-connector-binding.dao';
 export * from './connector-auth-request.dao';
+export * from './task-session-workspace-cache.dao';

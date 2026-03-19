@@ -113,6 +113,18 @@ CREATE TABLE IF NOT EXISTS task_session_recent_messages (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 会话工作区预览缓存表
+CREATE TABLE IF NOT EXISTS task_session_workspace_cache (
+  id UUID PRIMARY KEY,
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  tenant_key TEXT NOT NULL,
+  cache_type TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- 意图识别结果表
 CREATE TABLE IF NOT EXISTS intent_recognition_results (
   id UUID PRIMARY KEY,
@@ -340,6 +352,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_messa
   ON task_session_recent_messages(session_id, message_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_created_at
   ON task_session_recent_messages(session_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_unique
+  ON task_session_workspace_cache(session_id, tenant_key, cache_type, cache_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_id
+  ON task_session_workspace_cache(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_type
+  ON task_session_workspace_cache(session_id, cache_type);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
+  ON task_session_workspace_cache(updated_at);
 `;
 
 /**
@@ -359,6 +380,7 @@ export async function runMigration() {
     console.log('  - task_creation_sessions');
     console.log('  - conversation_messages');
     console.log('  - task_session_recent_messages');
+    console.log('  - task_session_workspace_cache');
     console.log('  - intent_recognition_results');
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
@@ -401,6 +423,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS task_session_recent_messages CASCADE;
+      DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;

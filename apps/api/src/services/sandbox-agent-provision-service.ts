@@ -819,12 +819,63 @@ opencode --version >/dev/null 2>&1 || true
 }
 
 async function assertCodexReady(sessionId: string) {
+  return ensureCodexReady(sessionId);
+}
+
+function resolveDesiredCodexVersion(): string {
+  const configured = pickString(process.env.CODEX_SANDBOX_CLI_VERSION);
+  if (configured) return configured;
+  return '0.115.0-alpha.27';
+}
+
+async function ensureCodexReady(
+  sessionId: string
+): Promise<{ codexBinaryPath: string; codexVersion: string }> {
+  const desiredVersion = resolveDesiredCodexVersion();
   const command = `
 set -euo pipefail
-command -v codex >/dev/null 2>&1
-codex --version >/dev/null 2>&1 || true
+desired=${shellEscape(desiredVersion)}
+install_root='/home/user/.altus/codex-runtime'
+prefix="$install_root/npm-global"
+bin="$prefix/bin/codex"
+mkdir -p "$prefix"
+export NPM_CONFIG_PREFIX="$prefix"
+export PATH="$prefix/bin:$PATH"
+current_version=""
+current_path=""
+if command -v codex >/dev/null 2>&1; then
+  current_path="$(command -v codex || true)"
+  current_version="$(codex --version 2>/dev/null | awk '{print $2}' | tr -d '\\r' || true)"
+fi
+if [ "$current_version" != "$desired" ] || [ -z "$current_path" ] || [ "$current_path" = "/usr/local/bin/codex" ]; then
+  npm install -g "@openai/codex@$desired" >/tmp/codex-install.log 2>&1
+fi
+resolved_path="$bin"
+if [ ! -x "$resolved_path" ]; then
+  resolved_path="$(command -v codex || true)"
+fi
+if [ -z "$resolved_path" ]; then
+  echo "codex binary missing"
+  exit 41
+fi
+resolved_version="$("$resolved_path" --version 2>/dev/null | awk '{print $2}' | tr -d '\\r' || true)"
+if [ "$resolved_version" != "$desired" ]; then
+  echo "codex version mismatch: expected=$desired actual=$resolved_version"
+  exit 42
+fi
+printf 'READY:%s:%s' "$resolved_path" "$resolved_version"
 `;
-  await e2bConnector.runCommand(sessionId, command, { timeoutMs: 20000 });
+  const result: any = await e2bConnector.runCommand(sessionId, command, { timeoutMs: 180000 });
+  const stdout = pickString(result?.stdout || result?.output) || '';
+  const match = stdout.match(/^READY:(.+):([^:]+)$/);
+  if (!match) {
+    const stderr = pickString(result?.stderr) || '';
+    throw new Error(stderr || stdout || 'codex ready check failed');
+  }
+  return {
+    codexBinaryPath: match[1],
+    codexVersion: match[2],
+  };
 }
 
 async function waitForSandboxCommands(sessionId: string) {
@@ -915,6 +966,7 @@ async function ensureOsacBridge(
     executor: ProvisionExecutor;
     workspaceRoot?: string | null;
     authToken?: string | null;
+    codexPath?: string | null;
   }
 ): Promise<{
   osacEndpoint: string;
@@ -946,7 +998,7 @@ async function ensureOsacBridge(
     `OSAC_LOG_DIR=${shellEscape(osacLogDir)}`,
     `OSAC_UPDATE_TMP=${shellEscape(osacTmpDir)}`,
     `OSAC_INSTANCE_LOCK_PATH=${shellEscape(osacLockPath)}`,
-    `OSAC_CODEX_PATH='codex'`,
+    `OSAC_CODEX_PATH=${shellEscape(pickString(input.codexPath) || 'codex')}`,
     `OSAC_CODEX_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
     `OSAC_OPENCODE_PATH='opencode'`,
     `OSAC_OPENCODE_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
@@ -1126,6 +1178,8 @@ export class SandboxAgentProvisionService {
     const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
     let codexArchiveHome: string | null = null;
     let codexDotCodexPath: string | null = null;
+    let codexBinaryPath: string | null = null;
+    let codexVersion: string | null = null;
 
     if (!isReused) {
       const restored = await restoreWorkspaceIfArchived(sessionId);
@@ -1171,7 +1225,9 @@ export class SandboxAgentProvisionService {
       await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
       await runStep('neko_debug', () => ensureNekoDebug(sessionId));
     } else if (executor === 'codex') {
-      await runStep('codex_present', () => assertCodexReady(sessionId));
+      const codexReady = await runStep('codex_present', () => assertCodexReady(sessionId));
+      codexBinaryPath = codexReady.codexBinaryPath;
+      codexVersion = codexReady.codexVersion;
       const codexHomeMapping = await runStep('codex_home_mapping', () =>
         ensureCodexHomeMapping(sessionId, {
           taskSessionId,
@@ -1193,6 +1249,7 @@ export class SandboxAgentProvisionService {
             executor,
             workspaceRoot,
             authToken: osacAuthToken,
+            codexPath: codexBinaryPath,
           })
         );
         osacEndpoint = bridge.osacEndpoint;
@@ -1224,6 +1281,8 @@ export class SandboxAgentProvisionService {
       opencodeStateRoot: stateRoot || undefined,
       codexArchiveHome: codexArchiveHome || undefined,
       codexDotCodexPath: codexDotCodexPath || undefined,
+      codexBinaryPath: codexBinaryPath || undefined,
+      codexVersion: codexVersion || undefined,
       osacEndpoint: osacEndpoint || undefined,
       osacHost: osacHost || undefined,
       osacHostPort: osacHostPort || undefined,

@@ -1,0 +1,177 @@
+## 2026-03-19
+
+- 继续定位 Codex 纯 App Server 模式在 E2B sandbox 中拿不到 diff 的问题。
+- 确认根因不是 App Server 不支持 diff，而是 sandbox 内认证链路错误：仅透传 `OPENAI_API_KEY/OPENAI_BASE_URL` 会导致 `401 Unauthorized`，且 `OPENAI_BASE_URL` 已进入 deprecated 路径。
+- 已在本地代码中把 App Server 启动前置配置改为写入 sandbox 的 `~/.codex/config.toml` 和 `~/.codex/auth.json`，并在子进程启动前移除 deprecated base-url env。
+- 使用升级后的 sandbox Codex `0.115.0-alpha.27` 实测成功拿到：
+  - `reasoning`
+  - `fileChange`
+  - `turn/diff/updated`
+  - `agentMessage`
+- 结论：纯 App Server 模式在当前 non-prod E2B sandbox 中已经具备文件显示和原生 diff 能力，可以继续推进接入平台主链路。
+- 按仓库流程补充了新设计文档 `Codex执行模式与AppServer最佳实践设计.md`，明确 `executor=codex` 下新增 `sdk模式 / ws模式`，其中 `sdk模式` 沿用旧链路，`ws模式` 采用已验证通过的 App Server 方案，并规定设置只影响新会话、历史会话不热切换 transport。
+- 开始落地第一阶段代码：
+  - 设置页已新增 `Codex 模式` 选择
+  - localStorage 已保存 `codexExecutionMode`
+  - 新会话会把 `codexExecutionMode` 写入 session
+  - runtime 已固定写入 `transport=sdk|app_server`
+  - `codex-remote-service` 已按 session transport 选择旧链路或 App Server 链路
+- focused 验证通过：
+  - web `tsc --noEmit`
+  - `task-creation-routes` / `codex-remote-service` 导入通过
+  - file-memory smoke 已确认 `codexExecutionMode=ws -> runtime.transport=app_server`
+- 继续完成第二阶段接入：
+  - App Server `fileChange.changes[].diff` 已补进平台 metadata
+  - 前端已兼容 camelCase item 类型：`commandExecution / fileChange / approvalRequest / agentMessage`
+  - `turn/diff/updated` 和 `fileChange.changes[].diff` 已接入 `buildPreviewItems`
+  - 前端 `文件变更 / 变更 Diff` 卡片可联动右侧 diff 预览
+- 第二阶段验证通过：
+  - web `tsc --noEmit`
+  - api `codex-app-server-protocol / codex-remote-service` 导入通过
+  - focused preview smoke 已确认 App Server 风格 `fileChange + turn/diff/updated` 会产出 diff 预览项
+- 调整了设置页交互位置：
+  - `Codex 模式（sdk/ws）` 不再单独挂在执行器选择下
+  - 现在只在 `模型设置 -> Altus 控制 = sandbox 直通 -> 执行器 = codex` 时显示
+  - 便于按“直通模式 -> codex”路径手动切到 `ws模式`
+- 定位并修复了 `ws模式` 同一会话续聊失败：
+  - 根因不是 `thread/resume` 失效，而是当前 App Server 实现采用“单轮阻塞等待完成”，`sendUserInput()` 硬编码 `60s` 导致长任务被误判为失败
+  - 已把 `ws模式` 的等待窗口提升到默认 `10 分钟`
+  - 同时过滤了 `account/rateLimits/updated`、`thread/tokenUsage/updated`、`item/reasoning/*`、`codex/event/*` 等内部 transport 噪音
+- 真实 E2B 两轮复验通过：
+  - 第二轮继续沿用同一个 `threadId`
+  - 2048 HTML 任务在同一 thread 内完成
+  - 原报错 `exit status 1` 已复现并确认是超时误杀，不是 session continuity 失效
+- 基于用户提供的全链路导出日志继续收口体验问题：
+  - 前端原先会在 `createTaskCreationSession/getTaskCreationSession` 预检之后才插入乐观用户消息，导致第二条消息显示偏慢
+  - `ws模式` 后端原先会在整轮 App Server turn 完成后才落库 `codex_user_input`，导致长任务期间刷新/恢复时像“没有反应”
+- 已修正：
+  - 前端先显示用户消息，再做后续预检与发送
+  - 后端在 App Server turn 前先持久化 `codex_user_input`
+  - 后端立即补一条 `Codex 已接收输入，正在执行...` 状态消息
+- 基于最新排查，进一步确认：
+  - 第二条消息确实继续落在同一个 `taskSessionId`
+  - 后端也确实继续使用同一个 `threadId`
+  - 当前真正的问题是 `ws模式` 仍然采用“阻塞式单轮回写”，不是实时增量回传
+- 已更新设计文档，新增 `ws模式` 实时回传重构方案：
+  - 后台执行
+  - 增量事件回传
+  - 最终完成收口
+- 已在本地代码中把 `ws模式` 的 App Server 主链路从同步 `runTurn()` 改成后台 turn job：
+  - `codex-app-server-turn-service` 负责在 sandbox 内启动后台 job 并把 notifications/status/result 写到 job 目录
+  - `codex-remote-service` 负责轮询 job 进度并把中间 notifications 增量写入平台消息缓冲层
+- 真实 E2B 回归确认：
+  - 第二条消息继续落在同一个 `taskSessionId`
+  - 第二条消息继续落在同一个 `threadId`
+  - turn 未完成前，消息数量已经持续增长，不再等整轮完成后一次性回写
+- 顺手继续过滤了一类纯 transport 噪音：
+  - `thread/status/changed`
+- 基于用户导出的会话详情与真实 App Server 原始流进一步确认：
+  - 第二条消息后并非 Codex 没有继续执行
+  - sandbox 内持续产生了大量 `item/reasoning/summaryTextDelta`
+  - 原问题是平台把这类可读摘要也当成噪音整类过滤，导致前端长时间看起来无消息
+- 已修正 `ws模式` 的 reasoning 策略：
+  - 对 `summaryTextDelta` 做 item 级聚合
+  - 使用稳定 `messageKey` 持续更新同一条思考摘要消息
+- 针对“第二条消息等待后提示执行环境启动较慢，请稍后再试”做了全链路复盘：
+  - 根因不是 session/thread 丢失，而是 `ws模式` 之前每轮都会重新启动一个临时 `codex app-server`
+  - 因此第二条消息没有复用第一轮已启动的 server，慢时会再次走启动链路并被前端归一成“执行环境启动较慢”
+  - 同时前端在本地已有 runtime 绑定时，发送前还会额外等待一次 authoritative runtime 预检，进一步放大了二次发送延迟
+- 已完成修复：
+  - `codex-app-server-service` 现在负责在 sandbox 内维持常驻 App Server
+  - 每轮 turn 改为只连接本地 `ws://127.0.0.1:4321`，不再重复启动 `codex app-server`
+  - 常驻 server 启动链路改为真正后台启动，并修正了端口探测把 `NOT_READY` 误判成 `READY` 的问题
+  - turn 客户端改为 Python 标准库 websocket 握手，不依赖 sandbox 内安装第三方 websocket 包
+  - 前端在 `executor=codex + ws模式` 且本地已有可发送 runtime 绑定时，发送前不再额外阻塞等待一次权威预检
+- 最新真实回归确认：
+  - 第二条消息继续使用同一个 `taskSessionId`
+  - 第二条消息继续使用同一个 `executorSessionId(threadId)`
+  - 第二条消息发送后数秒内就能看到 `turn/started` 和后续 `item/completed`
+  - 相关测试 sandbox 已在验证后关闭，未留下额外计费实例
+- 基于用户导出的失败会话继续排查，确认第二条消息并不是没有进入同一个 thread，而是 App Server 返回了真实上游错误。
+- 关键根因补充：
+  - 平台之前把 `turn/completed(status=failed)` 误判成 completed
+  - 同时把 `error` 通知压成了无信息的 `error` 文本
+  - 所以前端会看到“没有任何回复，但会话状态变成完成”
+- 已修正：
+  - App Server `turn/completed` 现在按 turn 实际 `status` 映射为 `completed/failed`
+  - 若 turn 为 failed，不再把它写成完成态
+  - `error` 通知会保留原始错误正文和错误码写入 metadata
+  - 前端 `turn.completed` 渲染也已兼容 `turnStatus=failed`，不再误显示 `Codex 执行完成`
+- 真实原始证据：
+  - 第二轮 job `turn_1773894987318_52h1utre` 的 `threadRead` 显示 turn 状态实际为 `failed`
+  - 原始错误为 usage limit exceeded，不是会话续聊丢失
+- 基于用户最新导出的成功会话继续优化 `ws模式` 消息显示：
+  - 当前主对话区仍会泄露 `item/fileChange/outputDelta` 这类底层增量通知
+  - 同一 turn 的多次 diff 更新会造成重复 `变更 Diff` 卡片
+  - 部分 diff 卡片因事件本身不带路径而退化成 `变更 Diff · 文件`
+- 已修正：
+  - 后端不再持久化 `item/fileChange/outputDelta`
+  - 前端对旧历史也会主动隐藏 `item/fileChange/outputDelta`
+  - 同一 turn 的 `turn/diff/updated` 只保留最后一条显示
+  - 若 diff 事件缺少路径，前端会利用同一 turn 的 `fileChange` 信息补齐文件名，例如 `变更 Diff · index.html`
+- 继续优化 `ws模式` 的解释性消息时序展示：
+  - 确认 App Server 的 `summaryTextDelta` 早已在后端被聚合成 `item/reasoning/summary`
+  - 但持久化过滤规则又把 `item/reasoning/summary` 一并丢弃，导致页面只剩原子消息和最终总结
+  - 已修正为只过滤原始增量通知 `summaryPartAdded / summaryTextDelta`，保留聚合后的 `item/reasoning/summary`
+  - 同时将同一批 App Server notifications 的去重改为“保留最后一个快照”，避免 reasoning summary 在单次 poll 内只留下第一段半截文本
+- 继续修正了一处 summary 聚合细节：之前对每个 delta 调用了 `trim`，会把空格和换行挤掉，导致解释性消息变成黏连英文；现在改为保留原始 delta 文本
+- 最小 E2B smoke 已确认平台 file-memory 中出现 `item/reasoning/summary`，顺序位于 `turn.started` 之后、`commandExecution` 之前，且正文空格与换行正常
+- 继续收口 `plan` 事件显示：
+  - 确认 `turn/plan/updated` 之前被后端直接过滤，所以前端完全收不到规划消息
+  - 已放开该事件的持久化，并把 `params.plan / turn.plan` 归一写入 metadata
+  - 后端会为 `turn/plan/updated` 生成可直接展示的 markdown 计划摘要
+  - 前端将其作为 Codex 解释性消息插入主对话流，位置早于后续工具/文件变更事件
+- 根据新的交互需求，继续补充了 `ws模式` 解释性消息动态展示方案：
+  - 处理中时采用逐字滚动刷新样式
+  - 结束后只保留标题，不再保留整段解释正文
+  - 该规则仅作用于 Codex `reasoning / turn/plan/updated` 解释性消息，不影响原子消息和最终总结
+- 已完成前端实现：
+  - `Home.tsx` 新增 `agent_explanation` 聊天项
+  - `reasoning` 与 `turn/plan/updated` 现在都按解释性消息渲染
+  - 最后一条解释性消息保持展开并带动态光标样式
+  - 之前的解释性消息自动折叠为标题，例如 `Planning 2048 mini game`
+- 根据最新确认，终态标题样式进一步收窄：
+  - 解释性消息结束后不再显示为胶囊或带边框块
+  - 现在直接显示为普通一行文本标题
+- 继续细化解释性消息终态视觉：
+  - 折叠标题现已回调为与普通消息一致的字号和字色
+  - 连续的 Codex 文本消息只保留首条作者头，后续连续消息不再重复显示 `Codex`
+- 继续细化计划消息终态：
+  - `turn/plan/updated` 不再只保留标题
+  - 终态现在保留标题 + todo list
+  - 普通 reasoning 仍保持仅保留标题
+- 继续修正右侧 `最近更改` 的 Codex 预览归并：
+  - 真实样本里 `fileChange` 多数没有 `turnId`，导致之前按 turn 去重的规则失效
+  - 已改为给 Codex diff/fileChange 预览项补 `canonicalFile`
+  - `最近更改` 现在按文件级归并，只保留每个文件最新的一条预览项
+  - 真实导出回放后已收敛为 `server.py / index.html / .gitignore / README.md` 四项，不再重复堆叠同一个 `index.html` 的中间 patch
+- 继续补充内容预览面板的布局交互：
+  - 顶栏 `收起` 左侧新增 `展开/还原` 按钮
+  - 展开后内容预览占据主界面，聊天面板暂时隐藏
+  - 仅改页面布局状态切换，不改预览数据和标签逻辑
+- 继续补齐 `内容预览 -> 文件` 在 Codex 下的功能：
+  - 确认前端文件面板已具备通用能力，缺口仅在后端 `workspace/tree|dir|file` 仍写死 OpenCode
+  - 已在 `task-creation-routes.ts` 中按 executor 分流：
+    - `opencode` 继续走原有 OSAC/OpenCode 文件接口
+    - `codex` 直接通过 E2B sandbox 文件系统读取目录和文件
+  - 工作区根目录继续沿用当前 `taskSessionId -> workspaceRoot` 约定，不改路径规则
+  - focused 验证通过：`codex-workspace-routes-import-ok`，`apps/web` `tsc --noEmit` 通过
+- 新增一项待实现设计：
+  - `executor=codex` 的文件面板需要把已读取过的目录和有限内容预览落到数据库
+  - 目标是在 sandbox 关闭后，仍能从数据库恢复大致目录结构和最近读取文件的有限预览
+  - 已先补进设计文档，等待确认后再开始代码实现
+- 已开始实现 Codex 文件预览数据库缓存：
+  - 新增表 `task_session_workspace_cache`，用于保存 `tree / dir / file` 三类 workspace 预览缓存
+  - 新增 DAO `task-session-workspace-cache.dao.ts`
+  - `executor=codex` 时，`workspace/tree|dir|file` 成功读取后会把结果写入数据库
+  - 当 sandbox 关闭或 runtime 不 ready 时，Codex 文件面板会优先回退到数据库缓存，并返回 `stale=true`
+  - OpenCode 原有 workspace cache 行为未改
+  - focused 验证通过：`codex-workspace-db-cache-import-ok`，`apps/web` `tsc --noEmit` 通过
+- 修复 Codex workspace DB cache 缺表崩溃：
+  - 问题根因：未执行 `task_session_workspace_cache` 迁移时，DAO 直接查询新表触发 `42P01`，进而打死 API 进程
+  - 修复方式：在 `task-session-workspace-cache.dao.ts` 对缺表场景做安全降级，`get()` 返回空缓存、`upsert()` 跳过写入，并仅输出一次告警
+  - 结果：未迁移环境下，Codex 文件预览缓存会自动禁用，但不会再导致服务崩溃
+- 修复 Codex 文件列表 500：
+  - 问题根因：`workspace/dir` 的 Codex 分支在主流程里直接使用了未定义的 `tenantKey`
+  - 影响：内容预览 -> 文件 在加载目录列表时会直接抛 `ReferenceError`，前端表现为 500
+  - 修复：在 `task-creation-routes.ts` 的 `workspace/dir` 主流程补齐 `const tenantKey = resolveTenantKey(req)`

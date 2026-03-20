@@ -6,13 +6,18 @@
 
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO, taskSessionWorkspaceCacheDAO } from '../db/dao';
+import {
+  sandboxExecutionEnvironmentDAO,
+  taskCreationSessionDAO,
+  taskSessionWorkspaceCacheDAO,
+} from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
 import {
   deriveSessionDriver,
   taskCreationFileMemoryStore,
   type FileSessionRecord,
 } from '../agents/task-creation/file-memory-store';
+import { taskCreationWebSocketService } from '../agents/task-creation/websocket-service';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
@@ -37,6 +42,8 @@ import { platformDeploymentAccountService } from '../services/platform-deploymen
 import { publishTaskSessionWorkspaceToRepository } from '../services/task-creation-deployment-source-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
+import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
+import { codexRemoteService } from '../services/codex-remote-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
 import {
@@ -147,6 +154,46 @@ const WEAK_INTENT_TITLE_INPUTS = new Set([
   '？',
   '?',
 ]);
+
+router.get('/codex/runtime-config', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await codexRuntimeConfigService.getByUserId(currentUser.userId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取 Codex 运行配置失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取 Codex 运行配置失败'),
+    });
+  }
+});
+
+router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await codexRuntimeConfigService.upsertByUserId(currentUser.userId, {
+      baseUrl: typeof req.body?.baseUrl === 'string' ? req.body.baseUrl : undefined,
+      model: typeof req.body?.model === 'string' ? req.body.model : undefined,
+      apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined,
+      configToml: typeof req.body?.configToml === 'string' ? req.body.configToml : undefined,
+      authJson: typeof req.body?.authJson === 'string' ? req.body.authJson : undefined,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('保存 Codex 运行配置失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '保存 Codex 运行配置失败'),
+    });
+  }
+});
 
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
@@ -3210,6 +3257,97 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/detach', async (req, 
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '卸载连接器失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/runtime/interrupt
+ * 中断当前会话的直通执行
+ */
+router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const preserveForRetry = Boolean(req.body?.preserveForRetry ?? true);
+    const clientMessageKey = asText(req.body?.clientMessageKey);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const executor = asText(session.executor || session.runtime?.executor || 'opencode').toLowerCase();
+    const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+    const executorSessionId =
+      asText(session.runtime?.executorSessionId) || asText(session.runtime?.opencodeSessionId);
+
+    const managedInterrupt = await taskCreationWebSocketService.interruptManagedSession(sessionId, {
+      preserveForRetry,
+      clientMessageKey,
+    });
+    if (managedInterrupt.interrupted && managedInterrupt.phase === 'intent_processing') {
+      return res.json({
+        success: true,
+        data: {
+          interrupted: true,
+          phase: 'intent_processing',
+          replayPending: managedInterrupt.replayPending,
+          reason: 'intent_processing_interrupted',
+        },
+      });
+    }
+
+    if (!orchestratorSessionId) {
+      return res.json({
+        success: true,
+        data: {
+          interrupted: false,
+          reason: 'runtime_not_ready',
+        },
+      });
+    }
+
+    if (executor === 'codex') {
+      const interrupted = await codexRemoteService.interruptCurrentRun(sessionId, orchestratorSessionId);
+      return res.json({
+        success: true,
+        data: {
+          interrupted,
+          executor: 'codex',
+          orchestratorSessionId,
+          executorSessionId: executorSessionId || undefined,
+        },
+      });
+    }
+
+    if (executor === 'opencode' || executor === 'claudecode') {
+      await osacAgentService.interruptExecutor(orchestratorSessionId, {
+        executor: executor as 'opencode' | 'claudecode',
+        executorSessionId: executorSessionId || undefined,
+      });
+      await touchSandbox(orchestratorSessionId, `${executor}_interrupt`);
+      return res.json({
+        success: true,
+        data: {
+          interrupted: true,
+          executor,
+          orchestratorSessionId,
+          executorSessionId: executorSessionId || undefined,
+        },
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(`不支持的 executor: ${executor || 'unknown'}`),
+    });
+  } catch (error: any) {
+    console.error('中断执行环境失败:', error);
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '中断执行环境失败，请稍后重试'),
     });
   }
 });

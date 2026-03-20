@@ -14,6 +14,7 @@ import ProjectDetail from "./ProjectDetail";
 import {
   Mic,
   Send,
+  Square,
   Sparkles,
   Loader2,
   FilePlus,
@@ -260,6 +261,7 @@ export default function Home() {
   const {
     isConnected,
     isProcessing,
+    isInterrupting,
     messages,
     hasOlderHistory,
     isLoadingOlderHistory,
@@ -267,6 +269,7 @@ export default function Home() {
     currentQuestion,
     runtime,
     sendChatInput,
+    interruptCurrentRun,
     answerQuestion,
     ensureSession,
     loadOlderHistory,
@@ -536,6 +539,17 @@ export default function Home() {
     setMessage("");
   };
 
+  const handleStop = () => {
+    if (!sessionId) return;
+    void interruptCurrentRun(sessionId).catch((error) => {
+      const text = error instanceof Error ? error.message : String(error || "");
+      if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
+        return;
+      }
+      toast.error(text || "停止执行失败");
+    });
+  };
+
   const handleQuickAction = (action: string) => {
     setMode("chat");
     void submitPrompt(action);
@@ -556,6 +570,8 @@ export default function Home() {
 
   const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
+  const hasSendDraft = Boolean(message.trim()) || attachments.length > 0;
+  const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
 
   const normalizePath = (value: string) =>
     value
@@ -800,6 +816,8 @@ export default function Home() {
                       if (currentQuestion) {
                         handleAnswerQuestion(message);
                         setMessage("");
+                      } else if (showStopButton) {
+                        handleStop();
                       } else {
                         handleSend();
                       }
@@ -904,23 +922,32 @@ export default function Home() {
                               if (currentQuestion) {
                                 handleAnswerQuestion(message);
                                 setMessage("");
+                              } else if (showStopButton) {
+                                handleStop();
                               } else {
                                 handleSend();
                               }
                             }}
                             disabled={
-                              currentQuestion
+                              isInterrupting ||
+                              (currentQuestion
                                 ? !message.trim()
-                                : !message.trim() && attachments.length === 0
+                                : showStopButton
+                                  ? false
+                                  : !message.trim() && attachments.length === 0)
                             }
                             size="icon"
                             className="h-9 w-9 rounded-xl bg-foreground transition-colors hover:bg-foreground/90 disabled:opacity-50"
                           >
-                            <Send className="w-4 h-4" />
+                            {showStopButton ? (
+                              <Square className="w-4 h-4" />
+                            ) : (
+                              <Send className="w-4 h-4" />
+                            )}
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Send message</p>
+                          <p>{showStopButton ? "停止执行" : "Send message"}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>

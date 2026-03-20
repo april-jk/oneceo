@@ -25,6 +25,8 @@ import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
+import { codexRuntimeConfigService } from './codex-runtime-config-service';
+import { codexAppServerService } from './codex-app-server-service';
 import {
   connectorRegistry,
   type ConnectorKey,
@@ -67,6 +69,7 @@ type ProvisionResult = {
 };
 
 type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode';
+type ProvisionCodexMode = 'sdk' | 'ws';
 
 function pickString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();
@@ -80,9 +83,37 @@ function normalizeProvisionExecutor(value: unknown): ProvisionExecutor {
   return 'opencode';
 }
 
-function resolveProvisionTemplate(executor: ProvisionExecutor): string {
+function normalizeProvisionCodexMode(value: unknown): ProvisionCodexMode | null {
+  const normalized = pickString(value)?.toLowerCase();
+  if (normalized === 'sdk') return 'sdk';
+  if (normalized === 'ws') return 'ws';
+  return null;
+}
+
+async function resolveProvisionCodexMode(
+  taskSessionId: string | undefined,
+  metadata: Record<string, unknown> | undefined
+): Promise<ProvisionCodexMode | null> {
+  const requestedMode =
+    normalizeProvisionCodexMode(metadata?.codexExecutionMode) ||
+    normalizeProvisionCodexMode(metadata?.codexMode) ||
+    normalizeProvisionCodexMode(metadata?.transport === 'app_server' ? 'ws' : metadata?.transport);
+  if (requestedMode) return requestedMode;
+  if (!taskSessionId) return null;
+  const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
+  return (
+    normalizeProvisionCodexMode(session?.codexExecutionMode) ||
+    normalizeProvisionCodexMode(session?.runtime?.transport === 'app_server' ? 'ws' : session?.runtime?.transport) ||
+    null
+  );
+}
+
+function resolveProvisionTemplate(
+  executor: ProvisionExecutor,
+  codexExecutionMode: ProvisionCodexMode | null
+): string {
   if (executor === 'codex') {
-    return e2bConfig.codexTemplate;
+    return codexExecutionMode === 'ws' ? e2bConfig.codexWsTemplate : e2bConfig.codexTemplate;
   }
   return e2bConfig.template;
 }
@@ -127,7 +158,11 @@ function resolveExecutorRemoteBaseDir(
   return '/home/user/.altus/opencode';
 }
 
-async function resolveReusableSandbox(taskSessionId: string, executor: ProvisionExecutor) {
+async function resolveReusableSandbox(
+  taskSessionId: string,
+  executor: ProvisionExecutor,
+  codexExecutionMode: ProvisionCodexMode | null
+) {
   const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
   const orchestratorSessionId = pickString(session?.runtime?.orchestratorSessionId);
   if (!orchestratorSessionId) return null;
@@ -152,6 +187,19 @@ async function resolveReusableSandbox(taskSessionId: string, executor: Provision
   );
   if (sandboxExecutor !== executor) {
     return null;
+  }
+  if (executor === 'codex') {
+    const environmentCodexMode =
+      normalizeProvisionCodexMode(metadata.codexExecutionMode) ||
+      normalizeProvisionCodexMode(metadata.codexMode) ||
+      normalizeProvisionCodexMode(
+        pickString((metadata.e2b as Record<string, unknown> | undefined)?.template) === e2bConfig.codexWsTemplate
+          ? 'ws'
+          : 'sdk'
+      );
+    if ((codexExecutionMode || environmentCodexMode) && codexExecutionMode !== environmentCodexMode) {
+      return null;
+    }
   }
 
   return {
@@ -1146,8 +1194,11 @@ export class SandboxAgentProvisionService {
     const envInput = buildSandboxEnv();
     const taskSessionId = pickString(input.metadata?.taskSessionId) || undefined;
     const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
-    const selectedTemplate = resolveProvisionTemplate(executor);
-    const reusable = taskSessionId ? await resolveReusableSandbox(taskSessionId, executor) : null;
+    const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
+    const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
+    const reusable = taskSessionId
+      ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode)
+      : null;
 
     const environment = reusable
       ? reusable.environment
@@ -1180,6 +1231,8 @@ export class SandboxAgentProvisionService {
     let codexDotCodexPath: string | null = null;
     let codexBinaryPath: string | null = null;
     let codexVersion: string | null = null;
+    let codexConfigToml: string | null = null;
+    let codexAuthJson: string | null = null;
 
     if (!isReused) {
       const restored = await restoreWorkspaceIfArchived(sessionId);
@@ -1236,6 +1289,20 @@ export class SandboxAgentProvisionService {
       );
       codexArchiveHome = codexHomeMapping.codexArchiveHome;
       codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
+      if (taskSessionId) {
+        const runtimeConfig = await runStep('codex_runtime_config', () =>
+          codexRuntimeConfigService.getByTaskSessionId(taskSessionId)
+        );
+        codexConfigToml = runtimeConfig.configToml;
+        codexAuthJson = runtimeConfig.authJson;
+        await runStep('codex_runtime_files', () =>
+          codexAppServerService.ensureRuntimeFiles({
+            sessionId,
+            configToml: codexConfigToml,
+            authJson: codexAuthJson,
+          })
+        );
+      }
       const reusableBridge = await canReuseOsacBridge({
         endpoint: osacEndpoint,
         authToken: osacAuthToken,
@@ -1274,6 +1341,8 @@ export class SandboxAgentProvisionService {
       sandboxProvider: 'e2b',
       sandboxExecutor: executor,
       executor,
+      codexExecutionMode: codexExecutionMode || undefined,
+      codexMode: codexExecutionMode || undefined,
       opencodeBaseUrl: baseUrl,
       opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
       opencodeHost: host,
@@ -1283,6 +1352,7 @@ export class SandboxAgentProvisionService {
       codexDotCodexPath: codexDotCodexPath || undefined,
       codexBinaryPath: codexBinaryPath || undefined,
       codexVersion: codexVersion || undefined,
+      codexConfigToml: codexConfigToml || undefined,
       osacEndpoint: osacEndpoint || undefined,
       osacHost: osacHost || undefined,
       osacHostPort: osacHostPort || undefined,

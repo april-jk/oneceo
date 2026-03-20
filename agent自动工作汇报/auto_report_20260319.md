@@ -1,5 +1,10 @@
 ## 2026-03-19
 
+- 按用户要求切换 oneceo 的 E2B 账号：
+  - 在 `apps/.env` 注释保留旧 `E2B_API_KEY`，并标注 2026-03-19 更换
+  - 准备在新账号下重新发布本地 `opencode-playwright-mcp` 模板
+  - 检查模板构建链路对现有 R2 配置的依赖，完成后做新账号可用性验证
+
 - 继续定位 Codex 纯 App Server 模式在 E2B sandbox 中拿不到 diff 的问题。
 - 确认根因不是 App Server 不支持 diff，而是 sandbox 内认证链路错误：仅透传 `OPENAI_API_KEY/OPENAI_BASE_URL` 会导致 `401 Unauthorized`，且 `OPENAI_BASE_URL` 已进入 deprecated 路径。
 - 已在本地代码中把 App Server 启动前置配置改为写入 sandbox 的 `~/.codex/config.toml` 和 `~/.codex/auth.json`，并在子进程启动前移除 deprecated base-url env。

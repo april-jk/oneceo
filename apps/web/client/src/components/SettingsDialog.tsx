@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Plug, Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
 import { ConnectorCenterPanel } from '@/components/ConnectorCenterPanel';
+import { getCodexRuntimeConfig, updateCodexRuntimeConfig } from '@/lib/task-creation-client';
 import {
   OPEN_SETTINGS_DIALOG_EVENT,
   type OpenSettingsDialogDetail,
@@ -51,6 +53,18 @@ export function SettingsPanel({
   const [theme, setTheme] = useState('light');
   const [executor, setExecutor] = useState('opencode');
   const [codexExecutionMode, setCodexExecutionMode] = useState('sdk');
+  const [codexBaseUrl, setCodexBaseUrl] = useState('https://ai.hvmz.cn');
+  const [codexModel, setCodexModel] = useState('gpt-5.2');
+  const [codexApiKey, setCodexApiKey] = useState('');
+  const [codexConfigToml, setCodexConfigToml] = useState('');
+  const [codexAuthJson, setCodexAuthJson] = useState('');
+  const [codexConfigDirty, setCodexConfigDirty] = useState(false);
+  const [codexAuthDirty, setCodexAuthDirty] = useState(false);
+  const [codexConfigLoading, setCodexConfigLoading] = useState(false);
+  const [codexConfigSaving, setCodexConfigSaving] = useState(false);
+  const [codexConfigError, setCodexConfigError] = useState('');
+  const [codexConfigUpdatedAt, setCodexConfigUpdatedAt] = useState('');
+  const [codexConfigLoaded, setCodexConfigLoaded] = useState(false);
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
@@ -97,6 +111,106 @@ export function SettingsPanel({
       })
     );
   }, [executor, altusMode, codexExecutionMode]);
+
+  const shouldShowCodexLlmSettings = executor === 'codex' && altusMode === 'sandbox';
+
+  useEffect(() => {
+    if (!shouldShowCodexLlmSettings || codexConfigLoaded) return;
+    let cancelled = false;
+    setCodexConfigLoading(true);
+    setCodexConfigError('');
+    getCodexRuntimeConfig()
+      .then((config) => {
+        if (cancelled) return;
+        setCodexBaseUrl(config.baseUrl || 'https://ai.hvmz.cn');
+        setCodexModel(config.model || 'gpt-5.2');
+        setCodexApiKey(config.apiKey || '');
+        setCodexConfigToml(config.configToml || '');
+        setCodexAuthJson(config.authJson || '');
+        setCodexConfigUpdatedAt(config.updatedAt || '');
+        setCodexConfigDirty(false);
+        setCodexAuthDirty(false);
+        setCodexConfigLoaded(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCodexConfigError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setCodexConfigLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codexConfigLoaded, shouldShowCodexLlmSettings]);
+
+  useEffect(() => {
+    if (codexConfigDirty) return;
+    setCodexConfigToml(
+      [
+        'model_provider = "OpenAI"',
+        `model = ${JSON.stringify(codexModel || 'gpt-5.2')}`,
+        `review_model = ${JSON.stringify(codexModel || 'gpt-5.2')}`,
+        'model_reasoning_effort = "high"',
+        'disable_response_storage = true',
+        'network_access = "enabled"',
+        'windows_wsl_setup_acknowledged = true',
+        'model_context_window = 1000000',
+        'model_auto_compact_token_limit = 900000',
+        '',
+        '[model_providers.OpenAI]',
+        'name = "OpenAI"',
+        `base_url = ${JSON.stringify(codexBaseUrl || 'https://ai.hvmz.cn')}`,
+        'wire_api = "responses"',
+        'supports_websockets = true',
+        'requires_openai_auth = true',
+        '',
+        '[features]',
+        'responses_websockets_v2 = true',
+        '',
+      ].join('\n')
+    );
+  }, [codexBaseUrl, codexModel, codexConfigDirty]);
+
+  useEffect(() => {
+    if (codexAuthDirty) return;
+    setCodexAuthJson(
+      JSON.stringify(
+        {
+          OPENAI_API_KEY: codexApiKey || '',
+        },
+        null,
+        2
+      )
+    );
+  }, [codexApiKey, codexAuthDirty]);
+
+  const handleSaveCodexConfig = async () => {
+    try {
+      setCodexConfigSaving(true);
+      setCodexConfigError('');
+      const saved = await updateCodexRuntimeConfig({
+        baseUrl: codexBaseUrl,
+        model: codexModel,
+        apiKey: codexApiKey,
+        configToml: codexConfigToml,
+        authJson: codexAuthJson,
+      });
+      setCodexBaseUrl(saved.baseUrl || 'https://ai.hvmz.cn');
+      setCodexModel(saved.model || 'gpt-5.2');
+      setCodexApiKey(saved.apiKey || '');
+      setCodexConfigToml(saved.configToml || '');
+      setCodexAuthJson(saved.authJson || '');
+      setCodexConfigUpdatedAt(saved.updatedAt || '');
+      setCodexConfigDirty(false);
+      setCodexAuthDirty(false);
+      setCodexConfigLoaded(true);
+    } catch (error) {
+      setCodexConfigError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCodexConfigSaving(false);
+    }
+  };
 
   return (
     <div className="h-full">
@@ -289,6 +403,102 @@ export function SettingsPanel({
                           </SelectItem>
                         </SelectContent>
                       </Select>
+
+                      <div className="space-y-4 rounded-2xl border border-border/60 bg-background/80 p-4">
+                        <div className="space-y-1">
+                          <Label className="text-sm font-medium">{t('settings.codexLlmSettingsLabel')}</Label>
+                          <p className="text-sm text-muted-foreground">
+                            {t('settings.codexLlmSettingsDescription')}
+                          </p>
+                          <p className="text-xs text-amber-600">
+                            {t('settings.codexLlmTodo')}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {t('settings.codexLlmSandboxOnly')}
+                          </p>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label className="text-sm">{t('settings.codexLlmBaseUrl')}</Label>
+                            <Input
+                              value={codexBaseUrl}
+                              onChange={(event) => setCodexBaseUrl(event.target.value)}
+                              placeholder="https://ai.hvmz.cn"
+                              className="rounded-xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm">{t('settings.codexLlmModel')}</Label>
+                            <Input
+                              value={codexModel}
+                              onChange={(event) => setCodexModel(event.target.value)}
+                              placeholder="gpt-5.2"
+                              className="rounded-xl"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexLlmApiKey')}</Label>
+                          <Input
+                            value={codexApiKey}
+                            onChange={(event) => setCodexApiKey(event.target.value)}
+                            placeholder="sk-..."
+                            className="rounded-xl"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexConfigTomlLabel')}</Label>
+                          <Textarea
+                            value={codexConfigToml}
+                            onChange={(event) => {
+                              setCodexConfigToml(event.target.value);
+                              setCodexConfigDirty(true);
+                            }}
+                            rows={12}
+                            className="rounded-xl font-mono text-xs"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexAuthJsonLabel')}</Label>
+                          <Textarea
+                            value={codexAuthJson}
+                            onChange={(event) => {
+                              setCodexAuthJson(event.target.value);
+                              setCodexAuthDirty(true);
+                            }}
+                            rows={8}
+                            className="rounded-xl font-mono text-xs"
+                          />
+                        </div>
+
+                        {codexConfigError ? (
+                          <p className="text-sm text-destructive">{codexConfigError}</p>
+                        ) : null}
+
+                        {codexConfigUpdatedAt ? (
+                          <p className="text-xs text-muted-foreground">
+                            {t('settings.codexLlmUpdatedAt')}: {codexConfigUpdatedAt}
+                          </p>
+                        ) : null}
+
+                        <div className="flex items-center gap-3">
+                          <Button
+                            type="button"
+                            onClick={handleSaveCodexConfig}
+                            disabled={codexConfigLoading || codexConfigSaving}
+                            className="rounded-xl bg-foreground hover:bg-foreground/90 text-background"
+                          >
+                            {codexConfigSaving ? t('common.loading') : t('common.save')}
+                          </Button>
+                          {codexConfigLoading ? (
+                            <span className="text-sm text-muted-foreground">{t('common.loading')}</span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   ) : null}
                 </div>

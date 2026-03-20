@@ -1,4 +1,5 @@
 import { e2bConnector } from '../connectors/e2b-connector';
+import { ensurePlaywrightMcpInConfigToml } from '../utils/codex-runtime-config';
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -47,12 +48,13 @@ async function writeCodexRuntimeFiles(
   configToml?: string | null,
   authJson?: string | null
 ): Promise<void> {
-  if (!asString(configToml) && !asString(authJson)) {
+  const normalizedConfigToml = ensurePlaywrightMcpInConfigToml(asString(configToml));
+  if (!normalizedConfigToml && !asString(authJson)) {
     return;
   }
   const payloadBase64 = Buffer.from(
     JSON.stringify({
-      configToml: asString(configToml) || null,
+      configToml: normalizedConfigToml || null,
       authJson: asString(authJson) || null,
     }),
     'utf-8'
@@ -79,6 +81,14 @@ PY`;
 }
 
 export class CodexAppServerService {
+  async ensureRuntimeFiles(input: {
+    sessionId: string;
+    configToml?: string | null;
+    authJson?: string | null;
+  }): Promise<void> {
+    await writeCodexRuntimeFiles(input.sessionId, input.configToml, input.authJson);
+  }
+
   async ensureServer(input: CodexAppServerEnsureInput): Promise<CodexAppServerEnsureResult> {
     const port = input.port || defaultPort;
     const listenUrl = `ws://0.0.0.0:${port}`;
@@ -135,9 +145,17 @@ export class CodexAppServerService {
   }
 
   async stopServer(sessionId: string): Promise<void> {
-    await e2bConnector.runCommand(sessionId, `pkill -f "codex app-server" || true`, {
-      timeoutMs: 15_000,
-    });
+    try {
+      await e2bConnector.runCommand(sessionId, `pkill -f "codex app-server" || true`, {
+        timeoutMs: 15_000,
+      });
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error || '');
+      if (/signal:\s*terminated/i.test(text) || /\bterminated\b/i.test(text)) {
+        return;
+      }
+      throw error;
+    }
   }
 }
 

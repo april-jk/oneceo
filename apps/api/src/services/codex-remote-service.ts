@@ -10,7 +10,9 @@ import { archiveSandboxWorkspace } from './sandbox-archive-service';
 import { setSandboxMetadata, touchSandbox } from './sandbox-activity-service';
 import { resolveCodexArchiveDotCodexPath, resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { buildTimelineMessageKey, normalizeMessageTimelineMetadata } from '../utils/task-message-identity';
+import { codexAppServerService } from './codex-app-server-service';
 import { codexAppServerTurnService } from './codex-app-server-turn-service';
+import { codexRuntimeConfigService } from './codex-runtime-config-service';
 import {
   extractAppServerErrorMessage,
   extractAppServerTurnStatus,
@@ -1005,6 +1007,78 @@ fi
     }
   }
 
+  async interruptCurrentRun(taskSessionId: string, orchestratorSessionId?: string): Promise<boolean> {
+    const normalizedTaskSessionId = asString(taskSessionId);
+    if (!normalizedTaskSessionId) {
+      throw new Error('taskSessionId is required');
+    }
+
+    const currentSession =
+      (await taskCreationFileMemoryStore.getSession(normalizedTaskSessionId)) || null;
+    const runtimeOrchestratorSessionId =
+      asString(orchestratorSessionId) || asString(currentSession?.runtime?.orchestratorSessionId);
+    const runtimeExecutorSessionId =
+      asString(currentSession?.runtime?.executorSessionId) ||
+      asString(currentSession?.runtime?.opencodeSessionId);
+    if (!runtimeOrchestratorSessionId) {
+      return false;
+    }
+
+    const transportMode = resolveCodexTransportMode(currentSession);
+    if (transportMode === 'app_server') {
+      const activeJob = this.appServerJobs.get(normalizedTaskSessionId);
+      this.clearAppServerJob(normalizedTaskSessionId);
+      await codexAppServerService.stopServer(runtimeOrchestratorSessionId);
+      await touchSandbox(runtimeOrchestratorSessionId, 'codex_interrupt');
+      const interruptedAt = new Date().toISOString();
+      const metadata = this.prepareTimelineMetadata(
+        'executor_event',
+        {
+          executor: 'codex',
+          transport: 'app_server',
+          orchestratorSessionId: runtimeOrchestratorSessionId,
+          executorSessionId:
+            asString(activeJob?.executorSessionId) || runtimeExecutorSessionId || undefined,
+          opencodeSessionId:
+            asString(activeJob?.executorSessionId) || runtimeExecutorSessionId || undefined,
+          eventType: 'turn.interrupted',
+          status: 'interrupted',
+        },
+        {
+          createdAt: interruptedAt,
+        }
+      );
+      await this.persistMessage(
+        normalizedTaskSessionId,
+        'agent',
+        'executor_event',
+        'interrupted',
+        metadata,
+        {
+          createdAt: interruptedAt,
+        }
+      );
+      await this.notify({
+        taskSessionId: normalizedTaskSessionId,
+        message: {
+          type: 'executor_event',
+          content: 'interrupted',
+          metadata,
+          stage: 'failed',
+          tone: 'system',
+        },
+      });
+      return true;
+    }
+
+    await osacAgentService.interruptExecutor(runtimeOrchestratorSessionId, {
+      executor: 'codex',
+      executorSessionId: runtimeExecutorSessionId || undefined,
+    });
+    await touchSandbox(runtimeOrchestratorSessionId, 'codex_interrupt');
+    return true;
+  }
+
   async sendUserInput(input: CodexDirectInput): Promise<{
     orchestratorSessionId: string;
     executorSessionId: string;
@@ -1109,6 +1183,7 @@ fi
         },
       });
 
+      const runtimeConfig = await codexRuntimeConfigService.getByTaskSessionId(taskSessionId);
       this.clearAppServerJob(taskSessionId);
       const turnJob = await codexAppServerTurnService.startBackgroundTurn({
         sessionId: runtime.orchestratorSessionId,
@@ -1116,8 +1191,10 @@ fi
         prompt: content,
         threadId: existingExecutorSessionId,
         waitTimeoutMs: resolveCodexAppServerWaitTimeoutMs(),
-        model: process.env.CODEX_MODEL || process.env.OPENAI_MODEL || undefined,
+        model: runtimeConfig.model || process.env.CODEX_MODEL || process.env.OPENAI_MODEL || undefined,
         codexBinaryPath: runtime.codexBinaryPath || undefined,
+        configToml: runtimeConfig.configToml,
+        authJson: runtimeConfig.authJson,
       });
       if (!turnJob.threadId) {
         throw new Error('Codex App Server 未返回 threadId');

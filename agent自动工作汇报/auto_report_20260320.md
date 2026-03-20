@@ -1,0 +1,78 @@
+- 梳理了当前 Codex sandbox 配置链路：
+  - `ws模式` 已通过 `~/.codex/config.toml + ~/.codex/auth.json` 写入 sandbox
+  - `sdk模式` 仍以环境变量透传为主，用户不可直接维护配置文件
+- 按新需求补充设计文档：
+  - 新增 [Codex_e2b-template_sandbox配置文件直编与LLM设置设计.md]
+  - 文档名已明确标注 `e2b-template` 相关
+  - 方案补充为设置页单独增加 `LLM设置` 分组，支持用户直接维护 `baseUrl/model/apiKey`
+  - 文档中已写明 TODO：当前只实现 `codex`，其他模型待后续平台侧统一计费与切换体系补齐
+- 重新核对 `AGENTS.md` 后补全 TODO 索引：
+  - 新增根目录 [todos.md]
+  - 已把本轮确认但暂不实现的事项提取进 `todos.md`
+  - 同时在设计文档中新增独立 `TODO` 章节，避免只留零散提示语
+- 已开始代码开发：
+  - 新增 `user_codex_runtime_configs` 表、迁移和 DAO
+  - 新增 `codex-runtime-config-service`
+  - 新增 `GET/PUT /api/task-creation/codex/runtime-config`
+  - 设置页在 `模型设置 -> sandbox直通 -> codex` 下新增 `LLM设置` 分组
+  - 支持编辑 `Base URL / Model / API Key / config.toml / auth.json`
+  - Codex sandbox provision 与 app-server turn 已开始写入用户级 `~/.codex/config.toml` 和 `~/.codex/auth.json`
+- 已继续实现 Codex ws 专用 e2b template：
+  - 新增 `e2b_templates/codex-ws-playwright-sandbox/`
+  - 新增 `template.ts / build.ts / README.md`
+  - `codex -> ws模式` 已改为命中新模板
+  - `codex -> sdk模式` 继续走原模板
+  - sandbox 复用时已增加 `codexExecutionMode` 约束，避免 sdk/ws 混用同一旧 sandbox
+- 已确认真实构建环境位于 `apps/.env`，并修正模板构建脚本读取路径：
+  - `codex-ws-playwright-sandbox/build.ts` 已显式加载 `../../apps/.env`
+  - `opencode-playwright-mcp/build.ts` 也同步补齐 `../../apps/.env`
+- 已完成真实模板构建：
+  - 模板名：`codex-ws-playwright-sandbox-v1`
+  - E2B Template ID：`ss1fwlkiw4vi6l5dwesm`
+  - Build ID：`72533b37-77d5-4b4f-9e26-40cfaf786abc`
+  - 构建结果：成功
+- 已完成一轮真实端到端联调：
+  - 使用 `codex + ws模式` 新建测试会话并直接发送消息
+  - 真实命中新模板：`codex-ws-playwright-sandbox-v1`
+  - sandbox 内已真实写入：
+    - `~/.codex/config.toml`
+    - `~/.codex/auth.json`
+  - `codex app-server` 已成功启动并返回首轮回复 `OK`
+  - 验证数据：
+    - sandbox：`ic069ar0udmbiua3bqivo`
+    - threadId：`019d0961-fd8e-7262-98bf-708a20ce0ced`
+  - 测试完成后已主动关闭 sandbox，避免计费
+- 本轮额外暴露的独立问题：
+  - turn 完成后自动归档在上传 R2 时出现一次 `ECONNRESET`
+  - 不影响本次 `ws模式` 回复链路可用性
+  - 但会影响归档稳定性，后续需要单独收口
+- 新确认的缺口：
+  - `codex + ws模式` 目前只是把 `playwright` 和 `@playwright/mcp` 安装进 sandbox
+  - 还没有把 Playwright MCP 注册为 Codex 启动即可见的 MCP server
+  - 所以 Codex 会出现“看不到你提供的 Playwright MCP”这一现象
+  - 已在设计文档补充“Playwright MCP 固化接入”章节，下一步按该方案实现
+- 已完成 `codex + ws模式` 的 Playwright MCP 固化接入：
+  - 新增 `apps/api/src/utils/codex-runtime-config.ts`
+  - 在写入 `~/.codex/config.toml` 时自动补充 `[mcp_servers.playwright]`
+  - 自动写入 `PLAYWRIGHT_BROWSERS_PATH / PLAYWRIGHT_HEADLESS / DISPLAY / XDG_RUNTIME_DIR`
+  - 若用户自定义 `config.toml` 已有 `[mcp_servers.playwright]`，平台不覆盖
+- 已完成真实验证：
+  - 新 sandbox 命中 `codex-ws-playwright-sandbox-v1`
+  - `codex mcp list` 真实返回 `playwright`
+  - 证明现在不是“只安装了 Playwright 包”，而是“启动即接给 Codex”
+- 下一步：
+  - 继续观察 `ws模式` 长任务时的 app-server 稳定性
+  - 单独收口归档与测试脚本导致的失败噪音
+# 2026-03-20 补充记录
+
+- 补充《直通模式_OpenCode_过程流显示优化设计》：新增“处理中继续发送与停止交互”章节。
+- 规则已明确为：直通模式下执行中点击停止必须触发真实 interrupt；执行中输入新消息并发送时，必须先 interrupt 再立即执行新消息，禁止排队。
+- 下一步实现范围：`task-creation-routes` 中断接口、`task-creation-client` 中断调用、`useTaskCreationAgent` 按钮状态机与立即执行链路、首页聊天输入按钮切换。
+- 继续修正文档：当前“处理中”需细分为 `intent_processing` 和 `executor_processing`。
+- 新规则：
+  - 若消息仍停留在意图识别 agent，停止时必须中断意图识别并阻塞其下发到执行器。
+  - 若用户此时继续发送新消息，旧消息和新消息要一起重新交给意图识别 agent，再统一加工后发往执行器。
+  - 若消息已进入执行器，才走执行器 interrupt + 新消息立即执行。
+- UI 补充约束：
+  - 停止成功后，对话窗口需立即插入一条原子消息：`消息发送被中止，等待进一步指令`
+  - 不能只依赖 toast 或状态灯。

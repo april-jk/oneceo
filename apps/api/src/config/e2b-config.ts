@@ -2,6 +2,7 @@ export type E2bConfig = {
   apiKey: string | null;
   template: string;
   codexTemplate: string;
+  codexWsTemplate: string;
   timeoutMs: number;
   allowInternetAccess: boolean;
   allowPublicTraffic: boolean;
@@ -30,6 +31,9 @@ export const e2bConfig: E2bConfig = {
     'opencode-playwright-mcp-v2-min-eko',
   codexTemplate:
     (process.env.E2B_CODEX_TEMPLATE || process.env.E2B_TEMPLATE_CODEX || 'codex').trim() || 'codex',
+  codexWsTemplate:
+    (process.env.E2B_CODEX_WS_TEMPLATE || process.env.E2B_TEMPLATE_CODEX_WS || 'codex-ws-playwright-sandbox-v1').trim() ||
+    'codex-ws-playwright-sandbox-v1',
   timeoutMs: Math.max(10_000, toNumber(process.env.E2B_TIMEOUT_MS, 30 * 60 * 1000)),
   allowInternetAccess: toBool(process.env.E2B_ALLOW_INTERNET, true),
   allowPublicTraffic: toBool(process.env.E2B_ALLOW_PUBLIC_TRAFFIC, true),

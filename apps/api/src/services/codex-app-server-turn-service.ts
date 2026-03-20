@@ -1,5 +1,6 @@
 import { e2bConnector } from '../connectors/e2b-connector';
 import { codexAppServerService } from './codex-app-server-service';
+import { ensurePlaywrightMcpInConfigToml } from '../utils/codex-runtime-config';
 
 type CodexAppServerTurnInput = {
   sessionId: string;
@@ -9,6 +10,8 @@ type CodexAppServerTurnInput = {
   waitTimeoutMs?: number;
   model?: string;
   codexBinaryPath?: string;
+  configToml?: string;
+  authJson?: string;
 };
 
 type CodexAppServerTurnResult = {
@@ -92,7 +95,7 @@ function buildRuntimeConfig(): CodexAppServerRuntimeConfig {
 }
 
 function buildConfigToml(config: CodexAppServerRuntimeConfig): string {
-  return [
+  return ensurePlaywrightMcpInConfigToml([
     `model_provider = ${JSON.stringify(config.providerName)}`,
     `model = ${JSON.stringify(config.model)}`,
     `review_model = ${JSON.stringify(config.reviewModel)}`,
@@ -113,7 +116,7 @@ function buildConfigToml(config: CodexAppServerRuntimeConfig): string {
     '[features]',
     'responses_websockets_v2 = true',
     '',
-  ].join('\n');
+  ].join('\n'));
 }
 
 function buildAuthJson(config: CodexAppServerRuntimeConfig): string | null {
@@ -171,13 +174,15 @@ export class CodexAppServerTurnService {
     const waitTimeoutMs = toPositiveInt(input.waitTimeoutMs, 10 * 60_000);
     const pollStartTimeoutMs = toPositiveInt(input.pollStartTimeoutMs, 15_000);
     const runtimeConfig = buildRuntimeConfig();
+    const configToml = ensurePlaywrightMcpInConfigToml(asString(input.configToml) || buildConfigToml(runtimeConfig));
+    const authJson = asString(input.authJson) || buildAuthJson(runtimeConfig) || '';
     const jobId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const server = await codexAppServerService.ensureServer({
       sessionId: input.sessionId,
       workspaceRoot: input.workspacePath,
       codexBinaryPath: input.codexBinaryPath || null,
-      configToml: buildConfigToml(runtimeConfig),
-      authJson: buildAuthJson(runtimeConfig),
+      configToml,
+      authJson,
     });
     const payload = {
       jobId,
@@ -668,6 +673,8 @@ PY`;
   async runTurn(input: CodexAppServerTurnInput): Promise<CodexAppServerTurnResult> {
     const waitTimeoutMs = toPositiveInt(input.waitTimeoutMs, 45_000);
     const runtimeConfig = buildRuntimeConfig();
+    const configToml = asString(input.configToml) || buildConfigToml(runtimeConfig);
+    const authJson = asString(input.authJson) || buildAuthJson(runtimeConfig) || '';
     const payload = {
       workspacePath: input.workspacePath,
       prompt: input.prompt,
@@ -675,8 +682,8 @@ PY`;
       model: input.model || null,
       codexBinaryPath: input.codexBinaryPath || null,
       waitTimeoutMs,
-      configToml: buildConfigToml(runtimeConfig),
-      authJson: buildAuthJson(runtimeConfig),
+      configToml,
+      authJson,
     };
     const payloadBase64 = Buffer.from(JSON.stringify(payload), 'utf-8').toString('base64');
 

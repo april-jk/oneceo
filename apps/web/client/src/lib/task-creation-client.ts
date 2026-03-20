@@ -267,6 +267,15 @@ export type WorkspaceFile = {
   binaryTooLarge?: boolean;
 };
 
+export type CodexRuntimeConfig = {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  configToml: string;
+  authJson: string;
+  updatedAt?: string;
+};
+
 async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
   const timeoutMs = options?.timeoutMs;
   const controller =
@@ -337,6 +346,36 @@ export async function createTaskCreationSession(
   }
   const result = (await response.json()) as { data?: TaskCreationSessionSummary };
   return result?.data || null;
+}
+
+export async function getCodexRuntimeConfig(): Promise<CodexRuntimeConfig> {
+  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
+  const result = await fetchJson<{ data?: CodexRuntimeConfig }>(url);
+  if (result?.data) return result.data;
+  throw new Error("failed to load codex runtime config");
+}
+
+export async function updateCodexRuntimeConfig(input: {
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  configToml?: string;
+  authJson?: string;
+}): Promise<CodexRuntimeConfig> {
+  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input || {}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: CodexRuntimeConfig };
+  if (result?.data) return result.data;
+  throw new Error("failed to save codex runtime config");
 }
 
 export async function listTaskCreationMessages(sessionId: string): Promise<TaskCreationHistoryMessage[]> {
@@ -691,6 +730,55 @@ export async function touchTaskCreationRuntime(sessionId: string): Promise<void>
   if (!response.ok) {
     throw new Error(`request failed: ${response.status}`);
   }
+}
+
+export async function interruptTaskCreationRuntime(
+  sessionId: string,
+  options?: { clientMessageKey?: string }
+): Promise<{
+  interrupted: boolean;
+  phase?: "intent_processing" | "executor_processing";
+  executor?: "opencode" | "claudecode" | "codex";
+  orchestratorSessionId?: string;
+  executorSessionId?: string;
+  reason?: string;
+  replayPending?: boolean;
+}> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/interrupt`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      preserveForRetry: true,
+      clientMessageKey: options?.clientMessageKey || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as {
+    data?: {
+      interrupted?: boolean;
+      phase?: "intent_processing" | "executor_processing";
+      executor?: "opencode" | "claudecode" | "codex";
+      orchestratorSessionId?: string;
+      executorSessionId?: string;
+      reason?: string;
+      replayPending?: boolean;
+    };
+  };
+  return {
+    interrupted: Boolean(result?.data?.interrupted),
+    phase: result?.data?.phase,
+    executor: result?.data?.executor,
+    orchestratorSessionId: result?.data?.orchestratorSessionId,
+    executorSessionId: result?.data?.executorSessionId,
+    reason: result?.data?.reason,
+    replayPending: Boolean(result?.data?.replayPending),
+  };
 }
 
 export async function listOsacMessages(orchestratorSessionId: string, limit: number = 120): Promise<OsacMessageRecord[]> {

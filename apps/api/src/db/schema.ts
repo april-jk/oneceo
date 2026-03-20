@@ -226,6 +226,22 @@ export const userConnectorAccounts = pgTable(
   })
 );
 
+export const userCodexRuntimeConfigs = pgTable(
+  'user_codex_runtime_configs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    configToml: text('config_toml').notNull(),
+    authJson: text('auth_json').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userUnique: uniqueIndex('idx_user_codex_runtime_configs_user_id').on(table.userId),
+    updatedAtIdx: index('idx_user_codex_runtime_configs_updated_at').on(table.updatedAt),
+  })
+);
+
 export const taskSessionConnectorBindings = pgTable(
   'task_session_connector_bindings',
   {
@@ -303,6 +319,9 @@ export type NewSandboxExecutionEnvironment = typeof sandboxExecutionEnvironments
 
 export type UserConnectorAccount = typeof userConnectorAccounts.$inferSelect;
 export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
+
+export type UserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferSelect;
+export type NewUserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferInsert;
 
 export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
 export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;

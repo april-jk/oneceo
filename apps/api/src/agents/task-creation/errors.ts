@@ -21,3 +21,15 @@ export class RecoverableAgentError extends Error {
 export function isRecoverableAgentError(error: unknown): boolean {
   return Boolean((error as any)?.__recoverableAgentError);
 }
+
+export class InterruptedTaskError extends Error {
+  constructor(message: string = 'TASK_INTERRUPTED') {
+    super(message);
+    this.name = 'InterruptedTaskError';
+    (this as any).__interruptedTask = true;
+  }
+}
+
+export function isInterruptedTaskError(error: unknown): boolean {
+  return Boolean((error as any)?.__interruptedTask);
+}

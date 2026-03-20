@@ -27,6 +27,15 @@ CREATE TABLE IF NOT EXISTS user_connector_accounts (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_codex_runtime_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  config_toml TEXT NOT NULL,
+  auth_json TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- 任务会话连接器绑定表
 CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -59,6 +68,8 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_user_id ON user_codex_runtime_configs(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_updated_at ON user_codex_runtime_configs(updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
   ON task_session_connector_bindings(task_session_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
@@ -389,6 +400,7 @@ export async function runMigration() {
     console.log('  - user_connector_accounts');
     console.log('  - task_session_connector_bindings');
     console.log('  - connector_auth_requests');
+    console.log('  - user_codex_runtime_configs');
     
     return true;
   } catch (error) {
@@ -427,6 +439,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
     `));

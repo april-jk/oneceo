@@ -14,6 +14,7 @@ import {
   getTaskCreationRecentMessages,
   getOpencodeEventStreamUrl,
   getTaskCreationSession,
+  interruptTaskCreationRuntime,
   listOsacMessages,
   resolveTaskCreationSessionTitle,
   startTaskCreationRuntime,
@@ -255,6 +256,8 @@ function compactText(value: string, maxLen: number = 320): string {
   if (!text) return '';
   return text;
 }
+
+const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指令';
 
 // Altus 控制模式存储键：
 // - sandbox: 直通 sandbox 执行器（OpenCode/ClaudeCode/Codex 等）
@@ -1985,6 +1988,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [sseReplayHint, setSseReplayHint] = useState(0);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
+  const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();
   const search = useSearch();
@@ -2024,6 +2028,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const historyExpandedRef = useRef(false);
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
   const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
+  const activeProcessingMessageKeyRef = useRef<string | null>(null);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -2065,6 +2070,68 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     pendingSandboxPromptRef.current = nextPrompt;
     setPendingSandboxPromptVersion((value) => value + 1);
   }, []);
+
+  const interruptCurrentRun = useCallback(
+    async (targetSessionId?: string) => {
+      const activeSessionId = asText(targetSessionId) || asText(sessionId);
+      const pendingPrompt = pendingSandboxPromptRef.current;
+      const hasPendingPrompt =
+        Boolean(pendingPrompt) && asText(pendingPrompt?.sessionId) === activeSessionId;
+
+      if (!activeSessionId) {
+        if (hasPendingPrompt) {
+          setPendingSandboxPrompt(null);
+          setIsProcessing(false);
+        }
+        return false;
+      }
+
+      const hasRuntimeBinding = Boolean(orchestratorSessionId);
+      if (!hasRuntimeBinding && hasPendingPrompt) {
+        setPendingSandboxPrompt(null);
+        setRuntimeError(null);
+        setIsProcessing(false);
+        return true;
+      }
+
+      setIsInterrupting(true);
+      try {
+        const result = await interruptTaskCreationRuntime(activeSessionId, {
+          clientMessageKey: activeProcessingMessageKeyRef.current || undefined,
+        });
+        if (!hasRuntimeBinding && !result.interrupted) {
+          return false;
+        }
+        setPendingSandboxPrompt(null);
+        setRuntimeError(null);
+        setIsProcessing(false);
+        activeProcessingMessageKeyRef.current = null;
+        setMessages((prev) =>
+          mergeRealtimeMessage(
+            prev,
+            {
+              type: 'status_update',
+              content: INTERRUPT_CONFIRMATION_TEXT,
+              message: INTERRUPT_CONFIRMATION_TEXT,
+              stage: 'failed',
+              tone: 'system',
+              sessionId: activeSessionId || undefined,
+              metadata: {
+                interruptConfirmed: true,
+                interruptPhase: result.phase || undefined,
+                interruptReason: result.reason || undefined,
+              },
+            },
+            WELCOME_MESSAGE
+          )
+        );
+        return true;
+      } finally {
+        setIsInterrupting(false);
+      }
+    },
+    [orchestratorSessionId, sessionId, setPendingSandboxPrompt]
+  );
 
   const bindSessionId = useCallback((nextSessionId: string) => {
     if (!nextSessionId) return;
@@ -2626,6 +2693,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
         if (!shouldDisplayErrorText(errorText)) {
           setIsProcessing(false);
+          activeProcessingMessageKeyRef.current = null;
           return;
         }
         const errorSessionId = (message.sessionId || sessionId || '').trim();
@@ -2640,6 +2708,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           return;
         }
         setIsProcessing(false);
+        activeProcessingMessageKeyRef.current = null;
         setMessages((prev) =>
           mergeRealtimeMessage(
             prev,
@@ -2912,6 +2981,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
     if (derived.stopProcessing) {
       setIsProcessing(false);
+      activeProcessingMessageKeyRef.current = null;
     }
     if (!derived.currentQuestion) {
       setCurrentQuestion(null);
@@ -3441,6 +3511,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
     setIsProcessing(true);
     setCurrentQuestion(null);
+    activeProcessingMessageKeyRef.current = messageKey;
     setMessages((prev) =>
       mergeRealtimeMessage(
         prev,
@@ -3505,6 +3576,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
     const altusMode = readAltusMode();
     if (altusMode === 'sandbox') {
+      if (isProcessing) {
+        await interruptCurrentRun(activeSessionId || undefined);
+      }
       const executor = readExecutor();
       const codexExecutionMode = executor === 'codex' ? readCodexExecutionMode() : undefined;
       if (!activeSessionId) {
@@ -3522,6 +3596,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       };
       setIsProcessing(true);
       setCurrentQuestion(null);
+      activeProcessingMessageKeyRef.current = messageKey;
       setMessages((prev) =>
         mergeRealtimeMessage(
           prev,
@@ -3683,6 +3758,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
 
+    if (isProcessing) {
+      await interruptCurrentRun(activeSessionId || undefined);
+    }
     sendUserInput(text, {
       ...options,
       sessionId: activeSessionId || options?.sessionId || undefined,
@@ -3702,6 +3780,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     syncRuntime,
     autoRuntime,
     runtimeEnabled,
+    interruptCurrentRun,
+    isProcessing,
     setPendingSandboxPrompt,
   ]);
 
@@ -3750,6 +3830,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     } as OrchestrationRuntime,
     sendUserInput,
     sendChatInput,
+    interruptCurrentRun,
+    isInterrupting,
     ensureSession,
     loadOlderHistory,
     answerQuestion,

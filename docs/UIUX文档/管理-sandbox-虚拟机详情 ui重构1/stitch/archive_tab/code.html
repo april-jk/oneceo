@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Runtime Inspector - Archive Management</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "surface-container": "#edeef0",
+              "on-tertiary-container": "#ffc6b2",
+              "surface-container-lowest": "#ffffff",
+              "on-surface": "#191c1e",
+              "inverse-surface": "#2e3132",
+              "surface-container-high": "#e7e8ea",
+              "on-primary-container": "#c4d2ff",
+              "background": "#f8f9fb",
+              "on-primary-fixed": "#001848",
+              "outline-variant": "#c3c6d6",
+              "tertiary": "#7b2600",
+              "error-container": "#ffdad6",
+              "secondary-container": "#8af5be",
+              "tertiary-fixed-dim": "#ffb59b",
+              "on-secondary-fixed": "#002113",
+              "primary-fixed": "#dae2ff",
+              "on-tertiary-fixed-variant": "#812800",
+              "on-primary-fixed-variant": "#0040a2",
+              "on-surface-variant": "#434654",
+              "on-background": "#191c1e",
+              "tertiary-fixed": "#ffdbcf",
+              "tertiary-container": "#a33500",
+              "surface-container-low": "#f3f4f6",
+              "on-secondary": "#ffffff",
+              "on-tertiary-fixed": "#380d00",
+              "surface-dim": "#d9dadc",
+              "primary": "#003d9b",
+              "on-error-container": "#93000a",
+              "primary-fixed-dim": "#b2c5ff",
+              "on-tertiary": "#ffffff",
+              "primary-container": "#0052cc",
+              "outline": "#737685",
+              "on-error": "#ffffff",
+              "error": "#ba1a1a",
+              "on-secondary-fixed-variant": "#005235",
+              "secondary": "#006c47",
+              "secondary-fixed-dim": "#71dba6",
+              "on-primary": "#ffffff",
+              "surface": "#f8f9fb",
+              "on-secondary-container": "#00714b",
+              "secondary-fixed": "#8df7c1",
+              "inverse-on-surface": "#f0f1f3",
+              "surface-variant": "#e1e2e4",
+              "surface-bright": "#f8f9fb",
+              "surface-tint": "#0c56d0",
+              "surface-container-highest": "#e1e2e4",
+              "inverse-primary": "#b2c5ff"
+            },
+            fontFamily: {
+              "headline": ["Inter"],
+              "body": ["Inter"],
+              "label": ["Inter"],
+              "mono": ["JetBrains Mono"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+            line-height: 1;
+        }
+        .tonal-architecture-shift {
+            background-color: #f3f4f6;
+        }
+        .ghost-border {
+            border-bottom: 1px solid rgba(195, 198, 214, 0.1);
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #d9dadc;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-background font-body text-on-surface antialiased overflow-hidden h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="docked full-width top-0 z-50 bg-gradient-to-r from-[#003d9b] to-[#0052cc] shadow-[0_24px_48px_-12px_rgba(25,28,30,0.08)] flex justify-between items-center w-full px-6 py-3">
+<div class="flex items-center gap-6">
+<span class="text-lg font-bold text-white tracking-tighter">Runtime Inspector</span>
+<nav class="hidden md:flex gap-6 font-['Inter'] font-semibold tracking-tight text-sm">
+<a class="text-blue-100/80 hover:text-white transition-colors" href="#">Runtime List</a>
+<a class="text-white border-b-2 border-white pb-1" href="#">Sandbox-123</a>
+</nav>
+</div>
+<div class="flex items-center gap-3">
+<div class="hidden md:flex items-center mr-4">
+<button class="px-4 py-1.5 bg-white/10 hover:bg-white/20 text-white font-medium text-xs rounded transition-all active:scale-95">Refresh</button>
+<button class="ml-2 px-4 py-1.5 bg-white text-primary font-bold text-xs rounded shadow-sm hover:bg-white/90 transition-all active:scale-95">Deploy Changes</button>
+</div>
+<div class="flex items-center gap-4 text-white">
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1.5 rounded-full transition-all">settings</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1.5 rounded-full transition-all">help</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1.5 rounded-full transition-all">account_circle</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden pt-0">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-[240px] z-40 bg-[#f3f4f6] flex flex-col pt-16 pb-4 border-r border-slate-200/20">
+<div class="px-6 py-4 mb-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container flex items-center justify-center text-white">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">deployed_code</span>
+</div>
+<div>
+<div class="text-on-surface font-bold text-sm leading-tight">Sandbox-123</div>
+<div class="text-slate-500 text-[10px] uppercase font-mono tracking-wider">ID: 88291-OM</div>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1 px-3">
+<div class="text-slate-500 text-[10px] px-3 mb-2 font-medium uppercase tracking-widest">Navigation</div>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">dashboard</span>
+<span>Overview</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">hub</span>
+<span>Connectivity</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 bg-[#ffffff] text-[#003d9b] font-bold border-l-4 border-[#003d9b] font-['Inter'] text-xs uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">archive</span>
+<span>Archive</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">monitoring</span>
+<span>Metrics</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">settings_input_component</span>
+<span>Advanced</span>
+</a>
+</nav>
+<div class="mt-auto px-3 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">menu_book</span>
+<span>Documentation</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors font-['Inter'] text-xs font-medium uppercase tracking-wider" href="#">
+<span class="material-symbols-outlined text-[18px]">support_agent</span>
+<span>Support</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 ml-[240px] mt-[56px] overflow-y-auto flex flex-col">
+<!-- Breadcrumbs and Header -->
+<div class="bg-surface-container-lowest px-8 py-6 flex justify-between items-end ghost-border">
+<div>
+<nav class="flex text-[10px] text-outline font-medium uppercase tracking-widest mb-2 gap-2 items-center">
+<span>Runtime List</span>
+<span class="material-symbols-outlined text-[12px]">chevron_right</span>
+<span class="text-primary">Sandbox-123</span>
+</nav>
+<h1 class="text-2xl font-bold text-on-surface tracking-tight">Archive Management</h1>
+<p class="text-xs text-on-surface-variant mt-1">Manage snapshots, version recovery, and metadata storage persistence.</p>
+</div>
+<div class="flex gap-2">
+<button class="flex items-center gap-2 px-4 py-2 border border-outline/20 hover:bg-surface-container-low text-on-surface text-xs font-bold rounded transition-colors active:scale-95">
+<span class="material-symbols-outlined text-sm">settings_backup_restore</span>
+                        Manual Restore
+                    </button>
+<button class="flex items-center gap-2 px-4 py-2 bg-primary text-white text-xs font-bold rounded shadow hover:bg-primary-container transition-all active:scale-95">
+<span class="material-symbols-outlined text-sm">cloud_upload</span>
+                        Manual Archive
+                    </button>
+</div>
+</div>
+<div class="p-8 flex-1 grid grid-cols-12 gap-6">
+<!-- Status Cards -->
+<div class="col-span-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+<div class="bg-surface-container-lowest p-4 rounded-lg flex items-center justify-between border border-outline-variant/10">
+<div>
+<div class="text-[10px] uppercase font-bold text-outline tracking-wider">Archive Status</div>
+<div class="text-xl font-bold text-secondary mt-1 flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+                                Success
+                            </div>
+</div>
+<div class="h-10 w-10 bg-secondary-container/20 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary">cloud_done</span>
+</div>
+</div>
+<div class="bg-surface-container-lowest p-4 rounded-lg flex items-center justify-between border border-outline-variant/10">
+<div>
+<div class="text-[10px] uppercase font-bold text-outline tracking-wider">Archive Dirty</div>
+<div class="text-xl font-bold text-on-surface mt-1 flex items-center gap-2">
+<span class="material-symbols-outlined text-outline">verified</span>
+                                No
+                            </div>
+</div>
+<div class="h-10 w-10 bg-surface-container-low rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-outline">cleaning_services</span>
+</div>
+</div>
+<div class="bg-surface-container-lowest p-4 rounded-lg flex items-center justify-between border border-outline-variant/10">
+<div>
+<div class="text-[10px] uppercase font-bold text-outline tracking-wider">Pending Update</div>
+<div class="text-xl font-bold text-on-surface mt-1 flex items-center gap-2">
+<span class="material-symbols-outlined text-outline">schedule</span>
+                                No
+                            </div>
+</div>
+<div class="h-10 w-10 bg-surface-container-low rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined text-outline">update</span>
+</div>
+</div>
+</div>
+<!-- Snapshot History Table -->
+<div class="col-span-12 lg:col-span-9 space-y-4">
+<div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 flex flex-col min-h-[500px]">
+<div class="px-6 py-4 border-b border-outline-variant/10 flex items-center justify-between">
+<h3 class="font-bold text-on-surface text-sm">Snapshot History</h3>
+<div class="flex items-center gap-4">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-2 top-1.5 text-outline text-sm">search</span>
+<input class="pl-8 pr-4 py-1.5 text-xs bg-surface-container-low border-none rounded focus:ring-1 focus:ring-primary w-48" placeholder="Filter by ID..." type="text"/>
+</div>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-primary transition-colors">filter_list</span>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low/50 text-outline text-[10px] uppercase font-bold tracking-widest">
+<th class="px-6 py-3">Snapshot ID</th>
+<th class="px-6 py-3">Timestamp</th>
+<th class="px-6 py-3">Type</th>
+<th class="px-6 py-3">Size</th>
+<th class="px-6 py-3">Hash/Key</th>
+<th class="px-6 py-3 text-center">Status</th>
+<th class="px-6 py-3 text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="text-xs divide-y divide-outline-variant/10">
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-4 font-mono text-primary font-medium">sn-892-v1.2</td>
+<td class="px-6 py-4 text-on-surface-variant">2023-11-24 14:22:01</td>
+<td class="px-6 py-4"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[10px] font-bold">INCREMENTAL</span></td>
+<td class="px-6 py-4 font-mono">1.24 GB</td>
+<td class="px-6 py-4 font-mono text-outline">a9f...44b</td>
+<td class="px-6 py-4 text-center">
+<span class="inline-flex items-center gap-1 bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-sm text-[10px] font-bold">
+                                                SUCCESS
+                                            </span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-primary font-bold hover:underline">Restore</button>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer hover:text-primary">download</span>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-4 font-mono text-primary font-medium">sn-891-v1.2</td>
+<td class="px-6 py-4 text-on-surface-variant">2023-11-24 12:05:44</td>
+<td class="px-6 py-4"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[10px] font-bold">FULL</span></td>
+<td class="px-6 py-4 font-mono">8.92 GB</td>
+<td class="px-6 py-4 font-mono text-outline">b12...ef8</td>
+<td class="px-6 py-4 text-center">
+<span class="inline-flex items-center gap-1 bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-sm text-[10px] font-bold">
+                                                SUCCESS
+                                            </span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-primary font-bold hover:underline">Restore</button>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer hover:text-primary">download</span>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-4 font-mono text-primary font-medium">sn-890-v1.1</td>
+<td class="px-6 py-4 text-on-surface-variant">2023-11-23 23:59:00</td>
+<td class="px-6 py-4"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[10px] font-bold">AUTO</span></td>
+<td class="px-6 py-4 font-mono">241 MB</td>
+<td class="px-6 py-4 font-mono text-outline">f72...c91</td>
+<td class="px-6 py-4 text-center">
+<span class="inline-flex items-center gap-1 bg-error-container text-on-error-container px-2 py-0.5 rounded-sm text-[10px] font-bold">
+                                                FAILED
+                                            </span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-outline/50 font-bold cursor-not-allowed">Retry</button>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer hover:text-primary">info</span>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-4 font-mono text-primary font-medium">sn-889-v1.1</td>
+<td class="px-6 py-4 text-on-surface-variant">2023-11-23 18:00:12</td>
+<td class="px-6 py-4"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[10px] font-bold">INCREMENTAL</span></td>
+<td class="px-6 py-4 font-mono">1.11 GB</td>
+<td class="px-6 py-4 font-mono text-outline">332...10a</td>
+<td class="px-6 py-4 text-center">
+<span class="inline-flex items-center gap-1 bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded-sm text-[10px] font-bold">
+                                                PENDING
+                                            </span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-outline/50 font-bold cursor-not-allowed">Wait</button>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer hover:text-primary">cancel</span>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors group">
+<td class="px-6 py-4 font-mono text-primary font-medium">sn-888-v1.1</td>
+<td class="px-6 py-4 text-on-surface-variant">2023-11-23 09:12:05</td>
+<td class="px-6 py-4"><span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[10px] font-bold">FULL</span></td>
+<td class="px-6 py-4 font-mono">8.76 GB</td>
+<td class="px-6 py-4 font-mono text-outline">e41...552</td>
+<td class="px-6 py-4 text-center">
+<span class="inline-flex items-center gap-1 bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded-sm text-[10px] font-bold">
+                                                SUCCESS
+                                            </span>
+</td>
+<td class="px-6 py-4 text-right">
+<div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-primary font-bold hover:underline">Restore</button>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer hover:text-primary">download</span>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="mt-auto px-6 py-3 bg-surface-container-low/30 border-t border-outline-variant/10 flex items-center justify-between">
+<span class="text-[10px] text-outline font-medium">Showing 1 to 5 of 42 snapshots</span>
+<div class="flex items-center gap-2">
+<button class="p-1 hover:bg-surface-container-low rounded border border-outline-variant/20 disabled:opacity-30" disabled="">
+<span class="material-symbols-outlined text-xs">chevron_left</span>
+</button>
+<span class="text-[10px] font-bold bg-primary text-white w-5 h-5 flex items-center justify-center rounded-sm">1</span>
+<span class="text-[10px] font-bold text-outline w-5 h-5 flex items-center justify-center rounded-sm hover:bg-surface-container-low cursor-pointer">2</span>
+<span class="text-[10px] font-bold text-outline w-5 h-5 flex items-center justify-center rounded-sm hover:bg-surface-container-low cursor-pointer">3</span>
+<button class="p-1 hover:bg-surface-container-low rounded border border-outline-variant/20">
+<span class="material-symbols-outlined text-xs">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Archive Metadata Panel -->
+<div class="col-span-12 lg:col-span-3 space-y-6">
+<div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 overflow-hidden flex flex-col">
+<div class="px-6 py-4 bg-primary text-white flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">info</span>
+<h3 class="font-bold text-xs uppercase tracking-widest">Archive Metadata</h3>
+</div>
+<div class="p-6 space-y-6">
+<div>
+<label class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-2">archiveKey</label>
+<div class="bg-inverse-surface text-inverse-on-surface p-3 rounded font-mono text-[11px] break-all leading-relaxed shadow-inner">
+                                    ark_production_88291_0M_x922
+                                </div>
+</div>
+<div>
+<label class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-2">snapshotKey</label>
+<div class="bg-inverse-surface text-inverse-on-surface p-3 rounded font-mono text-[11px] break-all leading-relaxed shadow-inner">
+                                    sn_892_primary_v1.2_final
+                                </div>
+</div>
+<div>
+<label class="text-[10px] font-bold text-outline uppercase tracking-widest block mb-2">metadataKey</label>
+<div class="bg-inverse-surface text-inverse-on-surface p-3 rounded font-mono text-[11px] break-all leading-relaxed shadow-inner">
+                                    meta_88291_OM_config_json
+                                </div>
+</div>
+<div class="pt-4 border-t border-outline-variant/20">
+<div class="flex justify-between items-center mb-1">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest">Restored At</span>
+<span class="text-xs font-medium">Never</span>
+</div>
+<div class="flex justify-between items-center mb-1">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest">Storage Policy</span>
+<span class="text-xs font-medium">Glacier-Deep</span>
+</div>
+<div class="flex justify-between items-center">
+<span class="text-[10px] font-bold text-outline uppercase tracking-widest">Encryption</span>
+<span class="text-[10px] font-bold text-secondary uppercase">AES-256</span>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-surface-container-low/50 p-4 rounded border border-outline-variant/10">
+<div class="flex items-center gap-3 text-on-surface-variant">
+<span class="material-symbols-outlined text-xl">help</span>
+<div>
+<p class="text-[11px] font-medium leading-tight">Need to automate snapshots?</p>
+<a class="text-primary text-[10px] font-bold hover:underline uppercase mt-1 inline-block" href="#">View Policy Settings</a>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

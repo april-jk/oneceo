@@ -366,6 +366,24 @@ export default function ConnectorDialog({
     });
   };
 
+  const selectGithubRepository = async (
+    connectorKey: ConnectorKey,
+    profileId: string | null,
+    selectionKey: string,
+    repositoryFullName: string,
+    canAttach: boolean
+  ) => {
+    if (!profileId) return;
+    setGithubSelectedRepositories((prev) => ({
+      ...prev,
+      [selectionKey]: [repositoryFullName],
+    }));
+    if (!sessionId || !canAttach) return;
+    await handleAttach(connectorKey, profileId, "attach", {
+      repositories: [repositoryFullName],
+    });
+  };
+
   return (
     <Popover
       open={open}
@@ -561,7 +579,7 @@ export default function ConnectorDialog({
               <div
                 className="absolute left-[calc(100%+8px)] top-0 z-20 w-[min(280px,calc(100vw-32px))] overflow-hidden rounded-[12px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
                 style={{
-                  maxHeight:
+                  height:
                     "min(430px, calc(var(--radix-popover-content-available-height, 75vh) - 8px))",
                 }}
               >
@@ -569,9 +587,6 @@ export default function ConnectorDialog({
                   const { item, session, connectorProfiles, selectedProfileId, selectedProfile } =
                     activeDetailConnector;
                   const busy = actingKey === item.key;
-                  const attachedToSelected =
-                    Boolean(session?.attached) &&
-                    session?.attachedProfileId === selectedProfileId;
                   const canAttach =
                     Boolean(sessionId) &&
                     item.available &&
@@ -589,109 +604,9 @@ export default function ConnectorDialog({
                     githubSelectedRepositories[githubRepoSelectionKey] ||
                     attachedAuthorizedRepositories ||
                     [];
-                  const selectedRepositoryName = selectedRepositories[0] || null;
 
                   return (
-                    <div className="flex min-w-0 flex-col overflow-hidden">
-                      <div className="border-b border-border/70 px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <div className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-muted text-foreground">
-                            <Github className="h-3.5 w-3.5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[13px] font-medium text-foreground">
-                              选择授权仓库
-                            </div>
-                            <div className="truncate text-[11px] text-muted-foreground">
-                              {selectedProfile?.displayName ||
-                                selectedProfile?.profileName ||
-                                "先选择 GitHub 账户"}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2 border-b border-border/70 px-2 py-2">
-                        {connectorProfiles.length > 1 ? (
-                          <div className="space-y-1">
-                            <Select
-                              value={selectedProfileId || ""}
-                              onValueChange={(value) => {
-                                setProfileSelection((prev) => ({
-                                  ...prev,
-                                  [item.key]: value,
-                                }));
-                              }}
-                            >
-                              <SelectTrigger className="h-8 rounded-[8px] border-border/70 bg-muted/20 text-[12px]">
-                                <SelectValue placeholder="选择 GitHub 账户" />
-                              </SelectTrigger>
-                              <SelectContent className="rounded-[12px]">
-                                {connectorProfiles.map((profile) => (
-                                  <SelectItem
-                                    key={profile.profileId}
-                                    value={profile.profileId}
-                                    className="rounded-[8px]"
-                                  >
-                                    {profile.displayName || profile.profileName}
-                                    {profile.isDefault ? " · default" : ""}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        ) : null}
-
-                        {selectedProfile ? (
-                          <div className="flex items-center justify-between gap-2 rounded-[8px] bg-muted/30 px-2 py-1.5 text-[11px]">
-                            <div className="min-w-0">
-                              <div className="truncate font-medium text-foreground">
-                                {selectedProfile.displayName || selectedProfile.profileName}
-                              </div>
-                              <div className="truncate text-muted-foreground">
-                                {attachedToSelected
-                                  ? `当前会话已授权 ${attachedAuthorizedRepositories.length} 个仓库`
-                                  : "为当前会话选择一个仓库"}
-                              </div>
-                            </div>
-                            <span
-                              className={cn(
-                                "rounded-full px-2 py-0.5 text-[10px]",
-                                statusChipTone(
-                                  selectedProfile.authStatus ||
-                                    session?.globalAuthStatus ||
-                                    "not_configured"
-                                )
-                              )}
-                            >
-                              {formatStatus(
-                                selectedProfile.authStatus ||
-                                  session?.globalAuthStatus ||
-                                  "not_configured"
-                              )}
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="rounded-[8px] border border-dashed border-border/70 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
-                            还没有可用的 GitHub 授权账户，请先完成 GitHub 连接。
-                          </div>
-                        )}
-
-                        {item.availabilityReason ? (
-                          <div className="flex gap-2 rounded-[8px] bg-destructive/10 px-2.5 py-2 text-[11px] leading-5 text-destructive">
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <span>{item.availabilityReason}</span>
-                          </div>
-                        ) : null}
-
-                        {selectedProfile?.lastError ? (
-                          <div className="flex gap-2 rounded-[8px] bg-destructive/10 px-2.5 py-2 text-[11px] leading-5 text-destructive">
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <span>{selectedProfile.lastError}</span>
-                          </div>
-                        ) : null}
-                      </div>
-
+                    <div className="flex h-full min-w-0 flex-col overflow-hidden">
                       <div className="border-b border-border/70 p-2">
                         <div className="relative">
                           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -714,6 +629,18 @@ export default function ConnectorDialog({
                           {!selectedProfileId ? (
                             <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
                               先选择一个 GitHub 账户，再继续选择仓库。
+                            </div>
+                          ) : !selectedProfile ? (
+                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
+                              还没有可用的 GitHub 授权账户，请先完成 GitHub 连接。
+                            </div>
+                          ) : item.availabilityReason ? (
+                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-destructive">
+                              {item.availabilityReason}
+                            </div>
+                          ) : selectedProfile.lastError ? (
+                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-destructive">
+                              {selectedProfile.lastError}
                             </div>
                           ) : githubRepositoriesLoading[selectedProfileId] ? (
                             <div className="flex items-center gap-2 rounded-[8px] px-2.5 py-3 text-[11px] text-muted-foreground">
@@ -762,17 +689,23 @@ export default function ConnectorDialog({
                                       selected ? "bg-muted/50" : "hover:bg-muted/35"
                                     )}
                                     onClick={() =>
-                                      toggleGithubRepository(
+                                      void selectGithubRepository(
+                                        item.key,
+                                        selectedProfileId,
                                         githubRepoSelectionKey,
-                                        repository.fullName
+                                        repository.fullName,
+                                        canAttach
                                       )
                                     }
                                     onKeyDown={(event) => {
                                       if (event.key === "Enter" || event.key === " ") {
                                         event.preventDefault();
-                                        toggleGithubRepository(
+                                        void selectGithubRepository(
+                                          item.key,
+                                          selectedProfileId,
                                           githubRepoSelectionKey,
-                                          repository.fullName
+                                          repository.fullName,
+                                          canAttach
                                         );
                                       }
                                     }}
@@ -801,53 +734,6 @@ export default function ConnectorDialog({
                       </ScrollArea>
 
                       <div className="border-t border-border/70 p-1.5">
-                        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-                          <div
-                            className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground"
-                            title={selectedRepositoryName || undefined}
-                          >
-                            {selectedRepositoryName || "未选择仓库"}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {attachedToSelected ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 rounded-[8px] px-2.5 text-[12px]"
-                                disabled={busy}
-                                onClick={() =>
-                                  void handleAttach(item.key, selectedProfileId || "", "detach")
-                                }
-                              >
-                                移除
-                              </Button>
-                            ) : null}
-                            {sessionId && selectedProfileId ? (
-                              <Button
-                                size="sm"
-                                className="h-8 rounded-[8px] px-2.5 text-[12px]"
-                                disabled={
-                                  busy || !canAttach || selectedRepositories.length !== 1
-                                }
-                                onClick={() =>
-                                  void handleAttach(item.key, selectedProfileId, "attach", {
-                                    repositories: selectedRepositories.slice(0, 1),
-                                  })
-                                }
-                              >
-                                {busy ? (
-                                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                ) : null}
-                                {attachedToSelected
-                                  ? "更新"
-                                  : session?.attachedProfileId && session.attachedProfileId !== selectedProfileId
-                                    ? "切换"
-                                    : "授权"}
-                              </Button>
-                            ) : null}
-                          </div>
-                        </div>
-
                         <button
                           type="button"
                           className="flex w-full items-center justify-between rounded-[8px] px-2 py-2 text-left transition hover:bg-muted/45"
@@ -870,7 +756,7 @@ export default function ConnectorDialog({
               <div
                 className="absolute left-[calc(100%+8px)] top-0 z-20 w-[min(310px,calc(100vw-32px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
                 style={{
-                  maxHeight:
+                  height:
                     "min(440px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
                 }}
               >
@@ -890,7 +776,7 @@ export default function ConnectorDialog({
                     selectedProfile?.authStatus === "authorized";
 
                   return (
-                    <div className="flex min-w-0 flex-col overflow-hidden">
+                    <div className="flex h-full min-w-0 flex-col overflow-hidden">
                       <div className="border-b border-border/70 px-3 py-3">
                         <div className="flex items-center gap-2">
                           <div className="flex h-8 w-8 items-center justify-center rounded-[9px] bg-muted text-foreground">

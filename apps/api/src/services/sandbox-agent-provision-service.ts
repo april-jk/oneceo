@@ -461,7 +461,9 @@ async function resolveAttachedConnectorBootstrap(
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
     if (!catalogItem.available) continue;
 
-    const account = await userConnectorService.getAccountMaterial(userId, connectorKey);
+    const profileId = pickString(binding.profileId);
+    if (!profileId) continue;
+    const account = await userConnectorService.getProfileMaterial(userId, profileId);
     if (!account || account.authStatus !== 'authorized') continue;
 
     try {

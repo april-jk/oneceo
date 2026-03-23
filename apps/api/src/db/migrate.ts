@@ -27,6 +27,24 @@ CREATE TABLE IF NOT EXISTS user_connector_accounts (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_connector_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  profile_name TEXT NOT NULL,
+  display_name TEXT,
+  auth_mode TEXT NOT NULL,
+  auth_status TEXT NOT NULL DEFAULT 'not_configured',
+  config_json JSONB,
+  secret_ciphertext TEXT,
+  metadata_json JSONB,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  last_auth_at TIMESTAMP,
+  last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS user_codex_runtime_configs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
@@ -41,10 +59,13 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_session_id TEXT NOT NULL,
   connector_key TEXT NOT NULL,
+  profile_id TEXT,
   desired_state TEXT NOT NULL DEFAULT 'detached',
   runtime_status TEXT NOT NULL DEFAULT 'unknown',
   orchestrator_session_id TEXT,
   server_name TEXT,
+  enabled_tools JSONB,
+  definition_snapshot_json JSONB,
   last_used_at TIMESTAMP,
   last_error TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -56,9 +77,11 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
   request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
   connector_key TEXT NOT NULL,
+  profile_id TEXT,
   provider TEXT NOT NULL,
   state TEXT NOT NULL,
   code_verifier TEXT,
+  profile_draft_json JSONB,
   return_to_session_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   expires_at TIMESTAMP NOT NULL,
@@ -68,6 +91,10 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_profile
+  ON user_connector_profiles(user_id, connector_key, profile_name);
+CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_id ON user_connector_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector ON user_connector_profiles(user_id, connector_key);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_user_id ON user_codex_runtime_configs(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_updated_at ON user_codex_runtime_configs(updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
@@ -78,6 +105,65 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_sess
   ON task_session_connector_bindings(orchestrator_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
+
+ALTER TABLE IF EXISTS task_session_connector_bindings
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
+  ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+ALTER TABLE IF EXISTS connector_auth_requests
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS profile_draft_json JSONB;
+
+INSERT INTO user_connector_profiles (
+  user_id,
+  connector_key,
+  profile_name,
+  display_name,
+  auth_mode,
+  auth_status,
+  config_json,
+  secret_ciphertext,
+  metadata_json,
+  is_default,
+  last_auth_at,
+  last_error,
+  created_at,
+  updated_at
+)
+SELECT
+  user_id,
+  connector_key,
+  COALESCE(NULLIF(display_name, ''), initcap(connector_key) || ' Default'),
+  display_name,
+  auth_mode,
+  auth_status,
+  config_json,
+  secret_ciphertext,
+  '{}'::jsonb,
+  TRUE,
+  last_auth_at,
+  last_error,
+  created_at,
+  updated_at
+FROM user_connector_accounts legacy
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM user_connector_profiles profiles
+  WHERE profiles.user_id = legacy.user_id
+    AND profiles.connector_key = legacy.connector_key
+)
+ON CONFLICT DO NOTHING;
+
+UPDATE task_session_connector_bindings bindings
+SET profile_id = profiles.id::text
+FROM task_creation_sessions sessions,
+     user_connector_profiles profiles
+WHERE bindings.profile_id IS NULL
+  AND sessions.id::text = bindings.task_session_id
+  AND profiles.user_id = sessions.user_id
+  AND profiles.connector_key = bindings.connector_key
+  AND profiles.is_default = TRUE;
 `;
 
 const createTablesSQL = `

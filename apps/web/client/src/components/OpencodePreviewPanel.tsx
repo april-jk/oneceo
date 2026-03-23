@@ -153,6 +153,11 @@ export default function OpencodePreviewPanel({
   const debugPollRef = useRef<number | null>(null);
   const deploymentPollRef = useRef<number | null>(null);
   const currentTab = activeTab ?? internalTab;
+  const diffDerivedTree = useMemo(
+    () => buildWorkspaceTreeFromDiffItems(sessionId, diffItems),
+    [sessionId, diffItems],
+  );
+  const effectiveTree = tree && tree.items.length > 0 ? tree : diffDerivedTree;
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
   const setSelectedDiffId = (id: string | null) => {
@@ -868,7 +873,7 @@ export default function OpencodePreviewPanel({
           aria-hidden={currentTab !== "files"}
         >
           <FilePreview
-            tree={tree}
+            tree={effectiveTree}
             loading={treeLoading}
             error={treeError}
             selectedPath={selectedPath}
@@ -1086,6 +1091,81 @@ function buildTree(items: WorkspaceTreeItem[]): TreeNode[] {
   return root.children;
 }
 
+function detectProjectRootPrefix(items: WorkspaceTreeItem[]): string | null {
+  const filePaths = items
+    .filter((item) => item.type === "file")
+    .map((item) => item.path.replace(/\\/g, "/").replace(/^\/+/, ""))
+    .filter(Boolean);
+  if (filePaths.length > 0) {
+    const firstSegments = filePaths
+      .map((path) => path.split("/").filter(Boolean))
+      .filter((segments) => segments.length > 1)
+      .map((segments) => segments[0]);
+    if (firstSegments.length === filePaths.length) {
+      const first = firstSegments[0];
+      const same = firstSegments.every((segment) => segment === first);
+      if (same && first) {
+        return first;
+      }
+    }
+    return null;
+  }
+
+  const rootDirs = items
+    .filter((item) => item.type === "dir")
+    .map((item) => item.path.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, ""))
+    .filter((path) => path && !path.includes("/"));
+  if (rootDirs.length === 1) {
+    return rootDirs[0] || null;
+  }
+  return null;
+}
+
+function buildWorkspaceTreeFromDiffItems(
+  sessionId: string | null | undefined,
+  diffItems: PreviewDiffItem[],
+): WorkspaceTree | null {
+  if (!sessionId || diffItems.length === 0) return null;
+  const normalizePath = (value: string) =>
+    value.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "").replace(/\/+$/, "");
+  const filePaths = new Set<string>();
+  const dirPaths = new Set<string>();
+
+  diffItems.forEach((item) => {
+    if (item.canonicalFile) {
+      const normalized = normalizePath(item.canonicalFile);
+      if (normalized) filePaths.add(normalized);
+    }
+    (item.files || []).forEach((file) => {
+      const normalized = normalizePath(file.file || "");
+      if (normalized) filePaths.add(normalized);
+    });
+  });
+
+  for (const filePath of Array.from(filePaths)) {
+    const parts = filePath.split("/").filter(Boolean);
+    let current = "";
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      current = current ? `${current}/${parts[i]}` : parts[i]!;
+      dirPaths.add(current);
+    }
+  }
+
+  const items: WorkspaceTreeItem[] = [
+    ...Array.from(dirPaths).map((path) => ({ path, type: "dir" as const })),
+    ...Array.from(filePaths).map((path) => ({ path, type: "file" as const })),
+  ].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+    return a.path.localeCompare(b.path);
+  });
+
+  if (items.length === 0) return null;
+  return {
+    root: `/home/user/opencode/workspaces/${sessionId}`,
+    items,
+  };
+}
+
 function FilePreview({
   tree,
   loading,
@@ -1152,6 +1232,15 @@ function FilePreview({
   }
 
   const nodes = buildTree(tree.items);
+  const projectPrefix = detectProjectRootPrefix(tree.items);
+  const projectNode =
+    projectPrefix && nodes.length > 0
+      ? nodes.find((node) => node.type === "dir" && node.path === projectPrefix) || null
+      : null;
+  const renderNodes = projectNode ? projectNode.children : nodes;
+  const displayRoot = projectPrefix
+    ? `${(tree.root || "").replace(/\/+$/, "")}/${projectPrefix}`
+    : tree.root;
   const lineCount = file?.content ? file.content.split("\n").length : 0;
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
@@ -1167,7 +1256,7 @@ function FilePreview({
       <div className="border-b border-border overflow-auto overscroll-contain bg-slate-50/60 px-3 py-3 md:basis-[30%] md:max-w-[30%] md:border-r md:border-b-0">
         <div className="mb-2 space-y-1">
           <div className="text-[11px] text-muted-foreground break-all font-mono">
-            根目录: {tree.root}
+            根目录: {displayRoot}
           </div>
           {rootDirState?.hasMore ? (
             <button
@@ -1181,7 +1270,7 @@ function FilePreview({
           ) : null}
         </div>
         <TreeList
-          nodes={nodes}
+          nodes={renderNodes}
           selectedPath={selectedPath}
           onSelectFile={onSelectFile}
           expandedPaths={expandedPaths}

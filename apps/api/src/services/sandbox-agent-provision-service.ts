@@ -208,6 +208,37 @@ async function resolveReusableSandbox(
   };
 }
 
+function isSandboxUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('sandbox was not found') ||
+    normalized.includes('sandbox not found') ||
+    normalized.includes('not running anymore') ||
+    normalized.includes('sandbox command channel not ready') ||
+    normalized.includes('command channel not ready') ||
+    normalized.includes('guest has been shut down') ||
+    normalized.includes('instance was stopped') ||
+    normalized.includes('failed to connect to sandbox')
+  );
+}
+
+async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
+  try {
+    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
+      provisionRecoveryReason: reason,
+      provisionRecoveryAt: new Date().toISOString(),
+    });
+  } catch {
+    // ignore metadata sync failures during recovery
+  }
+  try {
+    await sandboxExecutionEnvironmentDAO.updateStatus(sessionId, 'closed', null);
+  } catch {
+    // ignore missing rows during recovery
+  }
+}
+
 function buildSandboxEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   const passthrough = [
@@ -1196,212 +1227,242 @@ export class SandboxAgentProvisionService {
     const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
     const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
     const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
-    const reusable = taskSessionId
+    const initialReusable = taskSessionId
       ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode)
       : null;
+    let reusable = initialReusable;
+    let lastRecoverableError: unknown = null;
 
-    const environment = reusable
-      ? reusable.environment
-      : await runStep('open_environment', () =>
-          sandboxEnvironmentService.openEnvironment({
-            metadata: {
-              ...(input.metadata || {}),
-              sandboxExecutor: executor,
-            },
-            envs: envInput,
-            templateOverride: selectedTemplate,
-          })
-        );
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const environment = reusable
+        ? reusable.environment
+        : await runStep('open_environment', () =>
+            sandboxEnvironmentService.openEnvironment({
+              metadata: {
+                ...(input.metadata || {}),
+                sandboxExecutor: executor,
+              },
+              envs: envInput,
+              templateOverride: selectedTemplate,
+            })
+          );
 
-    const sessionId = reusable?.sessionId || environment.sessionId;
-    const isReused = Boolean(reusable);
+      const sessionId = reusable?.sessionId || environment.sessionId;
+      const isReused = Boolean(reusable);
 
-    const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
-    const trafficAccessToken =
-      (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
-    const existingEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
-    const existingMetadata = ((existingEnvironment?.metadata || {}) as Record<string, unknown>) || {};
+      try {
+        const info = await runStep('sandbox_info', () => e2bConnector.getSandboxInfo(sessionId));
+        const trafficAccessToken =
+          (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
+        const existingEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(sessionId);
+        const existingMetadata = ((existingEnvironment?.metadata || {}) as Record<string, unknown>) || {};
 
-    await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
+        await runStep('commands_ready', () => waitForSandboxCommands(sessionId));
 
-    const layout = await runStep('workspace_prepare', () => ensureWorkspaceLayout(sessionId, taskSessionId || undefined));
-    const workspaceRoot = layout?.workspaceRoot || null;
-    const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
-    let codexArchiveHome: string | null = null;
-    let codexDotCodexPath: string | null = null;
-    let codexBinaryPath: string | null = null;
-    let codexVersion: string | null = null;
-    let codexConfigToml: string | null = null;
-    let codexAuthJson: string | null = null;
+        const layout = await runStep('workspace_prepare', () => ensureWorkspaceLayout(sessionId, taskSessionId || undefined));
+        const workspaceRoot = layout?.workspaceRoot || null;
+        const stateRoot = layout?.stateRoot || (taskSessionId ? resolveOpencodeStatePath(taskSessionId) : null);
+        let codexArchiveHome: string | null = null;
+        let codexDotCodexPath: string | null = null;
+        let codexBinaryPath: string | null = null;
+        let codexVersion: string | null = null;
+        let codexConfigToml: string | null = null;
+        let codexAuthJson: string | null = null;
 
-    if (!isReused) {
-      const restored = await restoreWorkspaceIfArchived(sessionId);
-      if (restored && taskSessionId) {
-        await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
-      }
-    }
+        if (!isReused) {
+          const restored = await restoreWorkspaceIfArchived(sessionId);
+          if (restored && taskSessionId) {
+            await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+          }
+        }
 
-    let baseUrl: string | undefined;
-    let host: string | undefined;
-    let osacEndpoint: string | null = pickString(existingMetadata.osacEndpoint);
-    let osacHost: string | null = pickString(existingMetadata.osacHost);
-    let osacHostPort: number | null = null;
-    let osacConnectionMode: string | null = pickString(existingMetadata.osacConnectionMode) || null;
-    let osacAuthToken: string | null = pickString(existingMetadata.osacAuthToken);
+        let baseUrl: string | undefined;
+        let host: string | undefined;
+        let osacEndpoint: string | null = pickString(existingMetadata.osacEndpoint);
+        let osacHost: string | null = pickString(existingMetadata.osacHost);
+        let osacHostPort: number | null = null;
+        let osacConnectionMode: string | null = pickString(existingMetadata.osacConnectionMode) || null;
+        let osacAuthToken: string | null = pickString(existingMetadata.osacAuthToken);
 
-    if (executor === 'opencode') {
-      host = await runStep('sandbox_host', () => resolveE2bPublicHost(sessionId, e2bConfig.opencodePort));
-      baseUrl = `https://${host}`;
+        if (executor === 'opencode') {
+          host = await runStep('sandbox_host', () => resolveE2bPublicHost(sessionId, e2bConfig.opencodePort));
+          baseUrl = `https://${host}`;
 
-      await runStep('opencode_present', () => assertOpencodeReady(sessionId));
-      await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
-      await ensurePlaywrightDeps(sessionId);
-      await runStep('opencode_state_migrate', () => migrateLegacyWorkspaceState(sessionId, workspaceRoot, stateRoot));
+          await runStep('opencode_present', () => assertOpencodeReady(sessionId));
+          await runStep('playwright_present', () => assertPlaywrightReady(sessionId));
+          await ensurePlaywrightDeps(sessionId);
+          await runStep('opencode_state_migrate', () => migrateLegacyWorkspaceState(sessionId, workspaceRoot, stateRoot));
 
-      const connectorBootstrap = await runStep('opencode_connector_config', () =>
-        resolveAttachedConnectorBootstrap(taskSessionId)
-      );
-      const opencodeEnvs = {
-        ...envInput,
-        ...connectorBootstrap.processEnvs,
-      };
+          const connectorBootstrap = await runStep('opencode_connector_config', () =>
+            resolveAttachedConnectorBootstrap(taskSessionId)
+          );
+          const opencodeEnvs = {
+            ...envInput,
+            ...connectorBootstrap.processEnvs,
+          };
 
-      await runStep('opencode_config', () =>
-        writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
-      );
-      await runStep('opencode_start', () =>
-        isReused
-          ? restartOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
-          : startOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
-      );
-      await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
-      await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
-      await runStep('neko_debug', () => ensureNekoDebug(sessionId));
-    } else if (executor === 'codex') {
-      const codexReady = await runStep('codex_present', () => assertCodexReady(sessionId));
-      codexBinaryPath = codexReady.codexBinaryPath;
-      codexVersion = codexReady.codexVersion;
-      const codexHomeMapping = await runStep('codex_home_mapping', () =>
-        ensureCodexHomeMapping(sessionId, {
-          taskSessionId,
-          stateRoot,
-        })
-      );
-      codexArchiveHome = codexHomeMapping.codexArchiveHome;
-      codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
-      if (taskSessionId) {
-        const runtimeConfig = await runStep('codex_runtime_config', () =>
-          codexRuntimeConfigService.getByTaskSessionId(taskSessionId)
-        );
-        codexConfigToml = runtimeConfig.configToml;
-        codexAuthJson = runtimeConfig.authJson;
-        await runStep('codex_runtime_files', () =>
-          codexAppServerService.ensureRuntimeFiles({
-            sessionId,
-            configToml: codexConfigToml,
-            authJson: codexAuthJson,
-          })
-        );
-      }
-      const reusableBridge = await canReuseOsacBridge({
-        endpoint: osacEndpoint,
-        authToken: osacAuthToken,
-      });
-      if (reusableBridge) {
-        osacHostPort = Number(existingMetadata.osacHostPort || osacBootstrapConfig.osacPort) || osacBootstrapConfig.osacPort;
-        osacConnectionMode = pickString(existingMetadata.osacConnectionMode) || 'direct';
-      } else {
-        const bridge = await runStep('osac_bridge', () =>
-          ensureOsacBridge(sessionId, {
-            executor,
-            workspaceRoot,
+          await runStep('opencode_config', () =>
+            writeOpencodeConfig(sessionId, opencodeEnvs, connectorBootstrap.mcpEntries)
+          );
+          await runStep('opencode_start', () =>
+            isReused
+              ? restartOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
+              : startOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
+          );
+          await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
+          await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
+          await runStep('neko_debug', () => ensureNekoDebug(sessionId));
+        } else if (executor === 'codex') {
+          const codexReady = await runStep('codex_present', () => assertCodexReady(sessionId));
+          codexBinaryPath = codexReady.codexBinaryPath;
+          codexVersion = codexReady.codexVersion;
+          const codexHomeMapping = await runStep('codex_home_mapping', () =>
+            ensureCodexHomeMapping(sessionId, {
+              taskSessionId,
+              stateRoot,
+            })
+          );
+          codexArchiveHome = codexHomeMapping.codexArchiveHome;
+          codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
+          if (taskSessionId) {
+            const runtimeConfig = await runStep('codex_runtime_config', () =>
+              codexRuntimeConfigService.getByTaskSessionId(taskSessionId)
+            );
+            codexConfigToml = runtimeConfig.configToml;
+            codexAuthJson = runtimeConfig.authJson;
+            await runStep('codex_runtime_files', () =>
+              codexAppServerService.ensureRuntimeFiles({
+                sessionId,
+                configToml: codexConfigToml,
+                authJson: codexAuthJson,
+              })
+            );
+          }
+          const reusableBridge = await canReuseOsacBridge({
+            endpoint: osacEndpoint,
             authToken: osacAuthToken,
-            codexPath: codexBinaryPath,
-          })
+          });
+          if (reusableBridge) {
+            osacHostPort =
+              Number(existingMetadata.osacHostPort || osacBootstrapConfig.osacPort) || osacBootstrapConfig.osacPort;
+            osacConnectionMode = pickString(existingMetadata.osacConnectionMode) || 'direct';
+          } else {
+            const bridge = await runStep('osac_bridge', () =>
+              ensureOsacBridge(sessionId, {
+                executor,
+                workspaceRoot,
+                authToken: osacAuthToken,
+                codexPath: codexBinaryPath,
+              })
+            );
+            osacEndpoint = bridge.osacEndpoint;
+            osacHost = bridge.osacHost;
+            osacHostPort = osacBootstrapConfig.osacPort;
+            osacConnectionMode = 'direct';
+            osacAuthToken = bridge.osacAuthToken;
+            await runStep('osac_ready', () =>
+              waitForOsacBridgeReady({
+                endpoint: bridge.osacEndpoint,
+                authToken: bridge.osacAuthToken,
+              })
+            );
+          }
+        } else {
+          throw new Error(`unsupported sandbox executor: ${executor}`);
+        }
+
+        const mergedMetadata: Record<string, unknown> = {
+          ...(((existingEnvironment?.metadata as Record<string, unknown> | undefined) || {})),
+          ...(((input.metadata as Record<string, unknown> | undefined) || {})),
+          sandboxProvider: 'e2b',
+          sandboxExecutor: executor,
+          executor,
+          codexExecutionMode: codexExecutionMode || undefined,
+          codexMode: codexExecutionMode || undefined,
+          opencodeBaseUrl: baseUrl,
+          opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
+          opencodeHost: host,
+          opencodeWorkspaceRoot: workspaceRoot || undefined,
+          opencodeStateRoot: stateRoot || undefined,
+          codexArchiveHome: codexArchiveHome || undefined,
+          codexDotCodexPath: codexDotCodexPath || undefined,
+          codexBinaryPath: codexBinaryPath || undefined,
+          codexVersion: codexVersion || undefined,
+          codexConfigToml: codexConfigToml || undefined,
+          osacEndpoint: osacEndpoint || undefined,
+          osacHost: osacHost || undefined,
+          osacHostPort: osacHostPort || undefined,
+          osacConnectionMode: osacConnectionMode || undefined,
+          osacAuthToken: osacAuthToken || undefined,
+          e2b: {
+            ...(existingEnvironment?.metadata as any)?.e2b,
+            sandboxId: sessionId,
+            template: selectedTemplate,
+            timeoutMs: e2bConfig.timeoutMs,
+            trafficAccessToken: trafficAccessToken,
+          },
+        };
+        await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, mergedMetadata);
+
+        if (taskSessionId) {
+          await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
+            orchestratorSessionId: sessionId,
+            executor,
+          });
+          await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
+        }
+
+        await touchSandbox(sessionId, `provisioned_${executor}`);
+
+        return {
+          sessionId,
+          vmName: null,
+          vmIpAddress: null,
+          osacEndpoint,
+          osacHost,
+          osacHostPort,
+          osacConnectionMode,
+          osacAuthToken,
+          status: 'ready',
+          sandboxStatus: 'ready',
+          allocationSource: isReused ? 'reused_session' : 'cold_start',
+          degradedFromWarmPool: false,
+          readyGatePassed: true,
+          bootstrap: {
+            osacBinaryUrl: '',
+            opencodeBinaryUrl: '',
+            osacPort: osacBootstrapConfig.osacPort,
+            osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
+          },
+          opencodeBaseUrl: baseUrl,
+          opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
+          trafficAccessToken,
+        };
+      } catch (error) {
+        const recoverable = isSandboxUnavailableError(error);
+        if (!recoverable || attempt >= 1) {
+          throw error;
+        }
+        lastRecoverableError = error;
+        console.warn('[SANDBOX_PROVISION_AUTO_RECOVER]', {
+          sessionId,
+          taskSessionId,
+          executor,
+          attempt: attempt + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        e2bConnector.forgetSandbox(sessionId);
+        await markSandboxClosedBestEffort(
+          sessionId,
+          error instanceof Error ? error.message : String(error)
         );
-        osacEndpoint = bridge.osacEndpoint;
-        osacHost = bridge.osacHost;
-        osacHostPort = osacBootstrapConfig.osacPort;
-        osacConnectionMode = 'direct';
-        osacAuthToken = bridge.osacAuthToken;
-        await runStep('osac_ready', () =>
-          waitForOsacBridgeReady({
-            endpoint: bridge.osacEndpoint,
-            authToken: bridge.osacAuthToken,
-          })
-        );
+        reusable = null;
       }
-    } else {
-      throw new Error(`unsupported sandbox executor: ${executor}`);
     }
 
-    const mergedMetadata: Record<string, unknown> = {
-      ...(((existingEnvironment?.metadata as Record<string, unknown> | undefined) || {})),
-      ...(((input.metadata as Record<string, unknown> | undefined) || {})),
-      sandboxProvider: 'e2b',
-      sandboxExecutor: executor,
-      executor,
-      codexExecutionMode: codexExecutionMode || undefined,
-      codexMode: codexExecutionMode || undefined,
-      opencodeBaseUrl: baseUrl,
-      opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
-      opencodeHost: host,
-      opencodeWorkspaceRoot: workspaceRoot || undefined,
-      opencodeStateRoot: stateRoot || undefined,
-      codexArchiveHome: codexArchiveHome || undefined,
-      codexDotCodexPath: codexDotCodexPath || undefined,
-      codexBinaryPath: codexBinaryPath || undefined,
-      codexVersion: codexVersion || undefined,
-      codexConfigToml: codexConfigToml || undefined,
-      osacEndpoint: osacEndpoint || undefined,
-      osacHost: osacHost || undefined,
-      osacHostPort: osacHostPort || undefined,
-      osacConnectionMode: osacConnectionMode || undefined,
-      osacAuthToken: osacAuthToken || undefined,
-      e2b: {
-        ...(existingEnvironment?.metadata as any)?.e2b,
-        sandboxId: sessionId,
-        template: selectedTemplate,
-        timeoutMs: e2bConfig.timeoutMs,
-        trafficAccessToken: trafficAccessToken,
-      },
-    };
-    await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, mergedMetadata);
-
-    if (taskSessionId) {
-      await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
-        orchestratorSessionId: sessionId,
-        executor,
-      });
-      await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, executor);
-    }
-
-    await touchSandbox(sessionId, `provisioned_${executor}`);
-
-    return {
-      sessionId,
-      vmName: null,
-      vmIpAddress: null,
-      osacEndpoint,
-      osacHost,
-      osacHostPort,
-      osacConnectionMode,
-      osacAuthToken,
-      status: 'ready',
-      sandboxStatus: 'ready',
-      allocationSource: reusable ? 'reused_session' : 'cold_start',
-      degradedFromWarmPool: false,
-      readyGatePassed: true,
-      bootstrap: {
-        osacBinaryUrl: '',
-        opencodeBinaryUrl: '',
-        osacPort: osacBootstrapConfig.osacPort,
-        osacPathSuffix: osacBootstrapConfig.osacPathSuffix,
-      },
-      opencodeBaseUrl: baseUrl,
-      opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
-      trafficAccessToken,
-    };
+    throw lastRecoverableError instanceof Error
+      ? lastRecoverableError
+      : new Error(String(lastRecoverableError || 'sandbox provision failed'));
   }
 }
 

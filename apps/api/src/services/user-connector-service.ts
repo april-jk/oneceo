@@ -257,6 +257,11 @@ function ensureRequiredProfileName(profileName: string, connectorKey: ConnectorK
   }
 }
 
+function buildGithubProfileName(displayName?: string | null): string {
+  const resolved = asText(displayName);
+  return resolved ? `GitHub · ${resolved}` : 'GitHub';
+}
+
 export class UserConnectorService {
   async listCatalog() {
     return connectorRegistry.listVisibleCatalog();
@@ -359,12 +364,6 @@ export class UserConnectorService {
     const config = pickObject(input.config);
     const credentials = pickObject(input.credentials);
     const metadata = pickObject(input.metadata);
-    const profileName =
-      asText(input.profileName) ||
-      asText(config.profileName) ||
-      asText(existing?.profileName) ||
-      `${catalogItem.name} Default`;
-    ensureRequiredProfileName(profileName, connectorKey);
     const displayName =
       asText(input.displayName) || asText(config.displayName) || asText(existing?.displayName) || '';
     const secret = buildSecretPayload(connectorKey, credentials, existingSecret);
@@ -379,6 +378,18 @@ export class UserConnectorService {
       secret,
       fallbackDisplayName: displayName,
     });
+    const profileNameCandidate =
+      asText(input.profileName) ||
+      asText(config.profileName) ||
+      asText(existing?.profileName) ||
+      (connectorKey === 'github'
+        ? buildGithubProfileName(resolvedDisplayName)
+        : `${catalogItem.name} Default`);
+    const profileName =
+      connectorKey === 'github'
+        ? profileNameCandidate || buildGithubProfileName(resolvedDisplayName)
+        : profileNameCandidate;
+    ensureRequiredProfileName(profileName, connectorKey);
     const authStatus = resolveAuthStatus(catalogItem, secret, existing?.authStatus);
 
     let saved;
@@ -599,10 +610,14 @@ export class UserConnectorService {
         asText(tokenPayload.workspace_name) ||
         asText(profile.displayName) ||
         '';
+      let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
 
       if (connectorKey === 'github') {
         const githubProfile = await resolveGithubProfile(accessToken);
         displayName = githubProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
+          profileName = buildGithubProfileName(displayName);
+        }
       }
 
       const secret: ConnectorAccountSecret = {
@@ -614,6 +629,7 @@ export class UserConnectorService {
 
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
       const saved = await userConnectorProfileDAO.update(profileId, userId, {
+        profileName,
         authMode: 'oauth',
         authStatus: 'authorized',
         displayName: displayName || profile.displayName || null,

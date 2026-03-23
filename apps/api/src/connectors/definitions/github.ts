@@ -48,16 +48,15 @@ export function buildGithubDefinition(): ConnectorDefinition {
         key: 'profileName',
         label: 'Profile Name',
         type: 'text',
-        required: true,
         placeholder: 'GitHub Main',
-        description: '用于区分不同 GitHub 授权档案。',
+        description: '可选。留空时平台会自动按授权账号生成名称。',
       },
       {
         key: 'displayName',
         label: 'Display Name',
         type: 'text',
         placeholder: 'Engineering Org',
-        description: '显示名称，可留空由平台自动回填。',
+        description: '可选。留空时平台会自动回填 GitHub 账号名。',
       },
       {
         key: 'accessToken',

@@ -72,6 +72,32 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeRepositoryFullName(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  const parts = text
+    .split('/')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (parts.length !== 2) return '';
+  return `${parts[0]}/${parts[1]}`;
+}
+
+function normalizeGithubRepositories(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeRepositoryFullName(item);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
 function parseHeadersTemplate(value: string | undefined): Record<string, string> {
   const raw = asText(value);
   if (!raw) return {};
@@ -106,7 +132,45 @@ function renderHeaders(
 
 function buildGithubStdioWrapperCommand(): string {
   return [
+    "const readline = require('node:readline');",
     "const { spawn } = require('node:child_process');",
+    "const allowedRepositories = (() => {",
+    "  try {",
+    "    const parsed = JSON.parse(process.env.ONECEO_GITHUB_ALLOWED_REPOSITORIES || '[]');",
+    "    if (!Array.isArray(parsed)) return new Set();",
+    "    return new Set(parsed.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));",
+    "  } catch {",
+    "    return new Set();",
+    "  }",
+    "})();",
+    "const parseRepository = (value) => {",
+    "  const text = String(value || '').trim();",
+    "  if (!text) return '';",
+    "  const parts = text.split('/').map((part) => part.trim()).filter(Boolean);",
+    "  if (parts.length !== 2) return '';",
+    "  return `${parts[0]}/${parts[1]}`;",
+    "};",
+    "const collectRepositories = (value, target = new Set()) => {",
+    "  if (!value) return target;",
+    "  if (Array.isArray(value)) {",
+    "    for (const item of value) collectRepositories(item, target);",
+    "    return target;",
+    "  }",
+    "  if (typeof value !== 'object') return target;",
+    "  const record = value;",
+    "  const owner = typeof record.owner === 'string' ? record.owner : '';",
+    "  const repo = typeof record.repo === 'string' ? record.repo : '';",
+    "  const combined = parseRepository(owner && repo ? `${owner}/${repo}` : '');",
+    "  if (combined) target.add(combined);",
+    "  const directKeys = ['repository', 'repo', 'full_name'];",
+    "  for (const key of directKeys) {",
+    "    const normalized = parseRepository(record[key]);",
+    "    if (normalized) target.add(normalized);",
+    "  }",
+    "  for (const nested of Object.values(record)) collectRepositories(nested, target);",
+    "  return target;",
+    "};",
+    "const writeMessage = (message) => process.stdout.write(`${JSON.stringify(message)}\\n`);",
     "const child = spawn('npx', ['-y', '@modelcontextprotocol/server-github'], {",
     "  stdio: ['pipe', 'pipe', 'inherit'],",
     "  env: {",
@@ -114,35 +178,40 @@ function buildGithubStdioWrapperCommand(): string {
     "    NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL || 'silent',",
     '  },',
     '});',
-    'let buffer = Buffer.alloc(0);',
-    'let filtered = false;',
-    'const flushChunk = (chunk) => {',
-    '  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);',
-    '  if (filtered) {',
-    '    process.stdout.write(data);',
+    'let skippedBanner = false;',
+    "const childOutput = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });",
+    "childOutput.on('line', (line) => {",
+    "  if (!skippedBanner && line.trim() === 'GitHub MCP Server running on stdio') {",
+    '    skippedBanner = true;',
     '    return;',
     '  }',
-    '  buffer = Buffer.concat([buffer, data]);',
-    '  const newlineIndex = buffer.indexOf(0x0a);',
-    '  if (newlineIndex === -1) return;',
-    "  const firstLine = buffer.subarray(0, newlineIndex).toString('utf8').trim();",
-    '  const rest = buffer.subarray(newlineIndex + 1);',
-    "  if (firstLine && firstLine !== 'GitHub MCP Server running on stdio') {",
-    "    process.stdout.write(Buffer.from(`${firstLine}\\n`));",
-    '  }',
-    '  if (rest.length > 0) {',
-    '    process.stdout.write(rest);',
-    '  }',
-    '  filtered = true;',
-    '};',
-    "child.stdout.on('data', flushChunk);",
-    "child.stdout.on('end', () => {",
-    '  if (!filtered && buffer.length > 0) {',
-    '    process.stdout.write(buffer);',
-    '    filtered = true;',
+    '  skippedBanner = true;',
+    "  process.stdout.write(`${line}\\n`);",
+    '});',
+    "const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
+    "input.on('line', (line) => {",
+    '  if (!line) return;',
+    '  try {',
+    '    const message = JSON.parse(line);',
+    "    if (message && message.method === 'tools/call' && message.params && typeof message.params === 'object') {",
+    "      const args = message.params.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};",
+    '      const repositories = Array.from(collectRepositories(args));',
+    '      const disallowed = repositories.filter((repo) => allowedRepositories.size > 0 && !allowedRepositories.has(String(repo).toLowerCase()));',
+    '      if (disallowed.length > 0) {',
+    "        writeMessage({",
+    "          jsonrpc: '2.0',",
+    '          id: message.id ?? null,',
+    "          error: { code: -32000, message: `GitHub repository access denied for this session: ${disallowed.join(', ')}` },",
+    '        });',
+    '        return;',
+    '      }',
+    '    }',
+    "    child.stdin.write(`${JSON.stringify(message)}\\n`);",
+    '  } catch {',
+    "    child.stdin.write(`${line}\\n`);",
     '  }',
     '});',
-    'process.stdin.pipe(child.stdin);',
+    "input.on('close', () => child.stdin.end());",
     "child.on('exit', (code, signal) => {",
     '  if (signal) {',
     '    process.kill(process.pid, signal);',
@@ -247,23 +316,29 @@ export class ConnectorRegistry {
   materializeRuntimeConfig(input: {
     connectorKey: ConnectorKey;
     account: ConnectorProfileMaterial;
+    sessionConfig?: Record<string, unknown> | null;
   }): ConnectorRuntimeConfig {
     const { connectorKey, account } = input;
     const item = this.getCatalogItem(connectorKey);
     const secret = account.secret || {};
     const configJson = account.configJson || {};
+    const sessionConfig = input.sessionConfig || {};
 
     if (connectorKey === 'github') {
       const accessToken = asText(secret.accessToken);
       if (!accessToken) {
         throw new Error('GitHub 连接器缺少 access token');
       }
+      const repositories = normalizeGithubRepositories(
+        (sessionConfig as Record<string, unknown>).repositories
+      );
       return {
         type: 'local',
         enabled: true,
         command: ['node', '-e', buildGithubStdioWrapperCommand()],
         environment: {
           GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
+          ONECEO_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify(repositories),
           NPM_CONFIG_LOGLEVEL: 'silent',
         },
       };

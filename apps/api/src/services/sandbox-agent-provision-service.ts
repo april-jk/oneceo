@@ -28,6 +28,11 @@ import { ensureNekoDebug } from './sandbox-debug-service';
 import { codexRuntimeConfigService } from './codex-runtime-config-service';
 import { codexAppServerService } from './codex-app-server-service';
 import {
+  DEFAULT_CODEX_API_KEY,
+  DEFAULT_CODEX_MODEL,
+  DEFAULT_SANDBOX_OPENAI_BASE_URL,
+} from '../utils/codex-runtime-config';
+import {
   connectorRegistry,
   type ConnectorKey,
   type ConnectorRuntimeConfig,
@@ -277,6 +282,12 @@ function buildSandboxEnv(): Record<string, string> {
       env.OPENAI_BASE_URL = env.OPENAI_API_BASE;
     }
   }
+  if (!env.OPENAI_API_KEY) {
+    env.OPENAI_API_KEY = DEFAULT_CODEX_API_KEY;
+  }
+  if (!env.OPENAI_BASE_URL) {
+    env.OPENAI_BASE_URL = DEFAULT_SANDBOX_OPENAI_BASE_URL;
+  }
   if (!env.OPENAI_API_BASE && env.OPENAI_BASE_URL) {
     env.OPENAI_API_BASE = env.OPENAI_BASE_URL;
   }
@@ -286,22 +297,30 @@ function buildSandboxEnv(): Record<string, string> {
       env.CODEX_BASE_URL = mirroredBase;
     }
   }
+  if (!env.OPENCODE_BASE_URL) {
+    env.OPENCODE_BASE_URL = env.OPENAI_BASE_URL || DEFAULT_SANDBOX_OPENAI_BASE_URL;
+  }
   if (!env.OPENAI_MODEL) {
-    const mirroredModel = env.CODEX_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim();
+    const mirroredModel =
+      env.CODEX_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim() || DEFAULT_CODEX_MODEL;
     if (mirroredModel) {
       env.OPENAI_MODEL = mirroredModel;
     }
   }
   if (!env.CODEX_MODEL) {
-    const mirroredModel = env.OPENAI_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim();
+    const mirroredModel =
+      env.OPENAI_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim() || DEFAULT_CODEX_MODEL;
     if (mirroredModel) {
       env.CODEX_MODEL = mirroredModel;
     }
   }
+  if (!env.OPENCODE_MODEL) {
+    env.OPENCODE_MODEL = env.OPENAI_MODEL || DEFAULT_CODEX_MODEL;
+  }
   if (env.CODEX_BASE_URL && !env.OPENAI_BASE_URL) {
     env.OPENAI_BASE_URL = env.CODEX_BASE_URL;
   }
-  const providerRaw = (process.env.OPENCODE_PROVIDER_ID || '').trim();
+  const providerRaw = (process.env.OPENCODE_PROVIDER_ID || 'openai').trim();
   if (providerRaw) {
     env.OPENCODE_PROVIDER_ID = providerRaw.toLowerCase();
   }
@@ -473,7 +492,7 @@ function buildOpencodeConfig(
 ): string {
   const providerIdRaw = (envs.OPENCODE_PROVIDER_ID || 'openai').trim();
   const providerId = providerIdRaw.toLowerCase() || 'openai';
-  const modelId = (envs.OPENCODE_MODEL || 'claude-haiku-4-5-20251001').trim();
+  const modelId = (envs.OPENCODE_MODEL || DEFAULT_CODEX_MODEL).trim();
   const baseUrlEnv =
     (envs.OPENAI_BASE_URL && 'OPENAI_BASE_URL') ||
     (envs.OPENCODE_BASE_URL && 'OPENCODE_BASE_URL') ||
@@ -794,7 +813,7 @@ function buildSandboxVerifyScript(): string {
     'fi',
     'echo "[verify] gateway_ok"',
     '',
-    'model="${OPENCODE_MODEL:-claude-haiku-4-5-20251001}"',
+    `model="\${OPENCODE_MODEL:-${DEFAULT_CODEX_MODEL}}"`,
     'chat_url="${OPENAI_BASE_URL%/}/chat/completions"',
     'payload=$(printf \'{"model":"%s","messages":[{"role":"user","content":"ping"}],"max_tokens":8}\' "$model")',
     'chat_status=$(curl -sS -o /tmp/oneceo_gateway_chat.json -w "%{http_code}" \\',

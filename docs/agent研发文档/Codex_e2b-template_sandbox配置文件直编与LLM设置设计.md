@@ -403,8 +403,8 @@
 
 ```toml
 model_provider = "OpenAI"
-model = "gpt-5.2"
-review_model = "gpt-5.2"
+model = "gpt-5.3-codex"
+review_model = "gpt-5.3-codex"
 model_reasoning_effort = "high"
 disable_response_storage = true
 network_access = "enabled"
@@ -414,7 +414,7 @@ model_auto_compact_token_limit = 900000
 
 [model_providers.OpenAI]
 name = "OpenAI"
-base_url = "https://ai.hvmz.cn"
+base_url = "https://llmapi.oneceo.ai"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true
@@ -427,7 +427,7 @@ responses_websockets_v2 = true
 
 ```json
 {
-  "OPENAI_API_KEY": ""
+  "OPENAI_API_KEY": "<平台预置默认 key>"
 }
 ```
 
@@ -468,9 +468,9 @@ responses_websockets_v2 = true
 1. 初始默认值只作为模板
 2. 实际由用户自行维护和保存
 3. 前端结构化字段默认映射为：
-   - `baseUrl = https://ai.hvmz.cn`
-   - `model = gpt-5.2`
-   - `apiKey = ''`
+   - `baseUrl = https://llmapi.oneceo.ai`
+   - `model = gpt-5.3-codex`
+   - `apiKey = 平台预置 llmapi key`
 
 ## 7. 数据与权限
 

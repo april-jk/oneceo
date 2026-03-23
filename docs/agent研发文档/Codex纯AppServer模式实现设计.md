@@ -635,15 +635,15 @@ API 层统一做：
 - 其中：
   - `config.toml` 需要放在 `~/.codex/` 根目录
   - `auth.json` 需要提供 `OPENAI_API_KEY`
-  - `base_url` 需要使用 provider 根地址，例如 `https://ai.hvmz.cn`，而不是 `https://ai.hvmz.cn/v1`
+  - `base_url` 需要使用 provider 根地址，例如 `https://llmapi.oneceo.ai`，而不是 `https://llmapi.oneceo.ai/v1`
 - 如果继续保留 `OPENAI_BASE_URL` / `OPENAI_API_BASE` / `CODEX_BASE_URL` 给 App Server 子进程，会触发旧配置路径并出现不稳定行为；当前实现已经在子进程启动前移除了这组 deprecated env。
 
 ## 已验证通过的最小 App Server 配置
 
 ```toml
 model_provider = "OpenAI"
-model = "gpt-5.2"
-review_model = "gpt-5.2"
+model = "gpt-5.3-codex"
+review_model = "gpt-5.3-codex"
 model_reasoning_effort = "high"
 disable_response_storage = true
 network_access = "enabled"
@@ -653,7 +653,7 @@ model_auto_compact_token_limit = 900000
 
 [model_providers.OpenAI]
 name = "OpenAI"
-base_url = "https://ai.hvmz.cn"
+base_url = "https://llmapi.oneceo.ai"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true

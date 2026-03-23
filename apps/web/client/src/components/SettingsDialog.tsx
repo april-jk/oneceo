@@ -36,6 +36,9 @@ type SettingsPanelProps = {
 };
 
 const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'connectors'];
+const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
+const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
+const DEFAULT_CODEX_API_KEY = 'sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555';
 
 function isSettingsTab(value: string | null | undefined): value is SettingsTab {
   return Boolean(value && SETTINGS_TABS.includes(value as SettingsTab));
@@ -53,9 +56,9 @@ export function SettingsPanel({
   const [theme, setTheme] = useState('light');
   const [executor, setExecutor] = useState('opencode');
   const [codexExecutionMode, setCodexExecutionMode] = useState('sdk');
-  const [codexBaseUrl, setCodexBaseUrl] = useState('https://ai.hvmz.cn');
-  const [codexModel, setCodexModel] = useState('gpt-5.2');
-  const [codexApiKey, setCodexApiKey] = useState('');
+  const [codexBaseUrl, setCodexBaseUrl] = useState(DEFAULT_CODEX_BASE_URL);
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
+  const [codexApiKey, setCodexApiKey] = useState(DEFAULT_CODEX_API_KEY);
   const [codexConfigToml, setCodexConfigToml] = useState('');
   const [codexAuthJson, setCodexAuthJson] = useState('');
   const [codexConfigDirty, setCodexConfigDirty] = useState(false);
@@ -122,9 +125,9 @@ export function SettingsPanel({
     getCodexRuntimeConfig()
       .then((config) => {
         if (cancelled) return;
-        setCodexBaseUrl(config.baseUrl || 'https://ai.hvmz.cn');
-        setCodexModel(config.model || 'gpt-5.2');
-        setCodexApiKey(config.apiKey || '');
+        setCodexBaseUrl(config.baseUrl || DEFAULT_CODEX_BASE_URL);
+        setCodexModel(config.model || DEFAULT_CODEX_MODEL);
+        setCodexApiKey(config.apiKey || DEFAULT_CODEX_API_KEY);
         setCodexConfigToml(config.configToml || '');
         setCodexAuthJson(config.authJson || '');
         setCodexConfigUpdatedAt(config.updatedAt || '');
@@ -149,8 +152,8 @@ export function SettingsPanel({
     setCodexConfigToml(
       [
         'model_provider = "OpenAI"',
-        `model = ${JSON.stringify(codexModel || 'gpt-5.2')}`,
-        `review_model = ${JSON.stringify(codexModel || 'gpt-5.2')}`,
+        `model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
+        `review_model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
         'model_reasoning_effort = "high"',
         'disable_response_storage = true',
         'network_access = "enabled"',
@@ -160,7 +163,7 @@ export function SettingsPanel({
         '',
         '[model_providers.OpenAI]',
         'name = "OpenAI"',
-        `base_url = ${JSON.stringify(codexBaseUrl || 'https://ai.hvmz.cn')}`,
+        `base_url = ${JSON.stringify(codexBaseUrl || DEFAULT_CODEX_BASE_URL)}`,
         'wire_api = "responses"',
         'supports_websockets = true',
         'requires_openai_auth = true',
@@ -177,7 +180,7 @@ export function SettingsPanel({
     setCodexAuthJson(
       JSON.stringify(
         {
-          OPENAI_API_KEY: codexApiKey || '',
+          OPENAI_API_KEY: codexApiKey || DEFAULT_CODEX_API_KEY,
         },
         null,
         2
@@ -196,9 +199,9 @@ export function SettingsPanel({
         configToml: codexConfigToml,
         authJson: codexAuthJson,
       });
-      setCodexBaseUrl(saved.baseUrl || 'https://ai.hvmz.cn');
-      setCodexModel(saved.model || 'gpt-5.2');
-      setCodexApiKey(saved.apiKey || '');
+      setCodexBaseUrl(saved.baseUrl || DEFAULT_CODEX_BASE_URL);
+      setCodexModel(saved.model || DEFAULT_CODEX_MODEL);
+      setCodexApiKey(saved.apiKey || DEFAULT_CODEX_API_KEY);
       setCodexConfigToml(saved.configToml || '');
       setCodexAuthJson(saved.authJson || '');
       setCodexConfigUpdatedAt(saved.updatedAt || '');
@@ -424,7 +427,7 @@ export function SettingsPanel({
                             <Input
                               value={codexBaseUrl}
                               onChange={(event) => setCodexBaseUrl(event.target.value)}
-                              placeholder="https://ai.hvmz.cn"
+                              placeholder={DEFAULT_CODEX_BASE_URL}
                               className="rounded-xl"
                             />
                           </div>
@@ -433,7 +436,7 @@ export function SettingsPanel({
                             <Input
                               value={codexModel}
                               onChange={(event) => setCodexModel(event.target.value)}
-                              placeholder="gpt-5.2"
+                              placeholder={DEFAULT_CODEX_MODEL}
                               className="rounded-xl"
                             />
                           </div>

@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { taskCreationSessionDAO, userCodexRuntimeConfigDAO } from '../db/dao';
-import { ensurePlaywrightMcpInConfigToml } from '../utils/codex-runtime-config';
+import {
+  buildCodexAuthJson,
+  buildCodexConfigToml,
+  DEFAULT_CODEX_API_KEY,
+  ensurePlaywrightMcpInConfigToml,
+  normalizeCodexApiKey,
+  normalizeCodexBaseUrl,
+  normalizeCodexModel,
+} from '../utils/codex-runtime-config';
 
 export type CodexRuntimeConfigPayload = {
   baseUrl: string;
@@ -19,56 +27,8 @@ type CodexRuntimeConfigInput = {
   authJson?: string;
 };
 
-const DEFAULT_BASE_URL = 'https://ai.hvmz.cn';
-const DEFAULT_MODEL = 'gpt-5.2';
-
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizeBaseUrl(value: string | undefined): string {
-  const trimmed = asString(value);
-  return trimmed || DEFAULT_BASE_URL;
-}
-
-function normalizeModel(value: string | undefined): string {
-  const trimmed = asString(value);
-  return trimmed || DEFAULT_MODEL;
-}
-
-function buildConfigToml(input: { baseUrl: string; model: string }): string {
-  return ensurePlaywrightMcpInConfigToml([
-    'model_provider = "OpenAI"',
-    `model = ${JSON.stringify(input.model)}`,
-    `review_model = ${JSON.stringify(input.model)}`,
-    'model_reasoning_effort = "high"',
-    'disable_response_storage = true',
-    'network_access = "enabled"',
-    'windows_wsl_setup_acknowledged = true',
-    'model_context_window = 1000000',
-    'model_auto_compact_token_limit = 900000',
-    '',
-    '[model_providers.OpenAI]',
-    'name = "OpenAI"',
-    `base_url = ${JSON.stringify(input.baseUrl)}`,
-    'wire_api = "responses"',
-    'supports_websockets = true',
-    'requires_openai_auth = true',
-    '',
-    '[features]',
-    'responses_websockets_v2 = true',
-    '',
-  ].join('\n'));
-}
-
-function buildAuthJson(input: { apiKey: string }): string {
-  return JSON.stringify(
-    {
-      OPENAI_API_KEY: input.apiKey,
-    },
-    null,
-    2
-  );
 }
 
 function extractTomlValue(source: string, key: string): string {
@@ -95,9 +55,9 @@ function extractApiKeyFromAuthJson(source: string): string {
 }
 
 function toPayload(input: { configToml: string; authJson: string; updatedAt?: string | Date | null }): CodexRuntimeConfigPayload {
-  const baseUrl = normalizeBaseUrl(extractBaseUrlFromConfigToml(input.configToml));
-  const model = normalizeModel(extractModelFromConfigToml(input.configToml));
-  const apiKey = extractApiKeyFromAuthJson(input.authJson);
+  const baseUrl = normalizeCodexBaseUrl(extractBaseUrlFromConfigToml(input.configToml));
+  const model = normalizeCodexModel(extractModelFromConfigToml(input.configToml));
+  const apiKey = normalizeCodexApiKey(extractApiKeyFromAuthJson(input.authJson));
   const updatedAt =
     input.updatedAt instanceof Date
       ? input.updatedAt.toISOString()
@@ -133,22 +93,22 @@ function resolveStoredFiles(input: CodexRuntimeConfigInput): { configToml: strin
     };
   }
 
-  const baseUrl = normalizeBaseUrl(input.baseUrl);
-  const model = normalizeModel(input.model);
-  const apiKey = asString(input.apiKey);
+  const baseUrl = normalizeCodexBaseUrl(input.baseUrl);
+  const model = normalizeCodexModel(input.model);
+  const apiKey = normalizeCodexApiKey(input.apiKey);
   return {
-    configToml: buildConfigToml({ baseUrl, model }),
-    authJson: buildAuthJson({ apiKey }),
+    configToml: buildCodexConfigToml({ baseUrl, model }),
+    authJson: buildCodexAuthJson({ apiKey }),
   };
 }
 
 export class CodexRuntimeConfigService {
   buildDefault(): CodexRuntimeConfigPayload {
-    const configToml = buildConfigToml({
-      baseUrl: DEFAULT_BASE_URL,
-      model: DEFAULT_MODEL,
+    const configToml = buildCodexConfigToml({
+      baseUrl: normalizeCodexBaseUrl(undefined),
+      model: normalizeCodexModel(undefined),
     });
-    const authJson = buildAuthJson({ apiKey: '' });
+    const authJson = buildCodexAuthJson({ apiKey: DEFAULT_CODEX_API_KEY });
     return toPayload({ configToml, authJson });
   }
 

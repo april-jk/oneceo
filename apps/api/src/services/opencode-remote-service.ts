@@ -32,6 +32,7 @@ import {
   findPendingOpencodeQuestion,
   type OpencodePendingQuestion,
 } from './opencode-question-adapter';
+import { DEFAULT_CODEX_MODEL } from '../utils/codex-runtime-config';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -1908,7 +1909,7 @@ export class OpencodeRemoteService {
 
   private getExpectedOpencodeModelTarget(): { providerId: string; modelId: string } {
     const providerId = (process.env.OPENCODE_PROVIDER_ID || 'openai').trim().toLowerCase() || 'openai';
-    const modelId = (process.env.OPENCODE_MODEL || 'claude-haiku-4-5-20251001').trim();
+    const modelId = (process.env.OPENCODE_MODEL || DEFAULT_CODEX_MODEL).trim();
     return { providerId, modelId };
   }
 

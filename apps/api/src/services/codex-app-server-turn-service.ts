@@ -1,6 +1,14 @@
 import { e2bConnector } from '../connectors/e2b-connector';
 import { codexAppServerService } from './codex-app-server-service';
-import { ensurePlaywrightMcpInConfigToml } from '../utils/codex-runtime-config';
+import {
+  buildCodexAuthJson,
+  buildCodexConfigToml,
+  DEFAULT_CODEX_API_KEY,
+  ensurePlaywrightMcpInConfigToml,
+  normalizeCodexApiKey,
+  normalizeCodexBaseUrl,
+  normalizeCodexModel,
+} from '../utils/codex-runtime-config';
 
 type CodexAppServerTurnInput = {
   sessionId: string;
@@ -67,8 +75,7 @@ function toPositiveInt(value: number | undefined, fallback: number): number {
 }
 
 function normalizeProviderBaseUrl(value: string | undefined): string {
-  const trimmed = asString(value);
-  if (!trimmed) return 'https://ai.hvmz.cn';
+  const trimmed = normalizeCodexBaseUrl(value);
   const withoutTrailingSlash = trimmed.replace(/\/+$/, '');
   return withoutTrailingSlash.endsWith('/v1')
     ? withoutTrailingSlash.slice(0, -3)
@@ -76,14 +83,16 @@ function normalizeProviderBaseUrl(value: string | undefined): string {
 }
 
 function buildRuntimeConfig(): CodexAppServerRuntimeConfig {
-  const apiKey = asString(process.env.CODEX_API_KEY) || asString(process.env.OPENAI_API_KEY) || null;
+  const apiKey =
+    normalizeCodexApiKey(asString(process.env.CODEX_API_KEY) || asString(process.env.OPENAI_API_KEY) || undefined) ||
+    DEFAULT_CODEX_API_KEY;
   const baseUrl = normalizeProviderBaseUrl(
     asString(process.env.CODEX_BASE_URL) ||
       asString(process.env.OPENAI_BASE_URL) ||
       asString(process.env.OPENAI_API_BASE) ||
       undefined
   );
-  const model = asString(process.env.CODEX_MODEL) || asString(process.env.OPENAI_MODEL) || 'gpt-5.2';
+  const model = normalizeCodexModel(asString(process.env.CODEX_MODEL) || asString(process.env.OPENAI_MODEL) || undefined);
   return {
     apiKey,
     providerName: 'OpenAI',
@@ -95,39 +104,15 @@ function buildRuntimeConfig(): CodexAppServerRuntimeConfig {
 }
 
 function buildConfigToml(config: CodexAppServerRuntimeConfig): string {
-  return ensurePlaywrightMcpInConfigToml([
-    `model_provider = ${JSON.stringify(config.providerName)}`,
-    `model = ${JSON.stringify(config.model)}`,
-    `review_model = ${JSON.stringify(config.reviewModel)}`,
-    `model_reasoning_effort = ${JSON.stringify(config.reasoningEffort)}`,
-    'disable_response_storage = true',
-    'network_access = "enabled"',
-    'windows_wsl_setup_acknowledged = true',
-    'model_context_window = 1000000',
-    'model_auto_compact_token_limit = 900000',
-    '',
-    `[model_providers.${config.providerName}]`,
-    `name = ${JSON.stringify(config.providerName)}`,
-    `base_url = ${JSON.stringify(config.baseUrl)}`,
-    'wire_api = "responses"',
-    'supports_websockets = true',
-    'requires_openai_auth = true',
-    '',
-    '[features]',
-    'responses_websockets_v2 = true',
-    '',
-  ].join('\n'));
+  return buildCodexConfigToml({
+    baseUrl: config.baseUrl,
+    model: config.model,
+  });
 }
 
 function buildAuthJson(config: CodexAppServerRuntimeConfig): string | null {
   if (!config.apiKey) return null;
-  return JSON.stringify(
-    {
-      OPENAI_API_KEY: config.apiKey,
-    },
-    null,
-    2
-  );
+  return buildCodexAuthJson({ apiKey: config.apiKey });
 }
 
 function buildChildEnv(): Record<string, string> {

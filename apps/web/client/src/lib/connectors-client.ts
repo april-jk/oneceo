@@ -1,7 +1,14 @@
 import { getApiBaseUrl } from "@/lib/runtime-config";
 import { buildClientIdentityHeaders } from "@/lib/client-identity";
 
-export type ConnectorKey = "github" | "slack" | "notion" | "postgres";
+export type ConnectorKey =
+  | "github"
+  | "slack"
+  | "notion"
+  | "supabase"
+  | "figma"
+  | "vercel"
+  | "postgres";
 
 export type ConnectorCatalogItem = {
   key: ConnectorKey;
@@ -25,6 +32,24 @@ export type ConnectorCatalogItem = {
     provider?: string;
   };
   activityMatcherVerified: boolean;
+  visibleInMenu?: boolean;
+  deprecated?: boolean;
+};
+
+export type ConnectorProfile = {
+  profileId: string;
+  connectorKey: ConnectorKey;
+  profileName: string;
+  authMode: string;
+  authStatus: string;
+  displayName?: string | null;
+  config: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  secretSummary?: string | null;
+  isDefault: boolean;
+  lastAuthAt?: string | null;
+  updatedAt?: string | null;
+  lastError?: string | null;
 };
 
 export type UserConnectorAccount = {
@@ -37,6 +62,9 @@ export type UserConnectorAccount = {
   lastAuthAt?: string | null;
   updatedAt?: string | null;
   lastError?: string | null;
+  defaultProfileId?: string | null;
+  defaultProfileName?: string | null;
+  profilesCount?: number;
 };
 
 export type SessionConnectorStatus = {
@@ -52,9 +80,23 @@ export type SessionConnectorStatus = {
   runtimeStatus: string;
   usageStatus: "idle" | "active";
   displayName?: string | null;
+  selectedProfileId?: string | null;
+  selectedProfileName?: string | null;
+  attachedProfileId?: string | null;
+  attachedProfileName?: string | null;
+  availableProfilesCount?: number;
+  enabledTools?: string[];
   lastUsedAt?: string | null;
   lastError?: string | null;
   serverName?: string | null;
+};
+
+export type ConnectorProfileInput = {
+  profileName?: string;
+  displayName?: string;
+  config?: Record<string, unknown>;
+  credentials?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 
 type JsonOptions = {
@@ -84,38 +126,97 @@ export async function getConnectorCatalog(): Promise<ConnectorCatalogItem[]> {
   return Array.isArray(result.data) ? result.data : [];
 }
 
-export async function getMyConnectorAccounts(): Promise<{
+export async function getMyConnectorProfiles(): Promise<{
   userId?: string;
   source?: string;
   catalog: ConnectorCatalogItem[];
-  accounts: UserConnectorAccount[];
+  profiles: ConnectorProfile[];
 }> {
   const result = await requestJson<{
     data?: {
       userId?: string;
       source?: string;
       catalog?: ConnectorCatalogItem[];
-      accounts?: UserConnectorAccount[];
+      profiles?: ConnectorProfile[];
     };
   }>(`${getApiBaseUrl()}/api/connectors/me`);
   return {
     userId: result.data?.userId,
     source: result.data?.source,
     catalog: Array.isArray(result.data?.catalog) ? result.data?.catalog : [],
-    accounts: Array.isArray(result.data?.accounts) ? result.data?.accounts : [],
+    profiles: Array.isArray(result.data?.profiles) ? result.data?.profiles : [],
   };
 }
 
-export async function saveConnectorConfig(
-  connectorKey: ConnectorKey,
-  input: {
-    displayName?: string;
-    config?: Record<string, unknown>;
-    credentials?: Record<string, unknown>;
+export async function getMyConnectorAccounts(): Promise<{
+  userId?: string;
+  source?: string;
+  catalog: ConnectorCatalogItem[];
+  accounts: UserConnectorAccount[];
+  profiles: ConnectorProfile[];
+}> {
+  const result = await getMyConnectorProfiles();
+  const profilesByConnector = new Map<ConnectorKey, ConnectorProfile[]>();
+  for (const profile of result.profiles) {
+    const current = profilesByConnector.get(profile.connectorKey) || [];
+    current.push(profile);
+    profilesByConnector.set(profile.connectorKey, current);
   }
-): Promise<UserConnectorAccount> {
-  const result = await requestJson<{ data?: UserConnectorAccount }>(
-    `${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}`,
+
+  const accounts = result.catalog.map((item) => {
+    const connectorProfiles = profilesByConnector.get(item.key) || [];
+    const defaultProfile =
+      connectorProfiles.find((profile) => profile.isDefault) || connectorProfiles[0];
+
+    return {
+      connectorKey: item.key,
+      authMode: defaultProfile?.authMode || item.authMode,
+      authStatus:
+        defaultProfile?.authStatus || (item.available ? "not_configured" : "unavailable"),
+      displayName: defaultProfile?.displayName || null,
+      config: defaultProfile?.config || {},
+      secretSummary: defaultProfile?.secretSummary || null,
+      lastAuthAt: defaultProfile?.lastAuthAt || null,
+      updatedAt: defaultProfile?.updatedAt || null,
+      lastError: defaultProfile?.lastError || null,
+      defaultProfileId: defaultProfile?.profileId || null,
+      defaultProfileName: defaultProfile?.profileName || null,
+      profilesCount: connectorProfiles.length,
+    };
+  });
+
+  return {
+    userId: result.userId,
+    source: result.source,
+    catalog: result.catalog,
+    accounts,
+    profiles: result.profiles,
+  };
+}
+
+export async function createConnectorProfile(
+  connectorKey: ConnectorKey,
+  input: ConnectorProfileInput
+): Promise<ConnectorProfile> {
+  const result = await requestJson<{ data?: ConnectorProfile }>(
+    `${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}/profiles`,
+    {
+      method: "POST",
+      body: input,
+    }
+  );
+  if (!result.data) {
+    throw new Error("connector response empty");
+  }
+  return result.data;
+}
+
+export async function updateConnectorProfile(
+  profileId: string,
+  input: ConnectorProfileInput
+): Promise<ConnectorProfile> {
+  const result = await requestJson<{ data?: ConnectorProfile }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}`,
     {
       method: "PUT",
       body: input,
@@ -125,6 +226,110 @@ export async function saveConnectorConfig(
     throw new Error("connector response empty");
   }
   return result.data;
+}
+
+export async function deleteConnectorProfile(profileId: string): Promise<{ deleted: boolean }> {
+  const result = await requestJson<{ data?: { deleted?: boolean } }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+  return {
+    deleted: Boolean(result.data?.deleted),
+  };
+}
+
+export async function setDefaultConnectorProfile(
+  profileId: string
+): Promise<ConnectorProfile> {
+  const result = await requestJson<{ data?: ConnectorProfile }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}/default`,
+    {
+      method: "PUT",
+    }
+  );
+  if (!result.data) {
+    throw new Error("connector response empty");
+  }
+  return result.data;
+}
+
+export async function startConnectorProfileOauth(
+  profileId: string,
+  input: {
+    redirectUri: string;
+    returnToSessionId?: string;
+  }
+): Promise<{ authUrl: string; requestId?: string; state?: string }> {
+  const result = await requestJson<{
+    data?: { authUrl?: string; requestId?: string; state?: string };
+  }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}/oauth/start`,
+    {
+      method: "POST",
+      body: input,
+    }
+  );
+  if (!result.data?.authUrl) {
+    throw new Error("oauth url empty");
+  }
+  return {
+    authUrl: result.data.authUrl,
+    requestId: result.data.requestId,
+    state: result.data.state,
+  };
+}
+
+export async function completeConnectorProfileOauth(
+  profileId: string,
+  input: {
+    state: string;
+    code: string;
+    redirectUri: string;
+  }
+): Promise<{
+  profile?: ConnectorProfile;
+  account?: ConnectorProfile;
+  returnToSessionId?: string | null;
+}> {
+  const result = await requestJson<{
+    data?: {
+      profile?: ConnectorProfile;
+      account?: ConnectorProfile;
+      returnToSessionId?: string | null;
+    };
+  }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}/oauth/callback`,
+    {
+      method: "POST",
+      body: input,
+    }
+  );
+  return result.data || {};
+}
+
+export async function clearConnectorProfileAuth(
+  profileId: string
+): Promise<ConnectorProfile> {
+  const result = await requestJson<{ data?: ConnectorProfile }>(
+    `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}/auth`,
+    {
+      method: "DELETE",
+    }
+  );
+  if (!result.data) {
+    throw new Error("connector response empty");
+  }
+  return result.data;
+}
+
+// Backward-compatible helper for older callers while the UI migrates.
+export async function saveConnectorConfig(
+  connectorKey: ConnectorKey,
+  input: ConnectorProfileInput
+): Promise<ConnectorProfile> {
+  return createConnectorProfile(connectorKey, input);
 }
 
 export async function startConnectorOauth(
@@ -158,25 +363,29 @@ export async function completeConnectorOauth(
     redirectUri: string;
   }
 ): Promise<{
-  account?: UserConnectorAccount;
+  account?: ConnectorProfile;
   returnToSessionId?: string | null;
 }> {
   const result = await requestJson<{
     data?: {
-      account?: UserConnectorAccount;
+      account?: ConnectorProfile;
+      profile?: ConnectorProfile;
       returnToSessionId?: string | null;
     };
   }>(`${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}/oauth/callback`, {
     method: "POST",
     body: input,
   });
-  return result.data || {};
+  return {
+    account: result.data?.account || result.data?.profile,
+    returnToSessionId: result.data?.returnToSessionId,
+  };
 }
 
 export async function clearConnectorAuth(
   connectorKey: ConnectorKey
-): Promise<UserConnectorAccount> {
-  const result = await requestJson<{ data?: UserConnectorAccount }>(
+): Promise<ConnectorProfile> {
+  const result = await requestJson<{ data?: ConnectorProfile }>(
     `${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}/auth`,
     {
       method: "DELETE",
@@ -208,7 +417,11 @@ export async function getSessionConnectors(sessionId: string): Promise<{
 
 export async function attachSessionConnector(
   sessionId: string,
-  connectorKey: ConnectorKey
+  connectorKey: ConnectorKey,
+  input: {
+    profileId: string;
+    enabledTools?: string[];
+  }
 ): Promise<SessionConnectorStatus | null> {
   const result = await requestJson<{
     data?: {
@@ -220,6 +433,7 @@ export async function attachSessionConnector(
     )}/connectors/${encodeURIComponent(connectorKey)}/attach`,
     {
       method: "POST",
+      body: input,
     }
   );
   return result.data?.connector || null;

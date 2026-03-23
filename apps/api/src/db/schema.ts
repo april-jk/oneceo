@@ -226,6 +226,39 @@ export const userConnectorAccounts = pgTable(
   })
 );
 
+export const userConnectorProfiles = pgTable(
+  'user_connector_profiles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    profileName: text('profile_name').notNull(),
+    displayName: text('display_name'),
+    authMode: text('auth_mode').notNull(),
+    authStatus: text('auth_status').notNull().default('not_configured'),
+    configJson: jsonb('config_json'),
+    secretCiphertext: text('secret_ciphertext'),
+    metadataJson: jsonb('metadata_json'),
+    isDefault: boolean('is_default').notNull().default(false),
+    lastAuthAt: timestamp('last_auth_at'),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userConnectorProfileUnique: uniqueIndex('idx_user_connector_profiles_user_connector_profile').on(
+      table.userId,
+      table.connectorKey,
+      table.profileName
+    ),
+    userConnectorProfileUserIdx: index('idx_user_connector_profiles_user_id').on(table.userId),
+    userConnectorProfileConnectorIdx: index('idx_user_connector_profiles_user_connector').on(
+      table.userId,
+      table.connectorKey
+    ),
+  })
+);
+
 export const userCodexRuntimeConfigs = pgTable(
   'user_codex_runtime_configs',
   {
@@ -248,10 +281,13 @@ export const taskSessionConnectorBindings = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     taskSessionId: text('task_session_id').notNull(),
     connectorKey: text('connector_key').notNull(),
+    profileId: text('profile_id'),
     desiredState: text('desired_state').notNull().default('detached'),
     runtimeStatus: text('runtime_status').notNull().default('unknown'),
     orchestratorSessionId: text('orchestrator_session_id'),
     serverName: text('server_name'),
+    enabledTools: jsonb('enabled_tools'),
+    definitionSnapshotJson: jsonb('definition_snapshot_json'),
     lastUsedAt: timestamp('last_used_at'),
     lastError: text('last_error'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -275,9 +311,11 @@ export const connectorAuthRequests = pgTable(
     requestId: uuid('request_id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
     connectorKey: text('connector_key').notNull(),
+    profileId: text('profile_id'),
     provider: text('provider').notNull(),
     state: text('state').notNull(),
     codeVerifier: text('code_verifier'),
+    profileDraftJson: jsonb('profile_draft_json'),
     returnToSessionId: text('return_to_session_id'),
     status: text('status').notNull().default('pending'),
     expiresAt: timestamp('expires_at').notNull(),
@@ -319,6 +357,8 @@ export type NewSandboxExecutionEnvironment = typeof sandboxExecutionEnvironments
 
 export type UserConnectorAccount = typeof userConnectorAccounts.$inferSelect;
 export type NewUserConnectorAccount = typeof userConnectorAccounts.$inferInsert;
+export type UserConnectorProfile = typeof userConnectorProfiles.$inferSelect;
+export type NewUserConnectorProfile = typeof userConnectorProfiles.$inferInsert;
 
 export type UserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferSelect;
 export type NewUserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferInsert;

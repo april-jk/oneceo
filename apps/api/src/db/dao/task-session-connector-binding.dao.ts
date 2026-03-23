@@ -31,10 +31,13 @@ export class TaskSessionConnectorBindingDAO {
       .onConflictDoUpdate({
         target: [taskSessionConnectorBindings.taskSessionId, taskSessionConnectorBindings.connectorKey],
         set: {
+          profileId: data.profileId,
           desiredState: data.desiredState,
           runtimeStatus: data.runtimeStatus,
           orchestratorSessionId: data.orchestratorSessionId,
           serverName: data.serverName,
+          enabledTools: data.enabledTools,
+          definitionSnapshotJson: data.definitionSnapshotJson,
           lastUsedAt: data.lastUsedAt,
           lastError: data.lastError,
           updatedAt: new Date(),
@@ -48,10 +51,13 @@ export class TaskSessionConnectorBindingDAO {
     taskSessionId: string,
     connectorKey: string,
     patch: {
+      profileId?: string | null;
       desiredState?: string;
       runtimeStatus?: string;
       orchestratorSessionId?: string | null;
       serverName?: string | null;
+      enabledTools?: unknown;
+      definitionSnapshotJson?: unknown;
       lastUsedAt?: Date | null;
       lastError?: string | null;
     }
@@ -59,10 +65,13 @@ export class TaskSessionConnectorBindingDAO {
     const [row] = await db
       .update(taskSessionConnectorBindings)
       .set({
+        profileId: patch.profileId,
         desiredState: patch.desiredState,
         runtimeStatus: patch.runtimeStatus,
         orchestratorSessionId: patch.orchestratorSessionId,
         serverName: patch.serverName,
+        enabledTools: patch.enabledTools as any,
+        definitionSnapshotJson: patch.definitionSnapshotJson as any,
         lastUsedAt: patch.lastUsedAt,
         lastError: patch.lastError,
         updatedAt: new Date(),

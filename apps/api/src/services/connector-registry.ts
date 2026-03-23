@@ -1,7 +1,15 @@
-export const CONNECTOR_KEYS = ['github', 'slack', 'notion', 'postgres'] as const;
+import {
+  CONNECTOR_KEYS,
+  buildConnectorDefinitions,
+  resolveOauthProvider,
+  type ConnectorDefinition,
+  type ConnectorKey,
+  type ConnectorOauthProvider,
+} from '../connectors/definitions';
 
-export type ConnectorKey = (typeof CONNECTOR_KEYS)[number];
-export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn';
+export { CONNECTOR_KEYS, type ConnectorKey };
+
+export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
 export type ConnectorAuthStatus =
   | 'not_configured'
   | 'authorized'
@@ -19,45 +27,9 @@ export type ConnectorRuntimeStatus =
   | 'unknown';
 export type ConnectorUsageStatus = 'idle' | 'active';
 
-export type ConnectorConfigField = {
-  key: string;
-  label: string;
-  type: 'text' | 'password' | 'url' | 'textarea';
-  required?: boolean;
-  placeholder?: string;
-  description?: string;
-  secret?: boolean;
-};
+export type ConnectorConfigField = ConnectorDefinition['configFields'][number];
 
-export type ConnectorOauthProvider = {
-  provider: 'github' | 'slack' | 'notion';
-  clientId: string;
-  clientSecret: string;
-  authorizationUrl: string;
-  tokenUrl: string;
-  scopeParam?: string;
-  scopes: string[];
-  tokenRequestBodyFormat?: 'json' | 'form';
-  tokenClientAuth?: 'body' | 'basic';
-  tokenExtraParams?: Record<string, string>;
-  authorizationExtraParams?: Record<string, string>;
-};
-
-export type ConnectorCatalogItem = {
-  key: ConnectorKey;
-  name: string;
-  description: string;
-  icon: string;
-  authMode: ConnectorAuthMode;
-  available: boolean;
-  availabilityReason?: string;
-  configFields: ConnectorConfigField[];
-  oauth?: {
-    supported: boolean;
-    provider?: ConnectorOauthProvider['provider'];
-  };
-  activityMatcherVerified: boolean;
-};
+export type ConnectorCatalogItem = ConnectorDefinition;
 
 export type ConnectorAccountSecret = {
   accessToken?: string;
@@ -67,14 +39,20 @@ export type ConnectorAccountSecret = {
   dsn?: string;
 };
 
-export type ConnectorAccountMaterial = {
+export type ConnectorProfileMaterial = {
+  profileId: string;
   connectorKey: ConnectorKey;
+  profileName: string;
   authMode: string;
   authStatus: string;
   displayName?: string | null;
   configJson?: Record<string, unknown>;
+  metadataJson?: Record<string, unknown>;
   secret?: ConnectorAccountSecret | null;
 };
+
+// Backward-compatible alias while the rest of the codebase migrates from account -> profile wording.
+export type ConnectorAccountMaterial = ConnectorProfileMaterial;
 
 export type ConnectorRuntimeConfig =
   | {
@@ -92,21 +70,6 @@ export type ConnectorRuntimeConfig =
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function isEnabled(value: unknown, fallback = true): boolean {
-  const text = asText(value).toLowerCase();
-  if (!text) return fallback;
-  return !['0', 'false', 'no', 'off'].includes(text);
-}
-
-function parseScopes(value: string | undefined, fallback: string[]): string[] {
-  const raw = asText(value);
-  if (!raw) return fallback;
-  return raw
-    .split(/[,\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function parseHeadersTemplate(value: string | undefined): Record<string, string> {
@@ -149,236 +112,124 @@ function buildGithubStdioWrapperCommand(): string {
     "  env: {",
     "    ...process.env,",
     "    NPM_CONFIG_LOGLEVEL: process.env.NPM_CONFIG_LOGLEVEL || 'silent',",
-    "  },",
-    "});",
-    "let buffer = Buffer.alloc(0);",
-    "let filtered = false;",
-    "const flushChunk = (chunk) => {",
-    "  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);",
-    "  if (filtered) {",
-    "    process.stdout.write(data);",
-    "    return;",
-    "  }",
-    "  buffer = Buffer.concat([buffer, data]);",
-    "  const newlineIndex = buffer.indexOf(0x0a);",
-    "  if (newlineIndex === -1) return;",
+    '  },',
+    '});',
+    'let buffer = Buffer.alloc(0);',
+    'let filtered = false;',
+    'const flushChunk = (chunk) => {',
+    '  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);',
+    '  if (filtered) {',
+    '    process.stdout.write(data);',
+    '    return;',
+    '  }',
+    '  buffer = Buffer.concat([buffer, data]);',
+    '  const newlineIndex = buffer.indexOf(0x0a);',
+    '  if (newlineIndex === -1) return;',
     "  const firstLine = buffer.subarray(0, newlineIndex).toString('utf8').trim();",
-    "  const rest = buffer.subarray(newlineIndex + 1);",
+    '  const rest = buffer.subarray(newlineIndex + 1);',
     "  if (firstLine && firstLine !== 'GitHub MCP Server running on stdio') {",
     "    process.stdout.write(Buffer.from(`${firstLine}\\n`));",
-    "  }",
-    "  if (rest.length > 0) {",
-    "    process.stdout.write(rest);",
-    "  }",
-    "  filtered = true;",
-    "};",
+    '  }',
+    '  if (rest.length > 0) {',
+    '    process.stdout.write(rest);',
+    '  }',
+    '  filtered = true;',
+    '};',
     "child.stdout.on('data', flushChunk);",
     "child.stdout.on('end', () => {",
-    "  if (!filtered && buffer.length > 0) {",
-    "    process.stdout.write(buffer);",
-    "    filtered = true;",
-    "  }",
-    "});",
-    "process.stdin.pipe(child.stdin);",
+    '  if (!filtered && buffer.length > 0) {',
+    '    process.stdout.write(buffer);',
+    '    filtered = true;',
+    '  }',
+    '});',
+    'process.stdin.pipe(child.stdin);',
     "child.on('exit', (code, signal) => {",
-    "  if (signal) {",
-    "    process.kill(process.pid, signal);",
-    "    return;",
-    "  }",
-    "  process.exit(code ?? 0);",
-    "});",
+    '  if (signal) {',
+    '    process.kill(process.pid, signal);',
+    '    return;',
+    '  }',
+    '  process.exit(code ?? 0);',
+    '});',
   ].join('\n');
 }
 
-function resolveOauthProvider(key: ConnectorKey): ConnectorOauthProvider | undefined {
-  if (key === 'github') {
-    const clientId = asText(process.env.GITHUB_CONNECTOR_CLIENT_ID);
-    const clientSecret = asText(process.env.GITHUB_CONNECTOR_CLIENT_SECRET);
-    if (!clientId || !clientSecret) return undefined;
+function buildRemoteHeaders(
+  connectorKey: ConnectorKey,
+  item: ConnectorCatalogItem,
+  input: {
+    accessToken?: string;
+    projectRef?: string;
+    teamId?: string;
+  }
+): Record<string, string> {
+  const template = item.runtime.headersEnv
+    ? parseHeadersTemplate(process.env[item.runtime.headersEnv])
+    : {};
+  const accessToken = asText(input.accessToken);
+  const projectRef = asText(input.projectRef);
+  const teamId = asText(input.teamId);
+  if (Object.keys(template).length > 0) {
+    return renderHeaders(template, {
+      token: accessToken,
+      projectRef,
+      teamId,
+    });
+  }
+  if (item.runtime.headerTemplate === 'supabase') {
     return {
-      provider: 'github',
-      clientId,
-      clientSecret,
-      authorizationUrl:
-        asText(process.env.GITHUB_CONNECTOR_AUTHORIZE_URL) ||
-        'https://github.com/login/oauth/authorize',
-      tokenUrl:
-        asText(process.env.GITHUB_CONNECTOR_TOKEN_URL) ||
-        'https://github.com/login/oauth/access_token',
-      scopeParam: 'scope',
-      scopes: parseScopes(process.env.GITHUB_CONNECTOR_SCOPES, ['repo', 'read:user']),
-      tokenRequestBodyFormat: 'form',
-      tokenClientAuth: 'body',
+      Authorization: `Bearer ${accessToken}`,
     };
   }
-
-  if (key === 'slack') {
-    const clientId = asText(process.env.SLACK_CONNECTOR_CLIENT_ID);
-    const clientSecret = asText(process.env.SLACK_CONNECTOR_CLIENT_SECRET);
-    if (!clientId || !clientSecret) return undefined;
+  if (item.runtime.headerTemplate === 'figma') {
     return {
-      provider: 'slack',
-      clientId,
-      clientSecret,
-      authorizationUrl:
-        asText(process.env.SLACK_CONNECTOR_AUTHORIZE_URL) ||
-        'https://slack.com/oauth/v2/authorize',
-      tokenUrl:
-        asText(process.env.SLACK_CONNECTOR_TOKEN_URL) ||
-        'https://slack.com/api/oauth.v2.access',
-      scopeParam: 'scope',
-      scopes: parseScopes(process.env.SLACK_CONNECTOR_SCOPES, ['channels:history', 'chat:write']),
-      tokenRequestBodyFormat: 'form',
-      tokenClientAuth: 'body',
+      'X-Figma-Token': accessToken,
     };
   }
-
-  if (key === 'notion') {
-    const clientId = asText(process.env.NOTION_CONNECTOR_CLIENT_ID);
-    const clientSecret = asText(process.env.NOTION_CONNECTOR_CLIENT_SECRET);
-    if (!clientId || !clientSecret) return undefined;
+  if (item.runtime.headerTemplate === 'bearer-token') {
     return {
-      provider: 'notion',
-      clientId,
-      clientSecret,
-      authorizationUrl:
-        asText(process.env.NOTION_CONNECTOR_AUTHORIZE_URL) ||
-        'https://api.notion.com/v1/oauth/authorize',
-      tokenUrl:
-        asText(process.env.NOTION_CONNECTOR_TOKEN_URL) ||
-        'https://api.notion.com/v1/oauth/token',
-      scopeParam: 'scope',
-      scopes: parseScopes(process.env.NOTION_CONNECTOR_SCOPES, []),
-      tokenRequestBodyFormat: 'json',
-      tokenClientAuth: 'basic',
-      tokenExtraParams: {
-        grant_type: 'authorization_code',
-      },
-      authorizationExtraParams: {
-        owner: 'user',
-      },
+      Authorization: `Bearer ${accessToken}`,
     };
   }
+  return {};
+}
 
-  return undefined;
+function buildRemoteUrl(
+  item: ConnectorCatalogItem,
+  input: {
+    connectorKey: ConnectorKey;
+    projectRef?: string;
+    teamId?: string;
+  }
+): string {
+  const configured = item.runtime.urlEnv ? asText(process.env[item.runtime.urlEnv]) : '';
+  const baseUrl = configured || asText(item.runtime.urlDefault);
+  if (!baseUrl) {
+    throw new Error(`${item.name} MCP remote URL 未配置`);
+  }
+  const url = new URL(baseUrl);
+  if (input.connectorKey === 'supabase') {
+    const projectRef = asText(input.projectRef);
+    if (!projectRef) {
+      throw new Error('Supabase 连接器缺少 project ref');
+    }
+    url.searchParams.set('project_ref', projectRef);
+  }
+  if (input.connectorKey === 'vercel') {
+    const teamId = asText(input.teamId);
+    if (teamId) {
+      url.searchParams.set('teamId', teamId);
+    }
+  }
+  return url.toString();
 }
 
 export class ConnectorRegistry {
   listCatalog(): ConnectorCatalogItem[] {
-    const githubOauth = resolveOauthProvider('github');
-    const slackOauth = resolveOauthProvider('slack');
-    const notionOauth = resolveOauthProvider('notion');
-    const slackUrl = asText(process.env.SLACK_MCP_REMOTE_URL);
-    const notionUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
+    return buildConnectorDefinitions();
+  }
 
-    return [
-      {
-        key: 'github',
-        name: 'GitHub',
-        description: '统一保存 GitHub 登录态，并在会话中热挂载仓库工具。',
-        icon: 'github',
-        authMode: githubOauth ? 'oauth' : 'token',
-        available: isEnabled(process.env.GITHUB_CONNECTOR_ENABLED, true),
-        configFields: [
-          {
-            key: 'accessToken',
-            label: githubOauth ? 'Personal Access Token (Optional)' : 'Personal Access Token',
-            type: 'password',
-            required: !githubOauth,
-            secret: true,
-            placeholder: 'ghp_xxx',
-            description: githubOauth
-              ? '推荐优先走 GitHub OAuth；如已有 PAT，也可以直接粘贴保存。'
-              : '从 GitHub Personal Access Token 页面复制 fine-grained PAT。',
-          },
-        ],
-        oauth: {
-          supported: Boolean(githubOauth),
-          provider: githubOauth?.provider,
-        },
-        activityMatcherVerified: true,
-      },
-      {
-        key: 'slack',
-        name: 'Slack',
-        description: '复用用户授权态，把 Slack MCP 挂到当前会话。',
-        icon: 'slack',
-        authMode: slackOauth ? 'oauth' : 'token',
-        available: Boolean(slackUrl),
-        availabilityReason: slackUrl ? undefined : '部署环境未配置 Slack MCP adapter',
-        configFields: [
-          {
-            key: 'accessToken',
-            label: slackOauth ? 'Slack Token (Optional)' : 'Slack Access Token',
-            type: 'password',
-            required: !slackOauth,
-            secret: true,
-            placeholder: 'xoxb-...',
-            description: '通常填写从 Slack App -> OAuth & Permissions 获取的 Bot token。',
-          },
-        ],
-        oauth: {
-          supported: Boolean(slackOauth),
-          provider: slackOauth?.provider,
-        },
-        activityMatcherVerified: true,
-      },
-      {
-        key: 'notion',
-        name: 'Notion',
-        description: '统一管理 Notion 授权，并按会话动态装载。',
-        icon: 'notion',
-        authMode: notionOauth ? 'oauth' : 'token',
-        available: Boolean(notionUrl),
-        availabilityReason: notionUrl ? undefined : '部署环境未配置 Notion MCP adapter',
-        configFields: [
-          {
-            key: 'accessToken',
-            label: notionOauth ? 'Notion Token / Secret (Optional)' : 'Notion Access Token',
-            type: 'password',
-            required: !notionOauth,
-            secret: true,
-            placeholder: 'secret_xxx',
-            description: '从 Notion integration 配置页复制 Internal Integration Secret 或 access token。',
-          },
-        ],
-        oauth: {
-          supported: Boolean(notionOauth),
-          provider: notionOauth?.provider,
-        },
-        activityMatcherVerified: true,
-      },
-      {
-        key: 'postgres',
-        name: 'Postgres',
-        description: '保存数据库连接串，并把 Postgres MCP 热加载到当前执行器。',
-        icon: 'database',
-        authMode: 'dsn',
-        available: isEnabled(process.env.POSTGRES_CONNECTOR_ENABLED, true),
-        configFields: [
-          {
-            key: 'displayName',
-            label: 'Display Name',
-            type: 'text',
-            placeholder: 'Production DB',
-            description: '用于 UI 展示，非敏感。',
-          },
-          {
-            key: 'dsn',
-            label: 'Connection String',
-            type: 'password',
-            required: true,
-            secret: true,
-            placeholder: 'postgresql://user:pass@host:5432/db',
-            description: '从数据库控制台复制完整 DSN，保留 sslmode 等 query 参数。',
-          },
-        ],
-        oauth: {
-          supported: false,
-        },
-        activityMatcherVerified: true,
-      },
-    ];
+  listVisibleCatalog(): ConnectorCatalogItem[] {
+    return this.listCatalog().filter((item) => item.visibleInMenu);
   }
 
   getCatalogItem(connectorKey: string): ConnectorCatalogItem {
@@ -395,10 +246,12 @@ export class ConnectorRegistry {
 
   materializeRuntimeConfig(input: {
     connectorKey: ConnectorKey;
-    account: ConnectorAccountMaterial;
+    account: ConnectorProfileMaterial;
   }): ConnectorRuntimeConfig {
     const { connectorKey, account } = input;
+    const item = this.getCatalogItem(connectorKey);
     const secret = account.secret || {};
+    const configJson = account.configJson || {};
 
     if (connectorKey === 'github') {
       const accessToken = asText(secret.accessToken);
@@ -408,8 +261,6 @@ export class ConnectorRegistry {
       return {
         type: 'local',
         enabled: true,
-        // The upstream GitHub MCP server prints a startup banner to stdout.
-        // OpenCode treats stdout as the MCP transport, so we strip that first line.
         command: ['node', '-e', buildGithubStdioWrapperCommand()],
         environment: {
           GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
@@ -430,51 +281,26 @@ export class ConnectorRegistry {
       };
     }
 
-    if (connectorKey === 'slack') {
-      const url = asText(process.env.SLACK_MCP_REMOTE_URL);
-      if (!url) {
-        throw new Error('Slack MCP adapter 未配置');
-      }
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('Slack 连接器缺少 access token');
-      }
-      const headersTemplate =
-        parseHeadersTemplate(process.env.SLACK_MCP_REMOTE_HEADERS_JSON) || {};
-      const headers = Object.keys(headersTemplate).length
-        ? renderHeaders(headersTemplate, { token: accessToken })
-        : { Authorization: `Bearer ${accessToken}` };
-      return {
-        type: 'remote',
-        enabled: true,
-        url,
-        headers,
-      };
+    const accessToken = asText(secret.accessToken);
+    if (!accessToken) {
+      throw new Error(`${item.name} 连接器缺少 access token`);
     }
-
-    if (connectorKey === 'notion') {
-      const url = asText(process.env.NOTION_MCP_REMOTE_URL);
-      if (!url) {
-        throw new Error('Notion MCP adapter 未配置');
-      }
-      const accessToken = asText(secret.accessToken);
-      if (!accessToken) {
-        throw new Error('Notion 连接器缺少 access token');
-      }
-      const headersTemplate =
-        parseHeadersTemplate(process.env.NOTION_MCP_REMOTE_HEADERS_JSON) || {};
-      const headers = Object.keys(headersTemplate).length
-        ? renderHeaders(headersTemplate, { token: accessToken })
-        : { Authorization: `Bearer ${accessToken}` };
-      return {
-        type: 'remote',
-        enabled: true,
-        url,
-        headers,
-      };
-    }
-
-    throw new Error(`不支持的连接器: ${connectorKey}`);
+    const url = buildRemoteUrl(item, {
+      connectorKey,
+      projectRef: asText(configJson.projectRef),
+      teamId: asText(configJson.teamId),
+    });
+    const headers = buildRemoteHeaders(connectorKey, item, {
+      accessToken,
+      projectRef: asText(configJson.projectRef),
+      teamId: asText(configJson.teamId),
+    });
+    return {
+      type: 'remote',
+      enabled: true,
+      url,
+      headers,
+    };
   }
 
   matchesToolUsage(connectorKey: ConnectorKey, toolName: string): boolean {
@@ -487,6 +313,12 @@ export class ConnectorRegistry {
         return normalized.includes('slack');
       case 'notion':
         return normalized.includes('notion');
+      case 'supabase':
+        return normalized.includes('supabase');
+      case 'figma':
+        return normalized.includes('figma');
+      case 'vercel':
+        return normalized.includes('vercel');
       case 'postgres':
         return normalized.includes('postgres');
       default:

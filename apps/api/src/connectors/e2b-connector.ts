@@ -87,6 +87,19 @@ function isRetriableError(error: unknown): boolean {
   );
 }
 
+function isSandboxUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('sandbox was not found') ||
+    normalized.includes('sandbox not found') ||
+    normalized.includes('not running anymore') ||
+    normalized.includes('guest has been shut down') ||
+    normalized.includes('instance was stopped') ||
+    normalized.includes('failed to connect to sandbox')
+  );
+}
+
 async function withRetry<T>(label: string, action: () => Promise<T>): Promise<T> {
   const maxAttempts = Math.max(1, toPositiveInt(process.env.E2B_CREATE_RETRIES, 3));
   const delayMs = Math.max(500, toPositiveInt(process.env.E2B_CREATE_RETRY_DELAY_MS, 2000));
@@ -130,7 +143,7 @@ function normalizeMetadata(metadata?: Record<string, unknown>): Record<string, s
 
 async function createSandbox(input: CreateSandboxInput = {}): Promise<Sandbox> {
   requireE2bApiKey();
-  const sandbox = await withRetry('createSandbox', () => {
+  const sandbox = await withRetry<Sandbox>('createSandbox', () => {
     const options = {
       timeoutMs: input.timeoutMs ?? e2bConfig.timeoutMs,
       metadata: normalizeMetadata(input.metadata),
@@ -162,28 +175,49 @@ async function killSandbox(sandboxId: string): Promise<void> {
 }
 
 async function getSandboxInfo(sandboxId: string) {
-  const sandbox = await connectSandbox(sandboxId);
-  return sandbox.getInfo();
+  try {
+    const sandbox = await connectSandbox(sandboxId);
+    return await sandbox.getInfo();
+  } catch (error) {
+    if (isSandboxUnavailableError(error)) {
+      sandboxCache.delete(sandboxId);
+    }
+    throw error;
+  }
 }
 
 async function getSandboxHost(sandboxId: string, port: number): Promise<string> {
-  const sandbox = await connectSandbox(sandboxId);
-  return sandbox.getHost(port);
+  try {
+    const sandbox = await connectSandbox(sandboxId);
+    return await sandbox.getHost(port);
+  } catch (error) {
+    if (isSandboxUnavailableError(error)) {
+      sandboxCache.delete(sandboxId);
+    }
+    throw error;
+  }
 }
 
 async function runCommand(sandboxId: string, command: string, options?: RunCommandOptions) {
-  return withRetry('runCommand', async () => {
-    const sandbox = await connectSandbox(sandboxId);
-    let finalCommand = command;
-    if (options?.cwd) {
-      finalCommand = `cd ${shellEscape(options.cwd)} && ${command}`;
+  try {
+    return await withRetry('runCommand', async () => {
+      const sandbox = await connectSandbox(sandboxId);
+      let finalCommand = command;
+      if (options?.cwd) {
+        finalCommand = `cd ${shellEscape(options.cwd)} && ${command}`;
+      }
+      return sandbox.commands.run(finalCommand, {
+        background: options?.background,
+        envs: options?.envs,
+        timeoutMs: options?.timeoutMs,
+      } as any);
+    });
+  } catch (error) {
+    if (isSandboxUnavailableError(error)) {
+      sandboxCache.delete(sandboxId);
     }
-    return sandbox.commands.run(finalCommand, {
-      background: options?.background,
-      envs: options?.envs,
-      timeoutMs: options?.timeoutMs,
-    } as any);
-  });
+    throw error;
+  }
 }
 
 async function pauseSandbox(sandboxId: string): Promise<void> {
@@ -215,6 +249,9 @@ function shellEscape(value: string): string {
 export const e2bConnector = {
   connectSandbox,
   createSandbox,
+  forgetSandbox: (sandboxId: string) => {
+    sandboxCache.delete(sandboxId);
+  },
   killSandbox,
   getSandboxInfo,
   getSandboxHost,

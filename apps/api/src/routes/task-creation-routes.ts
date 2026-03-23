@@ -44,6 +44,7 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
 import { codexRemoteService } from '../services/codex-remote-service';
+import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
 import {
@@ -1065,7 +1066,52 @@ async function readOpencodeFile(
 type SandboxWorkspaceNode = {
   path: string;
   type: 'file' | 'directory';
+  ignored?: boolean;
 };
+
+type WorkspaceDirectoryCachePayload = {
+  root: string;
+  path: string;
+  items: Array<{ path: string; type: 'file' | 'dir' }>;
+  cursor: number;
+  total: number;
+  returned: number;
+  limit: number;
+  hasMore: boolean;
+  nextCursor: number | null;
+};
+
+function asWorkspaceDirectoryCachePayload(value: unknown): WorkspaceDirectoryCachePayload | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const items = rawItems
+    .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
+    .filter(Boolean)
+    .map((item) => {
+      const path = normalizeWorkspacePath(String(item!.path || ''));
+      const type = String(item!.type || '').toLowerCase() === 'dir' ? ('dir' as const) : ('file' as const);
+      return { path, type };
+    })
+    .filter((item) => Boolean(item.path));
+
+  return {
+    root: typeof record.root === 'string' ? record.root : '',
+    path: typeof record.path === 'string' ? record.path : '',
+    items,
+    cursor: Number.isFinite(Number(record.cursor)) ? Number(record.cursor) : 0,
+    total: Number.isFinite(Number(record.total)) ? Number(record.total) : items.length,
+    returned: Number.isFinite(Number(record.returned)) ? Number(record.returned) : items.length,
+    limit: Number.isFinite(Number(record.limit)) ? Number(record.limit) : items.length,
+    hasMore: Boolean(record.hasMore),
+    nextCursor:
+      record.nextCursor === null || record.nextCursor === undefined
+        ? null
+        : Number.isFinite(Number(record.nextCursor))
+          ? Number(record.nextCursor)
+          : null,
+  };
+}
 
 function buildWorkspaceDirCacheKey(input: {
   path: string;
@@ -1186,6 +1232,107 @@ async function buildWorkspaceTreeFromSandbox(input: {
   return {
     root: input.workspaceRoot,
     items,
+  };
+}
+
+function normalizeHistoricalPath(value: unknown): string {
+  const normalized = normalizeWorkspacePath(typeof value === 'string' ? value : '');
+  if (!normalized || normalized === '.') return '';
+  return normalized;
+}
+
+function buildHistoricalWorkspaceItems(messages: Array<{ metadata?: unknown }>): Array<{ path: string; type: 'file' | 'dir' }> {
+  const filePaths = new Set<string>();
+  const dirPaths = new Set<string>();
+
+  for (const message of messages) {
+    const metadata = message && typeof message === 'object' ? ((message as any).metadata as Record<string, unknown>) : {};
+    if (!metadata || typeof metadata !== 'object') continue;
+
+    const candidates: string[] = [];
+    const rawFilePaths = Array.isArray(metadata.filePaths) ? metadata.filePaths : [];
+    for (const raw of rawFilePaths) {
+      const path = normalizeHistoricalPath(raw);
+      if (path) candidates.push(path);
+    }
+    const rawFileChanges = Array.isArray(metadata.fileChanges) ? metadata.fileChanges : [];
+    for (const raw of rawFileChanges) {
+      if (!raw || typeof raw !== 'object') continue;
+      const path = normalizeHistoricalPath((raw as Record<string, unknown>).path);
+      if (path) candidates.push(path);
+    }
+    for (const key of ['path', 'targetPath']) {
+      const path = normalizeHistoricalPath(metadata[key]);
+      if (path) candidates.push(path);
+    }
+
+    for (const candidate of candidates) {
+      const segments = candidate.split('/').filter(Boolean);
+      if (segments.length === 0) continue;
+      const looksLikeDir =
+        String((metadata.itemType || metadata.partType || '')).toLowerCase() === 'directory' ||
+        candidate.endsWith('/');
+      if (looksLikeDir) {
+        dirPaths.add(candidate.replace(/\/+$/, ''));
+      } else {
+        filePaths.add(candidate);
+        let parent = '';
+        for (let i = 0; i < segments.length - 1; i += 1) {
+          parent = parent ? `${parent}/${segments[i]}` : segments[i]!;
+          dirPaths.add(parent);
+        }
+      }
+    }
+  }
+
+  const items: Array<{ path: string; type: 'file' | 'dir' }> = [];
+  for (const dir of dirPaths) {
+    items.push({ path: dir, type: 'dir' });
+  }
+  for (const file of filePaths) {
+    items.push({ path: file, type: 'file' });
+  }
+  return sortWorkspaceTreeItems(items);
+}
+
+async function buildWorkspaceFallbackFromMessageHistory(input: {
+  sessionId: string;
+  workspaceRoot: string;
+  path: string;
+  cursor: number;
+  limit: number;
+}): Promise<WorkspaceDirectoryCachePayload | null> {
+  const recent = await taskCreationSessionDAO.getRecentMessages(input.sessionId, 50);
+  const recentItems = buildHistoricalWorkspaceItems(recent as Array<{ metadata?: unknown }>);
+  const allItems =
+    recentItems.length > 0
+      ? recentItems
+      : buildHistoricalWorkspaceItems((await taskCreationSessionDAO.getMessages(input.sessionId)) as Array<{ metadata?: unknown }>);
+  if (allItems.length === 0) {
+    return null;
+  }
+  const prefix = input.path ? `${input.path}/` : '';
+  const filtered = allItems.filter((item) => {
+    if (!input.path) {
+      return !item.path.includes('/');
+    }
+    if (!item.path.startsWith(prefix)) return false;
+    const rest = item.path.slice(prefix.length);
+    return rest.length > 0 && !rest.includes('/');
+  });
+  const start = Math.min(Math.max(0, input.cursor), filtered.length);
+  const end = Math.min(filtered.length, start + input.limit);
+  const pageItems = filtered.slice(start, end);
+  return {
+    root: input.workspaceRoot,
+    path: input.path,
+    items: pageItems,
+    cursor: start,
+    total: filtered.length,
+    returned: pageItems.length,
+    limit: input.limit,
+    hasMore: end < filtered.length,
+    nextCursor: end < filtered.length ? end : null,
   };
 }
 
@@ -3936,18 +4083,22 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       limit,
       includeIgnored,
     });
+    const codexCachedRow =
+      workspaceExecutor === 'codex'
+        ? await taskSessionWorkspaceCacheDAO.get({
+            sessionId,
+            tenantKey,
+            cacheType: 'dir',
+            cacheKey: dirCacheKey,
+          })
+        : null;
+    const codexCachedPage = asWorkspaceDirectoryCachePayload(codexCachedRow?.data);
     const tryCodexDirFallback = async () => {
       if (workspaceExecutor !== 'codex') return null;
-      const cached = await taskSessionWorkspaceCacheDAO.get({
-        sessionId,
-        tenantKey,
-        cacheType: 'dir',
-        cacheKey: dirCacheKey,
-      });
-      if (!cached?.data) return null;
+      if (!codexCachedPage) return null;
       return res.json({
         success: true,
-        data: cached.data,
+        data: codexCachedPage,
         cache: { hit: true, stale: true, source: 'db_workspace_cache' },
       });
     };
@@ -3972,11 +4123,32 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
 
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
-    const nodes =
+    const listWorkspaceNodes = async () =>
       workspaceExecutor === 'codex'
         ? await listSandboxDirectory(orchestratorSessionId, workspaceRoot, dirPath)
         : (await ensureOpencodeServer(orchestratorSessionId, workspaceRoot),
           await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, dirPath));
+    let nodes = await listWorkspaceNodes();
+    if (workspaceExecutor === 'codex' && dirPath === '' && nodes.length === 0) {
+      const runtime = (session?.runtime || {}) as Record<string, unknown>;
+      const restoreSourceKey =
+        asText(runtime.codexRestoreSourceKey) || asText(runtime.r2RestoreSourceKey) || asText(runtime.r2ArchiveKey);
+      if (restoreSourceKey) {
+        try {
+          const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
+          if (restored) {
+            await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+            nodes = await listWorkspaceNodes();
+          }
+        } catch (restoreError) {
+          console.warn('[WORKSPACE_DIR_RESTORE_ON_EMPTY_FAILED]', {
+            sessionId,
+            orchestratorSessionId,
+            error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+          });
+        }
+      }
+    }
     const normalizedCandidates = nodes
       .map((node): { path: string; type: 'file' | 'dir'; ignored: boolean } | null => {
         const normalizedPath = normalizeWorkspacePath(node.path || '');
@@ -3998,8 +4170,54 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const start = Math.min(Math.max(0, cursor), total);
     const end = Math.min(total, start + limit);
     const pageItems = normalizedItems.slice(start, end);
+    const livePage = {
+      root: workspaceRoot,
+      path: dirPath,
+      items: pageItems,
+      cursor: start,
+      total,
+      returned: pageItems.length,
+      limit,
+      hasMore: end < total,
+      nextCursor: end < total ? end : null,
+    };
+    const shouldUseHistoricalCache =
+      workspaceExecutor === 'codex' &&
+      dirPath === '' &&
+      total === 0 &&
+      Boolean(codexCachedPage && codexCachedPage.items.length > 0);
+    const shouldUseMessageHistoryFallback =
+      workspaceExecutor === 'codex' &&
+      dirPath === '' &&
+      total === 0 &&
+      !shouldUseHistoricalCache;
 
     await touchSandbox(orchestratorSessionId, 'workspace_dir');
+
+    if (shouldUseHistoricalCache) {
+      return res.json({
+        success: true,
+        data: codexCachedPage,
+        cache: { hit: true, stale: true, source: 'db_workspace_cache', reason: 'live_root_empty' },
+      });
+    }
+
+    if (shouldUseMessageHistoryFallback) {
+      const historyFallback = await buildWorkspaceFallbackFromMessageHistory({
+        sessionId,
+        workspaceRoot,
+        path: dirPath,
+        cursor,
+        limit,
+      });
+      if (historyFallback && historyFallback.items.length > 0) {
+        return res.json({
+          success: true,
+          data: historyFallback,
+          cache: { hit: true, stale: true, source: 'message_history', reason: 'live_root_empty' },
+        });
+      }
+    }
 
     if (workspaceExecutor === 'codex') {
       await taskSessionWorkspaceCacheDAO.upsert({
@@ -4007,33 +4225,13 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
         tenantKey,
         cacheType: 'dir',
         cacheKey: dirCacheKey,
-        data: {
-          root: workspaceRoot,
-          path: dirPath,
-          items: pageItems,
-          cursor: start,
-          total,
-          returned: pageItems.length,
-          limit,
-          hasMore: end < total,
-          nextCursor: end < total ? end : null,
-        },
+        data: livePage,
       });
     }
 
     return res.json({
       success: true,
-      data: {
-        root: workspaceRoot,
-        path: dirPath,
-        items: pageItems,
-        cursor: start,
-        total,
-        returned: pageItems.length,
-        limit,
-        hasMore: end < total,
-        nextCursor: end < total ? end : null,
-      },
+      data: livePage,
     });
   } catch (error: any) {
     const { sessionId } = req.params;

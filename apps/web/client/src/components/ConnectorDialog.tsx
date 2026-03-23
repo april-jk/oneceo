@@ -3,41 +3,45 @@ import { toast } from "sonner";
 import {
   AlertCircle,
   ArrowUpRight,
+  CheckCircle2,
+  Cloud,
   Database,
-  ExternalLink,
+  Figma,
   Github,
   Link2,
   Loader2,
   NotepadText,
-  Plus,
   Plug,
   Settings2,
   Slack,
-  Trash2,
+  Unplug,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
-  clearConnectorAuth,
   detachSessionConnector,
-  getMyConnectorAccounts,
+  getMyConnectorProfiles,
   getSessionConnectors,
-  saveConnectorConfig,
   type ConnectorCatalogItem,
   type ConnectorKey,
+  type ConnectorProfile,
   type SessionConnectorStatus,
-  type UserConnectorAccount,
 } from "@/lib/connectors-client";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { cn } from "@/lib/utils";
@@ -47,13 +51,14 @@ interface ConnectorDialogProps {
   className?: string;
 }
 
-type ConnectorFormValues = Record<string, string>;
-
 const iconMap = {
   github: Github,
   slack: Slack,
   notion: NotepadText,
-  database: Database,
+  supabase: Database,
+  figma: Figma,
+  vercel: Cloud,
+  postgres: Database,
 } as const;
 
 function formatStatus(value: string | null | undefined) {
@@ -61,91 +66,62 @@ function formatStatus(value: string | null | undefined) {
   return value.replaceAll("_", " ");
 }
 
-function buildFormValues(
-  item: ConnectorCatalogItem,
-  account: UserConnectorAccount | undefined,
-  previousValues?: ConnectorFormValues
-): ConnectorFormValues {
-  const next: ConnectorFormValues = {};
-  for (const field of item.configFields) {
-    if (field.key === "displayName") {
-      const configDisplayName =
-        typeof account?.config?.displayName === "string"
-          ? String(account.config.displayName)
-          : "";
-      next[field.key] = configDisplayName || account?.displayName || previousValues?.[field.key] || "";
-      continue;
+function groupProfilesByConnector(profiles: ConnectorProfile[]) {
+  return profiles.reduce<Record<string, ConnectorProfile[]>>((acc, profile) => {
+    if (!acc[profile.connectorKey]) {
+      acc[profile.connectorKey] = [];
     }
-    if (field.secret) {
-      next[field.key] = previousValues?.[field.key] || "";
-      continue;
-    }
-    const raw = account?.config?.[field.key];
-    next[field.key] = typeof raw === "string" ? raw : previousValues?.[field.key] || "";
-  }
-  return next;
+    acc[profile.connectorKey].push(profile);
+    return acc;
+  }, {});
 }
 
-function buildQuickSavePayload(item: ConnectorCatalogItem, form: ConnectorFormValues) {
-  const config: Record<string, unknown> = {};
-  const credentials: Record<string, unknown> = {};
-  let displayName: string | undefined;
-
-  for (const field of item.configFields) {
-    const value = (form[field.key] || "").trim();
-    if (field.key === "displayName") {
-      displayName = value || undefined;
-    }
-    if (!value) continue;
-    if (field.secret) {
-      credentials[field.key] = value;
-    } else {
-      config[field.key] = value;
-    }
+function resolvePreferredProfileId(
+  connectorProfiles: ConnectorProfile[],
+  session?: SessionConnectorStatus,
+  currentSelection?: string | null
+) {
+  if (
+    currentSelection &&
+    connectorProfiles.some((profile) => profile.profileId === currentSelection)
+  ) {
+    return currentSelection;
   }
-
-  return {
-    displayName,
-    config,
-    credentials,
-  };
-}
-
-function ConnectorToggle({
-  checked,
-  busy,
-  onClick,
-}: {
-  checked: boolean;
-  busy?: boolean;
-  onClick: () => void;
-}) {
+  if (
+    session?.attachedProfileId &&
+    connectorProfiles.some((profile) => profile.profileId === session.attachedProfileId)
+  ) {
+    return session.attachedProfileId;
+  }
+  if (
+    session?.selectedProfileId &&
+    connectorProfiles.some((profile) => profile.profileId === session.selectedProfileId)
+  ) {
+    return session.selectedProfileId;
+  }
   return (
-    <button
-      type="button"
-      className="group flex items-center gap-2"
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick();
-      }}
-      aria-label={checked ? "Disable connector" : "Enable connector"}
-    >
-      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
-      <div
-        className={cn(
-          "h-4 w-[26px] rounded-full px-[1px] transition-colors",
-          checked ? "bg-primary" : "bg-muted-foreground/30"
-        )}
-      >
-        <span
-          className={cn(
-            "mt-[1px] block h-3.5 w-3.5 rounded-full bg-background transition-transform",
-            checked ? "translate-x-2.5" : "translate-x-0"
-          )}
-        />
-      </div>
-    </button>
+    connectorProfiles.find((profile) => profile.isDefault)?.profileId ||
+    connectorProfiles[0]?.profileId ||
+    null
   );
+}
+
+function statusChipTone(value: string) {
+  switch (value) {
+    case "authorized":
+    case "connected":
+      return "bg-emerald-500/10 text-emerald-700";
+    case "needs_auth":
+    case "not_configured":
+    case "connecting":
+      return "bg-amber-500/10 text-amber-700";
+    case "failed":
+    case "error":
+    case "unavailable":
+      return "bg-destructive/10 text-destructive";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
 }
 
 export default function ConnectorDialog({
@@ -155,50 +131,45 @@ export default function ConnectorDialog({
   const [open, setOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<ConnectorKey | null>(null);
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
-  const [accounts, setAccounts] = useState<Record<string, UserConnectorAccount>>({});
+  const [profiles, setProfiles] = useState<ConnectorProfile[]>([]);
   const [sessionStatuses, setSessionStatuses] = useState<Record<string, SessionConnectorStatus>>(
     {}
   );
-  const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
+  const [profileSelection, setProfileSelection] = useState<
+    Partial<Record<ConnectorKey, string | null>>
+  >({});
   const [loading, setLoading] = useState(false);
   const [actingKey, setActingKey] = useState<ConnectorKey | null>(null);
-
-  const mergedConnectors = useMemo(
-    () =>
-      catalog.map((item) => ({
-        item,
-        account: accounts[item.key],
-        session: sessionStatuses[item.key],
-        form: formState[item.key] || {},
-      })),
-    [accounts, catalog, formState, sessionStatuses]
-  );
 
   const load = async () => {
     if (!open) return;
     setLoading(true);
     try {
-      const me = await getMyConnectorAccounts();
+      const me = await getMyConnectorProfiles();
       setCatalog(me.catalog);
-      const nextAccounts = Object.fromEntries(
-        me.accounts.map((item) => [item.connectorKey, item])
-      );
-      setAccounts(nextAccounts);
-      setFormState((prev) => {
+      setProfiles(me.profiles);
+
+      let nextSessionStatuses: Record<string, SessionConnectorStatus> = {};
+      if (sessionId) {
+        const sessionData = await getSessionConnectors(sessionId);
+        nextSessionStatuses = Object.fromEntries(
+          sessionData.items.map((item) => [item.connectorKey, item])
+        );
+      }
+      setSessionStatuses(nextSessionStatuses);
+
+      const profilesByConnector = groupProfilesByConnector(me.profiles);
+      setProfileSelection((prev) => {
         const next = { ...prev };
         for (const item of me.catalog) {
-          next[item.key] = buildFormValues(item, nextAccounts[item.key], prev[item.key]);
+          next[item.key] = resolvePreferredProfileId(
+            profilesByConnector[item.key] || [],
+            nextSessionStatuses[item.key],
+            prev[item.key]
+          );
         }
         return next;
       });
-      if (sessionId) {
-        const sessionData = await getSessionConnectors(sessionId);
-        setSessionStatuses(
-          Object.fromEntries(sessionData.items.map((item) => [item.connectorKey, item]))
-        );
-      } else {
-        setSessionStatuses({});
-      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load connectors");
     } finally {
@@ -219,96 +190,62 @@ export default function ConnectorDialog({
     return () => window.clearInterval(timer);
   }, [open, sessionId]);
 
-  const handleFieldChange = (
-    connectorKey: ConnectorKey,
-    fieldKey: string,
-    value: string
-  ) => {
-    setFormState((prev) => ({
-      ...prev,
-      [connectorKey]: {
-        ...(prev[connectorKey] || {}),
-        [fieldKey]: value,
-      },
-    }));
-  };
+  const profilesByConnector = useMemo(
+    () => groupProfilesByConnector(profiles),
+    [profiles]
+  );
 
-  const closeAllPopovers = () => {
+  const mergedConnectors = useMemo(
+    () =>
+      catalog.map((item) => {
+        const connectorProfiles = profilesByConnector[item.key] || [];
+        const selectedProfileId = resolvePreferredProfileId(
+          connectorProfiles,
+          sessionStatuses[item.key],
+          profileSelection[item.key]
+        );
+        const selectedProfile =
+          connectorProfiles.find((profile) => profile.profileId === selectedProfileId) || null;
+
+        return {
+          item,
+          session: sessionStatuses[item.key],
+          connectorProfiles,
+          selectedProfileId,
+          selectedProfile,
+        };
+      }),
+    [catalog, profileSelection, profilesByConnector, sessionStatuses]
+  );
+
+  const openConnectorSettings = (connectorKey?: ConnectorKey | null) => {
+    openSettingsDialog({
+      tab: "connectors",
+      targetSessionId: sessionId || null,
+      connectorKey: connectorKey || null,
+    });
     setDetailKey(null);
     setOpen(false);
   };
 
-  const openConnectorSettings = (withSessionBinding: boolean) => {
-    openSettingsDialog({
-      tab: "connectors",
-      targetSessionId: withSessionBinding ? sessionId || null : null,
-      connectorKey: null,
-    });
-    closeAllPopovers();
-  };
-
-  const handleToggle = async (connectorKey: ConnectorKey) => {
-    const item = catalog.find((entry) => entry.key === connectorKey);
-    const account = accounts[connectorKey];
-    const session = sessionStatuses[connectorKey];
-
-    if (!item) return;
-    if (!sessionId || !item.available || account?.authStatus !== "authorized") {
-      setDetailKey(connectorKey);
-      return;
-    }
-
+  const handleAttach = async (
+    connectorKey: ConnectorKey,
+    profileId: string,
+    mode: "attach" | "detach"
+  ) => {
+    if (!sessionId) return;
     setActingKey(connectorKey);
     try {
-      if (session?.attached) {
+      if (mode === "detach") {
         await detachSessionConnector(sessionId, connectorKey);
-        toast.success("连接器已禁用");
+        toast.success("连接器已从当前会话移除");
       } else {
-        await attachSessionConnector(sessionId, connectorKey);
-        toast.success("连接器已启用");
+        await attachSessionConnector(sessionId, connectorKey, { profileId });
+        toast.success("连接器已挂载到当前会话");
       }
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "连接器操作失败");
-    } finally {
-      setActingKey(null);
-    }
-  };
-
-  const handleQuickSave = async (item: ConnectorCatalogItem) => {
-    const payload = buildQuickSavePayload(item, formState[item.key] || {});
-    const hasExistingSecret = Boolean(accounts[item.key]?.secretSummary);
-    const hasNewCredential = Object.keys(payload.credentials).length > 0;
-
-    if (!hasExistingSecret && !hasNewCredential) {
-      toast.error(item.key === "postgres" ? "请先粘贴数据库连接串" : "请先粘贴 token 或 secret");
-      return;
-    }
-
-    setActingKey(item.key);
-    try {
-      await saveConnectorConfig(item.key, {
-        displayName: payload.displayName,
-        config: payload.config,
-        credentials: payload.credentials,
-      });
-      toast.success("配置已保存，可通过右侧开关启用");
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存连接器失败");
-    } finally {
-      setActingKey(null);
-    }
-  };
-
-  const handleClearAuth = async (connectorKey: ConnectorKey) => {
-    setActingKey(connectorKey);
-    try {
-      await clearConnectorAuth(connectorKey);
-      toast.success("连接器授权已清除");
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "清除授权失败");
     } finally {
       setActingKey(null);
     }
@@ -332,7 +269,7 @@ export default function ConnectorDialog({
               size="icon"
               className={cn("h-9 w-9 rounded-xl hover:bg-muted transition-colors", className)}
             >
-              <Plug className="w-4 h-4 text-muted-foreground" />
+              <Plug className="h-4 w-4 text-muted-foreground" />
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -346,29 +283,42 @@ export default function ConnectorDialog({
         align="start"
         sideOffset={10}
         collisionPadding={12}
-        className="w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
+        className="w-[min(340px,calc(100vw-24px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
       >
         <div
-          className="grid min-h-[220px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+          className="grid min-h-[240px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
           style={{
             maxHeight:
-              "min(460px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
+              "min(480px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
           }}
         >
           <div className="flex items-center justify-between border-b border-border/70 px-3 py-2.5">
-            <div className="text-sm font-medium text-foreground">Session Connectors</div>
+            <div>
+              <div className="text-sm font-medium text-foreground">Session Connectors</div>
+              <div className="text-[11px] text-muted-foreground">
+                外部配置，内部挂载到当前 sandbox 会话
+              </div>
+            </div>
             {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
           </div>
 
           <div className="min-h-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="p-1.5">
-                <div className="space-y-1">
-                  {mergedConnectors.map(({ item, account, session, form }) => {
+              <div className="space-y-1 p-1.5">
+                {mergedConnectors.map(
+                  ({ item, session, connectorProfiles, selectedProfileId, selectedProfile }) => {
                     const busy = actingKey === item.key;
-                  const guide = CONNECTOR_GUIDES[item.key];
-                  const checked = Boolean(session?.attached);
-                  const DetailIcon = iconMap[item.icon as keyof typeof iconMap] || Link2;
+                    const checked = Boolean(session?.attached);
+                    const attachedToSelected =
+                      Boolean(session?.attached) &&
+                      session?.attachedProfileId === selectedProfileId;
+                    const DetailIcon = iconMap[item.icon as keyof typeof iconMap] || Link2;
+                    const guide = CONNECTOR_GUIDES[item.key];
+                    const canAttach =
+                      Boolean(sessionId) &&
+                      item.available &&
+                      Boolean(selectedProfileId) &&
+                      selectedProfile?.authStatus === "authorized";
 
                     return (
                       <div
@@ -382,18 +332,27 @@ export default function ConnectorDialog({
                           <PopoverTrigger asChild>
                             <button
                               type="button"
-                            className={cn(
-                              "flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left transition hover:bg-muted/45",
-                              detailKey === item.key ? "bg-muted/45" : ""
-                            )}
-                          >
-                            <div className="flex h-6 w-6 items-center justify-center rounded-[6px] bg-muted text-foreground/90">
-                              <DetailIcon className="h-3.5 w-3.5" />
-                            </div>
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {item.name}
-                            </div>
-                          </button>
+                              className={cn(
+                                "flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left transition hover:bg-muted/45",
+                                detailKey === item.key ? "bg-muted/45" : ""
+                              )}
+                            >
+                              <div className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-muted text-foreground/90">
+                                <DetailIcon className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-medium text-foreground">
+                                  {item.name}
+                                </div>
+                                <div className="truncate text-[11px] text-muted-foreground">
+                                  {selectedProfile?.profileName ||
+                                    `${connectorProfiles.length} profiles`}
+                                </div>
+                              </div>
+                              {checked ? (
+                                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                              ) : null}
+                            </button>
                           </PopoverTrigger>
 
                           <PopoverContent
@@ -401,13 +360,13 @@ export default function ConnectorDialog({
                             align="start"
                             sideOffset={8}
                             collisionPadding={12}
-                            className="w-[min(290px,calc(100vw-32px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
+                            className="w-[min(310px,calc(100vw-32px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
                           >
                             <div
                               className="flex min-w-0 flex-col overflow-hidden"
                               style={{
                                 maxHeight:
-                                  "min(420px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
+                                  "min(440px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
                               }}
                             >
                               <div className="border-b border-border/70 px-3 py-3">
@@ -415,30 +374,48 @@ export default function ConnectorDialog({
                                   <div className="flex h-8 w-8 items-center justify-center rounded-[9px] bg-muted text-foreground">
                                     <DetailIcon className="h-4 w-4" />
                                   </div>
-                                  <div className="min-w-0">
+                                  <div className="min-w-0 flex-1">
                                     <div className="truncate text-sm font-medium text-foreground">
                                       {item.name}
                                     </div>
-                                    <div className="truncate text-xs text-muted-foreground">
+                                    <div className="text-xs text-muted-foreground">
                                       {item.description}
                                     </div>
                                   </div>
                                 </div>
+
                                 <div className="mt-2 flex flex-wrap gap-1.5">
+                                  <span
+                                    className={cn(
+                                      "rounded-full px-2 py-0.5 text-[11px]",
+                                      statusChipTone(
+                                        selectedProfile?.authStatus ||
+                                          session?.globalAuthStatus ||
+                                          "not_configured"
+                                      )
+                                    )}
+                                  >
+                                    {formatStatus(
+                                      selectedProfile?.authStatus ||
+                                        session?.globalAuthStatus ||
+                                        "not_configured"
+                                    )}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "rounded-full px-2 py-0.5 text-[11px]",
+                                      statusChipTone(
+                                        session?.runtimeStatus || (checked ? "connecting" : "idle")
+                                      )
+                                    )}
+                                  >
+                                    {checked
+                                      ? formatStatus(session?.runtimeStatus || "connecting")
+                                      : "detached"}
+                                  </span>
                                   {!item.available ? (
                                     <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive">
                                       unavailable
-                                    </span>
-                                  ) : null}
-                                  {account?.authStatus ? (
-                                    <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                                      {formatStatus(account.authStatus)}
-                                    </span>
-                                  ) : null}
-                                  {session?.runtimeStatus &&
-                                  !["unknown", "disconnected"].includes(session.runtimeStatus) ? (
-                                    <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                                      {formatStatus(session.runtimeStatus)}
                                     </span>
                                   ) : null}
                                 </div>
@@ -448,128 +425,209 @@ export default function ConnectorDialog({
                                 <div className="space-y-3 px-3 py-3">
                                   <div className="rounded-[10px] bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
                                     <div className="flex items-center justify-between gap-3">
-                                      <span>Current account</span>
-                                      <span className="truncate text-right text-foreground/80">
-                                        {account?.displayName || account?.secretSummary || "Not configured"}
+                                      <span>配置位置</span>
+                                      <span className="text-right text-foreground/80">
+                                        Outside sandbox
                                       </span>
                                     </div>
-                                    {sessionId ? (
-                                      <div className="mt-1 flex items-center justify-between gap-3">
-                                        <span>Session state</span>
-                                        <span className="text-right text-foreground/80">
-                                          {checked ? "Enabled" : "Disabled"}
-                                        </span>
-                                      </div>
-                                    ) : null}
+                                    <div className="mt-1 flex items-center justify-between gap-3">
+                                      <span>当前用途</span>
+                                      <span className="text-right text-foreground/80">
+                                        Inside this session
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between gap-3">
+                                      <span>可用 profiles</span>
+                                      <span className="text-right text-foreground/80">
+                                        {connectorProfiles.length}
+                                      </span>
+                                    </div>
                                   </div>
 
-                                  <div className="flex flex-wrap gap-2">
-                                    {guide.quickLinks.slice(0, 2).map((link) => (
-                                      <a
-                                        key={link.href}
-                                        href={link.href}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2.5 py-1 text-[11px] text-foreground transition hover:bg-muted/50"
-                                        title={link.description}
-                                      >
-                                        <ExternalLink className="h-3 w-3" />
-                                        {link.label}
-                                      </a>
-                                    ))}
-                                    {guide.exampleValue && guide.exampleLabel ? (
-                                      <button
-                                        type="button"
-                                        className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2.5 py-1 text-[11px] text-foreground transition hover:bg-muted/50"
-                                        onClick={async () => {
-                                          try {
-                                            await navigator.clipboard.writeText(guide.exampleValue || "");
-                                            toast.success("模板已复制到剪贴板");
-                                          } catch {
-                                            toast.error("复制失败，请手动复制模板");
-                                          }
+                                  {item.availabilityReason ? (
+                                    <div className="flex gap-2 rounded-[10px] bg-destructive/10 px-3 py-2 text-[11px] leading-5 text-destructive">
+                                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                      <span>{item.availabilityReason}</span>
+                                    </div>
+                                  ) : null}
+
+                                  {connectorProfiles.length > 0 ? (
+                                    <div className="space-y-1.5">
+                                      <div className="text-xs font-medium text-foreground">
+                                        Choose profile
+                                      </div>
+                                      <Select
+                                        value={selectedProfileId || ""}
+                                        onValueChange={(value) => {
+                                          setProfileSelection((prev) => ({
+                                            ...prev,
+                                            [item.key]: value,
+                                          }));
                                         }}
                                       >
-                                        <ExternalLink className="h-3 w-3" />
-                                        {guide.exampleLabel}
-                                      </button>
-                                    ) : null}
-                                  </div>
+                                        <SelectTrigger className="h-9 rounded-[10px]">
+                                          <SelectValue placeholder="Select a profile" />
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-[12px]">
+                                          {connectorProfiles.map((profile) => (
+                                            <SelectItem
+                                              key={profile.profileId}
+                                              value={profile.profileId}
+                                              className="rounded-[8px]"
+                                            >
+                                              {profile.profileName}
+                                              {profile.isDefault ? " · default" : ""}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-[10px] border border-dashed border-border/70 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                                      这个连接器还没有可用 profile。请先在设置面板完成外部授权或手动凭证配置。
+                                    </div>
+                                  )}
 
-                                  <div className="space-y-2">
-                                    {item.configFields.map((field) => (
-                                      <div key={field.key} className="space-y-1.5">
-                                        <Label htmlFor={`${item.key}-${field.key}`} className="text-xs">
-                                          {field.label}
-                                        </Label>
-                                        <Input
-                                          id={`${item.key}-${field.key}`}
-                                          value={form[field.key] || ""}
-                                          onChange={(event) =>
-                                            handleFieldChange(item.key, field.key, event.target.value)
-                                          }
-                                          placeholder={field.placeholder}
-                                          className="h-9 rounded-[10px]"
-                                          type={
-                                            field.secret
-                                              ? "password"
-                                              : field.type === "url"
-                                                ? "url"
-                                                : "text"
-                                          }
-                                        />
-                                        {field.description ? (
-                                          <p className="text-[11px] leading-4 text-muted-foreground">
-                                            {field.description}
-                                          </p>
+                                  {selectedProfile ? (
+                                    <div className="space-y-2 rounded-[10px] border border-border/70 bg-background px-3 py-2.5">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-medium text-foreground">
+                                          {selectedProfile.profileName}
+                                        </div>
+                                        {selectedProfile.isDefault ? (
+                                          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                            default
+                                          </span>
                                         ) : null}
                                       </div>
-                                    ))}
-                                  </div>
+                                      <div className="text-[11px] leading-5 text-muted-foreground">
+                                        {selectedProfile.displayName ||
+                                          selectedProfile.secretSummary ||
+                                          "未设置 display name"}
+                                      </div>
+                                      {selectedProfile.lastError ? (
+                                        <div className="flex gap-2 rounded-[8px] bg-destructive/10 px-2.5 py-2 text-[11px] leading-5 text-destructive">
+                                          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                          <span>{selectedProfile.lastError}</span>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
 
-                                  <div className="flex gap-2">
+                                  {guide ? (
+                                    <div className="rounded-[10px] border border-dashed border-border/70 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                                      {guide.steps[0]}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </ScrollArea>
+
+                              <div className="border-t border-border/70 px-3 py-3">
+                                <div className="flex flex-wrap gap-2">
+                                  {sessionId && selectedProfileId ? (
                                     <Button
                                       size="sm"
-                                      className="flex-1 rounded-[10px]"
-                                      disabled={busy}
-                                      onClick={() => void handleQuickSave(item)}
+                                      className="rounded-[10px]"
+                                      disabled={busy || (!attachedToSelected && !canAttach)}
+                                      onClick={() =>
+                                        void handleAttach(
+                                          item.key,
+                                          selectedProfileId,
+                                          attachedToSelected ? "detach" : "attach"
+                                        )
+                                      }
                                     >
                                       {busy ? (
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      ) : null}
-                                      保存配置
+                                      ) : attachedToSelected ? (
+                                        <Unplug className="mr-2 h-4 w-4" />
+                                      ) : (
+                                        <Plug className="mr-2 h-4 w-4" />
+                                      )}
+                                      {attachedToSelected
+                                        ? "Detach"
+                                        : session?.attachedProfileId &&
+                                            session.attachedProfileId !== selectedProfileId
+                                          ? "Switch Profile"
+                                          : "Attach"}
                                     </Button>
-                                    {account?.authStatus === "authorized" || account?.secretSummary ? (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="rounded-[10px]"
-                                        disabled={busy}
-                                        onClick={() => void handleClearAuth(item.key)}
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    ) : null}
-                                  </div>
+                                  ) : null}
 
-                                  <div className="rounded-[10px] border border-dashed border-border/70 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-                                    {guide.steps[0]}
-                                  </div>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="rounded-[10px]"
+                                    onClick={() => openConnectorSettings(item.key)}
+                                  >
+                                    <Settings2 className="mr-2 h-4 w-4" />
+                                    Manage
+                                  </Button>
+
+                                  {guide?.quickLinks?.[0] ? (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="rounded-[10px]"
+                                      asChild
+                                    >
+                                      <a
+                                        href={guide.quickLinks[0].href}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        <ArrowUpRight className="mr-2 h-4 w-4" />
+                                        Docs
+                                      </a>
+                                    </Button>
+                                  ) : null}
                                 </div>
-                              </ScrollArea>
+                              </div>
                             </div>
                           </PopoverContent>
                         </Popover>
 
-                        <ConnectorToggle
-                          checked={checked}
-                          busy={busy}
-                          onClick={() => void handleToggle(item.key)}
-                        />
+                        <button
+                          type="button"
+                          className="group flex items-center gap-2"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (!selectedProfileId) {
+                              setDetailKey(item.key);
+                              return;
+                            }
+                            if (!attachedToSelected && !canAttach) {
+                              setDetailKey(item.key);
+                              return;
+                            }
+                            void handleAttach(
+                              item.key,
+                              selectedProfileId,
+                              attachedToSelected ? "detach" : "attach"
+                            );
+                          }}
+                          aria-label={checked ? "Disable connector" : "Enable connector"}
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                          ) : null}
+                          <div
+                            className={cn(
+                              "h-4 w-[26px] rounded-full px-[1px] transition-colors",
+                              checked ? "bg-primary" : "bg-muted-foreground/30"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "mt-[1px] block h-3.5 w-3.5 rounded-full bg-background transition-transform",
+                                checked ? "translate-x-2.5" : "translate-x-0"
+                              )}
+                            />
+                          </div>
+                        </button>
                       </div>
                     );
-                  })}
-                </div>
+                  }
+                )}
               </div>
             </ScrollArea>
           </div>
@@ -578,27 +636,18 @@ export default function ConnectorDialog({
             <button
               type="button"
               className="flex w-full items-center justify-between rounded-[10px] px-3 py-2 text-left transition hover:bg-muted/55"
-              onClick={() => openConnectorSettings(true)}
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-muted">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <div className="text-sm font-medium text-foreground">添加连接器</div>
-              </div>
-              <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
-            </button>
-
-            <button
-              type="button"
-              className="mt-1 flex w-full items-center justify-between rounded-[10px] px-3 py-2 text-left transition hover:bg-muted/55"
-              onClick={() => openConnectorSettings(false)}
+              onClick={() => openConnectorSettings(null)}
             >
               <div className="flex items-center gap-2.5">
                 <div className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-muted">
                   <Settings2 className="h-4 w-4" />
                 </div>
-                <div className="text-sm font-medium text-foreground">管理连接器</div>
+                <div>
+                  <div className="text-sm font-medium text-foreground">管理连接器</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    创建 profile、授权并设置默认项
+                  </div>
+                </div>
               </div>
               <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
             </button>

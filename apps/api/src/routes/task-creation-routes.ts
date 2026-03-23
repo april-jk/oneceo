@@ -3346,12 +3346,21 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     const connectorKey = parseConnectorKey(req.params.connectorKey);
+    const profileId = String(req.body?.profileId || '').trim();
+    const enabledTools = Array.isArray(req.body?.enabledTools)
+      ? req.body.enabledTools.map((item: unknown) => String(item))
+      : [];
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
+    if (!profileId) {
+      throw new Error('缺少 profileId');
+    }
     const status = await sessionConnectorService.attachConnector(
       sessionId,
       currentUser.userId,
       connectorKey,
+      profileId,
+      enabledTools,
       runtime.orchestratorSessionId
     );
     return res.json({

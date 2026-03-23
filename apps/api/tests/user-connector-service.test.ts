@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { connectorStorageBootstrap } from '../src/services/connector-storage-bootstrap';
 import { connectorSecretService } from '../src/services/connector-secret-service';
-import { userConnectorAccountDAO } from '../src/db/dao';
+import { userConnectorProfileDAO } from '../src/db/dao';
 import { userConnectorService } from '../src/services/user-connector-service';
 
 const originalFetch = global.fetch;
@@ -14,13 +14,17 @@ afterEach(() => {
 
 test('saveUserConnector validates GitHub token and persists resolved profile name', async () => {
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
-  mock.method(userConnectorAccountDAO, 'getByUserAndConnectorKey', async () => undefined as any);
-  let capturedUpsert: Record<string, unknown> | null = null;
-  mock.method(userConnectorAccountDAO, 'upsert', async (input: any) => {
-    capturedUpsert = input;
+  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
+  let capturedCreate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'create', async (input: any) => {
+    capturedCreate = input;
     return {
       ...input,
+      id: 'profile-1',
       updatedAt: new Date('2026-03-09T00:00:00.000Z'),
+      createdAt: new Date('2026-03-09T00:00:00.000Z'),
+      profileName: input.profileName,
+      isDefault: true,
     } as any;
   });
   global.fetch = mock.fn(async () =>
@@ -33,6 +37,7 @@ test('saveUserConnector validates GitHub token and persists resolved profile nam
   ) as typeof fetch;
 
   const saved = await userConnectorService.saveUserConnector('user-1', 'github', {
+    profileName: 'GitHub Main',
     credentials: {
       accessToken: 'ghp-valid-token',
     },
@@ -40,10 +45,10 @@ test('saveUserConnector validates GitHub token and persists resolved profile nam
 
   assert.equal(saved.authStatus, 'authorized');
   assert.equal(saved.displayName, 'april-jk');
-  assert.equal(capturedUpsert?.displayName, 'april-jk');
+  assert.equal(capturedCreate?.displayName, 'april-jk');
   assert.equal(
     connectorSecretService.decryptJson<{ accessToken?: string }>(
-      String(capturedUpsert?.secretCiphertext || '')
+      String(capturedCreate?.secretCiphertext || '')
     )?.accessToken,
     'ghp-valid-token'
   );
@@ -51,8 +56,8 @@ test('saveUserConnector validates GitHub token and persists resolved profile nam
 
 test('saveUserConnector rejects invalid GitHub token before persisting', async () => {
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
-  mock.method(userConnectorAccountDAO, 'getByUserAndConnectorKey', async () => undefined as any);
-  const upsertMock = mock.method(userConnectorAccountDAO, 'upsert', async () => {
+  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
+  const createMock = mock.method(userConnectorProfileDAO, 'create', async () => {
     throw new Error('should not persist invalid github token');
   });
   global.fetch = mock.fn(async () =>
@@ -67,11 +72,12 @@ test('saveUserConnector rejects invalid GitHub token before persisting', async (
   await assert.rejects(
     () =>
       userConnectorService.saveUserConnector('user-1', 'github', {
+        profileName: 'GitHub Main',
         credentials: {
           accessToken: 'ghp-invalid-token',
         },
       }),
     /Bad credentials/
   );
-  assert.equal(upsertMock.mock.callCount(), 0);
+  assert.equal(createMock.mock.callCount(), 0);
 });

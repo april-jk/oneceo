@@ -56,10 +56,12 @@ function buildAccount(
 
 test('connector registry exposes built-in connectors with availability metadata', () => {
   const catalog = connectorRegistry.listCatalog();
-  assert.equal(catalog.length, 4);
+  assert.equal(catalog.length, 7);
+  assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
   assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
   assert.equal(catalog.find((item) => item.key === 'slack')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'notion')?.available, true);
+  assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
 });
 
 test('connector registry materializes local and remote MCP configs', () => {
@@ -97,5 +99,5 @@ test('connector registry fails fast when remote adapter is unavailable', () => {
       connectorKey: 'slack',
       account: buildAccount('slack', { accessToken: 'slack-token' }),
     });
-  }, /adapter/);
+  }, /remote url/i);
 });

@@ -3350,6 +3350,10 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     const enabledTools = Array.isArray(req.body?.enabledTools)
       ? req.body.enabledTools.map((item: unknown) => String(item))
       : [];
+    const sessionConfig =
+      req.body?.sessionConfig && typeof req.body.sessionConfig === 'object' && !Array.isArray(req.body.sessionConfig)
+        ? (req.body.sessionConfig as Record<string, unknown>)
+        : {};
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
     if (!profileId) {
@@ -3361,6 +3365,7 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       connectorKey,
       profileId,
       enabledTools,
+      sessionConfig,
       runtime.orchestratorSessionId
     );
     return res.json({

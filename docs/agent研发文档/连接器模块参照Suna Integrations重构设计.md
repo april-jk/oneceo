@@ -273,6 +273,7 @@ oneceo 能直接吸收的部分有：
 1. `profile_id`
 2. `enabled_tools` `jsonb`
 3. `definition_snapshot_json` `jsonb`
+4. `session_config_json` `jsonb`
 
 建议唯一约束调整为：
 
@@ -292,6 +293,18 @@ oneceo 能直接吸收的部分有：
 
 1. `connector_key` 继续保留，便于快速聚合与兼容已有统计逻辑
 2. `definition_snapshot_json` 用于记录 attach 当时的定义快照，避免 definition 未来变更导致运行态语义漂移
+3. `session_config_json` 保存“这个会话如何使用该 profile”的额外约束
+4. 对 GitHub，`session_config_json` 的最小结构为：
+
+```json
+{
+  "repositories": ["owner/repo-a", "owner/repo-b"]
+}
+```
+
+5. `repositories` 只属于 session binding，不属于 profile
+6. profile 表示“哪个 GitHub 账号 / token”
+7. session binding 表示“当前会话允许使用这个账号访问哪些仓库”
 
 ### 7.3 调整 `connector_auth_requests`
 
@@ -396,6 +409,60 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 5. `figma`
 6. `vercel`
 
+### 10.1.1 GitHub 配置体验原则
+
+GitHub 在阶段一需要额外遵守一个易用性原则：
+
+1. 默认优先 OAuth，一键创建默认 profile 并进入授权
+2. 不要求用户在首次授权前先填写 `profileName`
+3. `profileName / displayName` 尽量由平台根据 GitHub 账号自动回填
+4. Personal Access Token 作为高级配置入口，不作为默认主路径
+5. 当前版本不在 oneceo 内重复做“仓库授权”假流程，仓库访问范围直接以 GitHub OAuth / PAT 的真实权限为准
+6. GitHub 详情页的默认交互应收敛到“一个主按钮发起 OAuth”，而不是复用通用连接器的 profile/说明/资料卡布局
+7. GitHub 弹窗不复用通用连接器的顶部标题栏，改为独立的单列居中布局，只保留右上角关闭按钮和主体内容
+8. GitHub 的“显示详情”区域只保留状态与运行相关信息，不展示 Personal Access Token 入口
+
+原因：
+
+1. 当前 oneceo 的 GitHub runtime 直接依赖 `@modelcontextprotocol/server-github` 和实际 GitHub token
+2. 该运行时能力当前没有 oneceo 自己维护的 repo 白名单物化链路
+3. 如果前端额外做一层“授权仓库”但运行时不真实执行，会造成错误心智和权限错配
+
+### 10.1.2 GitHub 会话仓库授权原则
+
+在 GitHub 已完成 OAuth/profile 授权之后，会话页还需要补一层“当前会话允许访问哪些仓库”的真实约束。
+
+这里必须明确：
+
+1. 这不是重新做一次 GitHub OAuth
+2. 这也不是 profile 级配置
+3. 这是 **session 级 repo allowlist**
+4. 作用范围只限“当前会话挂载后的 GitHub MCP 使用”
+
+实现原则：
+
+1. 一级弹层显示 GitHub 已连接状态与当前会话是否已挂载
+2. GitHub 二级页不再以“选择 profile”为主，而是以“选择授权仓库”为主
+3. profile 只作为仓库列表的数据来源与身份来源
+4. 仓库选择结果必须真实保存到 session binding
+5. runtime 必须真实消费这份仓库 allowlist，而不是只改 UI 文案
+
+最短路径定义：
+
+1. 若某个 GitHub profile 已授权，则二级页默认展示该 profile 下可访问的仓库列表
+2. 用户勾选 1 个或多个仓库后点击授权
+3. attach 请求把 `profileId + repositories[]` 一起提交
+4. 平台把 `repositories[]` 保存进 `session_config_json`
+5. sandbox 内 GitHub MCP 只允许访问这批仓库
+
+反例：
+
+1. 只把二级页标题改成“选择仓库”，但 attach 仍然只传 `profileId`
+2. 只在前端记住仓库选择，不落 session binding
+3. runtime 继续放行 token 所有仓库
+
+以上都属于假流程，本设计禁止。
+
 ### 10.2 `supabase` 的语义
 
 `supabase` 必须按“独立产品连接器”设计，而不是复用 `postgres` 连接器替代。
@@ -442,14 +509,15 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 
 要改成：
 
-`attach(sessionId, profileId, enabledTools?)`
+`attach(sessionId, profileId, enabledTools?, sessionConfig?)`
 
 也就是：
 
 1. session 不再直接挂 connector 定义
 2. session 挂的是某个用户 profile
 3. 如果该连接器支持工具白名单，可以附带 `enabledTools`
-4. attach 时由平台侧把 profile 解析成 runtime config，再投影到 sandbox 内部
+4. 如果该连接器支持 session 级使用范围约束，可以附带 `sessionConfig`
+5. attach 时由平台侧把 profile + sessionConfig 解析成 runtime config，再投影到 sandbox 内部
 
 这就是 `suna` 的 agent MCP 配置语义在 oneceo session 维度上的映射。
 
@@ -461,6 +529,7 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 2. 哪个 workspace / endpoint
 3. 哪个 profile
 4. 当前会话要不要只开放部分工具
+5. 当前会话是否只允许访问其中几个 GitHub 仓库
 
 这也是 `suna` 把运行时配置建立在 profile 之上的原因。
 
@@ -495,6 +564,46 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 3. 当前会话 attach 的是某个 profile
 4. 若连接器支持 tools，允许配置 `enabledTools`
 
+### 12.2.1 GitHub 的会话弹窗特殊化
+
+GitHub 不能继续复用现在“二级页 = 选择 profile”的结构。
+
+GitHub 在会话页上的正确结构应改为两层：
+
+1. 一级页：
+   - 显示 GitHub 行项目
+   - 展示当前授权账号
+   - 展示当前会话是否已挂载
+   - 展示已授权仓库数量摘要，例如 `2 repos authorized`
+2. 二级页：
+   - 顶部显示当前使用的 GitHub profile/account
+   - 提供仓库搜索框
+   - 提供可滚动的仓库列表
+   - 当前版本一个会话只授权一个仓库
+   - 底部主按钮为“授权/更新”，把单个仓库提交到当前会话
+
+GitHub 二级页不再出现：
+
+1. `Choose profile` 下拉作为主入口
+2. “配置位置 / 当前用途 / 可用 profiles”这类说明卡
+3. “Docs” 这种和当前会话挂载无关的次要操作
+
+取而代之的是：
+
+1. 当前账号摘要
+2. 紧凑搜索框 + 可滚动仓库列表
+3. 行内单选态 check，而不是 checkbox 表单堆叠
+4. 二级页固定贴在一级连接器面板右侧，作为稳定子菜单显示
+5. 长仓库名只在必要位置摘要显示，避免主列表和底部动作区遮挡
+6. 底部只保留会话授权动作和“配置 GitHub”入口
+
+原因：
+
+1. 用户在会话内的真实任务不是“理解 profile 模型”
+2. 用户在会话内真正关心的是“这个 session 现在能访问哪些仓库”
+3. GitHub 是唯一一个当前明确需要 session 级 repo scope 的连接器
+4. 仓库选择器应该尽量接近命令面板/资源选择器，而不是连接器管理后台
+
 ### 12.3 前端类型层改造
 
 `ConnectorKey` 不能再是固定 union。
@@ -526,7 +635,7 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 
 流程改为：
 
-1. session 读取 profile binding
+1. session 读取 profile binding 与 `session_config_json`
 2. profile service 取 profile
 3. definition registry 取 definition
 4. runtime materializer 生成 MCP config
@@ -548,6 +657,61 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 
 1. 数据模型先和 `suna` 对齐
 2. 不因为少量 runtime provider 暂不支持就破坏整体模型
+
+### 13.4 GitHub repo allowlist 的 runtime 约束
+
+GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
+
+最短路径实现如下：
+
+1. 保留当前 `@modelcontextprotocol/server-github` 作为底层 provider
+2. 在 oneceo 侧新增一个 GitHub MCP wrapper/proxy
+3. wrapper 负责：
+   - 启动底层 `server-github`
+   - 读取 `ONECEO_GITHUB_ALLOWED_REPOSITORIES`
+   - 拦截 MCP `tools/call`
+   - 对请求参数中的仓库标识做校验
+   - 如果目标仓库不在 allowlist 中，直接拒绝
+
+建议识别的仓库参数形态：
+
+1. `owner + repo`
+2. `repository = owner/repo`
+3. `full_name = owner/repo`
+
+这样做的原因：
+
+1. 当前 `server-github` 的接入方式只是 token 注入，没有 repo 级参数
+2. 如果不在 oneceo wrapper 层拦截，session 级 repo allowlist 无法真实生效
+3. 这条路径比重写整个 GitHub MCP 更短，也不会引入假流程
+
+这一层完成后，GitHub 的仓库授权二级页才成立。
+
+### 13.5 GitHub repo 列表获取
+
+为了支撑二级页，需要新增 GitHub 仓库列表接口。
+
+最短路径：
+
+1. 新增 GitHub-specific API
+2. 输入：`profileId`
+3. 输出：当前 profile/token 可访问的仓库列表
+
+建议接口：
+
+`GET /api/connectors/github/profiles/:profileId/repositories`
+
+返回结构至少包含：
+
+1. `id`
+2. `fullName`
+3. `owner`
+4. `name`
+5. `private`
+6. `permissions`（可选）
+7. `defaultBranch`（可选）
+
+前端二级页只消费这个列表，不自己猜仓库。
 
 ## 14. 最小实现路径
 
@@ -572,7 +736,16 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 
 1. 扩展 `task_session_connector_bindings`
 2. attach / detach 改成按 profile
-3. 前端弹窗切到 profile 视图
+3. attach 请求支持 `sessionConfig`
+4. 前端弹窗切到 profile 视图
+
+### 阶段 3.5：GitHub 会话仓库授权
+
+1. 新增 GitHub repo 列表接口
+2. 给 session binding 增加 `session_config_json`
+3. `ConnectorDialog` 的 GitHub 二级页改成 repo selector
+4. attach 时提交 `repositories[]`
+5. GitHub runtime wrapper 按 repo allowlist 拦截调用
 
 ### 阶段 4：阶段一连接器 runtime 实现
 
@@ -604,6 +777,8 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 6. `apps/api/src/db/schema.ts`
 7. `apps/api/src/db/migrate.ts`
 8. `apps/api/src/db/dao/*connector*`
+9. `apps/api/src/services/github-connector-repository-service.ts`
+10. `apps/api/src/services/connector-registry.ts`（内联 GitHub MCP allowlist wrapper）
 
 前端核心：
 
@@ -617,6 +792,7 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 1. `apps/api/src/connectors/definitions/`
 2. `apps/api/src/services/connector-profile-service.ts`
 3. `apps/api/src/services/connector-runtime-materializer.ts`
+4. `apps/api/src/connectors/runtime/`
 
 ## 16. 风险与处理
 
@@ -627,6 +803,15 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 1. 先迁移四个已有连接器
 2. attach / detach / reconcile 都走同一条 materialize 逻辑
 3. 做 session 级最小回归测试
+
+### 16.5 风险 5：GitHub 仓库授权页做成假流程
+
+处理：
+
+1. 不允许只改前端页面命名
+2. attach 必须落 `repositories[]`
+3. runtime 必须真实校验 repo allowlist
+4. 如果 runtime 校验未完成，GitHub 二级页就不能宣称“授权仓库”
 
 ### 16.2 风险 2：数据迁移把已有授权态冲掉
 
@@ -664,6 +849,8 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 1. 会话 attach 的对象是 profile
 2. 会话能显示当前 profile 名称
 3. 会话状态里能看到 `enabledTools`
+4. GitHub 会话二级页能展示可选仓库列表
+5. GitHub attach 时能提交并回显当前会话的 `repositories[]`
 
 ### 17.3 运行时层
 
@@ -671,6 +858,7 @@ oneceo 不需要 Composio 的超大 catalog，但需要它的抽象方式。
 2. `postgres` 不出现在选择菜单
 3. sandbox 重连后 reconcile 仍然正常
 4. sandbox 内不需要再次做连接器配置
+5. GitHub runtime 对不在 allowlist 内的仓库请求会拒绝，而不是放过 token 的全部权限
 
 ## 18. 结论
 

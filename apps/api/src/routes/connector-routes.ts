@@ -2,6 +2,7 @@ import express from 'express';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
+import { githubConnectorRepositoryService } from '../services/github-connector-repository-service';
 import { userConnectorService } from '../services/user-connector-service';
 
 const router = express.Router();
@@ -51,6 +52,24 @@ router.get('/me', async (req, res) => {
     });
   } catch (error) {
     return handleError(res, error, '获取当前用户连接器失败', 401);
+  }
+});
+
+router.get('/github/profiles/:profileId/repositories', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const items = await githubConnectorRepositoryService.listRepositories(
+      currentUser.userId,
+      req.params.profileId
+    );
+    return res.json({
+      success: true,
+      data: {
+        items,
+      },
+    });
+  } catch (error) {
+    return handleError(res, error, '获取 GitHub 仓库列表失败', 401);
   }
 });
 

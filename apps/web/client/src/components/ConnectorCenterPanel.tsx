@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -262,6 +263,10 @@ export function ConnectorCenterPanel({
     Partial<Record<ConnectorKey, string | null>>
   >({});
   const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
+  const [advancedEditorState, setAdvancedEditorState] = useState<
+    Record<string, boolean>
+  >({});
+  const [githubDetailsState, setGithubDetailsState] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     setLoading(true);
@@ -444,8 +449,9 @@ export function ConnectorCenterPanel({
     const currentProfile =
       connectorProfiles.find((profile) => profile.profileId === selectedProfileId) || null;
     const payload = buildSavePayload(item, getEditorValues(item.key, selectedProfileId));
+    const requiresExplicitProfileName = item.key !== "github";
 
-    if (!payload.profileName) {
+    if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error("请先填写 profile name");
     }
 
@@ -706,6 +712,14 @@ export function ConnectorCenterPanel({
           const Icon = iconMap[item.icon as keyof typeof iconMap] || Link2;
           const guide = CONNECTOR_GUIDES[item.key];
           const isNewProfile = selectedProfileId === NEW_PROFILE_ID || !selectedProfile;
+          const editorStateKey = editorKey(
+            item.key,
+            selectedProfileId === NEW_PROFILE_ID ? null : selectedProfileId
+          );
+          const isGithub = item.key === "github";
+          const showGithubAdvanced = Boolean(advancedEditorState[editorStateKey]);
+          const showGithubDetails = Boolean(githubDetailsState[editorStateKey]);
+          const githubOauthEnabled = Boolean(item.oauth?.supported);
           const busy =
             actionKey === `save:${item.key}` ||
             actionKey === `oauth:${item.key}` ||
@@ -713,38 +727,275 @@ export function ConnectorCenterPanel({
             actionKey === `default:${selectedProfile?.profileId}` ||
             actionKey === `attach:${selectedProfile?.profileId}`;
           const supportsManual = item.configFields.length > 0;
+          const visibleConfigFields = item.configFields.filter((field) => {
+            if (!isGithub) return true;
+            if (showGithubAdvanced) return true;
+            return field.key === "accessToken";
+          });
+          const showManualSection =
+            supportsManual && (!isGithub || showGithubAdvanced || !item.oauth?.supported);
+          const showManualSaveAction =
+            supportsManual && (!isGithub || showGithubAdvanced || !item.oauth?.supported);
           const isAuthorized = selectedProfile?.authStatus === "authorized";
 
           return (
-            <DialogContent className="max-h-[82vh] max-w-5xl overflow-hidden rounded-[28px] border border-border/70 p-0">
-              <DialogHeader className="border-b border-border/70 px-6 py-5 text-left">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
-                    <Icon className="h-5 w-5 text-foreground" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <DialogTitle className="text-xl font-semibold text-foreground">
-                        {item.name}
-                      </DialogTitle>
-                      <Badge
-                        variant={statusTone(
-                          selectedProfile?.authStatus ||
-                            (item.available ? "not_configured" : "unavailable")
-                        )}
+            <DialogContent
+              className={
+                isGithub
+                  ? "max-h-[95vh] w-[500px] max-w-[95vw] overflow-hidden rounded-[28px] border border-border/70 p-0"
+                  : "max-h-[82vh] max-w-5xl overflow-hidden rounded-[28px] border border-border/70 p-0"
+              }
+              showCloseButton={!isGithub}
+            >
+              {isGithub ? (
+                <>
+                  <DialogTitle className="sr-only">{item.name}</DialogTitle>
+                  <DialogDescription className="sr-only">
+                    {item.description}
+                  </DialogDescription>
+
+                  <div className="flex items-center justify-end px-6 py-5">
+                    <DialogClose className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted/60 hover:text-foreground">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
                       >
-                        {formatStatus(
-                          selectedProfile?.authStatus ||
-                            (item.available ? "not_configured" : "unavailable")
-                        )}
-                      </Badge>
-                    </div>
-                    <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
-                      {item.description}
-                    </DialogDescription>
+                        <path d="M18 6 6 18" />
+                        <path d="m6 6 12 12" />
+                      </svg>
+                      <span className="sr-only">Close</span>
+                    </DialogClose>
                   </div>
-                </div>
-              </DialogHeader>
+
+                  <ScrollArea className="max-h-[calc(95vh-72px)]">
+                    <div className="px-6 pb-6 pt-0">
+                      <div className="mx-auto flex w-full max-w-[600px] flex-col items-center gap-6 text-center">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border/70 bg-background">
+                          <Icon className="h-10 w-10 text-foreground" />
+                        </div>
+
+                        <div className="space-y-2">
+                          <h3 className="text-[22px] font-semibold leading-7 text-foreground">
+                            {isAuthorized ? "GitHub 已连接" : "GitHub"}
+                          </h3>
+                          <p className="text-sm leading-6 text-muted-foreground">
+                            {isAuthorized
+                              ? "你的 GitHub 授权已经就绪，返回后即可直接在会话里使用。"
+                              : "在 OneCEO 中直接访问、搜索并组织代码仓库，跟踪问题、审查拉取请求，并自动化工作流程。"}
+                          </p>
+                        </div>
+
+                        <div className="flex w-full flex-col items-center gap-3">
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            <Button
+                              className="h-10 min-w-[96px] rounded-xl px-4"
+                              disabled={Boolean(actionKey) || !item.available}
+                              onClick={() => {
+                                if (githubOauthEnabled) {
+                                  void handleOAuth(item);
+                                  return;
+                                }
+                                setGithubDetailsState((prev) => ({
+                                  ...prev,
+                                  [editorStateKey]: true,
+                                }));
+                                toast.error("当前环境未配置 GitHub OAuth，请先补充服务端 OAuth 配置");
+                              }}
+                            >
+                              {actionKey === `oauth:${item.key}` ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <Plus className="mr-2 h-4 w-4" />
+                              )}
+                              {githubOauthEnabled
+                                ? isAuthorized
+                                  ? "重新连接"
+                                  : "连接"
+                                : "连接"}
+                            </Button>
+
+                            {selectedProfile ? (
+                              <Button
+                                variant="outline"
+                                className="h-10 rounded-xl px-4"
+                                disabled={Boolean(actionKey)}
+                                onClick={() => void handleDisconnect(selectedProfile)}
+                              >
+                                {actionKey === `disconnect:${selectedProfile.profileId}` ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Unplug className="mr-2 h-4 w-4" />
+                                )}
+                                断开连接
+                              </Button>
+                            ) : null}
+                          </div>
+
+                          {!githubOauthEnabled ? (
+                            <p className="text-xs leading-5 text-destructive">
+                              GitHub OAuth 当前未配置，按钮暂时不能跳转授权。
+                            </p>
+                          ) : null}
+                        </div>
+
+                        {item.availabilityReason ? (
+                          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-left text-sm text-destructive">
+                            {item.availabilityReason}
+                          </div>
+                        ) : null}
+
+                        {selectedProfile?.lastError ? (
+                          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-left text-sm text-destructive">
+                            {selectedProfile.lastError}
+                          </div>
+                        ) : null}
+
+                        <div className="w-full rounded-2xl border border-border/70 bg-muted/20 px-4 py-4 text-left">
+                          <div className="space-y-3 text-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-muted-foreground">状态</span>
+                              <Badge
+                                variant={statusTone(
+                                  selectedProfile?.authStatus ||
+                                    (item.available ? "not_configured" : "unavailable")
+                                )}
+                              >
+                                {formatStatus(
+                                  selectedProfile?.authStatus ||
+                                    (item.available ? "not_configured" : "unavailable")
+                                )}
+                              </Badge>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-muted-foreground">连接方式</span>
+                              <span className="font-medium text-foreground">
+                                {githubOauthEnabled ? "GitHub OAuth" : "Personal Access Token"}
+                              </span>
+                            </div>
+
+                            {selectedProfile?.displayName ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-muted-foreground">授权账户</span>
+                                <span className="font-medium text-foreground">
+                                  {selectedProfile.displayName}
+                                </span>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {effectiveTargetSessionId &&
+                            selectedProfile &&
+                            selectedProfile.authStatus === "authorized" ? (
+                              <Button
+                                variant="secondary"
+                                className="rounded-xl"
+                                disabled={Boolean(actionKey)}
+                                onClick={async () => {
+                                  setActionKey(`attach:${selectedProfile.profileId}`);
+                                  try {
+                                    await attachSessionConnector(
+                                      effectiveTargetSessionId,
+                                      item.key,
+                                      {
+                                        profileId: selectedProfile.profileId,
+                                      }
+                                    );
+                                    toast.success("已挂载到目标会话");
+                                  } catch (error) {
+                                    toast.error(
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Attach connector failed"
+                                    );
+                                  } finally {
+                                    setActionKey(null);
+                                  }
+                                }}
+                              >
+                                <Plug className="mr-2 h-4 w-4" />
+                                挂载到当前会话
+                              </Button>
+                            ) : null}
+
+                          </div>
+                        </div>
+
+                        <div className="w-full">
+                          <button
+                            type="button"
+                            className="mx-auto flex items-center gap-1 text-[13px] text-muted-foreground transition hover:text-foreground"
+                            onClick={() =>
+                              setGithubDetailsState((prev) => ({
+                                ...prev,
+                                [editorStateKey]: !prev[editorStateKey],
+                              }))
+                            }
+                          >
+                            <span>{showGithubDetails ? "隐藏详情" : "显示详情"}</span>
+                            <ChevronRight
+                              className={`h-4 w-4 transition-transform ${
+                                showGithubDetails ? "rotate-90" : ""
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        {showGithubDetails ? (
+                          <div className="w-full rounded-2xl border border-border/70 bg-background px-4 py-4 text-left">
+                            <div className="space-y-4">
+                              {!githubOauthEnabled ? (
+                                <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                                  服务端缺少 `GITHUB_CONNECTOR_CLIENT_ID` 和
+                                  `GITHUB_CONNECTOR_CLIENT_SECRET`，因此当前不能跳转 GitHub OAuth。
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </>
+              ) : (
+                <>
+                  <DialogHeader className="border-b border-border/70 px-6 py-5 text-left">
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
+                        <Icon className="h-5 w-5 text-foreground" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <DialogTitle className="text-xl font-semibold text-foreground">
+                            {item.name}
+                          </DialogTitle>
+                          <Badge
+                            variant={statusTone(
+                              selectedProfile?.authStatus ||
+                                (item.available ? "not_configured" : "unavailable")
+                            )}
+                          >
+                            {formatStatus(
+                              selectedProfile?.authStatus ||
+                                (item.available ? "not_configured" : "unavailable")
+                            )}
+                          </Badge>
+                        </div>
+                        <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
+                          {item.description}
+                        </DialogDescription>
+                      </div>
+                    </div>
+                  </DialogHeader>
 
               <ScrollArea className="max-h-[calc(82vh-96px)]">
                 <div className="space-y-5 px-6 py-5">
@@ -924,6 +1175,75 @@ export function ConnectorCenterPanel({
                         </div>
                       </div>
 
+                      {isGithub ? (
+                        <div className="rounded-3xl border border-border/70 bg-background px-4 py-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium text-foreground">
+                                GitHub 推荐配置
+                              </p>
+                              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                                直接连接 GitHub 账户即可使用，平台会自动创建默认 profile
+                                并回填账号名。当前版本仓库访问范围由 GitHub OAuth 或 PAT
+                                的权限决定，不在 oneceo 内重复做仓库白名单配置。
+                              </p>
+                            </div>
+                            <Badge variant="outline">最少输入</Badge>
+                          </div>
+
+                          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                            <div className="rounded-2xl bg-muted/45 px-4 py-3">
+                              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                                1. 连接账户
+                              </div>
+                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                推荐 OAuth，一键完成授权并自动生成默认 profile。
+                              </p>
+                            </div>
+                            <div className="rounded-2xl bg-muted/45 px-4 py-3">
+                              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                <ShieldCheck className="h-4 w-4 text-foreground/80" />
+                                2. 会话挂载
+                              </div>
+                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                完成授权后，在会话里直接选择 profile 挂载即可，不需要再次配置。
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            {item.oauth?.supported ? (
+                              <Button
+                                className="rounded-2xl"
+                                disabled={Boolean(actionKey) || !item.available}
+                                onClick={() => void handleOAuth(item)}
+                              >
+                                {actionKey === `oauth:${item.key}` ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <ArrowUpRight className="mr-2 h-4 w-4" />
+                                )}
+                                {isAuthorized ? "重新连接 GitHub" : "连接 GitHub 账户"}
+                              </Button>
+                            ) : null}
+
+                            <Button
+                              variant="outline"
+                              className="rounded-2xl"
+                              onClick={() =>
+                                setAdvancedEditorState((prev) => ({
+                                  ...prev,
+                                  [editorStateKey]: !prev[editorStateKey],
+                                }))
+                              }
+                            >
+                              {showGithubAdvanced ? "收起高级配置" : "使用 Personal Access Token"}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {item.availabilityReason ? (
                         <div className="flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
                           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -938,15 +1258,21 @@ export function ConnectorCenterPanel({
                         </div>
                       ) : null}
 
-                      {supportsManual ? (
+                      {showManualSection ? (
                         <div className="space-y-3 rounded-3xl border border-border/70 bg-background px-4 py-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
                               <p className="text-sm font-medium text-foreground">
-                                {isNewProfile ? "创建 Profile" : "编辑 Profile"}
+                                {isGithub
+                                  ? "GitHub 手动凭证"
+                                  : isNewProfile
+                                    ? "创建 Profile"
+                                    : "编辑 Profile"}
                               </p>
                               <p className="text-sm text-muted-foreground">
-                                保存后的 profile 会复用到其他会话；会话里只做挂载，不在 sandbox 内录入凭证。
+                                {isGithub
+                                  ? "只在需要使用 PAT 时填写，默认推荐 OAuth。profile 名称和显示名可留空，由平台自动生成。"
+                                  : "保存后的 profile 会复用到其他会话；会话里只做挂载，不在 sandbox 内录入凭证。"}
                               </p>
                             </div>
                             {isAuthorized ? (
@@ -954,7 +1280,7 @@ export function ConnectorCenterPanel({
                             ) : null}
                           </div>
 
-                          {item.configFields.map((field) => {
+                          {visibleConfigFields.map((field) => {
                             const fieldDescription = [
                               field.description,
                               field.secret && isAuthorized
@@ -1002,17 +1328,17 @@ export function ConnectorCenterPanel({
                             );
                           })}
                         </div>
-                      ) : (
+                      ) : supportsManual ? (
                         <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
                           OAuth 已启用，授权完成后平台会保存 profile，后续任意 session
                           都可直接复用。
                         </div>
-                      )}
+                      ) : null}
 
                       <Separator />
 
                       <div className="flex flex-wrap gap-3">
-                        {supportsManual ? (
+                        {showManualSaveAction ? (
                           <Button
                             variant={item.oauth?.supported ? "secondary" : "default"}
                             className="rounded-2xl"
@@ -1024,11 +1350,15 @@ export function ConnectorCenterPanel({
                             ) : (
                               <ShieldCheck className="mr-2 h-4 w-4" />
                             )}
-                            {isNewProfile ? "创建 Profile" : "保存 Profile"}
+                            {isGithub
+                              ? "保存 GitHub PAT"
+                              : isNewProfile
+                                ? "创建 Profile"
+                                : "保存 Profile"}
                           </Button>
                         ) : null}
 
-                        {item.oauth?.supported ? (
+                        {item.oauth?.supported && !isGithub ? (
                           <Button
                             className="rounded-2xl"
                             disabled={Boolean(actionKey) || !item.available}
@@ -1113,6 +1443,8 @@ export function ConnectorCenterPanel({
                   </div>
                 </div>
               </ScrollArea>
+                </>
+              )}
             </DialogContent>
           );
         })() : null}

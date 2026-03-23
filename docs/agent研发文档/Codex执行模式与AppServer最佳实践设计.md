@@ -109,7 +109,7 @@
 1. sandbox 内 Codex CLI 升级到 `0.115.0-alpha.27`
 2. 启动前写入 `~/.codex/config.toml`
 3. 启动前写入 `~/.codex/auth.json`
-4. `base_url` 使用 provider 根地址，如 `https://ai.hvmz.cn`
+4. `base_url` 使用 provider 根地址，如 `https://llmapi.oneceo.ai`
 5. 不再依赖 `OPENAI_BASE_URL` 这类 deprecated env 作为 App Server 主配置来源
 
 ### 3.2 推荐配置
@@ -118,8 +118,8 @@
 
 ```toml
 model_provider = "OpenAI"
-model = "gpt-5.2"
-review_model = "gpt-5.2"
+model = "gpt-5.3-codex"
+review_model = "gpt-5.3-codex"
 model_reasoning_effort = "high"
 disable_response_storage = true
 network_access = "enabled"
@@ -129,7 +129,7 @@ model_auto_compact_token_limit = 900000
 
 [model_providers.OpenAI]
 name = "OpenAI"
-base_url = "https://ai.hvmz.cn"
+base_url = "https://llmapi.oneceo.ai"
 wire_api = "responses"
 supports_websockets = true
 requires_openai_auth = true

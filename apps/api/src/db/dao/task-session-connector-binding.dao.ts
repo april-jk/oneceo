@@ -37,6 +37,7 @@ export class TaskSessionConnectorBindingDAO {
           orchestratorSessionId: data.orchestratorSessionId,
           serverName: data.serverName,
           enabledTools: data.enabledTools,
+          sessionConfigJson: data.sessionConfigJson,
           definitionSnapshotJson: data.definitionSnapshotJson,
           lastUsedAt: data.lastUsedAt,
           lastError: data.lastError,
@@ -57,6 +58,7 @@ export class TaskSessionConnectorBindingDAO {
       orchestratorSessionId?: string | null;
       serverName?: string | null;
       enabledTools?: unknown;
+      sessionConfigJson?: unknown;
       definitionSnapshotJson?: unknown;
       lastUsedAt?: Date | null;
       lastError?: string | null;
@@ -71,6 +73,7 @@ export class TaskSessionConnectorBindingDAO {
         orchestratorSessionId: patch.orchestratorSessionId,
         serverName: patch.serverName,
         enabledTools: patch.enabledTools as any,
+        sessionConfigJson: patch.sessionConfigJson as any,
         definitionSnapshotJson: patch.definitionSnapshotJson as any,
         lastUsedAt: patch.lastUsedAt,
         lastError: patch.lastError,

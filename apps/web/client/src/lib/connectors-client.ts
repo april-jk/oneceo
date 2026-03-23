@@ -86,9 +86,26 @@ export type SessionConnectorStatus = {
   attachedProfileName?: string | null;
   availableProfilesCount?: number;
   enabledTools?: string[];
+  authorizedRepositories?: string[];
   lastUsedAt?: string | null;
   lastError?: string | null;
   serverName?: string | null;
+};
+
+export type GithubConnectorRepository = {
+  id: number;
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch?: string | null;
+  permissions?: {
+    admin?: boolean;
+    maintain?: boolean;
+    push?: boolean;
+    triage?: boolean;
+    pull?: boolean;
+  };
 };
 
 export type ConnectorProfileInput = {
@@ -421,6 +438,7 @@ export async function attachSessionConnector(
   input: {
     profileId: string;
     enabledTools?: string[];
+    sessionConfig?: Record<string, unknown>;
   }
 ): Promise<SessionConnectorStatus | null> {
   const result = await requestJson<{
@@ -437,6 +455,19 @@ export async function attachSessionConnector(
     }
   );
   return result.data?.connector || null;
+}
+
+export async function getGithubProfileRepositories(
+  profileId: string
+): Promise<GithubConnectorRepository[]> {
+  const result = await requestJson<{
+    data?: {
+      items?: GithubConnectorRepository[];
+    };
+  }>(
+    `${getApiBaseUrl()}/api/connectors/github/profiles/${encodeURIComponent(profileId)}/repositories`
+  );
+  return Array.isArray(result.data?.items) ? result.data?.items : [];
 }
 
 export async function detachSessionConnector(

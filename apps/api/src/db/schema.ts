@@ -287,6 +287,7 @@ export const taskSessionConnectorBindings = pgTable(
     orchestratorSessionId: text('orchestrator_session_id'),
     serverName: text('server_name'),
     enabledTools: jsonb('enabled_tools'),
+    sessionConfigJson: jsonb('session_config_json'),
     definitionSnapshotJson: jsonb('definition_snapshot_json'),
     lastUsedAt: timestamp('last_used_at'),
     lastError: text('last_error'),

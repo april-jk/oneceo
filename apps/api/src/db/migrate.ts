@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   orchestrator_session_id TEXT,
   server_name TEXT,
   enabled_tools JSONB,
+  session_config_json JSONB,
   definition_snapshot_json JSONB,
   last_used_at TIMESTAMP,
   last_error TEXT,
@@ -109,6 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth
 ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
+  ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
 
 ALTER TABLE IF EXISTS connector_auth_requests

@@ -21,7 +21,7 @@ export const POSTGRES_DSN_TEMPLATE =
 export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   github: {
     intro:
-      "连接器在 sandbox 外完成配置，进入 sandbox 后只消费已保存的授权。GitHub 推荐优先使用 OAuth；如果你已经有 Personal Access Token，也可以直接粘贴后保存。",
+      "连接器在 sandbox 外完成配置，进入 sandbox 后只消费已保存的授权。GitHub 默认推荐一键 OAuth，平台会自动生成默认 profile；只有在你明确需要 PAT 时再打开高级配置。",
     quickLinks: [
       {
         label: "GitHub Token Page",
@@ -42,6 +42,7 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
     tips: [
       "如果仓库在组织下并启用了 SSO，token 创建后可能还需要额外授权。",
       "手动保存 token 时会加密存储；留空不会覆盖当前 secret，sandbox 内部会自动复用。",
+      "当前版本的仓库访问范围由 GitHub OAuth 或 PAT 的权限决定，不在 oneceo 内重复配置仓库白名单。",
     ],
   },
   slack: {

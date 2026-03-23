@@ -15,6 +15,11 @@ import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
+import { githubConnectorRepositoryService } from './github-connector-repository-service';
+
+export type SessionConnectorConfig = {
+  repositories?: string[];
+};
 
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
@@ -35,6 +40,7 @@ export type SessionConnectorStatus = {
   attachedProfileName?: string | null;
   availableProfilesCount?: number;
   enabledTools?: string[];
+  authorizedRepositories?: string[];
   lastUsedAt?: string | null;
   lastError?: string | null;
   serverName?: string | null;
@@ -48,6 +54,56 @@ type RuntimeContext = {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function pickObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function normalizeRepositoryFullName(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  const parts = text
+    .split('/')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (parts.length !== 2) return '';
+  return `${parts[0]}/${parts[1]}`;
+}
+
+function repositoryKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeGithubRepositories(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeRepositoryFullName(item);
+    if (!normalized) continue;
+    const key = repositoryKey(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeSessionConfig(
+  connectorKey: ConnectorKey,
+  value: unknown
+): SessionConnectorConfig | null {
+  const config = pickObject(value);
+  if (connectorKey !== 'github') {
+    return Object.keys(config).length > 0 ? (config as SessionConnectorConfig) : null;
+  }
+  const repositories = normalizeGithubRepositories(config.repositories);
+  if (repositories.length === 0) {
+    return null;
+  }
+  return { repositories };
 }
 
 function toIso(value: unknown): string | null {
@@ -276,6 +332,7 @@ export class SessionConnectorService {
       desiredState: string;
       runtimeStatus: string;
       enabledTools?: unknown;
+      sessionConfigJson?: unknown;
       lastUsedAt: Date | null;
       lastError: string | null;
       serverName: string | null;
@@ -333,6 +390,9 @@ export class SessionConnectorService {
       enabledTools: Array.isArray(input.binding?.enabledTools)
         ? input.binding?.enabledTools.map((item) => String(item))
         : [],
+      authorizedRepositories: normalizeGithubRepositories(
+        pickObject(input.binding?.sessionConfigJson).repositories
+      ),
       lastUsedAt: toIso(input.binding?.lastUsedAt),
       lastError: input.binding?.lastError || input.account.lastError || null,
       serverName,
@@ -387,6 +447,7 @@ export class SessionConnectorService {
     connectorKey: ConnectorKey,
     profileId: string,
     enabledTools: string[] = [],
+    sessionConfig: Record<string, unknown> = {},
     orchestratorSessionId?: string
   ) {
     await connectorStorageBootstrap.ensureReady();
@@ -399,6 +460,18 @@ export class SessionConnectorService {
     if (!profileMaterial || profileMaterial.connectorKey !== connectorKey) {
       throw new Error('连接器 profile 不存在或不属于当前连接器');
     }
+    const normalizedSessionConfig = normalizeSessionConfig(connectorKey, sessionConfig);
+    if (connectorKey === 'github') {
+      const repositories = normalizedSessionConfig?.repositories || [];
+      if (repositories.length === 0) {
+        throw new Error('GitHub 会话授权至少需要选择一个仓库');
+      }
+      await githubConnectorRepositoryService.assertRepositoriesAccessible(
+        userId,
+        profileId,
+        repositories
+      );
+    }
     if (profileMaterial.authStatus !== 'authorized') {
       await taskSessionConnectorBindingDAO.upsert({
         taskSessionId,
@@ -409,6 +482,7 @@ export class SessionConnectorService {
         orchestratorSessionId: asText(orchestratorSessionId) || null,
         serverName: serverNameFor(connectorKey, taskSessionId),
         enabledTools,
+        sessionConfigJson: normalizedSessionConfig,
         definitionSnapshotJson: catalogItem,
         lastError: '连接器尚未完成授权或配置',
       });
@@ -422,6 +496,7 @@ export class SessionConnectorService {
     connectorRegistry.materializeRuntimeConfig({
       connectorKey,
       account: profileMaterial,
+      sessionConfig: normalizedSessionConfig,
     });
 
     await taskSessionConnectorBindingDAO.upsert({
@@ -433,6 +508,7 @@ export class SessionConnectorService {
       orchestratorSessionId: runtime.orchestratorSessionId,
       serverName,
       enabledTools,
+      sessionConfigJson: normalizedSessionConfig,
       definitionSnapshotJson: catalogItem,
       lastError: null,
     });
@@ -467,6 +543,7 @@ export class SessionConnectorService {
       orchestratorSessionId: runtime.orchestratorSessionId,
       serverName,
       enabledTools,
+      sessionConfigJson: normalizedSessionConfig,
       definitionSnapshotJson: catalogItem,
       lastError: null,
     });
@@ -494,6 +571,7 @@ export class SessionConnectorService {
       orchestratorSessionId: asText(orchestratorSessionId) || runtime?.orchestratorSessionId || null,
       serverName,
       enabledTools: [],
+      sessionConfigJson: null,
       definitionSnapshotJson: connectorRegistry.getCatalogItem(connectorKey),
       lastError: null,
     });
@@ -519,6 +597,7 @@ export class SessionConnectorService {
         orchestratorSessionId: runtime.orchestratorSessionId,
         serverName,
         enabledTools: [],
+        sessionConfigJson: null,
         lastError: removed ? null : '运行时仍保留已卸载的 MCP 服务',
       });
       if (!removed) {
@@ -553,6 +632,7 @@ export class SessionConnectorService {
           binding.connectorKey as ConnectorKey,
           profileId,
           Array.isArray(binding.enabledTools) ? binding.enabledTools.map((item: unknown) => String(item)) : [],
+          pickObject(binding.sessionConfigJson),
           orchestratorSessionId
         );
       } catch (error) {

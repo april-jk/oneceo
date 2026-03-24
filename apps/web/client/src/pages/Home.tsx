@@ -1734,6 +1734,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       const event = toRecord(metadata.event);
       const item = toRecord(event.item);
+      const executorLabel = getExecutorDisplayName(metadata);
       const eventType = asText(metadata.eventType).toLowerCase();
       const itemType =
         asText(metadata.itemType).toLowerCase() ||
@@ -1746,7 +1747,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         (message.content || "").trim();
 
       if (eventType === "turn.started") {
-        pushProgress("Codex 开始执行", "execution", message.messageKey);
+        pushProgress(`${executorLabel} 开始执行`, "execution", message.messageKey);
         continue;
       }
 
@@ -1757,7 +1758,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "capsule",
-            label: errorMessage || "Codex 执行失败",
+            label: errorMessage || `${executorLabel} 执行失败`,
             tone: "error",
             messageKey: message.messageKey,
           });
@@ -1766,7 +1767,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         flushProgress();
         items.push({
           kind: "capsule",
-          label: "Codex 执行完成",
+          label: `${executorLabel} 执行完成`,
           tone: "execution",
           messageKey: message.messageKey,
         });
@@ -1779,7 +1780,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           kind: "capsule",
           label:
             content ||
-            (eventType === "turn.interrupted" ? "Codex 执行已中断" : "Codex 执行失败"),
+            (eventType === "turn.interrupted" ? `${executorLabel} 执行已中断` : `${executorLabel} 执行失败`),
           tone: "error",
           messageKey: message.messageKey,
         });
@@ -1790,7 +1791,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         if (!content) {
           continue;
         }
-        pushCodexExplanation(content, message.messageKey, "Codex", {
+        pushCodexExplanation(content, message.messageKey, executorLabel, {
           collapsedMarkdown: extractCodexPlanCollapsedMarkdown(content),
         });
         continue;
@@ -1992,14 +1993,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const approvalText =
           asText(metadata.approvalText) ||
           content ||
-          "Codex 需要进一步授权后才能继续执行。";
+          `${executorLabel} 需要进一步授权后才能继续执行。`;
         items.push({
           kind: "capsule",
           label: "需要授权",
           tone: "system",
           messageKey: message.messageKey,
         });
-        pushAgentMarkdown(approvalText, message.messageKey, "Codex");
+        pushAgentMarkdown(approvalText, message.messageKey, executorLabel);
         continue;
       }
 
@@ -2059,12 +2060,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         isLikelyMarkdownText(content)
       ) {
         if (itemType === "reasoning") {
-          pushCodexExplanation(content, message.messageKey, "Codex");
+          pushCodexExplanation(content, message.messageKey, executorLabel);
         } else {
-          pushAgentMarkdown(content, message.messageKey, "Codex");
+          pushAgentMarkdown(content, message.messageKey, executorLabel);
         }
       } else {
-        pushAgentPlain(content, "Codex", message.messageKey);
+        pushAgentPlain(content, executorLabel, message.messageKey);
       }
       continue;
     }
@@ -4516,9 +4517,20 @@ function OpencodeToolCard({
 function getAgentName(agent?: string) {
   const nameMap: Record<string, string> = {
     system: "系统",
+    altus: "Altus",
     intent_recognition: "意图识别",
     planning: "任务规划",
     execution_plan: "执行计划",
   };
   return agent ? nameMap[agent] || agent : "智能体";
+}
+
+function getExecutorDisplayName(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const executor = asText(metadata.executor).toLowerCase();
+  if (executor === "codex") return "Codex";
+  if (executor === "altus") return "Altus";
+  if (executor === "claudecode") return "ClaudeCode";
+  if (executor === "opencode") return "OpenCode";
+  return "执行器";
 }

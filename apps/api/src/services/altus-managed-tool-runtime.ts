@@ -3,7 +3,8 @@ import { e2bConnector } from '../connectors/e2b-connector';
 
 type ManagedToolResult =
   | { type: 'result'; content: string }
-  | { type: 'ask_user'; question: string; options?: string[] };
+  | { type: 'ask_user'; question: string; options?: string[] }
+  | { type: 'complete'; summary: string; verification?: string[] };
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -209,6 +210,21 @@ export class AltusManagedToolRuntime {
         type: 'ask_user',
         question,
         options: options.length > 0 ? options : undefined,
+      };
+    }
+
+    if (toolName === 'complete_task') {
+      const summary = asText(rawArgs.summary);
+      if (!summary) {
+        throw new Error('complete_task_missing_summary');
+      }
+      const verification = Array.isArray(rawArgs.verification)
+        ? rawArgs.verification.map((item) => asText(item)).filter(Boolean).slice(0, 8)
+        : [];
+      return {
+        type: 'complete',
+        summary,
+        verification: verification.length > 0 ? verification : undefined,
       };
     }
 

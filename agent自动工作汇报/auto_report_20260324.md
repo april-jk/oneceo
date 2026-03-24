@@ -212,3 +212,32 @@
   - coordinator 定向测试 `3/3` 通过
   - Altus managed 相关组合测试 `12/12` 通过
   - 类型检查过滤 `rg` 无命中，说明这轮相关文件没有新增显性 TypeScript 报错
+
+## 新增工作记录：Altus managed 工具原子消息交互优化
+
+- 继续收紧了 Altus managed 对话页中的工具调用显示，目标是把其表现从“大块执行卡片”调整为真正的原子消息。
+- 已更新设计文档 `docs/agent研发文档/Altus接管模式参照Suna重构设计/07_前端对话页与交互状态.md`：
+  - 原子消息主形态应为紧凑胶囊/芯片
+  - hover 时展示工具用途、目标对象、输入/输出摘要与失败原因
+  - hover 层只展示高价值摘要，不直接倾倒完整 JSON
+- 已在 `apps/web/client/src/pages/Home.tsx` 完成实现：
+  - `managed_tool` 主消息改为紧凑胶囊式按钮
+  - hover 使用 `HoverCard` 展示更完整的介绍信息
+  - 点击仍保留原有 detail dialog，用于查看完整详情
+  - 新增 `getManagedToolDisplayName(...)`
+  - 新增 `formatManagedToolPreview(...)`
+  - 重写 `formatManagedToolDetail(...)`，把原 JSON 详情改为更可读的结构化文本
+- 当前工具原子消息在主流中只保留：
+  - 工具名
+  - 状态
+  - 摘要
+- hover 层补充：
+  - 中文动作名称
+  - 原始工具名
+  - 结果摘要
+  - 更多信息预览
+  - 点击查看完整详情提示
+- 已执行：
+  - `pnpm --filter web check`
+- 结果：
+  - 前端类型检查通过

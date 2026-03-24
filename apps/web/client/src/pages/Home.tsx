@@ -43,6 +43,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -4573,6 +4578,7 @@ function ManagedToolCard({
   item: Extract<ChatItem, { kind: "managed_tool" }>;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
+  const displayName = getManagedToolDisplayName(item.toolName);
   const icon =
     item.toolName === "shell_execute"
       ? Terminal
@@ -4591,15 +4597,34 @@ function ManagedToolCard({
   const toneClass =
     item.status === "failed"
       ? "border-rose-200 bg-rose-50 text-rose-700"
-      : item.status === "completed"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-        : "border-border/70 bg-muted/50 text-foreground/85";
+        : item.status === "completed"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-border/70 bg-muted/50 text-foreground/85";
   const statusLabel =
     item.status === "failed"
       ? "失败"
       : item.status === "completed"
         ? "已完成"
         : "进行中";
+  const hoverPreview = buildDetailPreview(item.detail || item.summary || item.toolName, 5, 96);
+  const summaryText = item.summary?.trim();
+  const previewText =
+    formatManagedToolPreview(item.toolName, item.metadata) ||
+    hoverPreview.preview ||
+    summaryText ||
+    "";
+  const statusToneClass =
+    item.status === "failed"
+      ? "border-rose-300/60 bg-rose-100/80 text-rose-700"
+      : item.status === "completed"
+        ? "border-emerald-300/60 bg-emerald-100/80 text-emerald-700"
+        : "border-border/70 bg-background/90 text-foreground/75";
+  const chipToneClass =
+    item.status === "failed"
+      ? "border-rose-200/80 bg-rose-50/80 text-rose-700 hover:bg-rose-50"
+      : item.status === "completed"
+        ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
+        : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
 
   return (
     <>
@@ -4609,35 +4634,89 @@ function ManagedToolCard({
         transition={{ duration: 0.18 }}
         className="w-full"
       >
-        <button
-          type="button"
-          onClick={() => setDetailOpen(true)}
-          className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition hover:bg-muted/40 ${toneClass}`}
-        >
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/80">
-            <Icon className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium leading-5">
-                {item.toolName}
+        <HoverCard openDelay={140} closeDelay={80}>
+          <HoverCardTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setDetailOpen(true)}
+              className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
+            >
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                <Icon className="h-3.5 w-3.5" />
               </span>
-              <span className="rounded-full border border-current/15 px-2 py-0.5 text-[10px] font-medium">
-                {statusLabel}
+              <span className="min-w-0 flex items-center gap-2 overflow-hidden">
+                <span className="shrink-0 text-[11px] font-medium leading-5">
+                  {displayName}
+                </span>
+                <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                  {statusLabel}
+                </span>
+                {summaryText ? (
+                  <span className="truncate text-[11px] leading-5 opacity-75">
+                    {summaryText}
+                  </span>
+                ) : null}
               </span>
-            </div>
-            {item.summary ? (
-              <div className="mt-1 truncate text-[12px] leading-5 opacity-80">
-                {item.summary}
+            </button>
+          </HoverCardTrigger>
+          <HoverCardContent
+            align="start"
+            side="top"
+            className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+          >
+            <div className="space-y-0 border-b border-current/10 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium leading-5">
+                      {displayName}
+                    </span>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                      {statusLabel}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] leading-5 opacity-70">
+                    {item.toolName}
+                  </div>
+                </div>
               </div>
-            ) : null}
-          </div>
-        </button>
+              {summaryText ? (
+                <p className="mt-3 text-[12px] leading-5 opacity-85">
+                  {summaryText}
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-3 px-4 py-3">
+              <div className="space-y-1">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                  结果摘要
+                </div>
+                <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
+                  {previewText}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                  更多信息
+                </div>
+                <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
+                  {hoverPreview.preview}
+                </p>
+              </div>
+              <div className="text-[11px] leading-5 opacity-60">
+                点击消息可查看完整详情
+              </div>
+            </div>
+          </HoverCardContent>
+        </HoverCard>
       </motion.div>
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{item.toolName}</DialogTitle>
+            <DialogTitle>{displayName}</DialogTitle>
             <DialogDescription>Altus 原子工具消息详情</DialogDescription>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
@@ -4681,6 +4760,27 @@ function isManagedExecutionEvent(metadataRaw: unknown) {
   );
 }
 
+function getManagedToolDisplayName(toolName: string) {
+  switch (toolName) {
+    case "shell_execute":
+      return "命令执行";
+    case "write_file":
+      return "写入文件";
+    case "read_file":
+      return "读取文件";
+    case "list_directory":
+      return "列出目录";
+    case "search_code":
+      return "代码搜索";
+    case "ask_user":
+      return "请求澄清";
+    case "complete_task":
+      return "完成任务";
+    default:
+      return toolName || "工具调用";
+  }
+}
+
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
@@ -4704,20 +4804,114 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   if (toolName === "ask_user") {
     return asText(args.question) || "请求用户澄清";
   }
+  if (toolName === "complete_task") {
+    return asText(args.summary) || "输出最终完成总结";
+  }
   return asText(metadata.content) || toolName;
+}
+
+function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = toRecord(metadata.outputPreview);
+  const error = asText(metadata.error);
+
+  if (error) return error;
+
+  if (toolName === "shell_execute") {
+    const stdout = asText(output.stdout);
+    const stderr = asText(output.stderr);
+    return stdout || stderr || asText(args.command) || "执行命令";
+  }
+
+  if (toolName === "write_file") {
+    const bytes = asText(output.bytes);
+    return bytes ? `写入 ${bytes} bytes` : asText(output.path) || "已写入目标文件";
+  }
+
+  if (toolName === "read_file") {
+    return asText(output.content) || asText(output.path) || "已读取目标文件";
+  }
+
+  if (toolName === "list_directory") {
+    return asText(output.output) || asText(output.path) || "已返回目录内容";
+  }
+
+  if (toolName === "search_code") {
+    return asText(output.output) || asText(args.query) || "已返回搜索结果";
+  }
+
+  if (toolName === "complete_task") {
+    return asText(args.summary) || "任务已完成";
+  }
+
+  return asText(metadata.outputPreview) || asText(metadata.content);
 }
 
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const detail = {
-    toolName,
-    arguments: toRecord(metadata.arguments),
-    outputPreview: asText(metadata.outputPreview) || undefined,
-    error: asText(metadata.error) || undefined,
+  const args = toRecord(metadata.arguments);
+  const output = toRecord(metadata.outputPreview);
+  const error = asText(metadata.error);
+  const lines: string[] = [];
+  const pushLine = (label: string, value: unknown) => {
+    const text = asText(value);
+    if (text) {
+      lines.push(`${label}: ${text}`);
+    }
   };
-  try {
-    return JSON.stringify(detail, null, 2);
-  } catch {
-    return `${toolName}`;
+
+  lines.push(`工具: ${getManagedToolDisplayName(toolName)} (${toolName})`);
+
+  if (toolName === "shell_execute") {
+    pushLine("命令", args.command);
+    pushLine("目录", output.cwd || args.cwd);
+    pushLine("退出码", output.exitCode);
+    pushLine("输出", output.stdout);
+    pushLine("错误输出", output.stderr);
+  } else if (toolName === "write_file") {
+    pushLine("目标文件", args.path || output.path);
+    pushLine("写入大小", output.bytes);
+  } else if (toolName === "read_file") {
+    pushLine("目标文件", args.path || output.path);
+    pushLine("内容预览", output.content);
+  } else if (toolName === "list_directory") {
+    pushLine("目标目录", args.path || output.path);
+    pushLine("递归深度", output.depth || args.depth);
+    pushLine("结果预览", output.output);
+  } else if (toolName === "search_code") {
+    pushLine("搜索词", args.query);
+    pushLine("搜索范围", args.path || output.path);
+    pushLine("结果预览", output.output);
+  } else if (toolName === "ask_user") {
+    pushLine("问题", args.question);
+    if (Array.isArray(args.options)) {
+      const options = (args.options as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean)
+        .join(" / ");
+      pushLine("建议选项", options);
+    }
+  } else if (toolName === "complete_task") {
+    pushLine("完成摘要", args.summary);
+    if (Array.isArray(args.verification)) {
+      const checks = (args.verification as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean)
+        .join(" / ");
+      pushLine("验证", checks);
+    }
+  } else {
+    pushLine("摘要", asText(metadata.content));
   }
+
+  if (error) {
+    pushLine("失败原因", error);
+  }
+
+  if (lines.length === 1) {
+    pushLine("摘要", formatManagedToolSummary(toolName, metadata));
+  }
+
+  return lines.join("\n");
 }

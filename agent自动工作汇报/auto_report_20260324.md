@@ -57,6 +57,10 @@
   - 现已在 `apps/api/src/services/altus-managed-prompt-service.ts` 强制 Altus 身份口径
   - 现已在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 为 managed 事件显式标记 `executor=altus`
   - 现已在 `apps/web/client/src/pages/Home.tsx` 按执行器动态渲染，不再把 managed 事件硬编码成 `Codex`
+- 继续收口了 Altus managed 的原子消息：
+  - 同一个 `toolCallId` 现在会用稳定 `messageKey` 做 started/completed/failed 原位更迭
+  - 聊天页新增 Altus 专用紧凑工具卡片，不再把 managed 工具事件继续塞进 direct mode 的通用执行器样式
+  - `artifact_updated` 改成轻量 review 胶囊，避免混入普通正文
 
 ## 本轮验证
 
@@ -68,3 +72,24 @@
 - 追加验证：
   - `DATABASE_URL=... pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "altus-managed|task-session-run|taskCreationManagedRun|useTaskCreationAgent"` 无新增命中
   - 说明本轮新增的 managed mode 文件没有留下新的显性 TypeScript 报错
+
+## 新增工作记录：LLMAPI 协议兼容层
+
+- 排查了当前平台实际使用的 LLM 上游口径，确认代码和文档里仍混用 `hone`、Cloudflare AI Gateway 与 `llmapi.oneceo.ai`。
+- 本地实测确认：
+  - `llmapi.oneceo.ai` 的 OpenAI-compatible `chat/completions` 当前返回 `503`
+  - `llmapi.oneceo.ai` 的 Anthropic 原生 `v1/messages` 可正常返回 `200`
+- 基于以上结论，新建设计文档 `docs/agent研发文档/LLMAPI统一供应商与协议兼容层设计.md`。
+- 设计结论：
+  - 后续统一使用 `llmapi.oneceo.ai` 作为唯一 LLM 供应商入口
+  - 在 `.env` 中新增上游协议类型配置：`openai` / `anthropic`
+  - 平台内部继续统一维持 OpenAI-compatible 调用口径，由 `llm-proxy` 负责向 Anthropic 原生协议做转换
+- 已完成代码实现：
+  - `apps/api/src/connectors/llm-proxy-connector.ts` 新增 `LLM_PROXY_UPSTREAM_API_TYPE`
+  - `anthropic` 模式下将 `/v1/chat/completions` 转换为上游 `/v1/messages`，并把响应映射回 OpenAI-compatible `chat.completion`
+  - `apps/api/src/agents/base-agent.ts` 默认改走本地 `llm-proxy`，避免后端内部链路直连旧上游
+  - `apps/api/src/services/sandbox-agent-provision-service.ts` 与 `apps/api/src/scripts/e2b-sandbox-verify.sh` 已支持按 `openai|anthropic` 分支验证
+  - `apps/.env` / `apps/.env.example` 已将 `LLM_PROXY_UPSTREAM_BASE_URL` 统一切到 `https://llmapi.oneceo.ai`
+- 本轮实测结果：
+  - `anthropic` 模式下，经新兼容层请求 `POST /v1/chat/completions` 返回 `200`，并成功映射为 OpenAI-compatible 响应
+  - `openai` 模式下，`GET /v1/models` 返回 `200`，`POST /v1/chat/completions` 仍返回 `503`，与上游现状一致

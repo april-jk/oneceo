@@ -2521,10 +2521,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         asText(envelope.message) ||
         asText(envelope.text);
 
+      const toolCallId = asText(payload.toolCallId) || asText(envelope.toolCallId);
+      const isManagedToolEvent =
+        eventType === 'tool_call_started' ||
+        eventType === 'tool_call_progress' ||
+        eventType === 'tool_call_completed' ||
+        eventType === 'tool_call_failed';
       const messageKey =
         asText(payload.messageKey) ||
         asText(envelope.messageKey) ||
-        (runId ? `managed:${runId}:${eventType}` : `managed:${eventType}`);
+        (isManagedToolEvent && runId && toolCallId
+          ? `managed:${runId}:tool:${toolCallId}`
+          : runId
+            ? `managed:${runId}:${eventType}`
+            : `managed:${eventType}`);
 
       const baseMetadata: Record<string, unknown> = {
         ...payload,
@@ -2535,6 +2545,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         messageKey,
         executor: 'altus',
         executionMode: 'managed',
+        toolCallId: toolCallId || undefined,
       };
 
       let nextMessage: AgentMessage | null = null;

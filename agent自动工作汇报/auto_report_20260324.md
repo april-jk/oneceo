@@ -184,3 +184,31 @@
   - `todos.md`
   - 标注日期 `2026-03-24`
   - 管理文档为 `LLMAPI统一供应商与协议兼容层设计.md`
+
+## 新增工作记录：Altus managed 闭环终止修复
+
+- 继续排查发现 Altus managed 仍会在“执行了一次工具后，模型输出一句说明性文本”时直接结束 run。
+- 根因在 `apps/api/src/services/altus-run-coordinator.ts`：
+  - 旧逻辑把 `tool_calls.length === 0` 直接判定为正常完成
+  - 这会导致模型只要输出“我开始创建 2048 游戏”之类的普通正文，run 就被错误收尾
+- 参照 `suna` 的显式 terminating tool 模式，完成了以下调整：
+  - 在 `apps/api/src/services/altus-managed-shared.ts` 新增 `complete_task` tool definition
+  - 在 `apps/api/src/services/altus-managed-tool-runtime.ts` 新增 `complete_task` 运行结果类型 `complete`
+  - 在 `apps/api/src/services/altus-managed-prompt-service.ts` 明确要求：
+    - 普通 assistant 文本不能结束 managed run
+    - 只有在实际完成并验证后才能调用 `complete_task`
+  - 在 `apps/api/src/services/altus-run-coordinator.ts` 改为：
+    - `complete_task` 是唯一正常完成信号
+    - 遇到普通 assistant 文本但没有 tool calls 时，不再直接完成
+    - coordinator 会把该响应作为中间轮次，并追加系统提醒继续调用工具或显式 `complete_task`
+- 补了两条关键单元测试到 `apps/api/tests/altus-run-coordinator.test.ts`：
+  - “工具轮次后必须通过 `complete_task` 才能完成”
+  - “普通 assistant 文本不会自动完成，会继续下一轮直到 `complete_task`”
+- 已执行：
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsx --test tests/altus-run-coordinator.test.ts`
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsx --test tests/llm-proxy-connector.test.ts tests/altus-managed-run-entry.service.test.ts tests/altus-run-lifecycle.service.test.ts tests/altus-run-coordinator.test.ts`
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "altus-run-coordinator|altus-managed-tool-runtime|altus-managed-shared|altus-managed-prompt-service|altus-run-coordinator.test"`
+- 结果：
+  - coordinator 定向测试 `3/3` 通过
+  - Altus managed 相关组合测试 `12/12` 通过
+  - 类型检查过滤 `rg` 无命中，说明这轮相关文件没有新增显性 TypeScript 报错

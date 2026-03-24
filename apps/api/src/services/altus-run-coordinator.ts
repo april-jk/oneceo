@@ -73,6 +73,17 @@ export class AltusRunCoordinator {
     };
   }
 
+  private buildCompletionMessage(summary: string, verification?: string[]) {
+    const normalizedSummary = truncate(asText(summary), 8000) || '任务已处理完成。';
+    const checks = Array.isArray(verification)
+      ? verification.map((item) => truncate(asText(item), 500)).filter(Boolean).slice(0, 8)
+      : [];
+    if (checks.length === 0) {
+      return normalizedSummary;
+    }
+    return `${normalizedSummary}\n\n验证:\n${checks.map((item) => `- ${item}`).join('\n')}`;
+  }
+
   private async runModelLoop(state: AltusRunState, signal: AbortSignal) {
     if (!state.workspaceRoot || !state.sandboxId) {
       throw new Error('managed_run_missing_sandbox_context');
@@ -112,23 +123,19 @@ export class AltusRunCoordinator {
       const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
 
       if (toolCalls.length === 0) {
-        const finalContent = assistantContent || '任务已处理完成。';
-        await this.setupService.persistTimelineMessage({
-          sessionId: state.input.sessionId,
-          role: 'agent',
-          messageType: 'assistant_message',
-          content: finalContent,
-          metadata: {
-            agent: 'assistant',
-            runId: state.input.runId,
-          },
-          messageKey: `managed:${state.input.runId}:assistant_final`,
+        messages.push({
+          role: 'assistant',
+          content: assistantContent || '',
         });
-        await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'assistant_message', {
-          content: finalContent,
-          messageKey: `managed:${state.input.runId}:assistant_final`,
+        messages.push({
+          role: 'user',
+          content: [
+            'System reminder: plain assistant text does not complete a managed run.',
+            'If work remains, continue by calling the required tools.',
+            'If the task is truly finished and verified, call complete_task with a concise summary and verification points.',
+          ].join(' '),
         });
-        return { outcome: 'completed' as const, content: finalContent };
+        continue;
       }
 
       messages.push({
@@ -180,6 +187,39 @@ export class AltusRunCoordinator {
               question: result.question,
               options: result.options,
             };
+          }
+
+          if (result.type === 'complete') {
+            const finalContent = this.buildCompletionMessage(result.summary, result.verification);
+            await this.setupService.persistTimelineMessage({
+              sessionId: state.input.sessionId,
+              role: 'agent',
+              messageType: 'assistant_message',
+              content: finalContent,
+              metadata: {
+                agent: 'assistant',
+                runId: state.input.runId,
+                verification: result.verification,
+              },
+              messageKey: `managed:${state.input.runId}:assistant_final`,
+            });
+            await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_completed', {
+              toolName,
+              content: `工具 ${toolName} 已完成`,
+              toolCallId: toolCall.id,
+              outputPreview: truncate(
+                JSON.stringify({
+                  summary: result.summary,
+                  verification: result.verification,
+                }),
+                4000
+              ),
+            });
+            await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'assistant_message', {
+              content: finalContent,
+              messageKey: `managed:${state.input.runId}:assistant_final`,
+            });
+            return { outcome: 'completed' as const, content: finalContent };
           }
 
           messages.push({

@@ -65,13 +65,15 @@ export class AltusManagedPromptService {
       '- Keep edits minimal and directly tied to the user request.',
       '- When running shell commands, explain only the essential outcome in your final reply.',
       '- If a command fails, inspect the real error and adjust instead of guessing.',
+      '- Do not end the task with a plain assistant message. To finish normally, you must call complete_task after the work is done and verified.',
+      '- If the task needs workspace changes, do the tool calls first, verify the result, then call complete_task.',
       '',
       '# Clarification rules',
       '- If critical requirements are missing, call ask_user with one precise question.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '',
       '# Completion rules',
-      '- When the task is complete, provide a concise assistant message summarizing what changed and what was verified.',
+      '- Use complete_task with a concise summary and optional verification points once the task is actually complete.',
       '- Do not emit hidden chain-of-thought or internal planning text.',
     ].join('\n');
   }

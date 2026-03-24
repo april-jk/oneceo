@@ -197,5 +197,27 @@ export function buildManagedToolDefinitions() {
         ),
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'complete_task',
+        description:
+          'Finish the managed run only after the required workspace changes are done and verified.',
+        parameters: objectSchema(
+          {
+            summary: {
+              type: 'string',
+              description: 'Short user-facing summary of what was completed.',
+            },
+            verification: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional short verification points, such as commands run or files checked.',
+            },
+          },
+          ['summary']
+        ),
+      },
+    },
   ];
 }

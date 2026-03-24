@@ -115,6 +115,7 @@ export function SettingsPanel({
     );
   }, [executor, altusMode, codexExecutionMode]);
 
+  const shouldShowExecutorSettings = altusMode === 'sandbox';
   const shouldShowCodexLlmSettings = executor === 'codex' && altusMode === 'sandbox';
 
   useEffect(() => {
@@ -345,29 +346,6 @@ export function SettingsPanel({
 
               {/* Model Tab */}
               <TabsContent value="model" className="space-y-8 mt-0">
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <div>
-                    <Label className="text-sm font-medium">{t('settings.executorLabel')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.executorDescription')}</p>
-                  </div>
-                  <Select value={executor} onValueChange={setExecutor}>
-                    <SelectTrigger className="w-full max-w-xs rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      <SelectItem value="opencode" className="rounded-md">
-                        {t('settings.executorOpencode')}
-                      </SelectItem>
-                      <SelectItem value="claudecode" className="rounded-md">
-                        {t('settings.executorClaudecode')}
-                      </SelectItem>
-                      <SelectItem value="codex" className="rounded-md">
-                        {t('settings.executorCodex')}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
                 <div className="space-y-4">
                   <div>
                     <Label className="text-sm font-medium">{t('settings.altusControlLabel')}</Label>
@@ -386,8 +364,34 @@ export function SettingsPanel({
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
 
-                  {executor === 'codex' && altusMode === 'sandbox' ? (
+                {shouldShowExecutorSettings ? (
+                  <div className="space-y-4 border-t border-border/60 pt-6">
+                    <div>
+                      <Label className="text-sm font-medium">{t('settings.executorLabel')}</Label>
+                      <p className="text-sm text-muted-foreground">{t('settings.executorDescription')}</p>
+                    </div>
+                    <Select value={executor} onValueChange={setExecutor}>
+                      <SelectTrigger className="w-full max-w-xs rounded-xl">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="opencode" className="rounded-md">
+                          {t('settings.executorOpencode')}
+                        </SelectItem>
+                        <SelectItem value="claudecode" className="rounded-md">
+                          {t('settings.executorClaudecode')}
+                        </SelectItem>
+                        <SelectItem value="codex" className="rounded-md">
+                          {t('settings.executorCodex')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {executor === 'codex' && altusMode === 'sandbox' ? (
                     <div className="space-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
                       <div>
                         <Label className="text-sm font-medium">{t('settings.codexModeLabel')}</Label>
@@ -503,8 +507,7 @@ export function SettingsPanel({
                         </div>
                       </div>
                     </div>
-                  ) : null}
-                </div>
+                ) : null}
               </TabsContent>
 
               {/* Account Tab */}

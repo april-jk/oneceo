@@ -1,5 +1,5 @@
 import { getApiBaseUrl, getTaskCreationWsUrl } from "@/lib/runtime-config";
-import { buildClientIdentityHeaders } from "@/lib/client-identity";
+import { buildClientIdentityHeaders, getClientUserId } from "@/lib/client-identity";
 
 export type TaskCreationSessionSummary = {
   id: string;
@@ -68,6 +68,26 @@ export type TaskCreationRuntimeStatus = {
   codexRestoreSourceKey?: string;
   previousExecutorSessionId?: string;
   codexRestoreFailureReason?: string;
+};
+
+export type TaskCreationManagedRunSummary = {
+  id: string;
+  runId?: string;
+  sessionId: string;
+  status?: string;
+  model?: string | null;
+  stopReason?: string | null;
+  streamUrl?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string | null;
+  sequence?: number | null;
+};
+
+export type StartTaskCreationManagedRunInput = {
+  content: string;
+  messageKey?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type TaskCreationUploadedAttachment = {
@@ -488,6 +508,92 @@ export async function getTaskCreationSession(sessionId: string): Promise<TaskCre
     throw new Error(`request failed: ${response.status}`);
   }
   const result = (await response.json()) as { data?: TaskCreationSessionDetail };
+  return result?.data || null;
+}
+
+export async function startTaskCreationManagedRun(
+  sessionId: string,
+  input: StartTaskCreationManagedRunInput
+): Promise<TaskCreationManagedRunSummary> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/sessions/${safeSessionId}/runs`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input || {}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary };
+  if (!result?.data) {
+    throw new Error("managed run empty");
+  }
+  return result.data;
+}
+
+export async function getLatestTaskCreationManagedRun(
+  sessionId: string
+): Promise<TaskCreationManagedRunSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/sessions/${safeSessionId}/runs/latest`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+    cache: 'no-store',
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary | null };
+  return result?.data || null;
+}
+
+export function getTaskCreationManagedRunStreamUrl(
+  runId: string,
+  options?: { afterSequence?: number | null; clientId?: string }
+): string {
+  const safeRunId = encodeURIComponent(runId);
+  const params = new URLSearchParams();
+  if (typeof options?.afterSequence === "number" && Number.isFinite(options.afterSequence) && options.afterSequence > 0) {
+    params.set("afterSequence", String(Math.floor(options.afterSequence)));
+  }
+  if (options?.clientId) {
+    params.set("clientId", options.clientId);
+  }
+  const userId = getClientUserId();
+  if (userId) {
+    params.set("userId", userId);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return `${getApiBaseUrl()}/api/altus-managed/runs/${safeRunId}/stream${suffix}`;
+}
+
+export async function stopTaskCreationManagedRun(
+  runId: string,
+  options?: { reason?: string; clientMessageKey?: string }
+): Promise<TaskCreationManagedRunSummary | null> {
+  const safeRunId = encodeURIComponent(runId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/runs/${safeRunId}/stop`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      reason: options?.reason || undefined,
+      clientMessageKey: options?.clientMessageKey || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary | null };
   return result?.data || null;
 }
 

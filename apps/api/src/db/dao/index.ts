@@ -10,3 +10,4 @@ export * from './user-codex-runtime-config.dao';
 export * from './task-session-connector-binding.dao';
 export * from './connector-auth-request.dao';
 export * from './task-session-workspace-cache.dao';
+export * from './task-session-run.dao';

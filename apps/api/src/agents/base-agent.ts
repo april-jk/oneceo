@@ -55,6 +55,7 @@ export abstract class BaseAgent {
 
   constructor(config: AgentConfig) {
     this.config = config;
+    const localProxyBaseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1`;
 
     // 初始化 LLM
     const agentModel =
@@ -70,8 +71,7 @@ export abstract class BaseAgent {
       configuration: {
         baseURL:
           process.env.AGENT_OPENAI_BASE_URL ||
-          process.env.OPENAI_BASE_URL ||
-          'https://api.openai.com/v1',
+          localProxyBaseUrl,
       },
     });
     this.requestTimeoutMs = Number(process.env.LLM_TIMEOUT_MS || 90000);

@@ -61,6 +61,20 @@
   - 同一个 `toolCallId` 现在会用稳定 `messageKey` 做 started/completed/failed 原位更迭
   - 聊天页新增 Altus 专用紧凑工具卡片，不再把 managed 工具事件继续塞进 direct mode 的通用执行器样式
   - `artifact_updated` 改成轻量 review 胶囊，避免混入普通正文
+- 新增了 `11_Altus与Suna调度架构差异整改清单.md`：
+  - 把 Altus 当前实现与 `suna` 在 run 入口、coordinator、state、ownership/idempotency、manager assembly、tool execution engine、event writer、前端 hook 拆分上的差异逐点列清
+  - 每个整改点都补了 `oneceo 当前代码位置 + suna 参照代码位置 + 目标结构`
+  - 作为后续继续重构 Altus managed 的直接开发索引
+- 已开始按整改清单进入代码拆分：
+  - 新增 `apps/api/src/services/altus-managed-run-entry-service.ts`
+  - 新增 `apps/api/src/services/altus-run-coordinator.ts`
+  - 新增 `apps/api/src/services/altus-run-state.ts`
+  - 新增 `apps/api/src/services/altus-run-lifecycle-service.ts`
+  - 新增 `apps/api/src/services/altus-run-event-writer.ts`
+  - 新增 `apps/api/src/services/altus-managed-setup-service.ts`
+  - 新增 `apps/api/src/services/altus-managed-shared.ts`
+  - `apps/api/src/services/altus-managed-run-service.ts` 已改为兼容出口，routes 无需变更
+  - 当前这轮目标是“先完成结构性拆分，不改变 managed API 形态”
 
 ## 本轮验证
 
@@ -72,6 +86,8 @@
 - 追加验证：
   - `DATABASE_URL=... pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "altus-managed|task-session-run|taskCreationManagedRun|useTaskCreationAgent"` 无新增命中
   - 说明本轮新增的 managed mode 文件没有留下新的显性 TypeScript 报错
+  - 本轮继续追加：
+    - `DATABASE_URL=... pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "altus-managed|altus-run|task-session-run|altusManaged"` 无新增命中
 
 ## 新增工作记录：LLMAPI 协议兼容层
 
@@ -93,3 +109,21 @@
 - 本轮实测结果：
   - `anthropic` 模式下，经新兼容层请求 `POST /v1/chat/completions` 返回 `200`，并成功映射为 OpenAI-compatible 响应
   - `openai` 模式下，`GET /v1/models` 返回 `200`，`POST /v1/chat/completions` 仍返回 `503`，与上游现状一致
+
+## 新增工作记录：Altus managed 单元测试
+
+- 为本轮拆出的 managed 后端服务补了定向单元测试：
+  - `apps/api/tests/altus-managed-run-entry.service.test.ts`
+  - `apps/api/tests/altus-run-lifecycle.service.test.ts`
+- 当前覆盖的关键分支：
+  - `startRun` 会创建 run、写入时间线、发送 `run_ack` 并启动 coordinator
+  - `stopRun` 在存在活动 controller 时会中断当前 run
+  - `markCompleted` 会更新 run 状态、会话生命周期并发送 `run_completed`
+  - `markFailed` 会写错误时间线并发送 `run_failed`
+  - `execute` 会在工具调用后继续收敛到最终 assistant 完成态
+  - `execute` 会在 `ask_user` 分支进入 `waiting_user`
+- 已执行：
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsx --test tests/altus-managed-run-entry.service.test.ts tests/altus-run-lifecycle.service.test.ts tests/altus-run-coordinator.test.ts`
+- 结果：
+  - `6/6` 通过
+  - 首次执行曾因未注入 `DATABASE_URL` 被仓库既有启动守卫拦截，补上测试环境变量后已正常通过

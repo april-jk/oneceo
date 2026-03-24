@@ -6,10 +6,51 @@ import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 type ProxyConfig = {
   upstreamBaseUrl: string;
   upstreamToken?: string | null;
+  upstreamApiType: 'openai' | 'anthropic';
   timeoutMs: number;
   maxRetries: number;
   retryDelayMs: number;
   retryJitterMs: number;
+};
+
+type OpenAiChatCompletionRequest = {
+  model?: string;
+  messages?: Array<{
+    role?: string;
+    content?: unknown;
+  }>;
+  max_tokens?: number;
+  temperature?: number;
+  stream?: boolean;
+};
+
+type AnthropicMessageRequest = {
+  model: string;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+  }>;
+  max_tokens: number;
+  temperature?: number;
+};
+
+type AnthropicMessageResponse = {
+  id?: string;
+  model?: string;
+  content?: Array<{
+    type?: string;
+    text?: string;
+  }>;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+  stop_reason?: string | null;
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string;
+  };
 };
 
 function toNumber(value: string | undefined, fallback: number): number {
@@ -35,9 +76,12 @@ function loadConfig(): ProxyConfig {
   if (!upstreamBaseUrl) {
     throw new Error('LLM_PROXY_UPSTREAM_BASE_URL is not configured');
   }
+  const apiTypeRaw = String(process.env.LLM_PROXY_UPSTREAM_API_TYPE || 'openai').trim().toLowerCase();
+  const upstreamApiType = apiTypeRaw === 'anthropic' ? 'anthropic' : 'openai';
   return {
     upstreamBaseUrl: upstreamBaseUrl.replace(/\/+$/, ''),
     upstreamToken: process.env.LLM_PROXY_UPSTREAM_API_KEY || null,
+    upstreamApiType,
     timeoutMs: Number(process.env.LLM_PROXY_TIMEOUT_MS || 60000),
     maxRetries: Math.max(0, Number(process.env.LLM_PROXY_RETRIES || 1)),
     retryDelayMs: Math.max(0, Number(process.env.LLM_PROXY_RETRY_DELAY_MS || 250)),
@@ -132,7 +176,205 @@ function computeRetryDelayMs(attempt: number, retryDelayMs: number, retryJitterM
   return base + Math.floor(Math.random() * (retryJitterMs + 1));
 }
 
+function getHeaderValue(headers: IncomingHttpHeaders | Record<string, string>, key: string) {
+  const direct = (headers as Record<string, string | string[] | undefined>)[key];
+  if (typeof direct === 'string') return direct;
+  if (Array.isArray(direct) && direct[0]) return direct[0];
+  const lower = (headers as Record<string, string | string[] | undefined>)[key.toLowerCase()];
+  if (typeof lower === 'string') return lower;
+  if (Array.isArray(lower) && lower[0]) return lower[0];
+  return null;
+}
+
+function parseJsonBody<T>(body: unknown): T {
+  if (Buffer.isBuffer(body)) {
+    return JSON.parse(body.toString('utf-8')) as T;
+  }
+  if (typeof body === 'string') {
+    return JSON.parse(body) as T;
+  }
+  if (body && typeof body === 'object') {
+    return body as T;
+  }
+  throw new Error('Invalid JSON body');
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  return content
+    .map((item) => {
+      if (typeof item === 'string') return item;
+      if (!item || typeof item !== 'object') return '';
+      const typedItem = item as { type?: string; text?: string };
+      return typedItem.type === 'text' && typeof typedItem.text === 'string' ? typedItem.text : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
+  const model = String(payload.model || '').trim();
+  if (!model) {
+    throw new Error('Missing model');
+  }
+
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const normalizedMessages = messages
+    .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
+    .map((message) => ({
+      role: message.role as 'user' | 'assistant',
+      content: extractTextContent(message.content),
+    }));
+
+  if (normalizedMessages.length === 0) {
+    throw new Error('Missing messages');
+  }
+
+  return {
+    model,
+    messages: normalizedMessages,
+    max_tokens: Math.max(1, Number(payload.max_tokens || 1024)),
+    ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
+  };
+}
+
+function normalizeFinishReason(stopReason: string | null | undefined) {
+  if (stopReason === 'max_tokens') return 'length';
+  return 'stop';
+}
+
+function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
+  const outputText = Array.isArray(response.content)
+    ? response.content
+        .filter((item) => item?.type === 'text' && typeof item.text === 'string')
+        .map((item) => item.text as string)
+        .join('\n')
+    : '';
+  const promptTokens = Number(response.usage?.input_tokens || 0);
+  const completionTokens = Number(response.usage?.output_tokens || 0);
+  return {
+    id: response.id || `chatcmpl_${Date.now()}`,
+    object: 'chat.completion',
+    model: response.model || '',
+    choices: [
+      {
+        index: 0,
+        finish_reason: normalizeFinishReason(response.stop_reason),
+        message: {
+          role: 'assistant',
+          content: outputText,
+        },
+      },
+    ],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    },
+  };
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  config: ProxyConfig
+): Promise<Response> {
+  let lastError: unknown = null;
+  const maxAttempts = Math.max(1, config.maxRetries + 1);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(createTimeoutError()), config.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      if (attempt < maxAttempts && isRetryableStatus(response.status)) {
+        const retryAfterMs = response.status === 429 ? parseRetryAfterMs(Object.fromEntries(response.headers.entries())) : 0;
+        await delay(Math.max(computeRetryDelayMs(attempt, config.retryDelayMs, config.retryJitterMs), retryAfterMs));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isTimeoutError(error)) {
+        throw error;
+      }
+      await delay(computeRetryDelayMs(attempt, config.retryDelayMs, config.retryJitterMs));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw (lastError instanceof Error ? lastError : new Error(String(lastError || 'upstream_error')));
+}
+
 export class LlmProxyConnector {
+  private async forwardAnthropicChat(req: any, res: any, config: ProxyConfig, debug: boolean) {
+    const requestPayload = parseJsonBody<OpenAiChatCompletionRequest>(req.body);
+    if (requestPayload.stream) {
+      res.status(400).json(toOpenAiError('Anthropic upstream does not support stream mode in this proxy yet', 'unsupported', 'unsupported'));
+      return;
+    }
+
+    const anthropicPayload = toAnthropicRequest(requestPayload);
+    const upstreamUrl = buildUpstreamUrl(config.upstreamBaseUrl, '/v1/messages', '');
+    const response = await fetchWithRetry(
+      upstreamUrl,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': config.upstreamToken || '',
+          'anthropic-version': '2023-06-01',
+          'accept-encoding': 'identity',
+        },
+        body: JSON.stringify(anthropicPayload),
+      },
+      config
+    );
+
+    const responseText = await response.text();
+    let responseJson: AnthropicMessageResponse | null = null;
+    try {
+      responseJson = responseText ? (JSON.parse(responseText) as AnthropicMessageResponse) : null;
+    } catch {
+      responseJson = null;
+    }
+
+    if (debug) {
+      console.log('[LLM_PROXY_ANTHROPIC_STATUS]', JSON.stringify({
+        method: req.method,
+        path: req.path,
+        upstreamUrl,
+        status: response.status,
+      }));
+    }
+
+    if (!response.ok) {
+      const message =
+        responseJson?.error?.message ||
+        responseText ||
+        `Upstream request failed with status ${response.status}`;
+      res
+        .status(response.status)
+        .json(
+          toOpenAiError(
+            getPublicErrorMessage(message),
+            responseJson?.error?.type || 'upstream_error',
+            responseJson?.error?.code || 'upstream_error'
+          )
+        );
+      return;
+    }
+
+    res.setHeader('content-type', 'application/json; charset=utf-8');
+    res.status(200).json(toOpenAiChatCompletion(responseJson || {}));
+  }
+
   async forward(req: any, res: any) {
     let config: ProxyConfig;
     let upstreamUrl = '';
@@ -146,6 +388,21 @@ export class LlmProxyConnector {
     }
 
     try {
+      if (config.upstreamApiType === 'anthropic' && req.path === '/v1/chat/completions') {
+        await this.forwardAnthropicChat(req, res, config, debug);
+        return;
+      }
+      if (config.upstreamApiType === 'anthropic' && req.path !== '/v1/models') {
+        res.status(400).json(
+          toOpenAiError(
+            `Anthropic upstream does not support proxied path ${req.path}`,
+            'unsupported',
+            'unsupported'
+          )
+        );
+        return;
+      }
+
       upstreamUrl = buildUpstreamUrl(
         config.upstreamBaseUrl,
         req.path,
@@ -163,6 +420,10 @@ export class LlmProxyConnector {
       headers['accept-encoding'] = 'identity';
       if (config.upstreamToken) {
         headers['Authorization'] = `Bearer ${config.upstreamToken}`;
+      }
+      const requestId = getHeaderValue(headers, 'x-request-id');
+      if (requestId) {
+        headers['x-request-id'] = requestId;
       }
 
       const targetUrl = new URL(upstreamUrl);

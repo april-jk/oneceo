@@ -1320,6 +1320,16 @@ export type ChatItem =
       messageKey?: string;
     }
   | {
+      kind: "managed_tool";
+      eventType: string;
+      toolName: string;
+      status: "running" | "completed" | "failed" | "unknown";
+      summary?: string;
+      detail?: string;
+      metadata?: Record<string, unknown>;
+      messageKey?: string;
+    }
+  | {
       kind: "opencode_turn";
       userText: string;
       attachments?: UploadedTaskAttachment[];
@@ -1732,6 +1742,44 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "executor_event") {
       const metadata = toRecord(message.metadata);
+      if (isManagedExecutionEvent(metadata)) {
+        const managedEventType = asText(metadata.eventType).toLowerCase();
+        const managedToolName = asText(metadata.toolName) || "tool";
+        if (
+          managedEventType === "tool_call_started" ||
+          managedEventType === "tool_call_progress" ||
+          managedEventType === "tool_call_completed" ||
+          managedEventType === "tool_call_failed"
+        ) {
+          flushProgress();
+          items.push({
+            kind: "managed_tool",
+            eventType: managedEventType,
+            toolName: managedToolName,
+            status:
+              managedEventType === "tool_call_failed"
+                ? "failed"
+                : managedEventType === "tool_call_completed"
+                  ? "completed"
+                  : "running",
+            summary: formatManagedToolSummary(managedToolName, metadata),
+            detail: formatManagedToolDetail(managedToolName, metadata),
+            metadata,
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
+        if (managedEventType === "artifact_updated") {
+          flushProgress();
+          items.push({
+            kind: "capsule",
+            label: asText(metadata.content) || "产物已更新",
+            tone: "review",
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
+      }
       const event = toRecord(metadata.event);
       const item = toRecord(event.item);
       const executorLabel = getExecutorDisplayName(metadata);
@@ -3019,6 +3067,14 @@ function MessageBubble({
     return (
       <div data-message-key={item.messageKey}>
         <OpencodeToolCard item={item} onOpenDiffPreview={onOpenDiffPreview} />
+      </div>
+    );
+  }
+
+  if (item.kind === "managed_tool") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <ManagedToolCard item={item} />
       </div>
     );
   }
@@ -4511,6 +4567,88 @@ function OpencodeToolCard({
   );
 }
 
+function ManagedToolCard({
+  item,
+}: {
+  item: Extract<ChatItem, { kind: "managed_tool" }>;
+}) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  const icon =
+    item.toolName === "shell_execute"
+      ? Terminal
+      : item.toolName === "write_file"
+        ? FilePenLine
+        : item.toolName === "read_file"
+          ? FileText
+          : item.toolName === "search_code"
+            ? Search
+            : item.toolName === "list_directory"
+              ? FolderSearch2
+              : item.toolName === "ask_user"
+                ? Sparkles
+                : FileSearch;
+  const Icon = icon;
+  const toneClass =
+    item.status === "failed"
+      ? "border-rose-200 bg-rose-50 text-rose-700"
+      : item.status === "completed"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border-border/70 bg-muted/50 text-foreground/85";
+  const statusLabel =
+    item.status === "failed"
+      ? "失败"
+      : item.status === "completed"
+        ? "已完成"
+        : "进行中";
+
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18 }}
+        className="w-full"
+      >
+        <button
+          type="button"
+          onClick={() => setDetailOpen(true)}
+          className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition hover:bg-muted/40 ${toneClass}`}
+        >
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/80">
+            <Icon className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium leading-5">
+                {item.toolName}
+              </span>
+              <span className="rounded-full border border-current/15 px-2 py-0.5 text-[10px] font-medium">
+                {statusLabel}
+              </span>
+            </div>
+            {item.summary ? (
+              <div className="mt-1 truncate text-[12px] leading-5 opacity-80">
+                {item.summary}
+              </div>
+            ) : null}
+          </div>
+        </button>
+      </motion.div>
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{item.toolName}</DialogTitle>
+            <DialogDescription>Altus 原子工具消息详情</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
+            {item.detail || item.summary || item.toolName}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 /**
  * 获取 Agent 名称
  */
@@ -4533,4 +4671,53 @@ function getExecutorDisplayName(metadataRaw: unknown) {
   if (executor === "claudecode") return "ClaudeCode";
   if (executor === "opencode") return "OpenCode";
   return "执行器";
+}
+
+function isManagedExecutionEvent(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  return (
+    asText(metadata.executionMode).toLowerCase() === "managed" ||
+    asText(metadata.executor).toLowerCase() === "altus"
+  );
+}
+
+function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  if (toolName === "shell_execute") {
+    return asText(args.command) || "执行 shell 命令";
+  }
+  if (toolName === "write_file") {
+    return asText(args.path) || "写入文件";
+  }
+  if (toolName === "read_file") {
+    return asText(args.path) || "读取文件";
+  }
+  if (toolName === "list_directory") {
+    return asText(args.path) || "列出目录";
+  }
+  if (toolName === "search_code") {
+    const query = asText(args.query);
+    const target = asText(args.path);
+    return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
+  }
+  if (toolName === "ask_user") {
+    return asText(args.question) || "请求用户澄清";
+  }
+  return asText(metadata.content) || toolName;
+}
+
+function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const detail = {
+    toolName,
+    arguments: toRecord(metadata.arguments),
+    outputPreview: asText(metadata.outputPreview) || undefined,
+    error: asText(metadata.error) || undefined,
+  };
+  try {
+    return JSON.stringify(detail, null, 2);
+  } catch {
+    return `${toolName}`;
+  }
 }

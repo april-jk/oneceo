@@ -36,8 +36,9 @@
 | M7 | `08_数据模型_存储与迁移.md` | 数据模型、表结构、迁移边界 |
 | M8 | `09_实施步骤_风险与验收.md` | 实施顺序、风险、验收标准 |
 | M9 | `10_Suna智能体架构与提示词研究.md` | Suna 的 run 架构、提示词系统、tool/MCP 装配、mode 设计研究与源码依据索引 |
+| M10 | `11_Altus与Suna调度架构差异整改清单.md` | Altus 当前实现与 Suna 在 run 调度、state、manager、execution engine、前端消息适配上的差异清单与代码级整改索引 |
 
-除 `M9` 的专题研究外，`M0-M8` 每篇文档末尾也必须提供对应的 `Suna 代码参照`，开发时优先按该模块末尾列出的源码入口回查，不允许只依据概念描述实现。
+除 `M9-M10` 的专题研究外，`M0-M8` 每篇文档末尾也必须提供对应的 `Suna 代码参照`，开发时优先按该模块末尾列出的源码入口回查，不允许只依据概念描述实现。
 
 ## 设计原则
 
@@ -82,9 +83,17 @@
 2. managed 独立事件流已接入：
    - `apps/api/src/services/altus-managed-stream-service.ts`
 3. managed 独立 prompt / tool runtime / run service 已接入：
-   - `apps/api/src/services/altus-managed-prompt-service.ts`
-   - `apps/api/src/services/altus-managed-tool-runtime.ts`
-   - `apps/api/src/services/altus-managed-run-service.ts`
+  - `apps/api/src/services/altus-managed-prompt-service.ts`
+  - `apps/api/src/services/altus-managed-tool-runtime.ts`
+  - `apps/api/src/services/altus-managed-run-service.ts`
+  - 并已继续拆出：
+    - `apps/api/src/services/altus-managed-run-entry-service.ts`
+    - `apps/api/src/services/altus-run-coordinator.ts`
+    - `apps/api/src/services/altus-run-state.ts`
+    - `apps/api/src/services/altus-run-lifecycle-service.ts`
+    - `apps/api/src/services/altus-run-event-writer.ts`
+    - `apps/api/src/services/altus-managed-setup-service.ts`
+    - `apps/api/src/services/altus-managed-shared.ts`
 4. managed 独立 HTTP / SSE 路由已接入：
    - `apps/api/src/routes/altus-managed-routes.ts`
    - `apps/api/src/index.ts`

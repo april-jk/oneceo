@@ -18,7 +18,26 @@ type OpenAiChatCompletionRequest = {
   messages?: Array<{
     role?: string;
     content?: unknown;
+    name?: string;
+    tool_call_id?: string;
+    tool_calls?: Array<{
+      id?: string;
+      type?: string;
+      function?: {
+        name?: string;
+        arguments?: string;
+      };
+    }>;
   }>;
+  tools?: Array<{
+    type?: string;
+    function?: {
+      name?: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }>;
+  tool_choice?: 'auto' | 'none' | { type?: string; function?: { name?: string } };
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
@@ -26,10 +45,23 @@ type OpenAiChatCompletionRequest = {
 
 type AnthropicMessageRequest = {
   model: string;
+  system?: string;
   messages: Array<{
     role: 'user' | 'assistant';
-    content: string;
+    content:
+      | string
+      | Array<
+          | { type: 'text'; text: string }
+          | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+          | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+        >;
   }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    input_schema: Record<string, unknown>;
+  }>;
+  tool_choice?: { type: 'auto' | 'none' | 'tool'; name?: string };
   max_tokens: number;
   temperature?: number;
 };
@@ -40,6 +72,9 @@ type AnthropicMessageResponse = {
   content?: Array<{
     type?: string;
     text?: string;
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
   }>;
   usage?: {
     input_tokens?: number;
@@ -51,6 +86,31 @@ type AnthropicMessageResponse = {
     type?: string;
     code?: string;
   };
+};
+
+type AnthropicStreamEvent = {
+  event: string;
+  data: any;
+};
+
+type OpenAiStreamChunk = {
+  id: string;
+  object: 'chat.completion.chunk';
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    delta: Record<string, unknown>;
+    finish_reason: string | null;
+  }>;
+};
+
+type AnthropicStreamState = {
+  id: string;
+  model: string;
+  created: number;
+  roleSent: boolean;
+  toolIndexes: Map<number, number>;
 };
 
 function toNumber(value: string | undefined, fallback: number): number {
@@ -155,6 +215,30 @@ function parseRetryAfterMs(headers: IncomingHttpHeaders): number {
   return 0;
 }
 
+function toSseData(value: unknown) {
+  return `data: ${JSON.stringify(value)}\n\n`;
+}
+
+function createChunk(
+  state: AnthropicStreamState,
+  delta: Record<string, unknown>,
+  finishReason: string | null = null
+): OpenAiStreamChunk {
+  return {
+    id: state.id,
+    object: 'chat.completion.chunk',
+    created: state.created,
+    model: state.model,
+    choices: [
+      {
+        index: 0,
+        delta,
+        finish_reason: finishReason,
+      },
+    ],
+  };
+}
+
 async function readResponseBody(response: IncomingMessage) {
   const chunks: Buffer[] = [];
   for await (const chunk of response) {
@@ -214,19 +298,151 @@ function extractTextContent(content: unknown): string {
     .join('\n');
 }
 
-function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
+function tryParseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function detectToolError(content: string) {
+  const parsed = tryParseJsonObject(content);
+  return Boolean(parsed && typeof parsed.error === 'string' && Object.keys(parsed).length === 1);
+}
+
+function normalizeOpenAiTools(payload: OpenAiChatCompletionRequest) {
+  if (!Array.isArray(payload.tools)) return undefined;
+  const tools = payload.tools
+    .map((tool) => {
+      if (tool?.type !== 'function' || !tool.function?.name) return null;
+      return {
+        name: String(tool.function.name).trim(),
+        description: typeof tool.function.description === 'string' ? tool.function.description : undefined,
+        input_schema:
+          tool.function.parameters && typeof tool.function.parameters === 'object'
+            ? (tool.function.parameters as Record<string, unknown>)
+            : {
+                type: 'object',
+                properties: {},
+                required: [],
+                additionalProperties: false,
+              },
+      };
+    })
+    .filter(Boolean) as Array<{
+    name: string;
+    description?: string;
+    input_schema: Record<string, unknown>;
+  }>;
+  return tools.length > 0 ? tools : undefined;
+}
+
+function normalizeToolChoice(
+  toolChoice: OpenAiChatCompletionRequest['tool_choice']
+): AnthropicMessageRequest['tool_choice'] | undefined {
+  if (!toolChoice || toolChoice === 'auto') {
+    return { type: 'auto' };
+  }
+  if (toolChoice === 'none') {
+    return { type: 'none' };
+  }
+  const toolName = typeof toolChoice === 'object' ? String(toolChoice.function?.name || '').trim() : '';
+  if (!toolName) {
+    return { type: 'auto' };
+  }
+  return {
+    type: 'tool',
+    name: toolName,
+  };
+}
+
+export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMessageRequest {
   const model = String(payload.model || '').trim();
   if (!model) {
     throw new Error('Missing model');
   }
 
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  const normalizedMessages = messages
-    .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-    .map((message) => ({
-      role: message.role as 'user' | 'assistant',
-      content: extractTextContent(message.content),
-    }));
+  const system = messages
+    .filter((message) => message?.role === 'system')
+    .map((message) => extractTextContent(message.content))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+
+  const normalizedMessages: AnthropicMessageRequest['messages'] = [];
+  let pendingToolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }> = [];
+
+  const flushPendingToolResults = () => {
+    if (pendingToolResults.length === 0) return;
+    normalizedMessages.push({
+      role: 'user',
+      content: pendingToolResults,
+    });
+    pendingToolResults = [];
+  };
+
+  for (const message of messages) {
+    if (!message) continue;
+    if (message.role === 'system') continue;
+
+    if (message.role === 'tool') {
+      const toolUseId = String(message.tool_call_id || '').trim();
+      if (!toolUseId) continue;
+      const content = extractTextContent(message.content);
+      pendingToolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content,
+        ...(detectToolError(content) ? { is_error: true } : {}),
+      });
+      continue;
+    }
+
+    flushPendingToolResults();
+
+    if (message.role !== 'user' && message.role !== 'assistant') continue;
+    const text = extractTextContent(message.content);
+
+    if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      const contentBlocks: Array<
+        { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+      > = [];
+      if (text) {
+        contentBlocks.push({ type: 'text', text });
+      }
+      for (const toolCall of message.tool_calls) {
+        const toolName = String(toolCall?.function?.name || '').trim();
+        const toolId = String(toolCall?.id || '').trim();
+        if (!toolName || !toolId) continue;
+        contentBlocks.push({
+          type: 'tool_use',
+          id: toolId,
+          name: toolName,
+          input: tryParseJsonObject(String(toolCall?.function?.arguments || '')) || {},
+        });
+      }
+      if (contentBlocks.length > 0) {
+        normalizedMessages.push({
+          role: 'assistant',
+          content: contentBlocks,
+        });
+      }
+      continue;
+    }
+
+    if (!text) continue;
+    normalizedMessages.push({
+      role: message.role,
+      content: text,
+    });
+  }
+
+  flushPendingToolResults();
 
   if (normalizedMessages.length === 0) {
     throw new Error('Missing messages');
@@ -234,7 +450,10 @@ function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMess
 
   return {
     model,
+    ...(system ? { system } : {}),
     messages: normalizedMessages,
+    ...(normalizeOpenAiTools(payload) ? { tools: normalizeOpenAiTools(payload) } : {}),
+    ...(normalizeOpenAiTools(payload) ? { tool_choice: normalizeToolChoice(payload.tool_choice) } : {}),
     max_tokens: Math.max(1, Number(payload.max_tokens || 1024)),
     ...(typeof payload.temperature === 'number' ? { temperature: payload.temperature } : {}),
   };
@@ -242,16 +461,26 @@ function toAnthropicRequest(payload: OpenAiChatCompletionRequest): AnthropicMess
 
 function normalizeFinishReason(stopReason: string | null | undefined) {
   if (stopReason === 'max_tokens') return 'length';
+  if (stopReason === 'tool_use') return 'tool_calls';
   return 'stop';
 }
 
-function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
-  const outputText = Array.isArray(response.content)
-    ? response.content
-        .filter((item) => item?.type === 'text' && typeof item.text === 'string')
-        .map((item) => item.text as string)
-        .join('\n')
-    : '';
+export function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
+  const contentBlocks = Array.isArray(response.content) ? response.content : [];
+  const outputText = contentBlocks
+    .filter((item) => item?.type === 'text' && typeof item.text === 'string')
+    .map((item) => item.text as string)
+    .join('\n');
+  const toolCalls = contentBlocks
+    .filter((item) => item?.type === 'tool_use' && typeof item.id === 'string' && typeof item.name === 'string')
+    .map((item) => ({
+      id: String(item.id),
+      type: 'function' as const,
+      function: {
+        name: String(item.name),
+        arguments: JSON.stringify(item.input && typeof item.input === 'object' ? item.input : {}),
+      },
+    }));
   const promptTokens = Number(response.usage?.input_tokens || 0);
   const completionTokens = Number(response.usage?.output_tokens || 0);
   return {
@@ -265,6 +494,7 @@ function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
         message: {
           role: 'assistant',
           content: outputText,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
       },
     ],
@@ -274,6 +504,159 @@ function toOpenAiChatCompletion(response: AnthropicMessageResponse) {
       total_tokens: promptTokens + completionTokens,
     },
   };
+}
+
+function parseAnthropicSseBlock(rawBlock: string): AnthropicStreamEvent | null {
+  const lines = rawBlock
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+
+  let eventName = 'message';
+  const dataLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  const rawData = dataLines.join('\n');
+  if (rawData === '[DONE]') {
+    return { event: eventName, data: '[DONE]' };
+  }
+  try {
+    return {
+      event: eventName,
+      data: JSON.parse(rawData),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function transformAnthropicStreamEvent(
+  streamEvent: AnthropicStreamEvent,
+  state: AnthropicStreamState
+): string[] {
+  const outputs: string[] = [];
+  const payload = streamEvent.data;
+  if (!payload || typeof payload !== 'object') {
+    return outputs;
+  }
+
+  if (streamEvent.event === 'ping') {
+    return outputs;
+  }
+
+  if (streamEvent.event === 'message_start') {
+    const message = payload.message || {};
+    state.id = String(message.id || state.id || `chatcmpl_${Date.now()}`);
+    state.model = String(message.model || state.model || '');
+    if (!state.roleSent) {
+      outputs.push(toSseData(createChunk(state, { role: 'assistant' }, null)));
+      state.roleSent = true;
+    }
+    return outputs;
+  }
+
+  if (streamEvent.event === 'content_block_start') {
+    const index = Number(payload.index);
+    const block = payload.content_block || {};
+    const blockType = String(block.type || '');
+    if (blockType === 'tool_use') {
+      const openAiToolIndex = state.toolIndexes.size;
+      state.toolIndexes.set(index, openAiToolIndex);
+      outputs.push(
+        toSseData(
+          createChunk(
+            state,
+            {
+              tool_calls: [
+                {
+                  index: openAiToolIndex,
+                  id: String(block.id || ''),
+                  type: 'function',
+                  function: {
+                    name: String(block.name || ''),
+                    arguments: '',
+                  },
+                },
+              ],
+            },
+            null
+          )
+        )
+      );
+    }
+    return outputs;
+  }
+
+  if (streamEvent.event === 'content_block_delta') {
+    const index = Number(payload.index);
+    const delta = payload.delta || {};
+    const deltaType = String(delta.type || '');
+    if (deltaType === 'text_delta' && typeof delta.text === 'string') {
+      outputs.push(toSseData(createChunk(state, { content: delta.text }, null)));
+      return outputs;
+    }
+    if (deltaType === 'input_json_delta' && typeof delta.partial_json === 'string') {
+      const openAiToolIndex = state.toolIndexes.get(index);
+      if (typeof openAiToolIndex === 'number') {
+        outputs.push(
+          toSseData(
+            createChunk(
+              state,
+              {
+                tool_calls: [
+                  {
+                    index: openAiToolIndex,
+                    function: {
+                      arguments: delta.partial_json,
+                    },
+                  },
+                ],
+              },
+              null
+            )
+          )
+        );
+      }
+      return outputs;
+    }
+    return outputs;
+  }
+
+  if (streamEvent.event === 'message_delta') {
+    const stopReason = normalizeFinishReason(String(payload.delta?.stop_reason || ''));
+    outputs.push(toSseData(createChunk(state, {}, stopReason)));
+    return outputs;
+  }
+
+  if (streamEvent.event === 'message_stop') {
+    outputs.push('data: [DONE]\n\n');
+    return outputs;
+  }
+
+  if (streamEvent.event === 'error') {
+    const message =
+      payload?.error?.message ||
+      payload?.message ||
+      'Upstream stream error';
+    outputs.push(
+      toSseData(
+        toOpenAiError(getPublicErrorMessage(String(message)), payload?.error?.type || 'upstream_error', payload?.error?.code || 'upstream_error')
+      )
+    );
+    outputs.push('data: [DONE]\n\n');
+    return outputs;
+  }
+
+  return outputs;
 }
 
 async function fetchWithRetry(
@@ -315,11 +698,6 @@ async function fetchWithRetry(
 export class LlmProxyConnector {
   private async forwardAnthropicChat(req: any, res: any, config: ProxyConfig, debug: boolean) {
     const requestPayload = parseJsonBody<OpenAiChatCompletionRequest>(req.body);
-    if (requestPayload.stream) {
-      res.status(400).json(toOpenAiError('Anthropic upstream does not support stream mode in this proxy yet', 'unsupported', 'unsupported'));
-      return;
-    }
-
     const anthropicPayload = toAnthropicRequest(requestPayload);
     const upstreamUrl = buildUpstreamUrl(config.upstreamBaseUrl, '/v1/messages', '');
     const response = await fetchWithRetry(
@@ -332,10 +710,106 @@ export class LlmProxyConnector {
           'anthropic-version': '2023-06-01',
           'accept-encoding': 'identity',
         },
-        body: JSON.stringify(anthropicPayload),
+        body: JSON.stringify({
+          ...anthropicPayload,
+          ...(requestPayload.stream ? { stream: true } : {}),
+        }),
       },
       config
     );
+
+    const responseContentType = response.headers.get('content-type') || '';
+
+    if (requestPayload.stream) {
+      if (debug) {
+        console.log('[LLM_PROXY_ANTHROPIC_STATUS]', JSON.stringify({
+          method: req.method,
+          path: req.path,
+          upstreamUrl,
+          status: response.status,
+          stream: true,
+        }));
+      }
+
+      if (!response.ok) {
+        const responseText = await response.text().catch(() => '');
+        let responseJson: AnthropicMessageResponse | null = null;
+        try {
+          responseJson = responseText ? (JSON.parse(responseText) as AnthropicMessageResponse) : null;
+        } catch {
+          responseJson = null;
+        }
+        const message =
+          responseJson?.error?.message ||
+          responseText ||
+          `Upstream request failed with status ${response.status}`;
+        res
+          .status(response.status)
+          .json(
+            toOpenAiError(
+              getPublicErrorMessage(message),
+              responseJson?.error?.type || 'upstream_error',
+              responseJson?.error?.code || 'upstream_error'
+            )
+          );
+        return;
+      }
+
+      if (!responseContentType.includes('text/event-stream') || !response.body) {
+        res
+          .status(502)
+          .json(toOpenAiError('Anthropic upstream did not return event stream', 'upstream_error', 'upstream_error'));
+        return;
+      }
+
+      res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const state: AnthropicStreamState = {
+        id: `chatcmpl_${Date.now()}`,
+        model: String(requestPayload.model || ''),
+        created: Math.floor(Date.now() / 1000),
+        roleSent: false,
+        toolIndexes: new Map<number, number>(),
+      };
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of response.body as any) {
+        buffer += decoder.decode(chunk, { stream: true });
+        while (true) {
+          const separatorIndex = buffer.indexOf('\n\n');
+          if (separatorIndex < 0) break;
+          const rawBlock = buffer.slice(0, separatorIndex);
+          buffer = buffer.slice(separatorIndex + 2);
+          const parsed = parseAnthropicSseBlock(rawBlock);
+          if (!parsed) continue;
+          const outputs = transformAnthropicStreamEvent(parsed, state);
+          for (const output of outputs) {
+            if (!res.writableEnded) {
+              res.write(output);
+            }
+          }
+        }
+      }
+      if (buffer.trim()) {
+        const parsed = parseAnthropicSseBlock(buffer.trim());
+        if (parsed) {
+          const outputs = transformAnthropicStreamEvent(parsed, state);
+          for (const output of outputs) {
+            if (!res.writableEnded) {
+              res.write(output);
+            }
+          }
+        }
+      }
+      if (!res.writableEnded) {
+        res.end();
+      }
+      return;
+    }
 
     const responseText = await response.text();
     let responseJson: AnthropicMessageResponse | null = null;

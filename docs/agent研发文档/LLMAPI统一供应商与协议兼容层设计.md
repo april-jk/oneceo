@@ -141,6 +141,7 @@ LLM_PROXY_UPSTREAM_API_TYPE=openai
    - `/v1/models`：优先直转上游 `/v1/models`
    - `/v1/chat/completions`：转换为上游 `/v1/messages`
    - 将上游响应再映射回 OpenAI-compatible 格式
+   - 必须支持 `tools / tool_choice / tool_use / tool_result`，否则 Altus managed mode 会退化成“只输出代码块、不执行文件操作”
 
 ### 6.2 `openai` 模式
 
@@ -197,7 +198,32 @@ content-type: application/json
 说明：
 
 1. 对纯文本对话，OpenAI `messages` 与 Anthropic `messages` 可直接复用最小公共结构。
-2. 本轮先覆盖平台当前主用纯文本路径，不扩展到 tools / reasoning 的跨协议高级字段。
+2. Altus managed mode 依赖工具调用完成真实文件操作，因此这里必须补齐 tools/tool_result 的协议转换，不能只停留在纯文本路径。
+
+#### 6.3.1.a 工具调用请求映射
+
+当 OpenAI-compatible 请求包含工具字段时，Anthropic 分支必须同时完成以下转换：
+
+1. `system` 消息提取到顶层 `system`
+2. `tools[].function` 转成 Anthropic `tools[]`
+3. `tool_choice`
+   - `auto` -> `{ "type": "auto" }`
+   - `none` -> `{ "type": "none" }`
+   - `function:name` -> `{ "type": "tool", "name": "<tool>" }`
+4. `assistant.tool_calls[]` 转成同一条 assistant message 内的 `tool_use` blocks
+5. 随后的 OpenAI `tool` role 消息，聚合成一条 Anthropic `user` message，并写入 `tool_result` blocks
+
+代码落点：
+
+- `apps/api/src/connectors/llm-proxy-connector.ts`
+- 上游使用方：`apps/api/src/services/altus-run-coordinator.ts`
+
+参照依据：
+
+- Anthropic 官方文档 “Tool use / Implement tool use”
+- `tool_use` 由 assistant message 发出
+- `tool_result` 必须由下一条 user message 回传
+- 不允许继续保持“Anthropic 只转纯文本”的实现
 
 #### 6.3.2 响应映射
 
@@ -217,6 +243,51 @@ Anthropic 响应示例：
   }
 }
 ```
+
+#### 6.3.2.a 工具调用响应映射
+
+当 Anthropic 返回 `tool_use` content blocks 时，必须映射回 OpenAI-compatible `message.tool_calls`：
+
+Anthropic：
+
+```json
+{
+  "role": "assistant",
+  "content": [
+    { "type": "text", "text": "我将写入文件。" },
+    { "type": "tool_use", "id": "toolu_01", "name": "write_file", "input": { "path": "index.html", "content": "..." } }
+  ],
+  "stop_reason": "tool_use"
+}
+```
+
+OpenAI-compatible：
+
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": "我将写入文件。",
+        "tool_calls": [
+          {
+            "id": "toolu_01",
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "arguments": "{\"path\":\"index.html\",\"content\":\"...\"}"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+否则上层 `AltusRunCoordinator` 会误判为“模型直接给最终回答”，导致你看到代码被直接渲染到聊天框，而没有真实工具执行。
 
 映射回 OpenAI-compatible：
 
@@ -245,19 +316,69 @@ Anthropic 响应示例：
 
 #### 6.3.3 支持边界
 
-本轮明确支持：
+当前明确支持：
 
 1. `GET /v1/models`
 2. 非流式 `POST /v1/chat/completions`
+3. 流式 `POST /v1/chat/completions`
 3. 文本输入输出
 4. 单 assistant 文本消息抽取
+5. OpenAI-compatible `tools -> Anthropic tools`
+6. `assistant.tool_calls -> tool_use`
+7. `tool role -> tool_result`
+8. `tool_use -> OpenAI tool_calls`
+9. Anthropic 流式事件：
+   - `message_start`
+   - `content_block_start`
+   - `content_block_delta`
+   - `message_delta`
+   - `message_stop`
+   - `error`
+   映射为 OpenAI-compatible `chat.completion.chunk`
 
-本轮暂不支持：
+当前暂不支持：
 
-1. OpenAI function/tool calling 到 Anthropic tool use 的双向转换
-2. 流式 SSE chunk 级映射
-3. 图像、多模态 block 的复杂映射
-4. `responses` API
+1. 图像、多模态 block 的复杂映射
+2. `responses` API
+3. Anthropic `server_tool_use / web_search / code_execution` 等内建服务型工具到 OpenAI-compatible 的专门映射
+
+#### 6.3.4 当前未实现项与后续待办
+
+以下能力目前明确未实现，后续需要单独设计并开发，不允许误认为当前已经与 OpenAI-compatible 完全一致：
+
+1. 多模态 block 映射
+   - 未实现内容：
+     - Anthropic image/document 等 block 到 OpenAI-compatible message content parts 的双向转换
+   - 影响：
+     - 当前仅保证 Altus managed 的文本+工具主链一致，不支持多模态会话的一致化
+   - 未来代码落点：
+     - `apps/api/src/connectors/llm-proxy-connector.ts`
+
+2. `responses` API
+   - 未实现内容：
+     - `/v1/responses`
+     - 响应对象、流式 chunk、工具调用事件与状态事件映射
+   - 影响：
+     - 当前平台代理只保证 `/v1/chat/completions` 与 `/v1/models` 主链
+   - 未来代码落点：
+     - `apps/api/src/routes/llm-proxy-routes.ts`
+     - `apps/api/src/connectors/llm-proxy-connector.ts`
+
+3. Anthropic 内建服务型工具映射
+   - 未实现内容：
+     - `server_tool_use`
+     - `web_search`
+     - `code_execution`
+     - 其他 Anthropic 平台侧内建工具事件
+   - 影响：
+     - 当前只保证 oneceo 自定义工具（`write_file/shell_execute/read_file/...`）在代理层的一致化
+   - 未来代码落点：
+     - `apps/api/src/connectors/llm-proxy-connector.ts`
+
+4. 结论
+   - 当前已经对齐的是 Altus managed 实际依赖的“文本 + 自定义工具 + 非流式/流式 chat.completions”
+   - 当前没有对齐的是“多模态 + responses API + Anthropic 内建服务型工具”
+   - 这些未实现项必须保留为显式 TODO，不能在后续开发中被默认视为已支持
 
 原因：当前需求只要求统一供应商与可配置协议，先覆盖现有主链路最小闭环。
 

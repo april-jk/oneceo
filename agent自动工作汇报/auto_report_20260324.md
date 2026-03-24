@@ -115,6 +115,8 @@
 - 为本轮拆出的 managed 后端服务补了定向单元测试：
   - `apps/api/tests/altus-managed-run-entry.service.test.ts`
   - `apps/api/tests/altus-run-lifecycle.service.test.ts`
+  - `apps/api/tests/altus-run-coordinator.test.ts`
+  - `apps/api/tests/llm-proxy-connector.test.ts`
 - 当前覆盖的关键分支：
   - `startRun` 会创建 run、写入时间线、发送 `run_ack` 并启动 coordinator
   - `stopRun` 在存在活动 controller 时会中断当前 run
@@ -122,8 +124,63 @@
   - `markFailed` 会写错误时间线并发送 `run_failed`
   - `execute` 会在工具调用后继续收敛到最终 assistant 完成态
   - `execute` 会在 `ask_user` 分支进入 `waiting_user`
+  - `llm-proxy` 的 Anthropic 分支会把 OpenAI-compatible `tools/tool_calls/tool` 正确映射到 `tools/tool_use/tool_result`
+  - Anthropic `tool_use` 响应会正确映射回 OpenAI-compatible `message.tool_calls`
+  - 指定 `tool_choice=function:name` 时会正确映射到 Anthropic `{ type: "tool", name }`
+  - `tool_result` 错误输出会正确标记 `is_error`
 - 已执行：
   - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsx --test tests/altus-managed-run-entry.service.test.ts tests/altus-run-lifecycle.service.test.ts tests/altus-run-coordinator.test.ts`
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsx --test tests/llm-proxy-connector.test.ts tests/altus-managed-run-entry.service.test.ts tests/altus-run-lifecycle.service.test.ts tests/altus-run-coordinator.test.ts`
+  - `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "llm-proxy-connector|altus-run|altus-managed|llm-proxy"`
 - 结果：
-  - `6/6` 通过
+  - `llm-proxy` 定向测试 `3/3` 通过
+  - Altus managed 相关组合测试 `8/8` 通过
   - 首次执行曾因未注入 `DATABASE_URL` 被仓库既有启动守卫拦截，补上测试环境变量后已正常通过
+  - `rg` 无命中，说明本轮新增的 `llm-proxy` / `altus-managed` 相关文件没有新增显性 TypeScript 报错
+
+## 新增工作记录：Altus managed 工具协议修复
+
+- 定位到当前“聊天框直接输出完整代码、不走工具调用”的根因不在 coordinator，而在 `apps/api/src/connectors/llm-proxy-connector.ts` 的 Anthropic 分支。
+- 旧实现只支持纯文本 `chat/completions -> /v1/messages` 转换，没有转换：
+  - `tools`
+  - `tool_choice`
+  - `assistant.tool_calls`
+  - `tool role`
+  - Anthropic `tool_use`
+- 这会导致 Altus managed 在 `LLM_PROXY_UPSTREAM_API_TYPE=anthropic` 下天然退化成纯文本回答。
+- 已完成修复：
+  - OpenAI-compatible `tools` -> Anthropic `tools`
+  - `assistant.tool_calls` -> `tool_use`
+  - `tool` role -> `tool_result`
+  - Anthropic `tool_use` -> OpenAI-compatible `message.tool_calls`
+  - `stop_reason=tool_use` -> `finish_reason=tool_calls`
+  - Anthropic 流式 SSE：
+    - `message_start`
+    - `content_block_start`
+    - `content_block_delta`
+    - `message_delta`
+    - `message_stop`
+    - `error`
+    现在会映射为 OpenAI-compatible `chat.completion.chunk`
+- 同时收紧了 `apps/api/src/services/altus-managed-prompt-service.ts`：
+  - 明确要求“修改 workspace 时必须先走工具，不允许把完整实现直接贴回聊天框”
+- 当前核查结论：
+  - 对 Altus managed 真正使用到的能力，`openai` 与 `anthropic` 现在已对齐：
+    - 非流式 `chat/completions`
+    - `system/user/assistant/tool` 消息链
+    - `tools`
+    - `tool_choice`
+    - `tool_use/tool_result`
+    - `finish_reason=tool_calls`
+    - 流式 `chat.completion.chunk`
+  - 仍未对齐、且当前没有实现的点：
+    - 多模态 block 映射
+    - `responses` API
+    - Anthropic `server_tool_use / web_search / code_execution` 等内建服务型工具映射
+  - 这些未对齐项当前不影响 Altus managed 主链，因为 Altus managed 现在固定 `stream: false` 且只走文本+工具调用
+- 已按要求把未实现项显式写入：
+  - `docs/agent研发文档/LLMAPI统一供应商与协议兼容层设计.md`
+- 并同步提取到：
+  - `todos.md`
+  - 标注日期 `2026-03-24`
+  - 管理文档为 `LLMAPI统一供应商与协议兼容层设计.md`

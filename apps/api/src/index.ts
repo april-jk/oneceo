@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
+import altusManagedRoutes from './routes/altus-managed-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
@@ -112,6 +113,7 @@ app.post('/api/projects', (req, res) => {
 
 // 任务创建相关 API
 app.use('/api/task-creation', taskCreationRoutes);
+app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
@@ -262,26 +264,33 @@ httpServer.on('error', (error: any) => {
 taskCreationWebSocketService.initialize(httpServer);
 osacLlmProxyBridgeService.initialize();
 
-httpServer.listen(PORT, () => {
-  console.log('');
-  console.log('🚀 oneceo.ai API Server');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`📡 API server running on http://localhost:${PORT}`);
-  console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
-  console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  
-  // 启动后先进行数据库连通性重试检测
-  void testDatabaseConnection({ retries: 5, delayMs: 1500 });
-  // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
-  void osacPersistentRecoveryService.recoverReadySessions();
-  // 预热连接器相关表，避免首次访问时因未迁移报错
-  void connectorStorageBootstrap.ensureReady();
-  // 启动 Sandbox 空闲归档任务
-  startSandboxArchiveJob();
-  
-  console.log('');
+async function startServer() {
+  await connectorStorageBootstrap.ensureReady();
+
+  httpServer.listen(PORT, () => {
+    console.log('');
+    console.log('🚀 oneceo.ai API Server');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`📡 API server running on http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
+    console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
+    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    // 启动后先进行数据库连通性重试检测
+    void testDatabaseConnection({ retries: 5, delayMs: 1500 });
+    // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
+    void osacPersistentRecoveryService.recoverReadySessions();
+    // 启动 Sandbox 空闲归档任务
+    startSandboxArchiveJob();
+    
+    console.log('');
+  });
+}
+
+void startServer().catch((error) => {
+  console.error('[API] startup failed before listen:', error);
+  process.exit(1);
 });
 
 process.on('SIGINT', () => {

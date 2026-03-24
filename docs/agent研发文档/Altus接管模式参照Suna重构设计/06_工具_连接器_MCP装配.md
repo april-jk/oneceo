@@ -34,6 +34,7 @@ Altus managed 重构后也必须采用同样策略。
 - `git_tool`
 - `browser_tool`
 - `connector_tool`
+- `complete_task_tool`
 
 ## 3. Prompt 装配
 
@@ -55,6 +56,8 @@ Altus managed 重构后也必须采用同样策略。
 - 改成一个 managed agent 的统一 prompt 入口
 - 对“修改文件/创建项目/生成代码”类请求，prompt 必须明确要求先走工具执行，再回传摘要
 - 不允许把完整实现代码直接作为聊天正文输出并跳过 `write_file` / `shell_execute`
+- managed mode 需要一个显式终止工具，语义参照 `suna` 的 `message_tool.complete(...)`
+- Altus run 不应因为模型输出了一段普通 assistant 正文就直接判定完成；应由 `complete_task` 这类 terminating tool 作为唯一的正常完成信号
 
 ## 4. Connector / MCP 装配
 
@@ -134,5 +137,9 @@ Altus managed 的工具体系必须从：
   - 说明运行时读取的是已缓存的静态 agent 配置，而不是在执行中临时拼接。
 - `referance/suna/backend/core/agents/runner/executor.py` -> `run.execute(...)` 之前的 manager 装配
   - 说明工具能力必须在真正进入模型调用前稳定注入，不能在 provider 兼容层里被丢失。
+- `referance/suna/backend/core/tools/message_tool.py` -> `complete(...)`
+  - 说明 `suna` 使用显式的 terminating tool 结束一次 agent run，而不是把任意 assistant 正文都当成 run 完成。
+- `referance/suna/backend/core/agents/pipeline/stateless/coordinator/tool_executor.py` -> `_handle_terminating_tool(...)`
+  - 说明 terminating tool 会直接触发 state complete，而不是继续等待自然文本结束。
 
 oneceo 在实现 `AltusConnectorMcpManager` 时，只能复用这套“run 启动时快照并装配”的结构，不得继续沿用 direct mode 的 executor 注入路径。

@@ -46,6 +46,8 @@ export class AltusManagedPromptService {
       '- Be concise, direct, and technically accurate.',
       '- Think through the task, but only output short user-facing messages.',
       '- Use tools to inspect files, run commands, search code, and update files when needed.',
+      '- If the task requires creating or modifying files, you must use tools such as write_file, read_file, list_directory, search_code, or shell_execute before replying.',
+      '- Do not paste full implementation code into the chat as the main answer when the request is to modify the workspace; perform the file operation instead, then summarize the result.',
       '- Do not claim success unless the result is verified from tool output.',
       '- Ask the user a clarification question only when the task is blocked on missing information.',
       '',

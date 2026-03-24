@@ -53,6 +53,8 @@ Altus managed 重构后也必须采用同样策略。
 
 - 不再使用当前三层 Agent 各自分散的 system prompt
 - 改成一个 managed agent 的统一 prompt 入口
+- 对“修改文件/创建项目/生成代码”类请求，prompt 必须明确要求先走工具执行，再回传摘要
+- 不允许把完整实现代码直接作为聊天正文输出并跳过 `write_file` / `shell_execute`
 
 ## 4. Connector / MCP 装配
 
@@ -91,6 +93,12 @@ managed mode 新设计下：
   - 显式声明 `properties`
   - 显式声明 `required`
   - 显式声明 `additionalProperties: false`
+- 当 `LLM_PROXY_UPSTREAM_API_TYPE=anthropic` 时，`llm-proxy` 不能只转换纯文本消息，必须同时完成：
+  - OpenAI `tools` -> Anthropic `tools`
+  - `assistant.tool_calls` -> `tool_use`
+  - `tool` role -> `tool_result`
+  - Anthropic `tool_use` -> OpenAI `message.tool_calls`
+- 否则 Altus managed 会把需要落盘的修改直接输出成聊天内容，而不会真实调用 `write_file`/`shell_execute`
 
 这两套装配路径完全独立。
 
@@ -124,5 +132,7 @@ Altus managed 的工具体系必须从：
   - 说明 agent 配置、默认工具和系统提示词来自集中配置。
 - `referance/suna/backend/core/cache/runtime_cache.py` -> `load_static_suna_config()`
   - 说明运行时读取的是已缓存的静态 agent 配置，而不是在执行中临时拼接。
+- `referance/suna/backend/core/agents/runner/executor.py` -> `run.execute(...)` 之前的 manager 装配
+  - 说明工具能力必须在真正进入模型调用前稳定注入，不能在 provider 兼容层里被丢失。
 
 oneceo 在实现 `AltusConnectorMcpManager` 时，只能复用这套“run 启动时快照并装配”的结构，不得继续沿用 direct mode 的 executor 注入路径。

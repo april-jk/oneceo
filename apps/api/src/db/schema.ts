@@ -116,6 +116,90 @@ export const taskSessionWorkspaceCache = pgTable(
   })
 );
 
+export const taskSessionRuns = pgTable(
+  'task_session_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    mode: text('mode').notNull().default('managed'),
+    status: text('status').notNull().default('queued'),
+    model: text('model'),
+    stopReason: text('stop_reason'),
+    sandboxBindingId: uuid('sandbox_binding_id'),
+    connectorSnapshotId: uuid('connector_snapshot_id'),
+    metadataJson: jsonb('metadata_json'),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index('idx_task_session_runs_session_id').on(table.sessionId),
+    sessionCreatedIdx: index('idx_task_session_runs_session_created_at').on(table.sessionId, table.createdAt),
+    statusIdx: index('idx_task_session_runs_status').on(table.status),
+  })
+);
+
+export const taskSessionRunEvents = pgTable(
+  'task_session_run_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => taskSessionRuns.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    sequence: integer('sequence').notNull(),
+    payloadJson: jsonb('payload_json'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    runSequenceUnique: uniqueIndex('idx_task_session_run_events_run_sequence').on(table.runId, table.sequence),
+    runCreatedIdx: index('idx_task_session_run_events_run_created_at').on(table.runId, table.createdAt),
+    sessionIdx: index('idx_task_session_run_events_session_id').on(table.sessionId),
+  })
+);
+
+export const taskSessionSandboxBindings = pgTable(
+  'task_session_sandbox_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    sandboxId: text('sandbox_id').notNull(),
+    workspaceRoot: text('workspace_root').notNull(),
+    status: text('status').notNull().default('ready'),
+    metadataJson: jsonb('metadata_json'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    lastActiveAt: timestamp('last_active_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionUnique: uniqueIndex('idx_task_session_sandbox_bindings_session_id').on(table.sessionId),
+    sandboxIdx: index('idx_task_session_sandbox_bindings_sandbox_id').on(table.sandboxId),
+  })
+);
+
+export const taskSessionConnectorSnapshots = pgTable(
+  'task_session_connector_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    snapshotJson: jsonb('snapshot_json').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index('idx_task_session_connector_snapshots_session_id').on(table.sessionId),
+  })
+);
+
 /**
  * 意图识别结果表
  * 
@@ -340,6 +424,14 @@ export type TaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferSe
 export type NewTaskSessionRecentMessage = typeof taskSessionRecentMessages.$inferInsert;
 export type TaskSessionWorkspaceCache = typeof taskSessionWorkspaceCache.$inferSelect;
 export type NewTaskSessionWorkspaceCache = typeof taskSessionWorkspaceCache.$inferInsert;
+export type TaskSessionRun = typeof taskSessionRuns.$inferSelect;
+export type NewTaskSessionRun = typeof taskSessionRuns.$inferInsert;
+export type TaskSessionRunEvent = typeof taskSessionRunEvents.$inferSelect;
+export type NewTaskSessionRunEvent = typeof taskSessionRunEvents.$inferInsert;
+export type TaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferSelect;
+export type NewTaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferInsert;
+export type TaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferSelect;
+export type NewTaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferInsert;
 
 export type IntentRecognitionResult = typeof intentRecognitionResults.$inferSelect;
 export type NewIntentRecognitionResult = typeof intentRecognitionResults.$inferInsert;

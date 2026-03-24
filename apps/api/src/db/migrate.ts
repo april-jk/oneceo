@@ -224,6 +224,55 @@ CREATE TABLE IF NOT EXISTS task_session_workspace_cache (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Altus managed run 表
+CREATE TABLE IF NOT EXISTS task_session_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'managed',
+  status TEXT NOT NULL DEFAULT 'queued',
+  model TEXT,
+  stop_reason TEXT,
+  sandbox_binding_id UUID,
+  connector_snapshot_id UUID,
+  metadata_json JSONB,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed run 事件表
+CREATE TABLE IF NOT EXISTS task_session_run_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES task_session_runs(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  payload_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed sandbox binding 表
+CREATE TABLE IF NOT EXISTS task_session_sandbox_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  sandbox_id TEXT NOT NULL,
+  workspace_root TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  metadata_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_active_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed connector snapshot 表
+CREATE TABLE IF NOT EXISTS task_session_connector_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- 意图识别结果表
 CREATE TABLE IF NOT EXISTS intent_recognition_results (
   id UUID PRIMARY KEY,
@@ -306,6 +355,20 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sand
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_id ON task_session_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_created_at ON task_session_runs(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_status ON task_session_runs(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_run_events_run_sequence
+  ON task_session_run_events(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_task_session_run_events_run_created_at
+  ON task_session_run_events(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_run_events_session_id ON task_session_run_events(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_session_id
+  ON task_session_sandbox_bindings(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_sandbox_id
+  ON task_session_sandbox_bindings(sandbox_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
+  ON task_session_connector_snapshots(session_id);
 ${connectorTablesSQL}
 `;
 

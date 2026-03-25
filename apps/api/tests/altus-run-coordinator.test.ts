@@ -24,6 +24,22 @@ function createState(runId: string, sessionId: string) {
   });
 }
 
+function createSseResponse(blocks: string[]) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const block of blocks) {
+        controller.enqueue(encoder.encode(block));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+  });
+}
+
 test('execute completes after tool round and final assistant response', async () => {
   const state = createState('run-coordinator-complete', 'session-coordinator-complete');
   const setupCalls: Record<string, unknown>[] = [];
@@ -234,7 +250,7 @@ test('execute does not complete on plain assistant text and continues until comp
     if (fetchCount === 2) {
       const messages = Array.isArray(payload?.messages) ? payload.messages : [];
       assert.equal(messages.at(-1)?.role, 'user');
-      assert.match(String(messages.at(-1)?.content || ''), /plain assistant text does not complete a managed run/i);
+      assert.match(String(messages.at(-1)?.content || ''), /continue from the latest tool result/i);
     }
 
     if (fetchCount === 1) {
@@ -415,4 +431,340 @@ test('execute requests clarification and transitions to waiting_user', async () 
     ['run_status', 'tool_call_started', 'clarification_requested']
   );
   assert.equal(eventCalls[2]?.payload.question, '你希望是网页版本还是原生版本？');
+});
+
+test('execute converts plain assistant clarification into waiting_user', async () => {
+  const state = createState('run-coordinator-plain-clarify', 'session-coordinator-plain-clarify');
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-4',
+      workspaceRoot: '/workspace/session-coordinator-plain-clarify',
+      reused: true,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '你希望优化哪些方面？比如颜色、布局还是动画？',
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('execute should not be called for plain assistant clarification');
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(timelineCall.input.messageType, 'clarification_request');
+  assert.equal(timelineCall.input.content, '你希望优化哪些方面？比如颜色、布局还是动画？');
+
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['run_status', 'clarification_requested']
+  );
+  assert.equal(eventCalls[1]?.payload.question, '你希望优化哪些方面？比如颜色、布局还是动画？');
+});
+
+test('execute retries transient upstream timeout before completing', async () => {
+  const state = createState('run-coordinator-retry', 'session-coordinator-retry');
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-5',
+      workspaceRoot: '/workspace/session-coordinator-retry',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _eventType: string, payload: Record<string, unknown>) => ({
+      sequence: 1,
+      payload,
+    })),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'Upstream timeout',
+            type: 'upstream_timeout',
+            code: 'upstream_timeout',
+          },
+        }),
+        { status: 504, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-retry-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '重试后已恢复并完成。',
+                      verification: ['第二次模型请求成功'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: '重试后已恢复并完成。',
+    verification: ['第二次模型请求成功'],
+  }));
+  const delayMock = mock.method(AltusRunCoordinator.prototype as any, 'delay', async () => {});
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(delayMock.mock.callCount(), 1);
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+});
+
+test('execute consumes streamed tool_call chunks and emits tool_call_progress', async () => {
+  const state = createState('run-coordinator-stream', 'session-coordinator-stream');
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-6',
+      workspaceRoot: '/workspace/session-coordinator-stream',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const payload = init?.body ? JSON.parse(String(init.body)) : null;
+    assert.equal(payload?.stream, true);
+
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return createSseResponse([
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tool-stream-1","type":"function","function":{"name":"write_file","arguments":""}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"index.html\\","}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"content\\":\\"<html></html>\\"}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-stream-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '流式 tool_call 已正确执行。',
+                      verification: ['已消费 SSE chunk', '已写入 index.html'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: fetchCount === 1 ? ('result' as const) : ('complete' as const),
+    ...(fetchCount === 1
+      ? {
+          content: JSON.stringify({
+            path: 'index.html',
+            bytes: 13,
+          }),
+        }
+      : {
+          summary: '流式 tool_call 已正确执行。',
+          verification: ['已消费 SSE chunk', '已写入 index.html'],
+        }),
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 2);
+  assert.equal(executeMock.mock.callCount(), 2);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+  assert.ok(eventCalls.some((entry) => entry.eventType === 'tool_call_progress'));
+  assert.ok(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_progress' &&
+        String(entry.payload.rawArguments || '').includes('index.html')
+    )
+  );
+  assert.ok(
+    eventCalls.some(
+      (entry) =>
+        entry.eventType === 'tool_call_started' && entry.payload.toolCallId === 'tool-stream-1'
+    )
+  );
 });

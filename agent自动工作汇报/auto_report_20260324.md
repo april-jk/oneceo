@@ -174,10 +174,37 @@
     - `finish_reason=tool_calls`
     - 流式 `chat.completion.chunk`
   - 仍未对齐、且当前没有实现的点：
-    - 多模态 block 映射
-    - `responses` API
-    - Anthropic `server_tool_use / web_search / code_execution` 等内建服务型工具映射
+  - 多模态 block 映射
+  - `responses` API
+  - Anthropic `server_tool_use / web_search / code_execution` 等内建服务型工具映射
   - 这些未对齐项当前不影响 Altus managed 主链，因为 Altus managed 现在固定 `stream: false` 且只走文本+工具调用
+
+## 新增工作记录：Altus 网页产物完成卡片
+
+- 按 `suna` 的 `CompleteToolView -> FileAttachment -> HtmlRenderer/IframePreview` 设计路径，先在 oneceo 落地第一阶段网页产物闭环。
+- 后端改动：
+  - `apps/api/src/routes/task-creation-routes.ts`
+    - 新增 `/api/task-creation/sessions/:sessionId/workspace/raw/*`
+    - Altus workspace 读取统一改走 E2B 分支，不再误落到 OpenCode 分支
+    - 补充了 `html/css/js/json/csv/xml/yaml` 等 MIME 推断
+  - `apps/api/src/services/altus-run-coordinator.ts`
+    - `tool_call_completed / tool_call_failed` 现在显式带回 `arguments`
+- 前端改动：
+  - `apps/web/client/src/lib/task-creation-client.ts`
+    - 新增 `getWorkspaceRawFileUrl(...)`
+  - `apps/web/client/src/components/AltusArtifactPreviewCard.tsx`
+    - 新增 `Preview / Code / Open` 完成卡片
+  - `apps/web/client/src/pages/Home.tsx`
+    - 把 managed `write_file` 完成事件聚合成 run 级 `managed_artifact_card`
+    - 在 `run_completed` 前插入最终产物卡片
+    - 同时修正 `outputPreview` 的字符串解析，避免工具摘要丢失结构化信息
+- 文档已同步：
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/07_前端对话页与交互状态.md`
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/12_Suna预览卡片与Altus产物预览对齐设计.md`
+- 本轮验证：
+  - `pnpm --filter web check` 通过
+  - `pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "AltusArtifactPreviewCard|task-creation-routes\\.ts\\(47|task-creation-routes\\.ts\\(48|altus-run-coordinator|workspace/raw|isE2bWorkspaceExecutor|parseManagedToolOutputPreview"` 无命中
+  - API 全量 `tsc` 仍存在仓库内既有错误，未由本轮新增文件引入
 - 已按要求把未实现项显式写入：
   - `docs/agent研发文档/LLMAPI统一供应商与协议兼容层设计.md`
 - 并同步提取到：
@@ -218,6 +245,29 @@
 - 继续收紧了 Altus managed 对话页中的工具调用显示，目标是把其表现从“大块执行卡片”调整为真正的原子消息。
 - 已更新设计文档 `docs/agent研发文档/Altus接管模式参照Suna重构设计/07_前端对话页与交互状态.md`：
   - 原子消息主形态应为紧凑胶囊/芯片
+
+## 新增工作记录：Suna 预览卡片与 Altus 产物预览研究
+
+- 按用户要求，重新回到 `referance/suna` 源码，对“过程预览 + 最终完成卡片 + HTML iframe 预览”这条链路做了一轮完整研究。
+- 这轮确认的关键结论：
+  - `suna` 的最终完成卡片不是普通 assistant markdown，而是 `CompleteToolView` 对 `complete` 工具结构化参数的渲染。
+  - 过程预览不是单点组件，而是三层结构：
+    - `chat-snack.tsx + floating-tool-preview.tsx`
+    - `ThreadContent.tsx + ShowToolStream.tsx + ToolCard.tsx`
+    - `CompleteToolView.tsx + FileAttachment + HtmlRenderer`
+  - HTML 预览不是基于文本 API 响应临时拼接，而是基于 `sandbox_url + filePath` 生成真实 iframe URL，这样相对资源才能正常工作。
+- 新增专题文档：
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/12_Suna预览卡片与Altus产物预览对齐设计.md`
+- 文档里已经明确写出：
+  - `suna` 的三层预览结构
+  - 相关源码路径
+  - oneceo 当前已有能力
+  - oneceo 当前缺口
+  - 后续实现 Altus 产物卡片时必须补的后端 raw file route 与前端 artifact model
+- 同时补了索引与前端章节回链：
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/README.md`
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/07_前端对话页与交互状态.md`
+- 本轮只完成代码级研究与设计文档整理，没有开始这部分的 UI/后端实现。
   - hover 时展示工具用途、目标对象、输入/输出摘要与失败原因
   - hover 层只展示高价值摘要，不直接倾倒完整 JSON
 - 已在 `apps/web/client/src/pages/Home.tsx` 完成实现：
@@ -237,6 +287,98 @@
   - 结果摘要
   - 更多信息预览
   - 点击查看完整详情提示
+- 已执行：
+  - `pnpm --filter web check`
+- 结果：
+  - 前端类型检查通过
+
+## Altus 三层预览补充研究（Actions / Files / Replay）
+
+- 继续深挖 `suna` 的预览体系，确认用户提供的 `Actions / Files / Prev / Next / Jump to Latest` 抽屉不属于 `CompleteToolView`，而是独立的 `KortixComputer` 链路：
+  - `referance/suna/apps/frontend/src/components/thread/kortix-computer/KortixComputer.tsx`
+  - `referance/suna/apps/frontend/src/stores/kortix-computer-store.ts`
+  - `referance/suna/apps/frontend/src/components/thread/kortix-computer/components/NavigationControls.tsx`
+  - `referance/suna/apps/frontend/src/components/thread/kortix-computer/FileBrowserView.tsx`
+  - `referance/suna/apps/frontend/src/hooks/messages/useThreadToolCalls.ts`
+- 已把该链路补进专题设计文档：
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/12_Suna预览卡片与Altus产物预览对齐设计.md`
+- 文档新增内容包括：
+  - `Actions / Files` 查看器源码入口
+  - replay state model
+  - oneceo 目标组件与状态字段
+  - 从 `managed_tool` 原子消息跳到 replay step 的联动要求
+- 同步更新：
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/07_前端对话页与交互状态.md`
+  - `docs/agent研发文档/Altus接管模式参照Suna重构设计/README.md`
+- 本轮仍停在文档层，未开始这部分代码实现，等待用户确认后继续开发。
+
+## Altus Actions / Files / Replay 第一版实现
+
+- 已新增：
+  - `apps/web/client/src/components/AltusRunReplayDrawer.tsx`
+- 已在 `apps/web/client/src/pages/Home.tsx` 接入：
+  - managed run 级 `replay actions / files` 聚合
+  - 从 `managed_tool` 原子消息点击后打开 replay drawer
+  - 自动定位到对应 `toolCallId` 的 step
+  - `Actions / Files`
+  - `Prev / Next / Jump to Latest`
+- `Files` 视图当前复用了已有：
+  - `AltusArtifactPreviewCard`
+  - 直接显示网页类 `Preview / Code / Open`
+- 已执行：
+  - `pnpm --filter web check`
+- 结果：
+  - 前端类型检查通过
+- 当前仍未覆盖：
+  - 输入区附近的 floating preview
+  - 过程中的流式 richer preview
+
+## Altus 产物卡片文件读取修复
+
+- 用户反馈 `AltusArtifactPreviewCard` 在 `Code` 标签读取 `game.js` 时出现 `request failed: 409`
+- 排查结果：
+  - 问题不在卡片本身，而在后端 `workspace/file` 与 `workspace/raw` 路由对 Altus/E2B 也沿用了 `runtimeStatus !== ready` 的门禁
+  - Altus 文件读取实际直走 E2B，这层门禁会误判，导致 `Code / Open / iframe preview` 在 run 完成后被挡住
+- 已修复：
+  - `apps/api/src/routes/task-creation-routes.ts`
+  - 对 `Altus / Codex` 这类 E2B workspace executor，读取文件时不再强依赖非 E2B 的 runtime ready 状态
+- 已执行：
+  - `pnpm --filter web check`
+  - `pnpm --filter api exec tsc --noEmit --pretty false 2>&1 | rg "task-creation-routes\\.ts|workspace/file|workspace/raw"`
+- 结果：
+  - 前端检查通过
+  - API 侧仍有仓库内既有的 `task-creation-routes.ts` 历史类型错误，但这轮改动附近没有新增与 `workspace/file/raw` 相关的新报错
+
+## Altus 产物卡片样式收口
+
+- 继续优化：
+  - `apps/web/client/src/components/AltusArtifactPreviewCard.tsx`
+- 已调整：
+  - 非网页文件不再显示禁用的 `Preview` 标签
+  - 非网页文件不再强占网页预览高度，改为更贴近代码查看器的卡片高度
+- 已执行：
+  - `pnpm --filter web check`
+- 结果：
+  - 前端类型检查通过
+
+## Altus 最终网页卡片与内部预览收口
+
+- 用户进一步明确：
+  - 最终完成卡片不是代码文件展示器
+  - 它只应该承载网页类产物预览
+  - 右上角按钮应进入 oneceo 内部右侧 preview viewer
+- 已调整：
+  - `apps/web/client/src/components/AltusArtifactPreviewCard.tsx`
+    - 新增 `displayMode`
+    - `web-preview` 模式下只保留 HTML 产物
+    - 恢复右上角 `Open in viewer` 按钮，并改为内部 viewer 语义
+  - `apps/web/client/src/components/OpencodePreviewPanel.tsx`
+    - 新增 `selectedWorkspacePath` 受控入口，允许外部直接打开指定 workspace 文件
+  - `apps/web/client/src/pages/Home.tsx`
+    - 新增 `openWorkspacePreview(path)` 统一入口
+    - 最终 `managed_artifact_card` 只在 run 完成后展示网页类产物
+    - 点击最终卡片右上角按钮时，打开 oneceo 右侧文件预览面板并定位到对应 HTML 文件
+    - replay `Files` 视图的 `Open` 也改走内部 preview 链路
 - 已执行：
   - `pnpm --filter web check`
 - 结果：

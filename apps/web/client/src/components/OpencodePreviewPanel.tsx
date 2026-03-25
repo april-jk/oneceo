@@ -83,6 +83,7 @@ interface OpencodePreviewPanelProps {
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
   className?: string;
+  selectedWorkspacePath?: string | null;
 }
 
 type PreviewTab = "files" | "changes" | "debug" | "deployment";
@@ -112,6 +113,7 @@ export default function OpencodePreviewPanel({
   runtimeStarting,
   onEnsureRuntime,
   className,
+  selectedWorkspacePath,
 }: OpencodePreviewPanelProps) {
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
 
@@ -484,6 +486,25 @@ export default function OpencodePreviewPanel({
     setFileError(null);
     setFileLoading(false);
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!open || !sessionId || !selectedWorkspacePath) return;
+    const normalizedTarget = normalizeWorkspacePath(selectedWorkspacePath);
+    const normalizedSelected = selectedPath
+      ? normalizeWorkspacePath(selectedPath)
+      : "";
+    if (!normalizedTarget || normalizedTarget === normalizedSelected) {
+      return;
+    }
+    void handleFileSelect(normalizedTarget);
+  }, [
+    open,
+    selectedPath,
+    selectedWorkspacePath,
+    sessionId,
+    runtimeReady,
+    runtimeStarting,
+  ]);
 
   useEffect(() => {
     debugBootRef.current = false;

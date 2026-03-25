@@ -207,6 +207,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 const PORT = process.env.PORT || 4000;
 let shuttingDown = false;
+let isListening = false;
+let listenRetryTimer: NodeJS.Timeout | null = null;
+let listenAttempts = 0;
+const maxListenRetries = Math.max(0, Number(process.env.API_PORT_RETRY_ATTEMPTS || 12));
+const listenRetryDelayMs = Math.max(100, Number(process.env.API_PORT_RETRY_DELAY_MS || 500));
 
 async function shutdown(signal: string, exitCode = 0) {
   if (shuttingDown) return;
@@ -215,6 +220,10 @@ async function shutdown(signal: string, exitCode = 0) {
   console.log(`[API] shutdown start: ${signal}`);
 
   try {
+    if (listenRetryTimer) {
+      clearTimeout(listenRetryTimer);
+      listenRetryTimer = null;
+    }
     stopSandboxArchiveJob();
   } catch (error) {
     console.warn('[API] stopSandboxArchiveJob failed:', error);
@@ -234,7 +243,11 @@ async function shutdown(signal: string, exitCode = 0) {
 
   await new Promise<void>((resolve) => {
     try {
-      httpServer.close(() => resolve());
+      if (isListening) {
+        httpServer.close(() => resolve());
+      } else {
+        resolve();
+      }
     } catch (_error) {
       resolve();
     }
@@ -250,13 +263,30 @@ async function shutdown(signal: string, exitCode = 0) {
 }
 
 httpServer.on('error', (error: any) => {
-  if (error?.code === 'EADDRINUSE') {
+  if (error?.code === 'EADDRINUSE' && !isListening && !shuttingDown) {
+    if (listenAttempts < maxListenRetries) {
+      listenAttempts += 1;
+      console.warn(
+        `[API] Port ${PORT} is temporarily in use. Retry ${listenAttempts}/${maxListenRetries} in ${listenRetryDelayMs}ms.`
+      );
+      if (listenRetryTimer) {
+        clearTimeout(listenRetryTimer);
+      }
+      listenRetryTimer = setTimeout(() => {
+        listenRetryTimer = null;
+        if (!shuttingDown && !isListening) {
+          httpServer.listen(PORT);
+        }
+      }, listenRetryDelayMs);
+      return;
+    }
     console.error(
       `[API] Port ${PORT} is already in use. Another api dev process may still be running.`
     );
-  } else {
-    console.error('[API] httpServer error:', error);
+    void shutdown('httpServer:error', 1);
+    return;
   }
+  console.error('[API] httpServer error:', error);
   void shutdown('httpServer:error', 1);
 });
 
@@ -268,6 +298,8 @@ async function startServer() {
   await connectorStorageBootstrap.ensureReady();
 
   httpServer.listen(PORT, () => {
+    isListening = true;
+    listenAttempts = 0;
     console.log('');
     console.log('🚀 oneceo.ai API Server');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

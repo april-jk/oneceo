@@ -59,6 +59,13 @@ import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
+import AltusArtifactPreviewCard, {
+  type AltusArtifactFile,
+} from "@/components/AltusArtifactPreviewCard";
+import AltusRunReplayDrawer, {
+  type AltusReplayAction,
+  type AltusReplayFile,
+} from "@/components/AltusRunReplayDrawer";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -76,7 +83,10 @@ import {
 } from "@/hooks/useTaskCreationAgent";
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
-import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
+import {
+  getWorkspaceRawFileUrl,
+  uploadTaskCreationAttachment,
+} from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
@@ -158,9 +168,20 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
+  const [altusReplayOpen, setAltusReplayOpen] = useState(false);
+  const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
+  const [altusReplayView, setAltusReplayView] = useState<"actions" | "files">(
+    "actions",
+  );
+  const [altusReplayIndex, setAltusReplayIndex] = useState(0);
+  const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
+    useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMaximized, setPreviewMaximized] = useState(false);
+  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<string | null>(
+    null,
+  );
   const [previewTab, setPreviewTab] = useState<
     "files" | "changes" | "debug" | "deployment"
   >("files");
@@ -574,6 +595,10 @@ export default function Home() {
   ];
 
   const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
+  const managedReplayByRun = useMemo(
+    () => buildManagedReplayData(messages),
+    [messages],
+  );
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
   const hasSendDraft = Boolean(message.trim()) || attachments.length > 0;
   const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
@@ -640,6 +665,7 @@ export default function Home() {
     filePath?: string | null;
     messageIndex?: number | null;
   }) => {
+    setPreviewWorkspacePath(null);
     setPreviewTab("changes");
     setPreviewOpen(true);
     const target =
@@ -651,8 +677,75 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
+  const openWorkspacePreview = (path: string) => {
+    const normalizedPath = String(path || "").trim().replace(/\\/g, "/");
+    if (!normalizedPath) return;
+    setPreviewWorkspacePath(normalizedPath);
+    setPreviewTab("files");
+    setPreviewOpen(true);
+  };
+
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
+  const activeAltusReplay =
+    altusReplayRunId ? managedReplayByRun.get(altusReplayRunId) || null : null;
+  const activeAltusReplayIndex =
+    activeAltusReplay && activeAltusReplay.actions.length > 0
+      ? Math.min(
+          Math.max(0, altusReplayIndex),
+          activeAltusReplay.actions.length - 1,
+        )
+      : 0;
+
+  const openAltusReplay = (
+    runId: string,
+    options?: {
+      toolCallId?: string | null;
+      view?: "actions" | "files";
+    },
+  ) => {
+    if (!runId) return;
+    setAltusReplayRunId(runId);
+    setAltusReplayView(options?.view || "actions");
+    setAltusReplayOpen(true);
+    if (options?.toolCallId) {
+      setPendingAltusReplayToolCallId(options.toolCallId);
+    } else {
+      const replay = managedReplayByRun.get(runId);
+      setAltusReplayIndex(Math.max(0, (replay?.actions.length || 1) - 1));
+      setPendingAltusReplayToolCallId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeAltusReplay) {
+      return;
+    }
+    if (pendingAltusReplayToolCallId) {
+      const action = activeAltusReplay.actions.find(
+        (item) => item.toolCallId === pendingAltusReplayToolCallId,
+      );
+      if (action) {
+        setAltusReplayIndex(action.stepIndex);
+        setPendingAltusReplayToolCallId(null);
+        return;
+      }
+    }
+    if (activeAltusReplay.actions.length === 0) {
+      if (altusReplayIndex !== 0) {
+        setAltusReplayIndex(0);
+      }
+      return;
+    }
+    const maxIndex = activeAltusReplay.actions.length - 1;
+    if (altusReplayIndex > maxIndex) {
+      setAltusReplayIndex(maxIndex);
+    }
+  }, [
+    activeAltusReplay,
+    altusReplayIndex,
+    pendingAltusReplayToolCallId,
+  ]);
 
   useEffect(() => {
     if (!previewOpen && previewMaximized) {
@@ -676,6 +769,7 @@ export default function Home() {
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
+        selectedWorkspacePath={previewWorkspacePath}
         className="h-full min-h-0 w-full"
       />
     </section>
@@ -780,6 +874,8 @@ export default function Home() {
                   key={item.messageKey || `chat-item-${index}`}
                   item={item}
                   onOpenDiffPreview={openDiffPreview}
+                  onOpenManagedReplay={openAltusReplay}
+                  onOpenWorkspacePreview={openWorkspacePreview}
                 />
               ))}
             </AnimatePresence>
@@ -1257,6 +1353,29 @@ export default function Home() {
         onOpenChange={setShowRuntimeDrawer}
         runtime={runtime}
       />
+      {activeAltusReplay && sessionId ? (
+        <AltusRunReplayDrawer
+          open={altusReplayOpen}
+          onOpenChange={setAltusReplayOpen}
+          sessionId={sessionId}
+          runId={activeAltusReplay.runId}
+          runTitle="Altus Actions"
+          actions={activeAltusReplay.actions}
+          files={activeAltusReplay.files}
+          currentIndex={activeAltusReplayIndex}
+          latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
+          onSelectIndex={setAltusReplayIndex}
+          onJumpToLatest={() =>
+            setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
+          }
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
+          onOpenFile={(path) => {
+            setAltusReplayOpen(false);
+            openWorkspacePreview(path);
+          }}
+        />
+      ) : null}
     </WorkspaceLayout>
   );
 }
@@ -1326,12 +1445,22 @@ export type ChatItem =
     }
   | {
       kind: "managed_tool";
+      runId: string;
+      toolCallId: string;
       eventType: string;
       toolName: string;
       status: "running" | "completed" | "failed" | "unknown";
       summary?: string;
       detail?: string;
+      artifactPaths?: string[];
       metadata?: Record<string, unknown>;
+      messageKey?: string;
+    }
+  | {
+      kind: "managed_artifact_card";
+      sessionId: string;
+      runId: string;
+      artifacts: AltusArtifactFile[];
       messageKey?: string;
     }
   | {
@@ -1406,6 +1535,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const finalizedPartIds = new Set<string>();
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
+  const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
+  const emittedManagedArtifactRuns = new Set<string>();
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -1441,6 +1572,21 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     const existing = codexTurnFilePaths.get(normalizedTurnId) || [];
     if (existing.includes(normalizedPath)) return;
     codexTurnFilePaths.set(normalizedTurnId, [...existing, normalizedPath]);
+  };
+
+  const mergeManagedArtifact = (runId: string, artifact: AltusArtifactFile) => {
+    const normalizedRunId = runId.trim();
+    const normalizedPath = artifact.path.trim().replace(/\\/g, "/");
+    if (!normalizedRunId || !normalizedPath) return;
+    const existing = managedArtifactsByRun.get(normalizedRunId) || [];
+    if (existing.some((item) => item.path === normalizedPath)) return;
+    managedArtifactsByRun.set(normalizedRunId, [
+      ...existing,
+      {
+        path: normalizedPath,
+        previewType: inferManagedArtifactPreviewType(normalizedPath),
+      },
+    ]);
   };
 
   for (let index = 0; index < messages.length; index += 1) {
@@ -1726,6 +1872,34 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "status_update") {
+      const metadata = toRecord(message.metadata);
+      if (isManagedExecutionEvent(metadata)) {
+        const managedEventType = asText(metadata.eventType).toLowerCase();
+        const runId = asText(metadata.runId);
+        const sessionIdForArtifact =
+          asText(message.sessionId) || asText(metadata.sessionId);
+        if (
+          managedEventType === "run_completed" &&
+          runId &&
+          sessionIdForArtifact &&
+          !emittedManagedArtifactRuns.has(runId)
+        ) {
+          const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
+            (artifact) => artifact.previewType === "web",
+          );
+          if (artifacts.length > 0) {
+            flushProgress();
+            items.push({
+              kind: "managed_artifact_card",
+              sessionId: sessionIdForArtifact,
+              runId,
+              artifacts,
+              messageKey: `managed:${runId}:artifact_card`,
+            });
+            emittedManagedArtifactRuns.add(runId);
+          }
+        }
+      }
       const label = message.content || "状态更新";
       if (isCodexControlStatusLabel(label)) {
         continue;
@@ -1750,6 +1924,22 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (isManagedExecutionEvent(metadata)) {
         const managedEventType = asText(metadata.eventType).toLowerCase();
         const managedToolName = asText(metadata.toolName) || "tool";
+        const managedRunId = asText(metadata.runId);
+        const managedToolCallId =
+          asText(metadata.toolCallId) ||
+          message.messageKey ||
+          `${managedRunId}:${managedToolName}:${index}`;
+        const artifactPath = extractManagedArtifactPath(managedToolName, metadata);
+        if (
+          managedEventType === "tool_call_completed" &&
+          managedRunId &&
+          artifactPath
+        ) {
+          mergeManagedArtifact(managedRunId, {
+            path: artifactPath,
+            previewType: inferManagedArtifactPreviewType(artifactPath),
+          });
+        }
         if (
           managedEventType === "tool_call_started" ||
           managedEventType === "tool_call_progress" ||
@@ -1759,6 +1949,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "managed_tool",
+            runId: managedRunId,
+            toolCallId: managedToolCallId,
             eventType: managedEventType,
             toolName: managedToolName,
             status:
@@ -1769,6 +1961,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
                   : "running",
             summary: formatManagedToolSummary(managedToolName, metadata),
             detail: formatManagedToolDetail(managedToolName, metadata),
+            artifactPaths: collectManagedReplayArtifactPaths(
+              managedToolName,
+              metadata,
+            ),
             metadata,
             messageKey: message.messageKey,
           });
@@ -2921,6 +3117,8 @@ function CodexExplanationMessage({
 function MessageBubble({
   item,
   onOpenDiffPreview,
+  onOpenManagedReplay,
+  onOpenWorkspacePreview,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -2928,6 +3126,14 @@ function MessageBubble({
     filePath?: string | null;
     messageIndex?: number | null;
   }) => void;
+  onOpenManagedReplay?: (
+    runId: string,
+    options?: {
+      toolCallId?: string | null;
+      view?: "actions" | "files";
+    },
+  ) => void;
+  onOpenWorkspacePreview?: (path: string) => void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -3079,7 +3285,25 @@ function MessageBubble({
   if (item.kind === "managed_tool") {
     return (
       <div data-message-key={item.messageKey}>
-        <ManagedToolCard item={item} />
+        <ManagedToolCard
+          item={item}
+          onOpenReplay={(runId, toolCallId) =>
+            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          }
+        />
+      </div>
+    );
+  }
+
+  if (item.kind === "managed_artifact_card") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <AltusArtifactPreviewCard
+          sessionId={item.sessionId}
+          artifacts={item.artifacts}
+          displayMode="web-preview"
+          onOpenViewer={onOpenWorkspacePreview}
+        />
       </div>
     );
   }
@@ -4574,10 +4798,11 @@ function OpencodeToolCard({
 
 function ManagedToolCard({
   item,
+  onOpenReplay,
 }: {
   item: Extract<ChatItem, { kind: "managed_tool" }>;
+  onOpenReplay?: (runId: string, toolCallId: string) => void;
 }) {
-  const [detailOpen, setDetailOpen] = useState(false);
   const displayName = getManagedToolDisplayName(item.toolName);
   const icon =
     item.toolName === "shell_execute"
@@ -4627,104 +4852,95 @@ function ManagedToolCard({
         : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
 
   return (
-    <>
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.18 }}
-        className="w-full"
-      >
-        <HoverCard openDelay={140} closeDelay={80}>
-          <HoverCardTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setDetailOpen(true)}
-              className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
-            >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-              <span className="min-w-0 flex items-center gap-2 overflow-hidden">
-                <span className="shrink-0 text-[11px] font-medium leading-5">
-                  {displayName}
-                </span>
-                <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
-                  {statusLabel}
-                </span>
-                {summaryText ? (
-                  <span className="truncate text-[11px] leading-5 opacity-75">
-                    {summaryText}
-                  </span>
-                ) : null}
-              </span>
-            </button>
-          </HoverCardTrigger>
-          <HoverCardContent
-            align="start"
-            side="top"
-            className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18 }}
+      className="w-full"
+    >
+      <HoverCard openDelay={140} closeDelay={80}>
+        <HoverCardTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenReplay && item.runId && item.toolCallId) {
+                onOpenReplay(item.runId, item.toolCallId);
+              }
+            }}
+            className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
           >
-            <div className="space-y-0 border-b border-current/10 px-4 py-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
-                  <Icon className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium leading-5">
-                      {displayName}
-                    </span>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
-                      {statusLabel}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 text-[11px] leading-5 opacity-70">
-                    {item.toolName}
-                  </div>
-                </div>
-              </div>
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+            <span className="min-w-0 flex items-center gap-2 overflow-hidden">
+              <span className="shrink-0 text-[11px] font-medium leading-5">
+                {displayName}
+              </span>
+              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                {statusLabel}
+              </span>
               {summaryText ? (
-                <p className="mt-3 text-[12px] leading-5 opacity-85">
+                <span className="truncate text-[11px] leading-5 opacity-75">
                   {summaryText}
-                </p>
+                </span>
               ) : null}
-            </div>
-            <div className="space-y-3 px-4 py-3">
-              <div className="space-y-1">
-                <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
-                  结果摘要
+            </span>
+          </button>
+        </HoverCardTrigger>
+        <HoverCardContent
+          align="start"
+          side="top"
+          className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+        >
+          <div className="space-y-0 border-b border-current/10 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
+                <Icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium leading-5">
+                    {displayName}
+                  </span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                    {statusLabel}
+                  </span>
                 </div>
-                <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
-                  {previewText}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
-                  更多信息
+                <div className="mt-0.5 text-[11px] leading-5 opacity-70">
+                  {item.toolName}
                 </div>
-                <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
-                  {hoverPreview.preview}
-                </p>
-              </div>
-              <div className="text-[11px] leading-5 opacity-60">
-                点击消息可查看完整详情
               </div>
             </div>
-          </HoverCardContent>
-        </HoverCard>
-      </motion.div>
-      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{displayName}</DialogTitle>
-            <DialogDescription>Altus 原子工具消息详情</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
-            {item.detail || item.summary || item.toolName}
+            {summaryText ? (
+              <p className="mt-3 text-[12px] leading-5 opacity-85">
+                {summaryText}
+              </p>
+            ) : null}
           </div>
-        </DialogContent>
-      </Dialog>
-    </>
+          <div className="space-y-3 px-4 py-3">
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                结果摘要
+              </div>
+              <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
+                {previewText}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                更多信息
+              </div>
+              <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
+                {hoverPreview.preview}
+              </p>
+            </div>
+            <div className="text-[11px] leading-5 opacity-60">
+              点击消息可查看回放与文件
+            </div>
+          </div>
+        </HoverCardContent>
+      </HoverCard>
+    </motion.div>
   );
 }
 
@@ -4758,6 +4974,198 @@ function isManagedExecutionEvent(metadataRaw: unknown) {
     asText(metadata.executionMode).toLowerCase() === "managed" ||
     asText(metadata.executor).toLowerCase() === "altus"
   );
+}
+
+function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {
+  if (!outputPreviewRaw) return {};
+  if (typeof outputPreviewRaw === "string") {
+    const trimmed = outputPreviewRaw.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return toRecord(parsed);
+    } catch {
+      return {};
+    }
+  }
+  return toRecord(outputPreviewRaw);
+}
+
+function collectManagedReplayArtifactPaths(
+  toolName: string,
+  metadataRaw: unknown,
+): string[] {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const paths = new Set<string>();
+  const pushPath = (value: unknown) => {
+    const path = asText(value).replace(/\\/g, "/");
+    if (!path) return;
+    paths.add(path);
+  };
+
+  if (toolName === "write_file" || toolName === "read_file") {
+    pushPath(args.path);
+    pushPath(output.path);
+  }
+
+  if (toolName === "complete_task" && Array.isArray((args as { attachments?: unknown[] }).attachments)) {
+    for (const item of (args as { attachments?: unknown[] }).attachments || []) {
+      const record = toRecord(item);
+      pushPath(record.path);
+      pushPath(record.filePath);
+    }
+  }
+
+  return Array.from(paths);
+}
+
+function buildManagedReplayData(messages: AgentMessage[]) {
+  const actionsByRun = new Map<string, AltusReplayAction[]>();
+  const filesByRun = new Map<string, AltusReplayFile[]>();
+  const actionIndexByRun = new Map<string, Map<string, number>>();
+  const fileIndexByRun = new Map<string, Map<string, AltusReplayFile>>();
+
+  const ensureActions = (runId: string) => {
+    const existing = actionsByRun.get(runId);
+    if (existing) return existing;
+    const created: AltusReplayAction[] = [];
+    actionsByRun.set(runId, created);
+    actionIndexByRun.set(runId, new Map<string, number>());
+    return created;
+  };
+
+  const ensureFiles = (runId: string) => {
+    const existing = filesByRun.get(runId);
+    if (existing) return existing;
+    const created: AltusReplayFile[] = [];
+    filesByRun.set(runId, created);
+    fileIndexByRun.set(runId, new Map<string, AltusReplayFile>());
+    return created;
+  };
+
+  const upsertFile = (
+    runId: string,
+    pathRaw: string,
+    sourceToolCallId?: string,
+    sourceStepIndex?: number,
+  ) => {
+    const path = pathRaw.trim().replace(/\\/g, "/");
+    if (!path) return;
+    const files = ensureFiles(runId);
+    const index = fileIndexByRun.get(runId)!;
+    if (index.has(path)) {
+      const existing = index.get(path)!;
+      if (typeof sourceStepIndex === "number") {
+        existing.lastSourceStepIndex = sourceStepIndex;
+      }
+      if (sourceToolCallId) {
+        existing.lastSourceToolCallId = sourceToolCallId;
+      }
+      return;
+    }
+    const file: AltusReplayFile = {
+      path,
+      displayName: getFilename(path) || path,
+      previewType: inferManagedArtifactPreviewType(path),
+      lastSourceToolCallId: sourceToolCallId,
+      lastSourceStepIndex: sourceStepIndex,
+    };
+    files.push(file);
+    index.set(path, file);
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type !== "executor_event") continue;
+    const metadata = toRecord(message.metadata);
+    if (!isManagedExecutionEvent(metadata)) continue;
+    const runId = asText(metadata.runId);
+    if (!runId) continue;
+    const eventType = asText(metadata.eventType).toLowerCase();
+    if (
+      eventType !== "tool_call_started" &&
+      eventType !== "tool_call_progress" &&
+      eventType !== "tool_call_completed" &&
+      eventType !== "tool_call_failed"
+    ) {
+      continue;
+    }
+
+    const toolCallId =
+      asText(metadata.toolCallId) ||
+      message.messageKey ||
+      `${runId}:${eventType}:${index}`;
+    const toolName = asText(metadata.toolName) || "tool";
+    const actions = ensureActions(runId);
+    const actionIndex = actionIndexByRun.get(runId)!;
+    let stepIndex = actionIndex.get(toolCallId);
+    if (stepIndex === undefined) {
+      stepIndex = actions.length;
+      actionIndex.set(toolCallId, stepIndex);
+      actions.push({
+        runId,
+        toolCallId,
+        stepIndex,
+        toolName,
+        displayName: getManagedToolDisplayName(toolName),
+        status:
+          eventType === "tool_call_failed"
+            ? "failed"
+            : eventType === "tool_call_completed"
+              ? "completed"
+              : "running",
+        summary: formatManagedToolSummary(toolName, metadata),
+        detail: formatManagedToolDetail(toolName, metadata),
+        artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+      });
+    } else {
+      const action = actions[stepIndex];
+      actions[stepIndex] = {
+        ...action,
+        status:
+          eventType === "tool_call_failed"
+            ? "failed"
+            : eventType === "tool_call_completed"
+              ? "completed"
+              : action.status === "completed" || action.status === "failed"
+                ? action.status
+                : "running",
+        summary: formatManagedToolSummary(toolName, metadata),
+        detail: formatManagedToolDetail(toolName, metadata),
+        artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+      };
+    }
+
+    const action = actions[stepIndex];
+    for (const path of action.artifactPaths) {
+      upsertFile(runId, path, action.toolCallId, action.stepIndex);
+    }
+  }
+
+  return new Map(
+    Array.from(actionsByRun.entries()).map(([runId, actions]) => [
+      runId,
+      {
+        runId,
+        actions,
+        files: filesByRun.get(runId) || [],
+      },
+    ]),
+  );
+}
+
+function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previewType"] {
+  return /\.(html?)$/i.test(path) ? "web" : "code";
+}
+
+function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
+  if (toolName !== "write_file") return "";
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  return asText(args.path) || asText(output.path);
 }
 
 function getManagedToolDisplayName(toolName: string) {
@@ -4813,7 +5221,7 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
 function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
-  const output = toRecord(metadata.outputPreview);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const error = asText(metadata.error);
 
   if (error) return error;
@@ -4851,7 +5259,7 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
-  const output = toRecord(metadata.outputPreview);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const error = asText(metadata.error);
   const lines: string[] = [];
   const pushLine = (label: string, value: unknown) => {

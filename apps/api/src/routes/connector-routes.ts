@@ -2,6 +2,7 @@ import express from 'express';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
+import { githubConnectorRepositoryService } from '../services/github-connector-repository-service';
 import { userConnectorService } from '../services/user-connector-service';
 
 const router = express.Router();
@@ -36,9 +37,9 @@ router.get('/catalog', async (req, res) => {
 router.get('/me', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const [catalog, accounts] = await Promise.all([
+    const [catalog, profiles] = await Promise.all([
       userConnectorService.listCatalog(),
-      userConnectorService.listUserAccounts(currentUser.userId),
+      userConnectorService.listUserProfiles(currentUser.userId),
     ]);
     return res.json({
       success: true,
@@ -46,7 +47,7 @@ router.get('/me', async (req, res) => {
         userId: currentUser.userId,
         source: currentUser.source,
         catalog,
-        accounts,
+        profiles,
       },
     });
   } catch (error) {
@@ -54,14 +55,148 @@ router.get('/me', async (req, res) => {
   }
 });
 
+router.get('/github/profiles/:profileId/repositories', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const items = await githubConnectorRepositoryService.listRepositories(
+      currentUser.userId,
+      req.params.profileId
+    );
+    return res.json({
+      success: true,
+      data: {
+        items,
+      },
+    });
+  } catch (error) {
+    return handleError(res, error, '获取 GitHub 仓库列表失败', 401);
+  }
+});
+
+router.post('/:connectorKey/profiles', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const connectorKey = parseConnectorKey(req.params.connectorKey);
+    const saved = await userConnectorService.createProfile(currentUser.userId, connectorKey, {
+      profileName: req.body?.profileName,
+      displayName: req.body?.displayName,
+      config: req.body?.config,
+      credentials: req.body?.credentials,
+      metadata: req.body?.metadata,
+    });
+    return res.json({
+      success: true,
+      data: saved,
+    });
+  } catch (error) {
+    return handleError(res, error, '创建连接器 profile 失败');
+  }
+});
+
+router.put('/profiles/:profileId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const saved = await userConnectorService.updateProfile(currentUser.userId, req.params.profileId, {
+      profileName: req.body?.profileName,
+      displayName: req.body?.displayName,
+      config: req.body?.config,
+      credentials: req.body?.credentials,
+      metadata: req.body?.metadata,
+    });
+    return res.json({
+      success: true,
+      data: saved,
+    });
+  } catch (error) {
+    return handleError(res, error, '更新连接器 profile 失败');
+  }
+});
+
+router.delete('/profiles/:profileId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    await userConnectorService.deleteProfile(currentUser.userId, req.params.profileId);
+    return res.json({
+      success: true,
+      data: {
+        deleted: true,
+      },
+    });
+  } catch (error) {
+    return handleError(res, error, '删除连接器 profile 失败');
+  }
+});
+
+router.put('/profiles/:profileId/default', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const saved = await userConnectorService.setDefaultProfile(currentUser.userId, req.params.profileId);
+    return res.json({
+      success: true,
+      data: saved,
+    });
+  } catch (error) {
+    return handleError(res, error, '设置默认 profile 失败');
+  }
+});
+
+router.post('/profiles/:profileId/oauth/start', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const result = await userConnectorService.startOAuthForProfile(currentUser.userId, req.params.profileId, {
+      redirectUri: String(req.body?.redirectUri || '').trim(),
+      returnToSessionId: String(req.body?.returnToSessionId || '').trim() || undefined,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, '启动连接器 OAuth 失败');
+  }
+});
+
+router.post('/profiles/:profileId/oauth/callback', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const result = await userConnectorService.completeOAuthByProfile(currentUser.userId, req.params.profileId, {
+      state: String(req.body?.state || '').trim(),
+      code: String(req.body?.code || '').trim(),
+      redirectUri: String(req.body?.redirectUri || '').trim(),
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, '完成连接器 OAuth 失败');
+  }
+});
+
+router.delete('/profiles/:profileId/auth', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const result = await userConnectorService.clearProfileAuth(currentUser.userId, req.params.profileId);
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return handleError(res, error, '断开连接器授权失败');
+  }
+});
+
+// Backward-compatible endpoints while the frontend migrates to profile-based APIs.
 router.put('/:connectorKey', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const connectorKey = parseConnectorKey(req.params.connectorKey);
     const saved = await userConnectorService.saveUserConnector(currentUser.userId, connectorKey, {
+      profileName: req.body?.profileName,
       displayName: req.body?.displayName,
       config: req.body?.config,
       credentials: req.body?.credentials,
+      metadata: req.body?.metadata,
     });
     return res.json({
       success: true,

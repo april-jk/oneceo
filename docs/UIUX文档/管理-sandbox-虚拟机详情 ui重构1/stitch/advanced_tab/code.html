@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Runtime Inspector - Advanced Debugging Workbench</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container": "#edeef0",
+                        "on-tertiary-container": "#ffc6b2",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "inverse-surface": "#2e3132",
+                        "surface-container-high": "#e7e8ea",
+                        "on-primary-container": "#c4d2ff",
+                        "background": "#f8f9fb",
+                        "on-primary-fixed": "#001848",
+                        "outline-variant": "#c3c6d6",
+                        "tertiary": "#7b2600",
+                        "error-container": "#ffdad6",
+                        "secondary-container": "#8af5be",
+                        "tertiary-fixed-dim": "#ffb59b",
+                        "on-secondary-fixed": "#002113",
+                        "primary-fixed": "#dae2ff",
+                        "on-tertiary-fixed-variant": "#812800",
+                        "on-primary-fixed-variant": "#0040a2",
+                        "on-surface-variant": "#434654",
+                        "on-background": "#191c1e",
+                        "tertiary-fixed": "#ffdbcf",
+                        "tertiary-container": "#a33500",
+                        "surface-container-low": "#f3f4f6",
+                        "on-secondary": "#ffffff",
+                        "on-tertiary-fixed": "#380d00",
+                        "surface-dim": "#d9dadc",
+                        "primary": "#003d9b",
+                        "on-error-container": "#93000a",
+                        "primary-fixed-dim": "#b2c5ff",
+                        "on-tertiary": "#ffffff",
+                        "primary-container": "#0052cc",
+                        "outline": "#737685",
+                        "on-error": "#ffffff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#005235",
+                        "secondary": "#006c47",
+                        "secondary-fixed-dim": "#71dba6",
+                        "on-primary": "#ffffff",
+                        "surface": "#f8f9fb",
+                        "on-secondary-container": "#00714b",
+                        "secondary-fixed": "#8df7c1",
+                        "inverse-on-surface": "#f0f1f3",
+                        "surface-variant": "#e1e2e4",
+                        "surface-bright": "#f8f9fb",
+                        "surface-tint": "#0c56d0",
+                        "surface-container-highest": "#e1e2e4",
+                        "inverse-primary": "#b2c5ff"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"],
+                        "mono": ["JetBrains Mono", "monospace"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c3c6d6; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #737685; }
+        .terminal-bg { background-color: #1e1e1e; }
+    </style>
+</head>
+<body class="bg-background font-body text-on-surface antialiased overflow-hidden h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="bg-gradient-to-r from-[#003d9b] to-[#0052cc] dark:from-blue-900 dark:to-blue-800 text-white font-['Inter'] font-semibold tracking-tight text-sm docked full-width top-0 z-50 no-border shadow-lg shadow-[0_24px_48px_-12px_rgba(25,28,30,0.08)] flex justify-between items-center w-full px-6 py-3 shrink-0">
+<div class="flex items-center gap-6">
+<span class="text-lg font-bold text-white tracking-tighter">Runtime Inspector</span>
+<nav class="hidden md:flex gap-6 items-center">
+<a class="text-blue-100/80 hover:text-white transition-colors" href="#">Runtime List</a>
+<span class="text-white/40">/</span>
+<a class="text-white border-b-2 border-white pb-1" href="#">Sandbox-123</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-sm">
+<span class="material-symbols-outlined text-sm">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-xs placeholder-white/60 w-48" placeholder="Search sandbox..." type="text"/>
+</div>
+<button class="bg-secondary-container text-on-secondary-container px-3 py-1.5 text-xs font-bold hover:bg-secondary-fixed transition-all duration-200 active:scale-95">Refresh</button>
+<button class="bg-white text-primary px-3 py-1.5 text-xs font-bold hover:bg-surface-container-lowest transition-all duration-200 active:scale-95">Deploy Changes</button>
+<div class="flex gap-3 ml-4">
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 transition-all">settings</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 transition-all">help</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 transition-all">account_circle</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<aside class="bg-[#f3f4f6] dark:bg-slate-900 fixed left-0 top-0 h-screen w-[240px] z-40 no-line tonal-architecture-shift flat no-shadows border-r border-slate-200/20 flex flex-col h-full pt-16 pb-4 shrink-0">
+<div class="px-6 py-4 mb-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-lg" style="font-variation-settings: 'FILL' 1;">terminal</span>
+</div>
+<div>
+<div class="text-xs font-bold text-primary uppercase tracking-wider leading-tight">Sandbox-123</div>
+<div class="text-[10px] text-slate-500 font-mono tracking-tighter">ID: 88291-OM</div>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<div class="px-6 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">dashboard</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Overview</span>
+</div>
+<div class="px-6 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">hub</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Connectivity</span>
+</div>
+<div class="px-6 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">archive</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Archive</span>
+</div>
+<div class="px-6 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">monitoring</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Metrics</span>
+</div>
+<div class="bg-[#ffffff] dark:bg-slate-800 text-[#003d9b] dark:text-blue-400 font-bold border-l-4 border-[#003d9b] px-6 py-2 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">settings_input_component</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Advanced</span>
+</div>
+</nav>
+<div class="mt-auto px-6 space-y-1">
+<div class="py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">menu_book</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Documentation</span>
+</div>
+<div class="py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 cursor-pointer transition-all duration-150 flex items-center gap-3">
+<span class="material-symbols-outlined text-lg">support_agent</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Support</span>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="ml-[240px] flex-1 flex flex-col overflow-hidden">
+<!-- Breadcrumbs / Identity Summary -->
+<header class="bg-surface-container-lowest px-8 py-4 border-b border-outline-variant/10 flex items-center justify-between shrink-0">
+<div>
+<div class="flex items-center gap-2 text-xs text-outline mb-1">
+<span>Runtime List</span>
+<span class="material-symbols-outlined text-[10px]">chevron_right</span>
+<span class="text-primary font-semibold">Sandbox-123</span>
+</div>
+<h1 class="text-xl font-bold tracking-tight text-on-surface">Advanced Debugging Workbench</h1>
+</div>
+<div class="flex items-center gap-8">
+<div class="text-right">
+<div class="text-[10px] text-outline font-bold uppercase tracking-widest">Runtime Version</div>
+<div class="text-xs font-mono font-medium">v2.4.12-enterprise</div>
+</div>
+<div class="h-8 w-[1px] bg-outline-variant/20"></div>
+<div class="text-right">
+<div class="text-[10px] text-outline font-bold uppercase tracking-widest">Container Status</div>
+<div class="flex items-center gap-1.5 justify-end">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+<span class="text-xs font-semibold">Healthy</span>
+</div>
+</div>
+</div>
+</header>
+<!-- Scrollable Workbench Grid -->
+<div class="flex-1 overflow-y-auto p-6 bg-background custom-scrollbar">
+<div class="grid grid-cols-12 gap-6">
+<!-- Left Column: Command & Process -->
+<div class="col-span-12 lg:col-span-7 flex flex-col gap-6">
+<!-- Section 1: Command Execution (Shell) -->
+<section class="bg-surface-container-lowest rounded overflow-hidden flex flex-col h-[480px] border border-outline-variant/10">
+<div class="px-4 py-2 bg-surface-container-low flex justify-between items-center shrink-0">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">terminal</span>
+<h2 class="text-[10px] font-bold uppercase tracking-widest">Command Execution</h2>
+</div>
+<div class="flex gap-2">
+<button class="text-[10px] px-2 py-0.5 border border-outline-variant rounded hover:bg-surface-variant transition-colors">Clear</button>
+<button class="bg-primary text-white text-[10px] font-bold px-3 py-0.5 rounded shadow-sm hover:bg-primary-container active:scale-95 transition-all">Execute Command</button>
+</div>
+</div>
+<div class="p-4 border-b border-outline-variant/10 shrink-0">
+<div class="flex items-center gap-2 bg-surface-container-low p-2 rounded-sm font-mono text-sm group">
+<span class="text-primary font-bold">root@sandbox-123:~$</span>
+<input class="flex-1 bg-transparent border-none p-0 focus:ring-0 text-sm font-mono" placeholder="Enter command..." type="text" value="curl -X GET http://localhost:8080/health"/>
+</div>
+</div>
+<div class="flex-1 bg-inverse-surface p-4 font-mono text-xs overflow-y-auto custom-scrollbar leading-relaxed">
+<div class="text-secondary mb-1">[INFO] Execution started at 2023-10-27T10:14:22Z</div>
+<div class="text-inverse-on-surface opacity-90 mb-4">
+                                    HTTP/1.1 200 OK<br/>
+                                    Content-Type: application/json<br/>
+                                    Date: Fri, 27 Oct 2023 10:14:23 GMT<br/>
+                                    Connection: keep-alive<br/>
+                                    Keep-Alive: timeout=5<br/>
+                                    Transfer-Encoding: chunked<br/><br/>
+                                    {<br/>
+                                      "status": "UP",<br/>
+                                      "checks": {<br/>
+                                        "database": "CONNECTED",<br/>
+                                        "redis": "CONNECTED",<br/>
+                                        "disk_space": "OK (24GB remaining)"<br/>
+                                      }<br/>
+                                    }
+                                </div>
+<div class="text-secondary opacity-80 mt-2 border-t border-white/5 pt-2">Process exited with code 0</div>
+</div>
+</section>
+<!-- Section 3: Process Management -->
+<section class="bg-surface-container-lowest rounded border border-outline-variant/10 flex flex-col">
+<div class="px-4 py-2 bg-surface-container-low flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">view_list</span>
+<h2 class="text-[10px] font-bold uppercase tracking-widest">Process Management</h2>
+</div>
+<span class="text-[10px] text-outline">Auto-refreshing (2s)</span>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low/30 border-b border-outline-variant/10">
+<th class="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-outline">PID</th>
+<th class="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-outline">Command</th>
+<th class="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-outline">CPU</th>
+<th class="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-outline">MEM</th>
+<th class="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-outline text-right">Action</th>
+</tr>
+</thead>
+<tbody class="text-xs font-mono">
+<tr class="hover:bg-surface-container-high transition-colors">
+<td class="px-4 py-2">1</td>
+<td class="px-4 py-2 text-primary font-medium">/usr/bin/python3 main.py</td>
+<td class="px-4 py-2">2.4%</td>
+<td class="px-4 py-2">142MB</td>
+<td class="px-4 py-2 text-right">
+<button class="text-error font-bold px-2 py-0.5 hover:bg-error-container rounded transition-colors">Kill</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-high transition-colors border-t border-outline-variant/5">
+<td class="px-4 py-2">42</td>
+<td class="px-4 py-2 text-primary font-medium">redis-server *:6379</td>
+<td class="px-4 py-2">0.1%</td>
+<td class="px-4 py-2">12MB</td>
+<td class="px-4 py-2 text-right">
+<button class="text-error font-bold px-2 py-0.5 hover:bg-error-container rounded transition-colors">Kill</button>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-high transition-colors border-t border-outline-variant/5">
+<td class="px-4 py-2">512</td>
+<td class="px-4 py-2 text-primary font-medium">tail -f /var/log/syslog</td>
+<td class="px-4 py-2">0.5%</td>
+<td class="px-4 py-2">4MB</td>
+<td class="px-4 py-2 text-right">
+<button class="text-error font-bold px-2 py-0.5 hover:bg-error-container rounded transition-colors">Kill</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+<!-- Right Column: File, Port, Metadata -->
+<div class="col-span-12 lg:col-span-5 flex flex-col gap-6">
+<!-- Section 2: File Operations -->
+<section class="bg-surface-container-lowest rounded border border-outline-variant/10 flex flex-col h-[400px]">
+<div class="px-4 py-2 bg-surface-container-low flex justify-between items-center shrink-0">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">folder_open</span>
+<h2 class="text-[10px] font-bold uppercase tracking-widest">File Operations</h2>
+</div>
+<button class="text-[10px] text-primary font-bold">Upload</button>
+</div>
+<div class="p-3 bg-surface-container border-b border-outline-variant/10 shrink-0">
+<div class="flex items-center gap-2 bg-white px-2 py-1 rounded-sm border border-outline-variant/20">
+<span class="material-symbols-outlined text-xs text-outline">folder</span>
+<input class="flex-1 bg-transparent border-none p-0 text-xs font-mono focus:ring-0" type="text" value="/app/config/production/"/>
+</div>
+</div>
+<div class="flex-1 flex overflow-hidden">
+<!-- File List -->
+<div class="w-1/3 border-r border-outline-variant/10 overflow-y-auto custom-scrollbar">
+<div class="px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-surface-container-high cursor-pointer border-b border-outline-variant/5">
+<span class="material-symbols-outlined text-xs text-secondary">description</span>
+<span class="truncate">env.json</span>
+</div>
+<div class="px-3 py-1.5 flex items-center gap-2 text-xs bg-primary/5 text-primary font-bold border-b border-outline-variant/5">
+<span class="material-symbols-outlined text-xs">description</span>
+<span class="truncate">settings.yaml</span>
+</div>
+<div class="px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-surface-container-high cursor-pointer border-b border-outline-variant/5">
+<span class="material-symbols-outlined text-xs text-outline">article</span>
+<span class="truncate">README.md</span>
+</div>
+</div>
+<!-- File Viewer -->
+<div class="flex-1 bg-surface-container-low p-4 overflow-y-auto custom-scrollbar">
+<pre class="font-mono text-[10px] leading-relaxed text-on-surface-variant"># Production settings
+runtime:
+  mode: optimized
+  threads: 8
+  logging:
+    level: INFO
+    dest: stdout
+  
+services:
+  database:
+    host: 10.0.4.12
+    port: 5432
+    retry: 3
+    timeout: 30s</pre>
+</div>
+</div>
+</section>
+<!-- Section 4: Port Monitoring -->
+<section class="bg-surface-container-lowest rounded border border-outline-variant/10 overflow-hidden">
+<div class="px-4 py-2 bg-surface-container-low flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">lan</span>
+<h2 class="text-[10px] font-bold uppercase tracking-widest">Port Monitoring</h2>
+</div>
+<div class="p-4 space-y-2">
+<div class="flex items-center justify-between p-2 rounded bg-surface-container-low/50">
+<div class="flex items-center gap-3">
+<div class="text-[10px] font-mono bg-primary-fixed text-on-primary-fixed px-1.5 py-0.5 rounded">TCP</div>
+<div class="text-xs font-mono">0.0.0.0:8080</div>
+</div>
+<span class="material-symbols-outlined text-xs text-outline">arrow_forward</span>
+<div class="text-xs font-mono text-primary">Host:32841</div>
+</div>
+<div class="flex items-center justify-between p-2 rounded bg-surface-container-low/50">
+<div class="flex items-center gap-3">
+<div class="text-[10px] font-mono bg-secondary-container text-on-secondary-container px-1.5 py-0.5 rounded">TCP</div>
+<div class="text-xs font-mono">127.0.0.1:6379</div>
+</div>
+<span class="material-symbols-outlined text-xs text-outline">lock</span>
+<div class="text-xs font-mono text-outline">Internal Only</div>
+</div>
+</div>
+</section>
+<!-- Section 5: Action Executor & Metadata -->
+<section class="bg-surface-container-lowest rounded border border-outline-variant/10 overflow-hidden flex flex-col">
+<div class="px-4 py-2 bg-surface-container-low flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-sm text-primary">bolt</span>
+<h2 class="text-[10px] font-bold uppercase tracking-widest">Action Executor</h2>
+</div>
+<a class="text-[10px] text-primary flex items-center gap-1 hover:underline" href="#">
+                                    Full Runtime Info
+                                    <span class="material-symbols-outlined text-[10px]">open_in_new</span>
+</a>
+</div>
+<div class="p-4 space-y-3">
+<div class="space-y-1">
+<label class="text-[10px] font-bold text-outline uppercase">Select Action</label>
+<select class="w-full text-xs font-mono bg-surface-container border-outline-variant/20 rounded-sm focus:ring-primary focus:border-primary">
+<option>trigger_garbage_collection</option>
+<option>rotate_log_segments</option>
+<option>flush_internal_cache</option>
+<option>re-index_registry</option>
+</select>
+</div>
+<div class="space-y-1">
+<label class="text-[10px] font-bold text-outline uppercase">Input Payload (JSON)</label>
+<textarea class="w-full h-20 text-[10px] font-mono bg-surface-container-low border-outline-variant/20 rounded-sm focus:ring-primary focus:border-primary custom-scrollbar" placeholder='{"force": true, "timeout": 5000}'></textarea>
+</div>
+<button class="w-full py-2 bg-primary text-white text-xs font-bold rounded shadow-sm hover:shadow-md transition-all active:scale-[0.98]">Execute Action</button>
+<div class="pt-2">
+<div class="text-[10px] font-bold text-outline uppercase mb-1">Execution Result</div>
+<div class="bg-inverse-surface rounded-sm p-3 h-24 overflow-y-auto custom-scrollbar">
+<pre class="text-[10px] font-mono text-secondary-fixed-dim leading-tight">{
+  "success": true,
+  "freed_bytes": 1420984,
+  "latency_ms": 12,
+  "timestamp": "2023-10-27T10:15:02Z"
+}</pre>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

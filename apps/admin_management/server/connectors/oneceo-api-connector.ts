@@ -56,6 +56,15 @@ export type SandboxEnvironmentRecord = {
   closedAt?: string | null;
 };
 
+export type TaskDebugInfo = {
+  ready: boolean;
+  url?: string;
+  status?: string;
+  updatedAt?: string;
+  sandboxId?: string;
+  message?: string;
+};
+
 export type OsacMessageRecord = {
   type: string;
   requestId?: string;
@@ -196,8 +205,48 @@ export class OneceoApiConnector {
     );
   }
 
+  getTaskCreationDebug(sessionId: string) {
+    return this.request<TaskDebugInfo>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}/debug`);
+  }
+
+  startTaskCreationRuntime(sessionId: string) {
+    return this.request<Record<string, unknown>>(
+      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/runtime/start`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
   getSandboxEnvironment(sessionId: string) {
     return this.request<SandboxEnvironmentRecord>(`/api/sandbox/environment/${encodeURIComponent(sessionId)}`);
+  }
+
+  archiveSandboxEnvironment(sessionId: string) {
+    return this.request<Record<string, unknown>>(
+      `/api/sandbox/environment/${encodeURIComponent(sessionId)}/archive`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  restoreSandboxEnvironment(sessionId: string) {
+    return this.request<Record<string, unknown>>(
+      `/api/sandbox/environment/${encodeURIComponent(sessionId)}/restore`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  checkSandboxConnectivity(sessionId: string) {
+    return this.request<Record<string, unknown>>(
+      `/api/sandbox/environment/${encodeURIComponent(sessionId)}/connectivity-check`,
+      {
+        method: 'POST',
+      }
+    );
   }
 
   closeSandboxEnvironment(sessionId: string) {

@@ -426,6 +426,85 @@ export interface SandboxManagementOverview {
   sandboxes: E2bSandboxItem[];
 }
 
+export interface SandboxRuntimeRegistryItem {
+  sandboxId: string;
+  orchestratorSessionId: string;
+  taskSessionId?: string | null;
+  taskTitle?: string | null;
+  taskStatus?: string | null;
+  executor: string;
+  codexExecutionMode?: string | null;
+  template?: string | null;
+  alias?: string | null;
+  status: string;
+  sandboxState?: string | null;
+  archiveStatus?: string | null;
+  archiveDirty: boolean;
+  pendingArchiveUpdate: boolean;
+  lastActiveAt?: string | null;
+  lastActiveReason?: string | null;
+  opencodeBaseUrl?: string | null;
+  osacEndpoint?: string | null;
+  osacHostPort?: number | null;
+  trafficAccessTokenPresent: boolean;
+  startedAt?: string | null;
+  endAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  closedAt?: string | null;
+  riskTags: string[];
+  source: 'tracked' | 'live_only';
+}
+
+export interface SandboxRuntimeRegistry {
+  summary: {
+    total: number;
+    running: number;
+    paused: number;
+    closed: number;
+    pendingArchive: number;
+    archiveFailed: number;
+    risky: number;
+  };
+  distributions: {
+    executors: Array<{ label: string; value: number }>;
+    templates: Array<{ label: string; value: number }>;
+    archiveStatuses: Array<{ label: string; value: number }>;
+  };
+  items: SandboxRuntimeRegistryItem[];
+}
+
+export interface SandboxRuntimeDetail {
+  runtime: SandboxRuntimeRegistryItem;
+  trackedEnvironment: SandboxEnvironmentItem | null;
+  liveSandbox: E2bSandboxItem | null;
+  liveSandboxDetail: E2bSandboxDetail | null;
+  liveSandboxFullInfo: E2bSandboxFullInfo | null;
+  taskSession: ConversationSession | null;
+  debug: Record<string, unknown> | null;
+  metrics: E2bSandboxMetricPoint[];
+  connectivity: {
+    osacConfigured: boolean;
+    opencodeConfigured: boolean;
+    trafficAccessTokenPresent: boolean;
+    workspaceRoot?: string | null;
+    stateRoot?: string | null;
+  };
+  archive: {
+    archiveStatus?: string | null;
+    archiveDirty: boolean;
+    pendingArchiveUpdate: boolean;
+    archiveKey?: string | null;
+    snapshotKey?: string | null;
+    metadataKey?: string | null;
+    archivePendingSince?: string | null;
+    lastDirtyAt?: string | null;
+    lastDirtyReason?: string | null;
+    restoredAt?: string | null;
+  };
+  metadata: Record<string, unknown>;
+}
+
 export interface E2bSandboxItem {
   sandboxId: string;
   state: 'running' | 'paused';
@@ -441,7 +520,7 @@ export interface E2bSandboxItem {
 
 export interface E2bSandboxDetail {
   sandboxId: string;
-  state: 'running' | 'paused';
+  state: 'running' | 'paused' | string;
   templateId: string;
   name?: string;
   startedAt: string;
@@ -454,7 +533,7 @@ export interface E2bSandboxDetail {
 
 export interface E2bSandboxFullInfo {
   sandboxId: string;
-  state: 'running' | 'paused';
+  state: 'running' | 'paused' | string;
   templateId: string;
   name?: string;
   startedAt: string;

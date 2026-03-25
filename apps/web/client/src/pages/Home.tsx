@@ -14,6 +14,7 @@ import ProjectDetail from "./ProjectDetail";
 import {
   Mic,
   Send,
+  Square,
   Sparkles,
   Loader2,
   FilePlus,
@@ -42,6 +43,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -53,6 +59,13 @@ import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
+import AltusArtifactPreviewCard, {
+  type AltusArtifactFile,
+} from "@/components/AltusArtifactPreviewCard";
+import AltusRunReplayDrawer, {
+  type AltusReplayAction,
+  type AltusReplayFile,
+} from "@/components/AltusRunReplayDrawer";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -70,7 +83,10 @@ import {
 } from "@/hooks/useTaskCreationAgent";
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
-import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
+import {
+  getWorkspaceRawFileUrl,
+  uploadTaskCreationAttachment,
+} from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
@@ -152,8 +168,20 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
+  const [altusReplayOpen, setAltusReplayOpen] = useState(false);
+  const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
+  const [altusReplayView, setAltusReplayView] = useState<"actions" | "files">(
+    "actions",
+  );
+  const [altusReplayIndex, setAltusReplayIndex] = useState(0);
+  const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
+    useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState("Agent Pro");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewMaximized, setPreviewMaximized] = useState(false);
+  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<string | null>(
+    null,
+  );
   const [previewTab, setPreviewTab] = useState<
     "files" | "changes" | "debug" | "deployment"
   >("files");
@@ -259,6 +287,7 @@ export default function Home() {
   const {
     isConnected,
     isProcessing,
+    isInterrupting,
     messages,
     hasOlderHistory,
     isLoadingOlderHistory,
@@ -266,6 +295,7 @@ export default function Home() {
     currentQuestion,
     runtime,
     sendChatInput,
+    interruptCurrentRun,
     answerQuestion,
     ensureSession,
     loadOlderHistory,
@@ -535,6 +565,17 @@ export default function Home() {
     setMessage("");
   };
 
+  const handleStop = () => {
+    if (!sessionId) return;
+    void interruptCurrentRun(sessionId).catch((error) => {
+      const text = error instanceof Error ? error.message : String(error || "");
+      if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
+        return;
+      }
+      toast.error(text || "停止执行失败");
+    });
+  };
+
   const handleQuickAction = (action: string) => {
     setMode("chat");
     void submitPrompt(action);
@@ -553,8 +594,14 @@ export default function Home() {
     { label: "生成季度业务报告", icon: "💻" },
   ];
 
-  const chatItems = useMemo(() => buildChatItems(messages), [messages]);
+  const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
+  const managedReplayByRun = useMemo(
+    () => buildManagedReplayData(messages),
+    [messages],
+  );
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
+  const hasSendDraft = Boolean(message.trim()) || attachments.length > 0;
+  const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
 
   const normalizePath = (value: string) =>
     value
@@ -618,6 +665,7 @@ export default function Home() {
     filePath?: string | null;
     messageIndex?: number | null;
   }) => {
+    setPreviewWorkspacePath(null);
     setPreviewTab("changes");
     setPreviewOpen(true);
     const target =
@@ -629,8 +677,81 @@ export default function Home() {
     setSelectedDiffId(target);
   };
 
+  const openWorkspacePreview = (path: string) => {
+    const normalizedPath = String(path || "").trim().replace(/\\/g, "/");
+    if (!normalizedPath) return;
+    setPreviewWorkspacePath(normalizedPath);
+    setPreviewTab("files");
+    setPreviewOpen(true);
+  };
+
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
+  const activeAltusReplay =
+    altusReplayRunId ? managedReplayByRun.get(altusReplayRunId) || null : null;
+  const activeAltusReplayIndex =
+    activeAltusReplay && activeAltusReplay.actions.length > 0
+      ? Math.min(
+          Math.max(0, altusReplayIndex),
+          activeAltusReplay.actions.length - 1,
+        )
+      : 0;
+
+  const openAltusReplay = (
+    runId: string,
+    options?: {
+      toolCallId?: string | null;
+      view?: "actions" | "files";
+    },
+  ) => {
+    if (!runId) return;
+    setAltusReplayRunId(runId);
+    setAltusReplayView(options?.view || "actions");
+    setAltusReplayOpen(true);
+    if (options?.toolCallId) {
+      setPendingAltusReplayToolCallId(options.toolCallId);
+    } else {
+      const replay = managedReplayByRun.get(runId);
+      setAltusReplayIndex(Math.max(0, (replay?.actions.length || 1) - 1));
+      setPendingAltusReplayToolCallId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeAltusReplay) {
+      return;
+    }
+    if (pendingAltusReplayToolCallId) {
+      const action = activeAltusReplay.actions.find(
+        (item) => item.toolCallId === pendingAltusReplayToolCallId,
+      );
+      if (action) {
+        setAltusReplayIndex(action.stepIndex);
+        setPendingAltusReplayToolCallId(null);
+        return;
+      }
+    }
+    if (activeAltusReplay.actions.length === 0) {
+      if (altusReplayIndex !== 0) {
+        setAltusReplayIndex(0);
+      }
+      return;
+    }
+    const maxIndex = activeAltusReplay.actions.length - 1;
+    if (altusReplayIndex > maxIndex) {
+      setAltusReplayIndex(maxIndex);
+    }
+  }, [
+    activeAltusReplay,
+    altusReplayIndex,
+    pendingAltusReplayToolCallId,
+  ]);
+
+  useEffect(() => {
+    if (!previewOpen && previewMaximized) {
+      setPreviewMaximized(false);
+    }
+  }, [previewOpen, previewMaximized]);
 
   const previewPanel = previewOpen ? (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -638,6 +759,8 @@ export default function Home() {
         messages={messages}
         sessionId={sessionId}
         open={previewOpen}
+        maximized={previewMaximized}
+        onToggleMaximized={() => setPreviewMaximized((prev) => !prev)}
         activeTab={previewTab}
         onTabChange={setPreviewTab}
         onToggle={() => setPreviewOpen(false)}
@@ -646,6 +769,7 @@ export default function Home() {
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
+        selectedWorkspacePath={previewWorkspacePath}
         className="h-full min-h-0 w-full"
       />
     </section>
@@ -674,7 +798,14 @@ export default function Home() {
               variant="outline"
               size="sm"
               className="rounded-full"
-              onClick={() => setPreviewOpen((prev) => !prev)}
+              onClick={() => {
+                setPreviewOpen((prev) => {
+                  if (prev) {
+                    setPreviewMaximized(false);
+                  }
+                  return !prev;
+                });
+              }}
             >
               {previewOpen ? "收起预览" : "显示预览"}
             </Button>
@@ -743,6 +874,8 @@ export default function Home() {
                   key={item.messageKey || `chat-item-${index}`}
                   item={item}
                   onOpenDiffPreview={openDiffPreview}
+                  onOpenManagedReplay={openAltusReplay}
+                  onOpenWorkspacePreview={openWorkspacePreview}
                 />
               ))}
             </AnimatePresence>
@@ -784,6 +917,8 @@ export default function Home() {
                       if (currentQuestion) {
                         handleAnswerQuestion(message);
                         setMessage("");
+                      } else if (showStopButton) {
+                        handleStop();
                       } else {
                         handleSend();
                       }
@@ -888,23 +1023,32 @@ export default function Home() {
                               if (currentQuestion) {
                                 handleAnswerQuestion(message);
                                 setMessage("");
+                              } else if (showStopButton) {
+                                handleStop();
                               } else {
                                 handleSend();
                               }
                             }}
                             disabled={
-                              currentQuestion
+                              isInterrupting ||
+                              (currentQuestion
                                 ? !message.trim()
-                                : !message.trim() && attachments.length === 0
+                                : showStopButton
+                                  ? false
+                                  : !message.trim() && attachments.length === 0)
                             }
                             size="icon"
                             className="h-9 w-9 rounded-xl bg-foreground transition-colors hover:bg-foreground/90 disabled:opacity-50"
                           >
-                            <Send className="w-4 h-4" />
+                            {showStopButton ? (
+                              <Square className="w-4 h-4" />
+                            ) : (
+                              <Send className="w-4 h-4" />
+                            )}
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Send message</p>
+                          <p>{showStopButton ? "停止执行" : "Send message"}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -1159,27 +1303,41 @@ export default function Home() {
                 className="flex h-full flex-1 min-h-0 overflow-hidden overscroll-none"
               >
                 {showDesktopPreview ? (
-                  <ResizablePanelGroup
-                    direction="horizontal"
-                    autoSaveId="task-creation-chat-layout"
-                    className="h-full min-h-0"
-                  >
-                    <ResizablePanel defaultSize={66} minSize={42}>
-                      <div className="h-full min-h-0 pr-2">{chatPanel}</div>
-                    </ResizablePanel>
-                    <ResizableHandle
-                      withHandle
-                      className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
-                    />
-                    <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
-                      <div className="h-full min-h-0 pl-2">{previewPanel}</div>
-                    </ResizablePanel>
-                  </ResizablePanelGroup>
+                  previewMaximized ? (
+                    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+                      <div className="h-full min-h-0 w-full">{previewPanel}</div>
+                    </div>
+                  ) : (
+                    <ResizablePanelGroup
+                      direction="horizontal"
+                      autoSaveId="task-creation-chat-layout"
+                      className="h-full min-h-0"
+                    >
+                      <ResizablePanel defaultSize={66} minSize={42}>
+                        <div className="h-full min-h-0 pr-2">{chatPanel}</div>
+                      </ResizablePanel>
+                      <ResizableHandle
+                        withHandle
+                        className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
+                      />
+                      <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
+                        <div className="h-full min-h-0 pl-2">{previewPanel}</div>
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
+                  )
                 ) : (
                   <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-                    <div className="flex-1 min-h-0">{chatPanel}</div>
+                    {!previewMaximized ? (
+                      <div className="flex-1 min-h-0">{chatPanel}</div>
+                    ) : null}
                     {showMobilePreview ? (
-                      <div className="h-[min(45vh,32rem)] min-h-[280px] shrink-0">
+                      <div
+                        className={
+                          previewMaximized
+                            ? "flex-1 min-h-0"
+                            : "h-[min(45vh,32rem)] min-h-[280px] shrink-0"
+                        }
+                      >
                         {previewPanel}
                       </div>
                     ) : null}
@@ -1195,6 +1353,29 @@ export default function Home() {
         onOpenChange={setShowRuntimeDrawer}
         runtime={runtime}
       />
+      {activeAltusReplay && sessionId ? (
+        <AltusRunReplayDrawer
+          open={altusReplayOpen}
+          onOpenChange={setAltusReplayOpen}
+          sessionId={sessionId}
+          runId={activeAltusReplay.runId}
+          runTitle="Altus Actions"
+          actions={activeAltusReplay.actions}
+          files={activeAltusReplay.files}
+          currentIndex={activeAltusReplayIndex}
+          latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
+          onSelectIndex={setAltusReplayIndex}
+          onJumpToLatest={() =>
+            setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
+          }
+          activeView={altusReplayView}
+          onActiveViewChange={setAltusReplayView}
+          onOpenFile={(path) => {
+            setAltusReplayOpen(false);
+            openWorkspacePreview(path);
+          }}
+        />
+      ) : null}
     </WorkspaceLayout>
   );
 }
@@ -1232,8 +1413,18 @@ export type ChatItem =
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
-  | { kind: "agent"; markdown: string; author?: string; messageKey?: string }
-  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string }
+  | { kind: "agent"; markdown: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent_explanation";
+      markdown: string;
+      heading: string;
+      collapsedMarkdown?: string;
+      author?: string;
+      messageKey?: string;
+      active?: boolean;
+      showAuthor?: boolean;
+    }
+  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string; showAuthor?: boolean }
   | {
       kind: "capsule";
       label: string;
@@ -1250,6 +1441,26 @@ export type ChatItem =
       metadata?: Record<string, unknown>;
       messageIndex: number;
       diffId?: string;
+      messageKey?: string;
+    }
+  | {
+      kind: "managed_tool";
+      runId: string;
+      toolCallId: string;
+      eventType: string;
+      toolName: string;
+      status: "running" | "completed" | "failed" | "unknown";
+      summary?: string;
+      detail?: string;
+      artifactPaths?: string[];
+      metadata?: Record<string, unknown>;
+      messageKey?: string;
+    }
+  | {
+      kind: "managed_artifact_card";
+      sessionId: string;
+      runId: string;
+      artifacts: AltusArtifactFile[];
       messageKey?: string;
     }
   | {
@@ -1322,6 +1533,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     value.replace(/\r\n/g, "\n").trim();
   const userTextSet = new Set<string>();
   const finalizedPartIds = new Set<string>();
+  const codexTurnFilePaths = new Map<string, string[]>();
+  const lastCodexDiffIndexByTurn = new Map<string, number>();
+  const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
+  const emittedManagedArtifactRuns = new Set<string>();
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -1347,6 +1562,64 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (eventInfo.eventType === "message.final") {
       const partId = getPartIdFromMetadata(metadata);
       if (partId) finalizedPartIds.add(partId);
+    }
+  }
+
+  const mergeCodexTurnFilePath = (turnId: string, path: string) => {
+    const normalizedTurnId = turnId.trim();
+    const normalizedPath = path.trim();
+    if (!normalizedTurnId || !normalizedPath) return;
+    const existing = codexTurnFilePaths.get(normalizedTurnId) || [];
+    if (existing.includes(normalizedPath)) return;
+    codexTurnFilePaths.set(normalizedTurnId, [...existing, normalizedPath]);
+  };
+
+  const mergeManagedArtifact = (runId: string, artifact: AltusArtifactFile) => {
+    const normalizedRunId = runId.trim();
+    const normalizedPath = artifact.path.trim().replace(/\\/g, "/");
+    if (!normalizedRunId || !normalizedPath) return;
+    const existing = managedArtifactsByRun.get(normalizedRunId) || [];
+    if (existing.some((item) => item.path === normalizedPath)) return;
+    managedArtifactsByRun.set(normalizedRunId, [
+      ...existing,
+      {
+        path: normalizedPath,
+        previewType: inferManagedArtifactPreviewType(normalizedPath),
+      },
+    ]);
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type !== "executor_event") continue;
+    const metadata = toRecord(message.metadata);
+    const event = toRecord(metadata.event);
+    const item = toRecord(event.item);
+    const eventType = asText(metadata.eventType).toLowerCase();
+    const itemType =
+      asText(metadata.itemType).toLowerCase() ||
+      asText(item.type).toLowerCase();
+    const turnId = asText(metadata.turnId);
+
+    if (eventType === "turn/diff/updated" && turnId) {
+      lastCodexDiffIndexByTurn.set(turnId, index);
+    }
+
+    if (itemType === "file_change" || itemType === "filechange") {
+      const fileChanges = extractCodexFileChanges(metadata, item);
+      for (const change of fileChanges) {
+        if (turnId && change.path) {
+          mergeCodexTurnFilePath(turnId, change.path);
+        }
+      }
+      const filePaths = Array.isArray(metadata.filePaths)
+        ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
+        : [];
+      for (const path of filePaths) {
+        if (turnId && path) {
+          mergeCodexTurnFilePath(turnId, path);
+        }
+      }
     }
   }
 
@@ -1449,6 +1722,64 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   };
 
+  const extractCodexExplanationHeading = (markdown: string) => {
+    const headingFromMarkdown = extractThinkingHeading(markdown);
+    if (headingFromMarkdown) return headingFromMarkdown;
+    const strongHeading = markdown.match(/^\s*\*\*([^*\n]+)\*\*/m);
+    if (strongHeading?.[1]) {
+      const value = cleanHeadingText(strongHeading[1]);
+      if (value) return value;
+    }
+    const firstLine = markdown
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => cleanHeadingText(line))
+      .find(Boolean);
+    return firstLine || "思考中";
+  };
+
+  const extractCodexPlanCollapsedMarkdown = (markdown: string) => {
+    const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+    const todoLines = lines
+      .map((line) => line.trimEnd())
+      .filter((line) => /^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line));
+    if (todoLines.length === 0) return undefined;
+    return todoLines.join("\n");
+  };
+
+  const pushCodexExplanation = (
+    markdown: string,
+    messageKey?: string,
+    author?: string,
+    options?: {
+      collapsedMarkdown?: string;
+    },
+  ) => {
+    const normalized = normalizeForDedup(markdown);
+    if (!normalized) return;
+    const heading = extractCodexExplanationHeading(markdown);
+    const last = items[items.length - 1];
+    if (messageKey && last?.messageKey === messageKey) {
+      return;
+    }
+    if (
+      last?.kind === "agent_explanation" &&
+      normalizeForDedup(last.markdown) === normalized &&
+      (last.author || "") === (author || "")
+    ) {
+      return;
+    }
+    items.push({
+      kind: "agent_explanation",
+      markdown,
+      heading,
+      collapsedMarkdown: options?.collapsedMarkdown,
+      author,
+      messageKey,
+      active: false,
+    });
+  };
+
   const getDiffSignature = (
     payload: ReturnType<typeof extractDiffPayload>,
   ): string | null => {
@@ -1541,6 +1872,34 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "status_update") {
+      const metadata = toRecord(message.metadata);
+      if (isManagedExecutionEvent(metadata)) {
+        const managedEventType = asText(metadata.eventType).toLowerCase();
+        const runId = asText(metadata.runId);
+        const sessionIdForArtifact =
+          asText(message.sessionId) || asText(metadata.sessionId);
+        if (
+          managedEventType === "run_completed" &&
+          runId &&
+          sessionIdForArtifact &&
+          !emittedManagedArtifactRuns.has(runId)
+        ) {
+          const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
+            (artifact) => artifact.previewType === "web",
+          );
+          if (artifacts.length > 0) {
+            flushProgress();
+            items.push({
+              kind: "managed_artifact_card",
+              sessionId: sessionIdForArtifact,
+              runId,
+              artifacts,
+              messageKey: `managed:${runId}:artifact_card`,
+            });
+            emittedManagedArtifactRuns.add(runId);
+          }
+        }
+      }
       const label = message.content || "状态更新";
       if (isCodexControlStatusLabel(label)) {
         continue;
@@ -1562,12 +1921,74 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "executor_event") {
       const metadata = toRecord(message.metadata);
+      if (isManagedExecutionEvent(metadata)) {
+        const managedEventType = asText(metadata.eventType).toLowerCase();
+        const managedToolName = asText(metadata.toolName) || "tool";
+        const managedRunId = asText(metadata.runId);
+        const managedToolCallId =
+          asText(metadata.toolCallId) ||
+          message.messageKey ||
+          `${managedRunId}:${managedToolName}:${index}`;
+        const artifactPath = extractManagedArtifactPath(managedToolName, metadata);
+        if (
+          managedEventType === "tool_call_completed" &&
+          managedRunId &&
+          artifactPath
+        ) {
+          mergeManagedArtifact(managedRunId, {
+            path: artifactPath,
+            previewType: inferManagedArtifactPreviewType(artifactPath),
+          });
+        }
+        if (
+          managedEventType === "tool_call_started" ||
+          managedEventType === "tool_call_progress" ||
+          managedEventType === "tool_call_completed" ||
+          managedEventType === "tool_call_failed"
+        ) {
+          flushProgress();
+          items.push({
+            kind: "managed_tool",
+            runId: managedRunId,
+            toolCallId: managedToolCallId,
+            eventType: managedEventType,
+            toolName: managedToolName,
+            status:
+              managedEventType === "tool_call_failed"
+                ? "failed"
+                : managedEventType === "tool_call_completed"
+                  ? "completed"
+                  : "running",
+            summary: formatManagedToolSummary(managedToolName, metadata),
+            detail: formatManagedToolDetail(managedToolName, metadata),
+            artifactPaths: collectManagedReplayArtifactPaths(
+              managedToolName,
+              metadata,
+            ),
+            metadata,
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
+        if (managedEventType === "artifact_updated") {
+          flushProgress();
+          items.push({
+            kind: "capsule",
+            label: asText(metadata.content) || "产物已更新",
+            tone: "review",
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
+      }
       const event = toRecord(metadata.event);
       const item = toRecord(event.item);
+      const executorLabel = getExecutorDisplayName(metadata);
       const eventType = asText(metadata.eventType).toLowerCase();
       const itemType =
         asText(metadata.itemType).toLowerCase() ||
         asText(item.type).toLowerCase();
+      const turnId = asText(metadata.turnId);
       const content =
         asText(item.text) ||
         asText(item.content) ||
@@ -1575,15 +1996,27 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         (message.content || "").trim();
 
       if (eventType === "turn.started") {
-        pushProgress("Codex 开始执行", "execution", message.messageKey);
+        pushProgress(`${executorLabel} 开始执行`, "execution", message.messageKey);
         continue;
       }
 
       if (eventType === "turn.completed") {
+        const turnStatus = asText(metadata.turnStatus).toLowerCase();
+        const errorMessage = asText(metadata.errorMessage) || content;
+        if (message.stage === "failed" || turnStatus === "failed") {
+          flushProgress();
+          items.push({
+            kind: "capsule",
+            label: errorMessage || `${executorLabel} 执行失败`,
+            tone: "error",
+            messageKey: message.messageKey,
+          });
+          continue;
+        }
         flushProgress();
         items.push({
           kind: "capsule",
-          label: "Codex 执行完成",
+          label: `${executorLabel} 执行完成`,
           tone: "execution",
           messageKey: message.messageKey,
         });
@@ -1596,9 +2029,19 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           kind: "capsule",
           label:
             content ||
-            (eventType === "turn.interrupted" ? "Codex 执行已中断" : "Codex 执行失败"),
+            (eventType === "turn.interrupted" ? `${executorLabel} 执行已中断` : `${executorLabel} 执行失败`),
           tone: "error",
           messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      if (eventType === "turn/plan/updated") {
+        if (!content) {
+          continue;
+        }
+        pushCodexExplanation(content, message.messageKey, executorLabel, {
+          collapsedMarkdown: extractCodexPlanCollapsedMarkdown(content),
         });
         continue;
       }
@@ -1607,8 +2050,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
+      if (eventType === "item/filechange/outputdelta") {
+        continue;
+      }
+
       flushProgress();
-      if (itemType === "command_execution") {
+      if (itemType === "command_execution" || itemType === "commandexecution") {
         const commandText =
           asText(metadata.command) ||
           asText(item.command) ||
@@ -1678,7 +2125,67 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
-      if (itemType === "file_change") {
+      if (eventType === "turn/diff/updated") {
+        if (turnId && lastCodexDiffIndexByTurn.get(turnId) !== index) {
+          continue;
+        }
+        const fileChanges = extractCodexFileChanges(metadata, item);
+        const filePaths = Array.isArray(metadata.filePaths)
+          ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
+          : [];
+        const turnPaths = turnId
+          ? (codexTurnFilePaths.get(turnId) || [])
+          : [];
+        const effectivePaths = filePaths.length > 0 ? filePaths : turnPaths;
+        const effectiveFiles =
+          fileChanges.length > 0
+            ? fileChanges
+            : effectivePaths.map((path) => ({ kind: "update", path }));
+        const primaryPath = fileChanges[0]?.path || effectivePaths[0] || "";
+        const fileCount = Math.max(fileChanges.length, effectivePaths.length);
+
+        items.push({
+          kind: "opencode_tool",
+          eventType: "file.changed",
+          event: {
+            type: "file.changed",
+            properties: {
+              file: primaryPath,
+              path: primaryPath,
+              label: "变更 Diff",
+              files: effectiveFiles,
+              diff: asText(metadata.diff) || undefined,
+              status: "completed",
+            },
+          },
+          content:
+            fileCount > 1
+              ? `变更 Diff · ${fileCount} 个文件`
+              : primaryPath
+                ? `变更 Diff · ${getFilename(primaryPath)}`
+                : "变更 Diff",
+          metadata: {
+            ...metadata,
+            eventType: "file.changed",
+            event: {
+              type: "file.changed",
+              properties: {
+                file: primaryPath,
+                path: primaryPath,
+                label: "变更 Diff",
+                files: effectiveFiles,
+                diff: asText(metadata.diff) || undefined,
+                status: "completed",
+              },
+            },
+          },
+          messageIndex: index,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+
+      if (itemType === "file_change" || itemType === "filechange") {
         const fileChanges = extractCodexFileChanges(metadata, item);
         if (fileChanges.length === 0) {
           continue;
@@ -1731,18 +2238,18 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         continue;
       }
 
-      if (itemType === "approval_request") {
+      if (itemType === "approval_request" || itemType === "approvalrequest") {
         const approvalText =
           asText(metadata.approvalText) ||
           content ||
-          "Codex 需要进一步授权后才能继续执行。";
+          `${executorLabel} 需要进一步授权后才能继续执行。`;
         items.push({
           kind: "capsule",
           label: "需要授权",
           tone: "system",
           messageKey: message.messageKey,
         });
-        pushAgentMarkdown(approvalText, message.messageKey, "Codex");
+        pushAgentMarkdown(approvalText, message.messageKey, executorLabel);
         continue;
       }
 
@@ -1798,11 +2305,16 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (
         itemType === "reasoning" ||
         itemType === "agent_message" ||
+        itemType === "agentmessage" ||
         isLikelyMarkdownText(content)
       ) {
-        pushAgentMarkdown(content, message.messageKey, "Codex");
+        if (itemType === "reasoning") {
+          pushCodexExplanation(content, message.messageKey, executorLabel);
+        } else {
+          pushAgentMarkdown(content, message.messageKey, executorLabel);
+        }
       } else {
-        pushAgentPlain(content, "Codex", message.messageKey);
+        pushAgentPlain(content, executorLabel, message.messageKey);
       }
       continue;
     }
@@ -1923,8 +2435,52 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
   }
 
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item || item.kind === "user") {
+      continue;
+    }
+    if (item.kind === "agent_explanation") {
+      item.active = true;
+    }
+    break;
+  }
+
   flushProgress();
   return items;
+}
+
+function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
+  const nextItems = [...items];
+  let previousAuthor = "";
+
+  for (let index = 0; index < nextItems.length; index += 1) {
+    const item = nextItems[index];
+    if (!item) continue;
+
+    if (
+      item.kind === "agent" ||
+      item.kind === "agent_plain" ||
+      item.kind === "agent_explanation"
+    ) {
+      const author = (item.author || "").trim();
+      if (!author) {
+        previousAuthor = "";
+        continue;
+      }
+      item.showAuthor = author !== previousAuthor;
+      previousAuthor = author;
+      continue;
+    }
+
+    if (item.kind === "capsule") {
+      continue;
+    }
+
+    previousAuthor = "";
+  }
+
+  return nextItems;
 }
 
 type DirectTurnDraft = {
@@ -2489,9 +3045,80 @@ function DirectMarkdownMessage({
   );
 }
 
+function CodexExplanationMessage({
+  markdown,
+  heading,
+  collapsedMarkdown,
+  active = false,
+  author = "Codex",
+  showAuthor = true,
+}: {
+  markdown: string;
+  heading: string;
+  collapsedMarkdown?: string;
+  active?: boolean;
+  author?: string;
+  showAuthor?: boolean;
+}) {
+  if (!active) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+      >
+        <div className="space-y-1.5 text-sm text-foreground">
+          {showAuthor ? (
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {author}
+            </div>
+          ) : null}
+          <div className="text-sm leading-7 text-foreground">
+            {heading}
+          </div>
+          {collapsedMarkdown ? (
+            <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
+              <Streamdown>{collapsedMarkdown}</Streamdown>
+            </div>
+          ) : null}
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+    >
+      <div className="space-y-1.5 text-sm text-foreground">
+        {showAuthor ? (
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            {author}
+          </div>
+        ) : null}
+        <div className="relative overflow-hidden rounded-xl border border-slate-200/80 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.14),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm">
+          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-slate-500 to-transparent" />
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            {heading}
+          </div>
+          <div className="pr-4">
+            <DirectMarkdownMessage markdown={markdown} />
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function MessageBubble({
   item,
   onOpenDiffPreview,
+  onOpenManagedReplay,
+  onOpenWorkspacePreview,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -2499,6 +3126,14 @@ function MessageBubble({
     filePath?: string | null;
     messageIndex?: number | null;
   }) => void;
+  onOpenManagedReplay?: (
+    runId: string,
+    options?: {
+      toolCallId?: string | null;
+      view?: "actions" | "files";
+    },
+  ) => void;
+  onOpenWorkspacePreview?: (path: string) => void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -2605,6 +3240,19 @@ function MessageBubble({
     );
   }
 
+  if (item.kind === "agent_explanation") {
+    return (
+      <CodexExplanationMessage
+        markdown={item.markdown}
+        heading={item.heading}
+        collapsedMarkdown={item.collapsedMarkdown}
+        active={item.active}
+        author={item.author}
+        showAuthor={item.showAuthor}
+      />
+    );
+  }
+
   if (item.kind === "user") {
     return (
       <motion.div
@@ -2634,6 +3282,32 @@ function MessageBubble({
     );
   }
 
+  if (item.kind === "managed_tool") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <ManagedToolCard
+          item={item}
+          onOpenReplay={(runId, toolCallId) =>
+            onOpenManagedReplay?.(runId, { toolCallId, view: "actions" })
+          }
+        />
+      </div>
+    );
+  }
+
+  if (item.kind === "managed_artifact_card") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <AltusArtifactPreviewCard
+          sessionId={item.sessionId}
+          artifacts={item.artifacts}
+          displayMode="web-preview"
+          onOpenViewer={onOpenWorkspacePreview}
+        />
+      </div>
+    );
+  }
+
   if (item.kind === "agent_plain") {
     return (
       <motion.div
@@ -2644,9 +3318,11 @@ function MessageBubble({
         data-message-key={item.messageKey}
       >
         <div className="space-y-1.5 text-sm text-foreground">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-            {item.author || "OpenCode"}
-          </div>
+          {item.showAuthor !== false ? (
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              {item.author || "OpenCode"}
+            </div>
+          ) : null}
           <div className="whitespace-pre-wrap break-words leading-6">
             {item.text}
           </div>
@@ -2664,7 +3340,7 @@ function MessageBubble({
       data-message-key={item.messageKey}
     >
       <div className="space-y-1.5 text-sm text-foreground">
-        {item.author ? (
+        {item.author && item.showAuthor !== false ? (
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             {item.author}
           </div>
@@ -3038,6 +3714,44 @@ function extractCodexCommandTargetPath(command: string): string {
   return "";
 }
 
+function extractCodexWritePayloadPreview(command: string): {
+  kind: "heredoc" | "command";
+  text: string;
+  truncated: boolean;
+} | null {
+  const normalized = normalizeShellCommand(command);
+  if (!normalized) return null;
+
+  const markerMatch = normalized.match(/<<['"]?([A-Za-z0-9_]+)['"]?/);
+  if (!markerMatch) {
+    return null;
+  }
+  const marker = markerMatch[1];
+  const lines = normalized.split(/\r?\n/);
+  if (lines.length <= 1) {
+    return null;
+  }
+  const payloadLines: string[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = stripShellQuotes(line.trim());
+    if (trimmed === marker) {
+      break;
+    }
+    payloadLines.push(line);
+  }
+  const payloadText = payloadLines.join("\n").trim();
+  if (!payloadText) {
+    return null;
+  }
+  const preview = truncateText(payloadText, 2400);
+  return {
+    kind: "heredoc",
+    text: preview.text,
+    truncated: preview.truncated,
+  };
+}
+
 function inferCodexWriteLabel(command: string): string {
   const normalized = normalizeShellCommand(command).toLowerCase();
   if (normalized.startsWith("mv ")) return "移动文件";
@@ -3381,6 +4095,7 @@ function OpencodeToolCard({
     asText(toolState.status) ||
     asText(properties.status) ||
     (error ? "error" : "unknown");
+  const isCodexExecutor = asText(metadata.executor).toLowerCase() === "codex";
 
   const isDiffEvent = (toolName || "").toLowerCase() === "apply_patch";
   const toolKey = (toolName || "").toLowerCase();
@@ -3531,7 +4246,8 @@ function OpencodeToolCard({
     Object.keys(metaInfo).length > 0,
   );
   const summaryText = info.subtitle || "";
-  const detailTitle = `${info.title}${summaryText ? ` · ${summaryText}` : ""}`;
+  let detailTitle = `${info.title}${summaryText ? ` · ${summaryText}` : ""}`;
+  let detailBodyText = explanationText;
   const wrapWithDetailDialog = (content: ReactNode) => (
     <>
       {content}
@@ -3542,7 +4258,7 @@ function OpencodeToolCard({
             <DialogDescription>工具原子消息完整信息</DialogDescription>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
-            {explanationText}
+            {detailBodyText}
           </div>
         </DialogContent>
       </Dialog>
@@ -3892,6 +4608,28 @@ function OpencodeToolCard({
       writeLike && targetPath
         ? `通过 shell ${inferCodexWriteLabel(commandText)}：${targetPath}`
         : "";
+    if (isCodexExecutor && writeLike) {
+      const resolvedLabel = inferCodexWriteLabel(commandText);
+      const resolvedPath = targetPath || "";
+      const resolvedFileName = getFilename(resolvedPath) || "文件";
+      const writePayloadPreview = extractCodexWritePayloadPreview(commandText);
+      const commandPreview = truncateText(commandText || "", 2400);
+      detailTitle = `${resolvedLabel} · ${resolvedFileName}`;
+      detailBodyText = [
+        `操作: ${resolvedLabel}`,
+        resolvedPath ? `目标文件: ${resolvedPath}` : "",
+        writePayloadPreview ? "写入内容预览:" : commandText ? "命令摘要:" : "",
+        writePayloadPreview ? writePayloadPreview.text : commandText ? commandPreview.text : "",
+        writePayloadPreview?.truncated
+          ? "写入内容已截断，请结合工作区文件预览查看完整结果。"
+          : commandText && commandPreview.truncated
+            ? "命令内容已截断，请结合工作区文件预览查看完整结果。"
+            : "",
+        !commandText && explanationText ? explanationText : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -3960,6 +4698,22 @@ function OpencodeToolCard({
         : label === "删除文件"
           ? Trash2
           : FilePenLine;
+    detailTitle =
+      files.length > 1
+        ? `${label || "文件变更"} · ${files.length} 个文件`
+        : `${label || "文件变更"} · ${getFilename(primaryPath) || "文件"}`;
+    detailBodyText = [
+      `操作: ${label || "文件变更"}`,
+      primaryPath ? `目标文件: ${primaryPath}` : "",
+      files.length > 1
+        ? `涉及文件:\n${files
+            .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`)
+            .join("\n")}`
+        : "",
+      asText(properties.diff) ? "原生 Diff 已同步到内容预览面板，可点击卡片查看。" : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
     return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -4042,15 +4796,530 @@ function OpencodeToolCard({
   );
 }
 
+function ManagedToolCard({
+  item,
+  onOpenReplay,
+}: {
+  item: Extract<ChatItem, { kind: "managed_tool" }>;
+  onOpenReplay?: (runId: string, toolCallId: string) => void;
+}) {
+  const displayName = getManagedToolDisplayName(item.toolName);
+  const icon =
+    item.toolName === "shell_execute"
+      ? Terminal
+      : item.toolName === "write_file"
+        ? FilePenLine
+        : item.toolName === "read_file"
+          ? FileText
+          : item.toolName === "search_code"
+            ? Search
+            : item.toolName === "list_directory"
+              ? FolderSearch2
+              : item.toolName === "ask_user"
+                ? Sparkles
+                : FileSearch;
+  const Icon = icon;
+  const toneClass =
+    item.status === "failed"
+      ? "border-rose-200 bg-rose-50 text-rose-700"
+        : item.status === "completed"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-border/70 bg-muted/50 text-foreground/85";
+  const statusLabel =
+    item.status === "failed"
+      ? "失败"
+      : item.status === "completed"
+        ? "已完成"
+        : "进行中";
+  const hoverPreview = buildDetailPreview(item.detail || item.summary || item.toolName, 5, 96);
+  const summaryText = item.summary?.trim();
+  const previewText =
+    formatManagedToolPreview(item.toolName, item.metadata) ||
+    hoverPreview.preview ||
+    summaryText ||
+    "";
+  const statusToneClass =
+    item.status === "failed"
+      ? "border-rose-300/60 bg-rose-100/80 text-rose-700"
+      : item.status === "completed"
+        ? "border-emerald-300/60 bg-emerald-100/80 text-emerald-700"
+        : "border-border/70 bg-background/90 text-foreground/75";
+  const chipToneClass =
+    item.status === "failed"
+      ? "border-rose-200/80 bg-rose-50/80 text-rose-700 hover:bg-rose-50"
+      : item.status === "completed"
+        ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
+        : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18 }}
+      className="w-full"
+    >
+      <HoverCard openDelay={140} closeDelay={80}>
+        <HoverCardTrigger asChild>
+          <button
+            type="button"
+            onClick={() => {
+              if (onOpenReplay && item.runId && item.toolCallId) {
+                onOpenReplay(item.runId, item.toolCallId);
+              }
+            }}
+            className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+            <span className="min-w-0 flex items-center gap-2 overflow-hidden">
+              <span className="shrink-0 text-[11px] font-medium leading-5">
+                {displayName}
+              </span>
+              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                {statusLabel}
+              </span>
+              {summaryText ? (
+                <span className="truncate text-[11px] leading-5 opacity-75">
+                  {summaryText}
+                </span>
+              ) : null}
+            </span>
+          </button>
+        </HoverCardTrigger>
+        <HoverCardContent
+          align="start"
+          side="top"
+          className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+        >
+          <div className="space-y-0 border-b border-current/10 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
+                <Icon className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium leading-5">
+                    {displayName}
+                  </span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                    {statusLabel}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11px] leading-5 opacity-70">
+                  {item.toolName}
+                </div>
+              </div>
+            </div>
+            {summaryText ? (
+              <p className="mt-3 text-[12px] leading-5 opacity-85">
+                {summaryText}
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-3 px-4 py-3">
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                结果摘要
+              </div>
+              <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
+                {previewText}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
+                更多信息
+              </div>
+              <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
+                {hoverPreview.preview}
+              </p>
+            </div>
+            <div className="text-[11px] leading-5 opacity-60">
+              点击消息可查看回放与文件
+            </div>
+          </div>
+        </HoverCardContent>
+      </HoverCard>
+    </motion.div>
+  );
+}
+
 /**
  * 获取 Agent 名称
  */
 function getAgentName(agent?: string) {
   const nameMap: Record<string, string> = {
     system: "系统",
+    altus: "Altus",
     intent_recognition: "意图识别",
     planning: "任务规划",
     execution_plan: "执行计划",
   };
   return agent ? nameMap[agent] || agent : "智能体";
+}
+
+function getExecutorDisplayName(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const executor = asText(metadata.executor).toLowerCase();
+  if (executor === "codex") return "Codex";
+  if (executor === "altus") return "Altus";
+  if (executor === "claudecode") return "ClaudeCode";
+  if (executor === "opencode") return "OpenCode";
+  return "执行器";
+}
+
+function isManagedExecutionEvent(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  return (
+    asText(metadata.executionMode).toLowerCase() === "managed" ||
+    asText(metadata.executor).toLowerCase() === "altus"
+  );
+}
+
+function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {
+  if (!outputPreviewRaw) return {};
+  if (typeof outputPreviewRaw === "string") {
+    const trimmed = outputPreviewRaw.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return toRecord(parsed);
+    } catch {
+      return {};
+    }
+  }
+  return toRecord(outputPreviewRaw);
+}
+
+function collectManagedReplayArtifactPaths(
+  toolName: string,
+  metadataRaw: unknown,
+): string[] {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const paths = new Set<string>();
+  const pushPath = (value: unknown) => {
+    const path = asText(value).replace(/\\/g, "/");
+    if (!path) return;
+    paths.add(path);
+  };
+
+  if (toolName === "write_file" || toolName === "read_file") {
+    pushPath(args.path);
+    pushPath(output.path);
+  }
+
+  if (toolName === "complete_task" && Array.isArray((args as { attachments?: unknown[] }).attachments)) {
+    for (const item of (args as { attachments?: unknown[] }).attachments || []) {
+      const record = toRecord(item);
+      pushPath(record.path);
+      pushPath(record.filePath);
+    }
+  }
+
+  return Array.from(paths);
+}
+
+function buildManagedReplayData(messages: AgentMessage[]) {
+  const actionsByRun = new Map<string, AltusReplayAction[]>();
+  const filesByRun = new Map<string, AltusReplayFile[]>();
+  const actionIndexByRun = new Map<string, Map<string, number>>();
+  const fileIndexByRun = new Map<string, Map<string, AltusReplayFile>>();
+
+  const ensureActions = (runId: string) => {
+    const existing = actionsByRun.get(runId);
+    if (existing) return existing;
+    const created: AltusReplayAction[] = [];
+    actionsByRun.set(runId, created);
+    actionIndexByRun.set(runId, new Map<string, number>());
+    return created;
+  };
+
+  const ensureFiles = (runId: string) => {
+    const existing = filesByRun.get(runId);
+    if (existing) return existing;
+    const created: AltusReplayFile[] = [];
+    filesByRun.set(runId, created);
+    fileIndexByRun.set(runId, new Map<string, AltusReplayFile>());
+    return created;
+  };
+
+  const upsertFile = (
+    runId: string,
+    pathRaw: string,
+    sourceToolCallId?: string,
+    sourceStepIndex?: number,
+  ) => {
+    const path = pathRaw.trim().replace(/\\/g, "/");
+    if (!path) return;
+    const files = ensureFiles(runId);
+    const index = fileIndexByRun.get(runId)!;
+    if (index.has(path)) {
+      const existing = index.get(path)!;
+      if (typeof sourceStepIndex === "number") {
+        existing.lastSourceStepIndex = sourceStepIndex;
+      }
+      if (sourceToolCallId) {
+        existing.lastSourceToolCallId = sourceToolCallId;
+      }
+      return;
+    }
+    const file: AltusReplayFile = {
+      path,
+      displayName: getFilename(path) || path,
+      previewType: inferManagedArtifactPreviewType(path),
+      lastSourceToolCallId: sourceToolCallId,
+      lastSourceStepIndex: sourceStepIndex,
+    };
+    files.push(file);
+    index.set(path, file);
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type !== "executor_event") continue;
+    const metadata = toRecord(message.metadata);
+    if (!isManagedExecutionEvent(metadata)) continue;
+    const runId = asText(metadata.runId);
+    if (!runId) continue;
+    const eventType = asText(metadata.eventType).toLowerCase();
+    if (
+      eventType !== "tool_call_started" &&
+      eventType !== "tool_call_progress" &&
+      eventType !== "tool_call_completed" &&
+      eventType !== "tool_call_failed"
+    ) {
+      continue;
+    }
+
+    const toolCallId =
+      asText(metadata.toolCallId) ||
+      message.messageKey ||
+      `${runId}:${eventType}:${index}`;
+    const toolName = asText(metadata.toolName) || "tool";
+    const actions = ensureActions(runId);
+    const actionIndex = actionIndexByRun.get(runId)!;
+    let stepIndex = actionIndex.get(toolCallId);
+    if (stepIndex === undefined) {
+      stepIndex = actions.length;
+      actionIndex.set(toolCallId, stepIndex);
+      actions.push({
+        runId,
+        toolCallId,
+        stepIndex,
+        toolName,
+        displayName: getManagedToolDisplayName(toolName),
+        status:
+          eventType === "tool_call_failed"
+            ? "failed"
+            : eventType === "tool_call_completed"
+              ? "completed"
+              : "running",
+        summary: formatManagedToolSummary(toolName, metadata),
+        detail: formatManagedToolDetail(toolName, metadata),
+        artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+      });
+    } else {
+      const action = actions[stepIndex];
+      actions[stepIndex] = {
+        ...action,
+        status:
+          eventType === "tool_call_failed"
+            ? "failed"
+            : eventType === "tool_call_completed"
+              ? "completed"
+              : action.status === "completed" || action.status === "failed"
+                ? action.status
+                : "running",
+        summary: formatManagedToolSummary(toolName, metadata),
+        detail: formatManagedToolDetail(toolName, metadata),
+        artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
+      };
+    }
+
+    const action = actions[stepIndex];
+    for (const path of action.artifactPaths) {
+      upsertFile(runId, path, action.toolCallId, action.stepIndex);
+    }
+  }
+
+  return new Map(
+    Array.from(actionsByRun.entries()).map(([runId, actions]) => [
+      runId,
+      {
+        runId,
+        actions,
+        files: filesByRun.get(runId) || [],
+      },
+    ]),
+  );
+}
+
+function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previewType"] {
+  return /\.(html?)$/i.test(path) ? "web" : "code";
+}
+
+function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
+  if (toolName !== "write_file") return "";
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  return asText(args.path) || asText(output.path);
+}
+
+function getManagedToolDisplayName(toolName: string) {
+  switch (toolName) {
+    case "shell_execute":
+      return "命令执行";
+    case "write_file":
+      return "写入文件";
+    case "read_file":
+      return "读取文件";
+    case "list_directory":
+      return "列出目录";
+    case "search_code":
+      return "代码搜索";
+    case "ask_user":
+      return "请求澄清";
+    case "complete_task":
+      return "完成任务";
+    default:
+      return toolName || "工具调用";
+  }
+}
+
+function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  if (toolName === "shell_execute") {
+    return asText(args.command) || "执行 shell 命令";
+  }
+  if (toolName === "write_file") {
+    return asText(args.path) || "写入文件";
+  }
+  if (toolName === "read_file") {
+    return asText(args.path) || "读取文件";
+  }
+  if (toolName === "list_directory") {
+    return asText(args.path) || "列出目录";
+  }
+  if (toolName === "search_code") {
+    const query = asText(args.query);
+    const target = asText(args.path);
+    return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
+  }
+  if (toolName === "ask_user") {
+    return asText(args.question) || "请求用户澄清";
+  }
+  if (toolName === "complete_task") {
+    return asText(args.summary) || "输出最终完成总结";
+  }
+  return asText(metadata.content) || toolName;
+}
+
+function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const error = asText(metadata.error);
+
+  if (error) return error;
+
+  if (toolName === "shell_execute") {
+    const stdout = asText(output.stdout);
+    const stderr = asText(output.stderr);
+    return stdout || stderr || asText(args.command) || "执行命令";
+  }
+
+  if (toolName === "write_file") {
+    const bytes = asText(output.bytes);
+    return bytes ? `写入 ${bytes} bytes` : asText(output.path) || "已写入目标文件";
+  }
+
+  if (toolName === "read_file") {
+    return asText(output.content) || asText(output.path) || "已读取目标文件";
+  }
+
+  if (toolName === "list_directory") {
+    return asText(output.output) || asText(output.path) || "已返回目录内容";
+  }
+
+  if (toolName === "search_code") {
+    return asText(output.output) || asText(args.query) || "已返回搜索结果";
+  }
+
+  if (toolName === "complete_task") {
+    return asText(args.summary) || "任务已完成";
+  }
+
+  return asText(metadata.outputPreview) || asText(metadata.content);
+}
+
+function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const error = asText(metadata.error);
+  const lines: string[] = [];
+  const pushLine = (label: string, value: unknown) => {
+    const text = asText(value);
+    if (text) {
+      lines.push(`${label}: ${text}`);
+    }
+  };
+
+  lines.push(`工具: ${getManagedToolDisplayName(toolName)} (${toolName})`);
+
+  if (toolName === "shell_execute") {
+    pushLine("命令", args.command);
+    pushLine("目录", output.cwd || args.cwd);
+    pushLine("退出码", output.exitCode);
+    pushLine("输出", output.stdout);
+    pushLine("错误输出", output.stderr);
+  } else if (toolName === "write_file") {
+    pushLine("目标文件", args.path || output.path);
+    pushLine("写入大小", output.bytes);
+  } else if (toolName === "read_file") {
+    pushLine("目标文件", args.path || output.path);
+    pushLine("内容预览", output.content);
+  } else if (toolName === "list_directory") {
+    pushLine("目标目录", args.path || output.path);
+    pushLine("递归深度", output.depth || args.depth);
+    pushLine("结果预览", output.output);
+  } else if (toolName === "search_code") {
+    pushLine("搜索词", args.query);
+    pushLine("搜索范围", args.path || output.path);
+    pushLine("结果预览", output.output);
+  } else if (toolName === "ask_user") {
+    pushLine("问题", args.question);
+    if (Array.isArray(args.options)) {
+      const options = (args.options as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean)
+        .join(" / ");
+      pushLine("建议选项", options);
+    }
+  } else if (toolName === "complete_task") {
+    pushLine("完成摘要", args.summary);
+    if (Array.isArray(args.verification)) {
+      const checks = (args.verification as unknown[])
+        .map((item) => asText(item))
+        .filter(Boolean)
+        .join(" / ");
+      pushLine("验证", checks);
+    }
+  } else {
+    pushLine("摘要", asText(metadata.content));
+  }
+
+  if (error) {
+    pushLine("失败原因", error);
+  }
+
+  if (lines.length === 1) {
+    pushLine("摘要", formatManagedToolSummary(toolName, metadata));
+  }
+
+  return lines.join("\n");
 }

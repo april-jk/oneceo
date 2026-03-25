@@ -9,7 +9,12 @@ import { TaskCreationService } from './task-creation-service';
 import type { WebSocketMessage } from './types/intent';
 import { getPublicErrorMessage } from '../../utils/error-response';
 import { taskCreationFileMemoryStore } from './file-memory-store';
-import { AwaitingUserInputError, isAwaitingUserInputError, isRecoverableAgentError } from './errors';
+import {
+  AwaitingUserInputError,
+  isAwaitingUserInputError,
+  isInterruptedTaskError,
+  isRecoverableAgentError,
+} from './errors';
 import { randomUUID } from 'crypto';
 import { codexRemoteService } from '../../services/codex-remote-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
@@ -45,6 +50,18 @@ export class TaskCreationWebSocketService {
   private sessionCleanupTimers: Map<string, NodeJS.Timeout> = new Map();
   private clarificationTimers: Map<string, NodeJS.Timeout> = new Map();
   private autoContinueCounts: Map<string, number> = new Map();
+  private activeManagedRuns: Map<
+    string,
+    {
+      clientId: string;
+      phase: 'intent_processing' | 'executor_processing';
+      cancelled: boolean;
+      cancelReason?: string;
+      latestUserInput: string;
+    }
+  > = new Map();
+  private interruptedIntentReplayInputs: Map<string, string[]> = new Map();
+  private cancelledClientMessageKeys: Map<string, Set<string>> = new Map();
   private opencodeUnsubscribe: (() => void) | null = null;
   private codexUnsubscribe: (() => void) | null = null;
 
@@ -469,6 +486,20 @@ export class TaskCreationWebSocketService {
       this.prefetchRuntime(sessionId, message.content || '');
     }
 
+    const replayInputs = sessionId ? this.interruptedIntentReplayInputs.get(sessionId) || [] : [];
+    const mergedReplayInput =
+      replayInputs.length > 0
+        ? [...replayInputs, message.content || '']
+            .filter((item) => typeof item === 'string' && item.trim())
+            .map((item, index) =>
+              index === 0 ? `原始需求：${item.trim()}` : `补充需求${index}：${item.trim()}`
+            )
+            .join('\n\n')
+        : message.content || '';
+    if (sessionId && replayInputs.length > 0) {
+      this.interruptedIntentReplayInputs.delete(sessionId);
+    }
+
     if (sessionId && pendingResume) {
       try {
         await taskCreationFileMemoryStore.clearPendingResume(sessionId);
@@ -476,10 +507,18 @@ export class TaskCreationWebSocketService {
           stage: pendingResume.stage || 'executing',
           allowBackward: true,
         });
+        this.beginManagedRun(sessionId, clientId, mergedReplayInput);
+        service.setRunControl({
+          isCancelled: () => Boolean(this.activeManagedRuns.get(sessionId)?.cancelled),
+          getCancelReason: () => this.activeManagedRuns.get(sessionId)?.cancelReason,
+          setPhase: (phase) => this.updateManagedRunPhase(sessionId, phase),
+        });
         await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput);
+        this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
       } catch (error) {
+        this.clearManagedRun(sessionId);
         if (isRecoverableAgentError(error)) {
           const current = await taskCreationFileMemoryStore.getSession(sessionId);
           await taskCreationFileMemoryStore.setPendingResume(sessionId, {
@@ -505,10 +544,18 @@ export class TaskCreationWebSocketService {
         });
         await taskCreationFileMemoryStore.clearPendingClarification(sessionId);
         await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: 'planning' });
+        this.beginManagedRun(sessionId, clientId, resumedInput);
+        service.setRunControl({
+          isCancelled: () => Boolean(this.activeManagedRuns.get(sessionId)?.cancelled),
+          getCancelReason: () => this.activeManagedRuns.get(sessionId)?.cancelReason,
+          setPhase: (phase) => this.updateManagedRunPhase(sessionId, phase),
+        });
         await service.createTask(resumedInput, undefined, sessionId, 'user_response');
+        this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
       } catch (error) {
+        this.clearManagedRun(sessionId);
         await taskCreationFileMemoryStore.updateSessionState(sessionId, {
           status: isAwaitingUserInputError(error) ? 'waiting_user' : 'failed',
           stage: isAwaitingUserInputError(error) ? 'clarifying' : 'failed',
@@ -518,17 +565,34 @@ export class TaskCreationWebSocketService {
     }
 
     try {
+      if (sessionId) {
+        this.beginManagedRun(sessionId, clientId, mergedReplayInput);
+        service.setRunControl({
+          isCancelled: () => Boolean(this.activeManagedRuns.get(sessionId)?.cancelled),
+          getCancelReason: () => this.activeManagedRuns.get(sessionId)?.cancelReason,
+          setPhase: (phase) => this.updateManagedRunPhase(sessionId, phase),
+        });
+      }
       await service.createTask(
-        message.content!,
+        mergedReplayInput,
         undefined,
         sessionId,
         (message.type as any) || 'user_input',
         message.metadata
       );
       if (sessionId) {
+        this.clearManagedRun(sessionId);
+      }
+      if (sessionId) {
         await this.syncSessionStateFromCurrentStage(sessionId);
       }
     } catch (error) {
+      if (sessionId) {
+        this.clearManagedRun(sessionId);
+      }
+      if (isInterruptedTaskError(error)) {
+        return;
+      }
       if (sessionId) {
         if (isRecoverableAgentError(error)) {
           const current = await taskCreationFileMemoryStore.getSession(sessionId);
@@ -546,6 +610,69 @@ export class TaskCreationWebSocketService {
       }
       throw error;
     }
+  }
+
+  private beginManagedRun(sessionId: string, clientId: string, latestUserInput: string) {
+    this.activeManagedRuns.set(sessionId, {
+      clientId,
+      phase: 'intent_processing',
+      cancelled: false,
+      latestUserInput,
+    });
+  }
+
+  private updateManagedRunPhase(sessionId: string, phase: 'intent_processing' | 'executor_processing') {
+    const current = this.activeManagedRuns.get(sessionId);
+    if (!current) return;
+    current.phase = phase;
+  }
+
+  private clearManagedRun(sessionId: string) {
+    const current = this.activeManagedRuns.get(sessionId);
+    if (current) {
+      const service = this.services.get(current.clientId);
+      service?.setRunControl(null);
+    }
+    this.activeManagedRuns.delete(sessionId);
+  }
+
+  async interruptManagedSession(
+    sessionId: string,
+    options?: { preserveForRetry?: boolean; clientMessageKey?: string }
+  ): Promise<{ interrupted: boolean; phase?: 'intent_processing' | 'executor_processing'; replayPending?: boolean }> {
+    const normalizedClientMessageKey = String(options?.clientMessageKey || '').trim();
+    if (normalizedClientMessageKey) {
+      const existing = this.cancelledClientMessageKeys.get(sessionId) || new Set<string>();
+      existing.add(normalizedClientMessageKey);
+      this.cancelledClientMessageKeys.set(sessionId, existing);
+    }
+    const current = this.activeManagedRuns.get(sessionId);
+    if (!current) {
+      return { interrupted: false };
+    }
+    current.cancelled = true;
+    current.cancelReason = '当前处理已停止';
+    if (current.phase === 'intent_processing' && options?.preserveForRetry && current.latestUserInput.trim()) {
+      const existing = this.interruptedIntentReplayInputs.get(sessionId) || [];
+      this.interruptedIntentReplayInputs.set(sessionId, [...existing, current.latestUserInput.trim()]);
+    }
+    return {
+      interrupted: true,
+      phase: current.phase,
+      replayPending: current.phase === 'intent_processing' && Boolean(options?.preserveForRetry),
+    };
+  }
+
+  private consumeCancelledClientMessageKey(sessionId: string, clientMessageKey?: string): boolean {
+    const normalized = String(clientMessageKey || '').trim();
+    if (!normalized) return false;
+    const current = this.cancelledClientMessageKeys.get(sessionId);
+    if (!current?.has(normalized)) return false;
+    current.delete(normalized);
+    if (current.size === 0) {
+      this.cancelledClientMessageKeys.delete(sessionId);
+    }
+    return true;
   }
 
   private prefetchRuntime(sessionId: string, taskTitle: string) {
@@ -594,6 +721,9 @@ export class TaskCreationWebSocketService {
     const clientMessageKey = String((message.metadata as any)?.messageKey || '').trim() || undefined;
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
     const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
+    if (taskSessionId && this.consumeCancelledClientMessageKey(taskSessionId, clientMessageKey)) {
+      return;
+    }
 
     try {
       if (createdSession) {

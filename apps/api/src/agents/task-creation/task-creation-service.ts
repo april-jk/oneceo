@@ -13,7 +13,7 @@ import { taskCreationSessionDAO } from '../../db/dao';
 import { ensureDatabaseConnection } from '../../config/database';
 import { getPublicErrorMessage } from '../../utils/error-response';
 import { normalizeOpencodeModel } from '../../utils/opencode-model';
-import { isAwaitingUserInputError, RecoverableAgentError } from './errors';
+import { InterruptedTaskError, isAwaitingUserInputError, RecoverableAgentError } from './errors';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { osacAgentService } from '../../services/osac-agent-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
@@ -39,6 +39,13 @@ export class TaskCreationService {
   private osacEnabled = (process.env.OSAC_EXECUTION_ENABLED || 'false').toLowerCase() === 'true';
   private osacMaxAttempts = Number(process.env.OSAC_EXECUTION_RETRIES || 2);
   private osacExecutionMode = (process.env.OSAC_EXECUTION_MODE || 'opencode_remote').trim().toLowerCase();
+  private runControl:
+    | {
+        isCancelled: () => boolean;
+        getCancelReason?: () => string | undefined;
+        setPhase?: (phase: 'intent_processing' | 'executor_processing') => void;
+      }
+    | null = null;
 
   constructor(callbacks?: TaskCreationCallbacks) {
     this.callbacks = callbacks;
@@ -56,6 +63,18 @@ export class TaskCreationService {
     this.layer3 = new ExecutionPlanAgent();
   }
 
+  setRunControl(
+    control:
+      | {
+          isCancelled: () => boolean;
+          getCancelReason?: () => string | undefined;
+          setPhase?: (phase: 'intent_processing' | 'executor_processing') => void;
+        }
+      | null
+  ): void {
+    this.runControl = control;
+  }
+
   /**
    * 创建任务的完整流程
    * 
@@ -70,6 +89,7 @@ export class TaskCreationService {
     metadata?: Record<string, unknown>
   ): Promise<ExecutionPlan> {
     try {
+      this.runControl?.setPhase?.('intent_processing');
       this.sessionId = sessionId;
       console.log('[TaskCreationService] 开始创建任务:', userInput);
       await ensureDatabaseConnection({ retries: 3, delayMs: 1200 });
@@ -133,6 +153,7 @@ export class TaskCreationService {
       // Step 1: 意图识别
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
       this.setStage('collecting');
+      this.throwIfCancelled();
       let intentResult;
       if (existingIntentRecord) {
         intentResult = {
@@ -171,6 +192,7 @@ export class TaskCreationService {
           throw error;
         }
         console.log('[TaskCreationService] 意图识别完成:', intentResult);
+        this.throwIfCancelled();
         const confidenceScore = this.normalizeConfidence(intentResult.confidence);
 
         // 保存意图识别结果
@@ -205,6 +227,7 @@ export class TaskCreationService {
       if (!existingIntentRecord) {
         this.sendPhaseStatus('analysis', '分析阶段：正在规划任务详情...', 'planning');
       }
+      this.throwIfCancelled();
 
       let taskDescription;
       try {
@@ -231,6 +254,7 @@ export class TaskCreationService {
         }
         throw error;
       }
+      this.throwIfCancelled();
 
       // 保存任务描述
       const intentResultRecord = await this.runDbOperation(
@@ -267,6 +291,7 @@ export class TaskCreationService {
       // Step 3: 生成执行计划
       this.setStage('planning');
       this.sendPhaseStatus('analysis', '分析阶段：正在生成执行计划...', 'planning');
+      this.throwIfCancelled();
 
       let executionPlan: ExecutionPlan;
       try {
@@ -278,6 +303,7 @@ export class TaskCreationService {
         throw error;
       }
       console.log('[TaskCreationService] 执行计划生成完成');
+      this.throwIfCancelled();
 
       // 保存执行计划
       const taskDescriptionRecord = await this.runDbOperation(
@@ -317,6 +343,7 @@ export class TaskCreationService {
 
       // Step 4: 交由 OSAC 在 sandbox 内执行（可开关）
       if (this.osacEnabled) {
+        this.runControl?.setPhase?.('executor_processing');
         await this.runDbOperation(
           'updateSessionStatus:in_progress',
           () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
@@ -354,6 +381,21 @@ export class TaskCreationService {
 
       return executionPlan;
     } catch (error: any) {
+      if (isInterruptedTaskError(error)) {
+        if (this.sessionId) {
+          try {
+            await this.runDbOperation(
+              'updateSessionStatus:in_progress_after_interrupt',
+              () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
+            );
+          } catch (dbError: any) {
+            console.warn('[TaskCreationService] 更新会话中断状态失败:', dbError?.message || dbError);
+          }
+        }
+        this.sendStatus('system', '当前处理已停止');
+        (error as any).__clientNotified = true;
+        throw error;
+      }
       if (isAwaitingUserInputError(error)) {
         this.setStage('clarifying');
         if (this.sessionId) {
@@ -454,6 +496,13 @@ export class TaskCreationService {
     }
     const normalized = confidence <= 1 ? confidence * 100 : confidence;
     return Math.max(0, Math.min(100, Math.round(normalized)));
+  }
+
+  private throwIfCancelled(): void {
+    if (!this.runControl?.isCancelled?.()) return;
+    throw new InterruptedTaskError(
+      this.runControl?.getCancelReason?.() || '当前处理已停止'
+    );
   }
 
   private setStage(
@@ -658,12 +707,14 @@ export class TaskCreationService {
     taskDescription: any;
     executionPlan: ExecutionPlan;
   }) {
+    this.throwIfCancelled();
     this.setStage('executing');
     this.sendPhaseStatus('development', '开发阶段：正在启动执行环境...', 'execution');
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.osacMaxAttempts; attempt++) {
       try {
+        this.throwIfCancelled();
         const provision = await sandboxAgentProvisionService.provision({
           metadata: {
             taskSessionId: this.sessionId,
@@ -688,6 +739,7 @@ export class TaskCreationService {
         });
 
         await osacAgentService.ensurePlaywrightMcp(provision.sessionId);
+        this.throwIfCancelled();
 
         if (this.osacExecutionMode !== 'command') {
           if (!this.sessionId) {

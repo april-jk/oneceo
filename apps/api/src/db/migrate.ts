@@ -27,15 +27,46 @@ CREATE TABLE IF NOT EXISTS user_connector_accounts (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS user_connector_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  profile_name TEXT NOT NULL,
+  display_name TEXT,
+  auth_mode TEXT NOT NULL,
+  auth_status TEXT NOT NULL DEFAULT 'not_configured',
+  config_json JSONB,
+  secret_ciphertext TEXT,
+  metadata_json JSONB,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  last_auth_at TIMESTAMP,
+  last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_codex_runtime_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  config_toml TEXT NOT NULL,
+  auth_json TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- 任务会话连接器绑定表
 CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_session_id TEXT NOT NULL,
   connector_key TEXT NOT NULL,
+  profile_id TEXT,
   desired_state TEXT NOT NULL DEFAULT 'detached',
   runtime_status TEXT NOT NULL DEFAULT 'unknown',
   orchestrator_session_id TEXT,
   server_name TEXT,
+  enabled_tools JSONB,
+  session_config_json JSONB,
+  definition_snapshot_json JSONB,
   last_used_at TIMESTAMP,
   last_error TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -47,9 +78,11 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
   request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
   connector_key TEXT NOT NULL,
+  profile_id TEXT,
   provider TEXT NOT NULL,
   state TEXT NOT NULL,
   code_verifier TEXT,
+  profile_draft_json JSONB,
   return_to_session_id TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   expires_at TIMESTAMP NOT NULL,
@@ -59,6 +92,12 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_profile
+  ON user_connector_profiles(user_id, connector_key, profile_name);
+CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_id ON user_connector_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector ON user_connector_profiles(user_id, connector_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_user_id ON user_codex_runtime_configs(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_codex_runtime_configs_updated_at ON user_codex_runtime_configs(updated_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_bindings_session_connector
   ON task_session_connector_bindings(task_session_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
@@ -67,6 +106,66 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_sess
   ON task_session_connector_bindings(orchestrator_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
+
+ALTER TABLE IF EXISTS task_session_connector_bindings
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
+  ADD COLUMN IF NOT EXISTS session_config_json JSONB,
+  ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+ALTER TABLE IF EXISTS connector_auth_requests
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS profile_draft_json JSONB;
+
+INSERT INTO user_connector_profiles (
+  user_id,
+  connector_key,
+  profile_name,
+  display_name,
+  auth_mode,
+  auth_status,
+  config_json,
+  secret_ciphertext,
+  metadata_json,
+  is_default,
+  last_auth_at,
+  last_error,
+  created_at,
+  updated_at
+)
+SELECT
+  user_id,
+  connector_key,
+  COALESCE(NULLIF(display_name, ''), initcap(connector_key) || ' Default'),
+  display_name,
+  auth_mode,
+  auth_status,
+  config_json,
+  secret_ciphertext,
+  '{}'::jsonb,
+  TRUE,
+  last_auth_at,
+  last_error,
+  created_at,
+  updated_at
+FROM user_connector_accounts legacy
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM user_connector_profiles profiles
+  WHERE profiles.user_id = legacy.user_id
+    AND profiles.connector_key = legacy.connector_key
+)
+ON CONFLICT DO NOTHING;
+
+UPDATE task_session_connector_bindings bindings
+SET profile_id = profiles.id::text
+FROM task_creation_sessions sessions,
+     user_connector_profiles profiles
+WHERE bindings.profile_id IS NULL
+  AND sessions.id::text = bindings.task_session_id
+  AND profiles.user_id = sessions.user_id
+  AND profiles.connector_key = bindings.connector_key
+  AND profiles.is_default = TRUE;
 `;
 
 const createTablesSQL = `
@@ -111,6 +210,67 @@ CREATE TABLE IF NOT EXISTS task_session_recent_messages (
   runtime_generation INTEGER,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 会话工作区预览缓存表
+CREATE TABLE IF NOT EXISTS task_session_workspace_cache (
+  id UUID PRIMARY KEY,
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  tenant_key TEXT NOT NULL,
+  cache_type TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed run 表
+CREATE TABLE IF NOT EXISTS task_session_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'managed',
+  status TEXT NOT NULL DEFAULT 'queued',
+  model TEXT,
+  stop_reason TEXT,
+  sandbox_binding_id UUID,
+  connector_snapshot_id UUID,
+  metadata_json JSONB,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed run 事件表
+CREATE TABLE IF NOT EXISTS task_session_run_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES task_session_runs(id) ON DELETE CASCADE,
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  payload_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed sandbox binding 表
+CREATE TABLE IF NOT EXISTS task_session_sandbox_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  sandbox_id TEXT NOT NULL,
+  workspace_root TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  metadata_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_active_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Altus managed connector snapshot 表
+CREATE TABLE IF NOT EXISTS task_session_connector_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- 意图识别结果表
@@ -195,6 +355,20 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sand
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_id ON task_session_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_created_at ON task_session_runs(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_runs_status ON task_session_runs(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_run_events_run_sequence
+  ON task_session_run_events(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_task_session_run_events_run_created_at
+  ON task_session_run_events(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_run_events_session_id ON task_session_run_events(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_session_id
+  ON task_session_sandbox_bindings(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_sandbox_id
+  ON task_session_sandbox_bindings(sandbox_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
+  ON task_session_connector_snapshots(session_id);
 ${connectorTablesSQL}
 `;
 
@@ -340,6 +514,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_messa
   ON task_session_recent_messages(session_id, message_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_recent_messages_session_created_at
   ON task_session_recent_messages(session_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_unique
+  ON task_session_workspace_cache(session_id, tenant_key, cache_type, cache_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_id
+  ON task_session_workspace_cache(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_type
+  ON task_session_workspace_cache(session_id, cache_type);
+CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
+  ON task_session_workspace_cache(updated_at);
 `;
 
 /**
@@ -359,6 +542,7 @@ export async function runMigration() {
     console.log('  - task_creation_sessions');
     console.log('  - conversation_messages');
     console.log('  - task_session_recent_messages');
+    console.log('  - task_session_workspace_cache');
     console.log('  - intent_recognition_results');
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
@@ -367,6 +551,7 @@ export async function runMigration() {
     console.log('  - user_connector_accounts');
     console.log('  - task_session_connector_bindings');
     console.log('  - connector_auth_requests');
+    console.log('  - user_codex_runtime_configs');
     
     return true;
   } catch (error) {
@@ -401,9 +586,11 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS intent_recognition_results CASCADE;
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS task_session_recent_messages CASCADE;
+      DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
     `));

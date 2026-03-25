@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   connectorAuthRequestDAO,
-  userConnectorAccountDAO,
+  userConnectorProfileDAO,
 } from '../db/dao';
 import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
@@ -14,6 +14,22 @@ import {
   connectorRegistry,
 } from './connector-registry';
 
+type UserConnectorProfileView = {
+  profileId: string;
+  connectorKey: ConnectorKey;
+  profileName: string;
+  authMode: string;
+  authStatus: string;
+  displayName?: string | null;
+  config: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  secretSummary?: string | null;
+  isDefault: boolean;
+  lastAuthAt?: string | null;
+  updatedAt?: string | null;
+  lastError?: string | null;
+};
+
 type UserConnectorAccountView = {
   connectorKey: ConnectorKey;
   authMode: string;
@@ -24,12 +40,17 @@ type UserConnectorAccountView = {
   lastAuthAt?: string | null;
   updatedAt?: string | null;
   lastError?: string | null;
+  defaultProfileId?: string | null;
+  defaultProfileName?: string | null;
+  profilesCount?: number;
 };
 
 type SaveConnectorInput = {
+  profileName?: string;
   displayName?: string;
   config?: Record<string, unknown>;
   credentials?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 
 type StartOauthInput = {
@@ -83,33 +104,62 @@ async function fetchJson(url: string, init: RequestInit): Promise<Record<string,
   return payload;
 }
 
-function buildAccountView(
-  catalogItem: ConnectorCatalogItem,
-  row?: {
+function buildProfileView(
+  row: {
+    id: string;
     connectorKey: string;
+    profileName: string;
     authMode: string;
     authStatus: string;
     displayName: string | null;
     configJson: Record<string, unknown> | null;
+    metadataJson?: Record<string, unknown> | null;
     secretCiphertext: string | null;
+    isDefault: boolean;
     lastAuthAt: Date | null;
     updatedAt: Date;
     lastError: string | null;
-  } | null
-): UserConnectorAccountView {
-  const secret = row?.secretCiphertext
+  }
+): UserConnectorProfileView {
+  const secret = row.secretCiphertext
     ? connectorSecretService.decryptJson<ConnectorAccountSecret>(row.secretCiphertext)
     : null;
   return {
-    connectorKey: catalogItem.key,
-    authMode: row?.authMode || catalogItem.authMode,
-    authStatus: row?.authStatus || (catalogItem.available ? 'not_configured' : 'unavailable'),
-    displayName: row?.displayName || null,
-    config: pickObject(row?.configJson),
+    profileId: row.id,
+    connectorKey: row.connectorKey as ConnectorKey,
+    profileName: row.profileName,
+    authMode: row.authMode,
+    authStatus: row.authStatus,
+    displayName: row.displayName || null,
+    config: pickObject(row.configJson),
+    metadata: pickObject(row.metadataJson),
     secretSummary: connectorSecretService.summarize(secret),
-    lastAuthAt: toIso(row?.lastAuthAt),
-    updatedAt: toIso(row?.updatedAt),
-    lastError: row?.lastError || null,
+    isDefault: Boolean(row.isDefault),
+    lastAuthAt: toIso(row.lastAuthAt),
+    updatedAt: toIso(row.updatedAt),
+    lastError: row.lastError || null,
+  };
+}
+
+function summarizeProfiles(
+  catalogItem: ConnectorCatalogItem,
+  profiles: UserConnectorProfileView[]
+): UserConnectorAccountView {
+  const defaultProfile = profiles.find((item) => item.isDefault) || profiles[0];
+  return {
+    connectorKey: catalogItem.key,
+    authMode: defaultProfile?.authMode || catalogItem.authMode,
+    authStatus:
+      defaultProfile?.authStatus || (catalogItem.available ? 'not_configured' : 'unavailable'),
+    displayName: defaultProfile?.displayName || null,
+    config: defaultProfile?.config || {},
+    secretSummary: defaultProfile?.secretSummary || null,
+    lastAuthAt: defaultProfile?.lastAuthAt || null,
+    updatedAt: defaultProfile?.updatedAt || null,
+    lastError: defaultProfile?.lastError || null,
+    defaultProfileId: defaultProfile?.profileId || null,
+    defaultProfileName: defaultProfile?.profileName || null,
+    profilesCount: profiles.length,
   };
 }
 
@@ -141,7 +191,15 @@ function sanitizeConfig(
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config || {})) {
     if (value === undefined) continue;
-    if (key === 'dsn' || key === 'accessToken' || key === 'refreshToken') continue;
+    if (
+      key === 'dsn' ||
+      key === 'accessToken' ||
+      key === 'refreshToken' ||
+      key === 'profileName' ||
+      key === 'displayName'
+    ) {
+      continue;
+    }
     next[key] = value;
   }
   if (connectorKey === 'postgres' && displayName) {
@@ -155,7 +213,7 @@ function resolveAuthStatus(
   secret: ConnectorAccountSecret | null,
   explicitStatus?: string
 ): ConnectorAuthStatus {
-  if (!catalogItem.available) return 'unavailable';
+  if (!catalogItem.available && !catalogItem.deprecated) return 'unavailable';
   if (explicitStatus === 'error') return 'error';
   if (secret?.accessToken || secret?.dsn) return 'authorized';
   if (catalogItem.oauth?.supported) return 'needs_auth';
@@ -172,10 +230,7 @@ async function resolveGithubProfile(accessToken: string): Promise<{ displayName?
     },
   });
   return {
-    displayName:
-      asText(payload.login) ||
-      asText(payload.name) ||
-      undefined,
+    displayName: asText(payload.login) || asText(payload.name) || undefined,
   };
 }
 
@@ -196,102 +251,258 @@ async function resolveDisplayNameForSave(input: {
   return profile.displayName || fallback;
 }
 
+function ensureRequiredProfileName(profileName: string, connectorKey: ConnectorKey) {
+  if (!profileName) {
+    throw new Error(`${connectorKey} 连接器缺少 profile name`);
+  }
+}
+
+function buildGithubProfileName(displayName?: string | null): string {
+  const resolved = asText(displayName);
+  return resolved ? `GitHub · ${resolved}` : 'GitHub';
+}
+
 export class UserConnectorService {
   async listCatalog() {
+    return connectorRegistry.listVisibleCatalog();
+  }
+
+  async listAllCatalog() {
     return connectorRegistry.listCatalog();
   }
 
-  async listUserAccounts(userId: string) {
+  async listUserProfiles(userId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const [catalog, rows] = await Promise.all([
-      Promise.resolve(connectorRegistry.listCatalog()),
-      userConnectorAccountDAO.listByUserId(userId),
-    ]);
-    const rowMap = new Map(rows.map((row) => [row.connectorKey, row]));
-    return catalog.map((item) => buildAccountView(item, rowMap.get(item.key) as any));
+    const profiles = await userConnectorProfileDAO.listByUserId(userId);
+    const visibleKeys = new Set(connectorRegistry.listVisibleCatalog().map((item) => item.key));
+    return profiles
+      .filter((row) => visibleKeys.has(row.connectorKey as ConnectorKey))
+      .map((row) => buildProfileView(row as any));
   }
 
-  async getUserAccount(userId: string, connectorKey: ConnectorKey) {
+  async getProfile(userId: string, profileId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
-    const row = await userConnectorAccountDAO.getByUserAndConnectorKey(userId, connectorKey);
-    return buildAccountView(catalogItem, row as any);
+    const row = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!row) {
+      throw new Error('连接器 profile 不存在');
+    }
+    return buildProfileView(row as any);
   }
 
-  async getAccountMaterial(userId: string, connectorKey: ConnectorKey): Promise<ConnectorAccountMaterial | null> {
+  async getProfileMaterial(userId: string, profileId: string): Promise<ConnectorAccountMaterial | null> {
     await connectorStorageBootstrap.ensureReady();
-    const row = await userConnectorAccountDAO.getByUserAndConnectorKey(userId, connectorKey);
+    const row = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
     if (!row) return null;
     return {
-      connectorKey,
+      profileId: row.id,
+      connectorKey: row.connectorKey as ConnectorKey,
+      profileName: row.profileName,
       authMode: row.authMode,
       authStatus: row.authStatus,
       displayName: row.displayName,
       configJson: pickObject(row.configJson),
+      metadataJson: pickObject(row.metadataJson),
       secret: row.secretCiphertext
         ? connectorSecretService.decryptJson<ConnectorAccountSecret>(row.secretCiphertext)
         : null,
     };
   }
 
-  async saveUserConnector(
+  async listUserAccounts(userId: string) {
+    await connectorStorageBootstrap.ensureReady();
+    const [catalog, profiles] = await Promise.all([
+      Promise.resolve(connectorRegistry.listCatalog()),
+      userConnectorProfileDAO.listByUserId(userId),
+    ]);
+    const profilesByKey = new Map<ConnectorKey, UserConnectorProfileView[]>();
+    for (const row of profiles) {
+      const key = row.connectorKey as ConnectorKey;
+      const items = profilesByKey.get(key) || [];
+      items.push(buildProfileView(row as any));
+      profilesByKey.set(key, items);
+    }
+    return catalog.map((item) => summarizeProfiles(item, profilesByKey.get(item.key) || []));
+  }
+
+  async getUserAccount(userId: string, connectorKey: ConnectorKey) {
+    await connectorStorageBootstrap.ensureReady();
+    const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
+    const rows = await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey);
+    return summarizeProfiles(
+      catalogItem,
+      rows.map((row) => buildProfileView(row as any))
+    );
+  }
+
+  async getDefaultOrFirstProfile(userId: string, connectorKey: ConnectorKey) {
+    await connectorStorageBootstrap.ensureReady();
+    const rows = await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey);
+    const items = rows.map((row) => buildProfileView(row as any));
+    return items.find((item) => item.isDefault) || items[0] || null;
+  }
+
+  async getAccountMaterial(userId: string, connectorKey: ConnectorKey): Promise<ConnectorAccountMaterial | null> {
+    const profile = await this.getDefaultOrFirstProfile(userId, connectorKey);
+    if (!profile) return null;
+    return this.getProfileMaterial(userId, profile.profileId);
+  }
+
+  private async saveProfileInternal(
     userId: string,
     connectorKey: ConnectorKey,
+    existingProfileId: string | null,
     input: SaveConnectorInput
   ) {
     await connectorStorageBootstrap.ensureReady();
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
-    const existing = await userConnectorAccountDAO.getByUserAndConnectorKey(userId, connectorKey);
+    const existing = existingProfileId
+      ? await userConnectorProfileDAO.getByIdAndUser(existingProfileId, userId)
+      : null;
     const existingSecret = existing?.secretCiphertext
       ? connectorSecretService.decryptJson<ConnectorAccountSecret>(existing.secretCiphertext)
       : null;
     const config = pickObject(input.config);
     const credentials = pickObject(input.credentials);
-    const displayName = asText(input.displayName) || asText(config.displayName) || existing?.displayName || '';
+    const metadata = pickObject(input.metadata);
+    const displayName =
+      asText(input.displayName) || asText(config.displayName) || asText(existing?.displayName) || '';
     const secret = buildSecretPayload(connectorKey, credentials, existingSecret);
     if (catalogItem.authMode === 'dsn' && !secret?.dsn) {
       throw new Error('Postgres 连接器需要提供 DSN');
+    }
+    if (catalogItem.authMode === 'token' && !catalogItem.oauth?.supported && connectorKey !== 'postgres' && !secret?.accessToken) {
+      throw new Error(`${catalogItem.name} 连接器需要提供 access token`);
     }
     const resolvedDisplayName = await resolveDisplayNameForSave({
       connectorKey,
       secret,
       fallbackDisplayName: displayName,
     });
+    const profileNameCandidate =
+      asText(input.profileName) ||
+      asText(config.profileName) ||
+      asText(existing?.profileName) ||
+      (connectorKey === 'github'
+        ? buildGithubProfileName(resolvedDisplayName)
+        : `${catalogItem.name} Default`);
+    const profileName =
+      connectorKey === 'github'
+        ? profileNameCandidate || buildGithubProfileName(resolvedDisplayName)
+        : profileNameCandidate;
+    ensureRequiredProfileName(profileName, connectorKey);
     const authStatus = resolveAuthStatus(catalogItem, secret, existing?.authStatus);
-    const saved = await userConnectorAccountDAO.upsert({
-      userId,
-      connectorKey,
-      authMode: catalogItem.authMode,
-      authStatus,
-      displayName: resolvedDisplayName || null,
-      configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
-      secretCiphertext: connectorSecretService.encrypt(secret),
-      lastAuthAt: authStatus === 'authorized' ? new Date() : existing?.lastAuthAt || null,
-      lastError: null,
-    });
-    return buildAccountView(catalogItem, saved as any);
+
+    let saved;
+    if (!existing) {
+      const currentProfiles = await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey);
+      const isDefault = currentProfiles.length === 0;
+      saved = await userConnectorProfileDAO.create({
+        userId,
+        connectorKey,
+        profileName,
+        authMode: catalogItem.authMode,
+        authStatus,
+        displayName: resolvedDisplayName || null,
+        configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
+        secretCiphertext: connectorSecretService.encrypt(secret),
+        metadataJson: metadata,
+        isDefault,
+        lastAuthAt: authStatus === 'authorized' ? new Date() : null,
+        lastError: null,
+      } as any);
+    } else {
+      saved = await userConnectorProfileDAO.update(existing.id, userId, {
+        profileName,
+        authMode: catalogItem.authMode,
+        authStatus,
+        displayName: resolvedDisplayName || null,
+        configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
+        secretCiphertext: connectorSecretService.encrypt(secret),
+        metadataJson: metadata,
+        lastAuthAt: authStatus === 'authorized' ? new Date() : existing.lastAuthAt || null,
+        lastError: null,
+      } as any);
+    }
+    if (!saved) {
+      throw new Error('保存连接器 profile 失败');
+    }
+    return buildProfileView(saved as any);
   }
 
-  async clearConnectorAuth(userId: string, connectorKey: ConnectorKey) {
+  async createProfile(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
+    return this.saveProfileInternal(userId, connectorKey, null, input);
+  }
+
+  async updateProfile(userId: string, profileId: string, input: SaveConnectorInput) {
+    const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    return this.saveProfileInternal(userId, existing.connectorKey as ConnectorKey, profileId, input);
+  }
+
+  async deleteProfile(userId: string, profileId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
-    const existing = await userConnectorAccountDAO.getByUserAndConnectorKey(userId, connectorKey);
-    const saved = await userConnectorAccountDAO.upsert({
-      userId,
-      connectorKey,
+    const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    await userConnectorProfileDAO.delete(profileId, userId);
+    if (existing.isDefault) {
+      const remaining = await userConnectorProfileDAO.listByUserAndConnectorKey(
+        userId,
+        existing.connectorKey
+      );
+      const nextDefault = remaining[0];
+      if (nextDefault) {
+        await userConnectorProfileDAO.clearDefaultForConnector(userId, existing.connectorKey);
+        await userConnectorProfileDAO.update(nextDefault.id, userId, { isDefault: true } as any);
+      }
+    }
+    return true;
+  }
+
+  async setDefaultProfile(userId: string, profileId: string) {
+    await connectorStorageBootstrap.ensureReady();
+    const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    await userConnectorProfileDAO.clearDefaultForConnector(userId, existing.connectorKey);
+    const saved = await userConnectorProfileDAO.update(profileId, userId, { isDefault: true } as any);
+    if (!saved) {
+      throw new Error('设置默认 profile 失败');
+    }
+    return buildProfileView(saved as any);
+  }
+
+  async clearProfileAuth(userId: string, profileId: string) {
+    await connectorStorageBootstrap.ensureReady();
+    const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
+    const saved = await userConnectorProfileDAO.update(profileId, userId, {
       authMode: catalogItem.authMode,
       authStatus: catalogItem.available ? 'not_configured' : 'unavailable',
-      displayName: existing?.displayName || null,
-      configJson: pickObject(existing?.configJson),
       secretCiphertext: null,
       lastAuthAt: null,
       lastError: null,
-    });
-    return buildAccountView(catalogItem, saved as any);
+    } as any);
+    if (!saved) {
+      throw new Error('断开连接器授权失败');
+    }
+    return buildProfileView(saved as any);
   }
 
-  async startOAuth(userId: string, connectorKey: ConnectorKey, input: StartOauthInput) {
+  async startOAuthForProfile(userId: string, profileId: string, input: StartOauthInput) {
     await connectorStorageBootstrap.ensureReady();
+    const profile = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!profile) {
+      throw new Error('连接器 profile 不存在');
+    }
+    const connectorKey = profile.connectorKey as ConnectorKey;
     const provider = connectorRegistry.getOauthProvider(connectorKey);
     if (!provider) {
       throw new Error('当前连接器未配置 OAuth');
@@ -302,13 +513,14 @@ export class UserConnectorService {
       requestId,
       userId,
       connectorKey,
+      profileId,
       provider: provider.provider,
       state,
       codeVerifier: randomUUID(),
       returnToSessionId: asText(input.returnToSessionId) || null,
       status: 'pending',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
+    } as any);
     const authUrl = new URL(provider.authorizationUrl);
     authUrl.searchParams.set('client_id', provider.clientId);
     authUrl.searchParams.set('redirect_uri', input.redirectUri);
@@ -328,14 +540,24 @@ export class UserConnectorService {
     };
   }
 
-  async completeOAuth(userId: string, connectorKey: ConnectorKey, input: CompleteOauthInput) {
+  async completeOAuthByProfile(userId: string, profileId: string, input: CompleteOauthInput) {
     await connectorStorageBootstrap.ensureReady();
+    const profile = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!profile) {
+      throw new Error('连接器 profile 不存在');
+    }
+    const connectorKey = profile.connectorKey as ConnectorKey;
     const provider = connectorRegistry.getOauthProvider(connectorKey);
     if (!provider) {
       throw new Error('当前连接器未配置 OAuth');
     }
     const request = await connectorAuthRequestDAO.getByState(input.state);
-    if (!request || request.userId !== userId || request.connectorKey !== connectorKey) {
+    if (
+      !request ||
+      request.userId !== userId ||
+      request.connectorKey !== connectorKey ||
+      asText(request.profileId) !== profileId
+    ) {
       throw new Error('OAuth 请求不存在或不属于当前用户');
     }
     if (request.expiresAt && request.expiresAt.getTime() < Date.now()) {
@@ -386,11 +608,16 @@ export class UserConnectorService {
       let displayName =
         asText((tokenPayload.team as Record<string, unknown> | undefined)?.name) ||
         asText(tokenPayload.workspace_name) ||
+        asText(profile.displayName) ||
         '';
+      let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
 
       if (connectorKey === 'github') {
-        const profile = await resolveGithubProfile(accessToken);
-        displayName = profile.displayName || displayName;
+        const githubProfile = await resolveGithubProfile(accessToken);
+        displayName = githubProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
+          profileName = buildGithubProfileName(displayName);
+        }
       }
 
       const secret: ConnectorAccountSecret = {
@@ -401,26 +628,71 @@ export class UserConnectorService {
       };
 
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
-      const saved = await userConnectorAccountDAO.upsert({
-        userId,
-        connectorKey,
+      const saved = await userConnectorProfileDAO.update(profileId, userId, {
+        profileName,
         authMode: 'oauth',
         authStatus: 'authorized',
-        displayName: displayName || null,
-        configJson: {},
+        displayName: displayName || profile.displayName || null,
         secretCiphertext: connectorSecretService.encrypt(secret),
         lastAuthAt: new Date(),
         lastError: null,
-      });
+      } as any);
+      if (!saved) {
+        throw new Error('OAuth 结果保存失败');
+      }
 
       return {
-        account: buildAccountView(connectorRegistry.getCatalogItem(connectorKey), saved as any),
+        profile: buildProfileView(saved as any),
         returnToSessionId: request.returnToSessionId || null,
       };
     } catch (error) {
       await connectorAuthRequestDAO.markFailedByState(input.state, 'failed');
       throw error;
     }
+  }
+
+  // Backward-compatible helpers while callers migrate to profile endpoints.
+  async saveUserConnector(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
+    const existing = await this.getDefaultOrFirstProfile(userId, connectorKey);
+    if (existing) {
+      return this.updateProfile(userId, existing.profileId, input);
+    }
+    const created = await this.createProfile(userId, connectorKey, {
+      profileName: input.profileName || `${connectorRegistry.getCatalogItem(connectorKey).name} Default`,
+      ...input,
+    });
+    return summarizeProfiles(connectorRegistry.getCatalogItem(connectorKey), [created]);
+  }
+
+  async clearConnectorAuth(userId: string, connectorKey: ConnectorKey) {
+    const existing = await this.getDefaultOrFirstProfile(userId, connectorKey);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    const cleared = await this.clearProfileAuth(userId, existing.profileId);
+    return summarizeProfiles(connectorRegistry.getCatalogItem(connectorKey), [cleared]);
+  }
+
+  async startOAuth(userId: string, connectorKey: ConnectorKey, input: StartOauthInput) {
+    let profile = await this.getDefaultOrFirstProfile(userId, connectorKey);
+    if (!profile) {
+      profile = await this.createProfile(userId, connectorKey, {
+        profileName: `${connectorRegistry.getCatalogItem(connectorKey).name} Default`,
+      });
+    }
+    return this.startOAuthForProfile(userId, profile.profileId, input);
+  }
+
+  async completeOAuth(userId: string, connectorKey: ConnectorKey, input: CompleteOauthInput) {
+    const request = await connectorAuthRequestDAO.getByState(input.state);
+    if (!request || request.userId !== userId || request.connectorKey !== connectorKey || !request.profileId) {
+      throw new Error('OAuth 请求不存在或不属于当前用户');
+    }
+    const result = await this.completeOAuthByProfile(userId, String(request.profileId), input);
+    return {
+      account: summarizeProfiles(connectorRegistry.getCatalogItem(connectorKey), [result.profile]),
+      returnToSessionId: result.returnToSessionId,
+    };
   }
 }
 

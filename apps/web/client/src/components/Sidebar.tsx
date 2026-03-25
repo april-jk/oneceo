@@ -11,9 +11,27 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -41,11 +60,23 @@ import {
   Bell,
   Coins,
   Crown,
+  Pencil,
+  Share2,
+  Star,
+  FolderInput,
+  Trash2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTranslation } from "react-i18next";
 import React from "react";
-import { listTaskCreationSessions } from "@/lib/task-creation-client";
+import { toast } from "sonner";
+import {
+  deleteTaskCreationSession,
+  listTaskCreationSessions,
+  renameTaskCreationSessionTitle,
+  toggleTaskCreationSessionFavorite,
+  type TaskCreationSessionSummary,
+} from "@/lib/task-creation-client";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 
 interface SidebarProps {
@@ -63,6 +94,17 @@ export default function Sidebar({
   selectedProjectId,
   onProjectSelect,
 }: SidebarProps) {
+  type SessionTask = {
+    sessionId: string;
+    title: string;
+    status: string;
+    updatedAt?: string;
+    isFavorite?: boolean;
+    projectId?: string | null;
+    projectName?: string | null;
+    shareEnabled?: boolean;
+    shareToken?: string | null;
+  };
   const SESSION_PREVIEW_COUNT = 3;
   const [location, setLocation] = useLocation();
   const { t } = useTranslation();
@@ -70,17 +112,64 @@ export default function Sidebar({
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
-  const [sessionTasks, setSessionTasks] = React.useState<
-    Array<{
-      sessionId: string;
-      title: string;
-      status: string;
-      updatedAt?: string;
-    }>
-  >([]);
+  const [sessionTasks, setSessionTasks] = React.useState<SessionTask[]>([]);
+  const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
+  const [renameTarget, setRenameTarget] = React.useState<SessionTask | null>(null);
+  const [renameValue, setRenameValue] = React.useState("");
+  const [renameSubmitting, setRenameSubmitting] = React.useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<SessionTask | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = React.useState(false);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
   const LIST_POLL_MS = 30000;
+
+  const mapSessionTask = React.useCallback(
+    (session: TaskCreationSessionSummary | any, index: number): SessionTask & { originalIndex: number } => ({
+      sessionId: session.id,
+      title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+      status: session.status || "in_progress",
+      updatedAt:
+        typeof session.updatedAt === "string" && session.updatedAt.trim()
+          ? session.updatedAt
+          : undefined,
+      isFavorite: Boolean(session.isFavorite),
+      projectId:
+        typeof session.projectId === "string" && session.projectId.trim()
+          ? session.projectId.trim()
+          : null,
+      projectName:
+        typeof session.projectName === "string" && session.projectName.trim()
+          ? session.projectName.trim()
+          : null,
+      shareEnabled: Boolean(session.shareEnabled),
+      shareToken:
+        typeof session.shareToken === "string" && session.shareToken.trim()
+          ? session.shareToken.trim()
+          : null,
+      originalIndex: index,
+    }),
+    [],
+  );
+
+  const sortSessionTasks = React.useCallback((list: Array<SessionTask & { originalIndex?: number }>) => {
+    return [...list]
+      .sort((left, right) => {
+        const favoriteDelta = Number(Boolean(right.isFavorite)) - Number(Boolean(left.isFavorite));
+        if (favoriteDelta !== 0) {
+          return favoriteDelta;
+        }
+        const leftTime = Date.parse(left.updatedAt || "");
+        const rightTime = Date.parse(right.updatedAt || "");
+        const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
+        const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
+        if (safeRightTime !== safeLeftTime) {
+          return safeRightTime - safeLeftTime;
+        }
+        return (left.originalIndex || 0) - (right.originalIndex || 0);
+      })
+      .map(({ originalIndex, ...session }) => session);
+  }, []);
 
   React.useEffect(() => {
     let disposed = false;
@@ -94,28 +183,7 @@ export default function Sidebar({
       try {
         const list = await listTaskCreationSessions("all");
         if (disposed) return;
-        const mapped = list
-          .map((session: any, index: number) => ({
-            sessionId: session.id,
-            title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
-            status: session.status || "in_progress",
-            updatedAt:
-              typeof session.updatedAt === "string" && session.updatedAt.trim()
-                ? session.updatedAt
-                : undefined,
-            originalIndex: index,
-          }))
-          .sort((left, right) => {
-            const leftTime = Date.parse(left.updatedAt || "");
-            const rightTime = Date.parse(right.updatedAt || "");
-            const safeLeftTime = Number.isFinite(leftTime) ? leftTime : 0;
-            const safeRightTime = Number.isFinite(rightTime) ? rightTime : 0;
-            if (safeRightTime !== safeLeftTime) {
-              return safeRightTime - safeLeftTime;
-            }
-            return left.originalIndex - right.originalIndex;
-          })
-          .map(({ originalIndex, ...session }) => session);
+        const mapped = sortSessionTasks(list.map(mapSessionTask));
         setSessionTasks(mapped);
         lastListFetchRef.current = Date.now();
       } catch {
@@ -138,6 +206,7 @@ export default function Sidebar({
               sessionId?: string;
               title?: string;
               status?: string;
+              isFavorite?: boolean;
             })
           : null;
       const patchedSessionId =
@@ -152,6 +221,7 @@ export default function Sidebar({
         typeof detail?.status === "string" && detail.status.trim()
           ? detail.status.trim()
           : "";
+      const hasFavoritePatch = typeof detail?.isFavorite === "boolean";
       if (patchedSessionId) {
         setSessionTasks((prev) => {
           const nowIso = new Date().toISOString();
@@ -165,20 +235,22 @@ export default function Sidebar({
               ...current,
               title: patchedTitle || current.title,
               status: patchedStatus || current.status,
+              isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : current.isFavorite,
               updatedAt: nowIso,
             };
-            return next;
+            return sortSessionTasks(next);
           }
           if (patchedTitle) {
-            return [
+            return sortSessionTasks([
               {
                 sessionId: patchedSessionId,
                 title: patchedTitle,
                 status: patchedStatus || "in_progress",
                 updatedAt: nowIso,
+                isFavorite: hasFavoritePatch ? Boolean(detail?.isFavorite) : false,
               },
               ...prev,
-            ];
+            ]);
           }
           return prev;
         });
@@ -203,7 +275,7 @@ export default function Sidebar({
         onSessionUpdated,
       );
     };
-  }, []);
+  }, [mapSessionTask, sortSessionTasks]);
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) =>
@@ -285,19 +357,25 @@ export default function Sidebar({
   }, [location]);
   const orderedSessionTasks = React.useMemo(() => {
     if (!activeSessionId) {
-      return sessionTasks;
+      return sortSessionTasks(sessionTasks);
     }
     const activeIndex = sessionTasks.findIndex(
       (session) => session.sessionId === activeSessionId,
     );
     if (activeIndex <= 0) {
-      return sessionTasks;
+      return sortSessionTasks(sessionTasks);
     }
-    const next = [...sessionTasks];
-    const [activeSession] = next.splice(activeIndex, 1);
+    const next = sortSessionTasks(sessionTasks);
+    const sortedActiveIndex = next.findIndex(
+      (session) => session.sessionId === activeSessionId,
+    );
+    if (sortedActiveIndex <= 0) {
+      return next;
+    }
+    const [activeSession] = next.splice(sortedActiveIndex, 1);
     next.unshift(activeSession);
     return next;
-  }, [activeSessionId, sessionTasks]);
+  }, [activeSessionId, sessionTasks, sortSessionTasks]);
   const sessionPreviewList = orderedSessionTasks.slice(
     0,
     SESSION_PREVIEW_COUNT,
@@ -312,6 +390,187 @@ export default function Sidebar({
     if (status === "waiting_user") return "待补充";
     return "进行中";
   };
+
+  const patchSessionTask = React.useCallback((sessionId: string, patch: Partial<SessionTask>) => {
+    setSessionTasks((prev) =>
+      sortSessionTasks(
+        prev.map((session, index) =>
+          session.sessionId === sessionId
+            ? {
+                ...session,
+                ...patch,
+                updatedAt:
+                  patch.updatedAt || new Date().toISOString(),
+                originalIndex: index,
+              }
+            : { ...session, originalIndex: index },
+        ),
+      ),
+    );
+  }, [sortSessionTasks]);
+
+  const dispatchSessionUpdate = React.useCallback((session: Partial<SessionTask> & { sessionId: string }) => {
+    window.dispatchEvent(
+      new CustomEvent("task-creation-session-updated", {
+        detail: {
+          sessionId: session.sessionId,
+          title: session.title,
+          status: session.status,
+          isFavorite: session.isFavorite,
+        },
+      }),
+    );
+  }, []);
+
+  const openRenameDialog = React.useCallback((session: SessionTask) => {
+    setRenameTarget(session);
+    setRenameValue(session.title);
+    setRenameDialogOpen(true);
+  }, []);
+
+  const handleRenameSubmit = React.useCallback(async () => {
+    const target = renameTarget;
+    const nextTitle = renameValue.trim();
+    if (!target || !nextTitle) {
+      return;
+    }
+    setRenameSubmitting(true);
+    try {
+      const updated = await renameTaskCreationSessionTitle(target.sessionId, nextTitle);
+      const appliedTitle = updated?.title?.trim() || nextTitle;
+      patchSessionTask(target.sessionId, { title: appliedTitle });
+      dispatchSessionUpdate({
+        sessionId: target.sessionId,
+        title: appliedTitle,
+      });
+      setRenameDialogOpen(false);
+      setRenameTarget(null);
+      toast.success("任务标题已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重命名失败");
+    } finally {
+      setRenameSubmitting(false);
+    }
+  }, [dispatchSessionUpdate, patchSessionTask, renameTarget, renameValue]);
+
+  const handleFavoriteToggle = React.useCallback(async (session: SessionTask) => {
+    const nextFavorite = !Boolean(session.isFavorite);
+    try {
+      const updated = await toggleTaskCreationSessionFavorite(session.sessionId, nextFavorite);
+      const appliedFavorite = typeof updated?.isFavorite === "boolean" ? Boolean(updated.isFavorite) : nextFavorite;
+      patchSessionTask(session.sessionId, { isFavorite: appliedFavorite });
+      dispatchSessionUpdate({
+        sessionId: session.sessionId,
+        isFavorite: appliedFavorite,
+      });
+      toast.success(appliedFavorite ? "已添加到收藏" : "已取消收藏");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新收藏状态失败");
+    }
+  }, [dispatchSessionUpdate, patchSessionTask]);
+
+  const openDeleteDialog = React.useCallback((session: SessionTask) => {
+    setDeleteTarget(session);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleDeleteConfirm = React.useCallback(async () => {
+    const target = deleteTarget;
+    if (!target) return;
+    setDeleteSubmitting(true);
+    try {
+      await deleteTaskCreationSession(target.sessionId);
+      setSessionTasks((prev) => prev.filter((session) => session.sessionId !== target.sessionId));
+      if (activeSessionId === target.sessionId) {
+        setLocation("/");
+      }
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+      toast.success("会话已删除");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除会话失败");
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  }, [activeSessionId, deleteTarget, setLocation]);
+
+  const renderSessionTaskItem = React.useCallback(
+    (session: SessionTask, options?: { compact?: boolean; onNavigate?: () => void }) => {
+      const compact = Boolean(options?.compact);
+      const label = formatSessionStatus(session.status);
+      const favoriteLabel = session.isFavorite ? "取消收藏" : "添加到收藏";
+      const leadingIcon = session.isFavorite ? (
+        <Star className="h-3.5 w-3.5 fill-current text-amber-500" />
+      ) : (
+        <FileText className={compact ? "h-3.5 w-3.5" : "w-4 h-4 shrink-0"} />
+      );
+
+      const button = compact ? (
+        <Button
+          variant="ghost"
+          className="grid h-7 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
+        >
+          {leadingIcon}
+          <span className="text-xs truncate flex-1 min-w-0 text-left">
+            {session.title}
+          </span>
+          <span className="w-9 truncate text-right text-[10px] text-muted-foreground">
+            {label}
+          </span>
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          className="w-full min-w-0 justify-between h-10 overflow-hidden px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
+          onClick={options?.onNavigate}
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            {leadingIcon}
+            <span className="text-sm truncate min-w-0">
+              {session.title}
+            </span>
+          </span>
+          <span className="text-xs text-muted-foreground shrink-0">
+            {label}
+          </span>
+        </Button>
+      );
+
+      return (
+        <ContextMenu key={session.sessionId}>
+          <ContextMenuTrigger>
+            <Link href={`/session/${session.sessionId}?view=history`}>
+              {button}
+            </Link>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-52">
+            <ContextMenuItem disabled>
+              <Share2 className="h-4 w-4" />
+              <span>分享（待实现）</span>
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => openRenameDialog(session)}>
+              <Pencil className="h-4 w-4" />
+              <span>重命名</span>
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => void handleFavoriteToggle(session)}>
+              <Star className={`h-4 w-4 ${session.isFavorite ? "fill-current text-amber-500" : ""}`} />
+              <span>{favoriteLabel}</span>
+            </ContextMenuItem>
+            <ContextMenuItem disabled>
+              <FolderInput className="h-4 w-4" />
+              <span>移动到项目（待实现）</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={() => openDeleteDialog(session)}>
+              <Trash2 className="h-4 w-4" />
+              <span>删除</span>
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      );
+    },
+    [formatSessionStatus, handleFavoriteToggle, openDeleteDialog, openRenameDialog],
+  );
 
   return (
     <aside
@@ -535,25 +794,9 @@ export default function Sidebar({
 
             {sessionTasks.length > 0 && (
               <div className="mt-2 space-y-1">
-                {sessionPreviewList.map((session) => (
-                  <Link
-                    key={session.sessionId}
-                    href={`/session/${session.sessionId}?view=history`}
-                  >
-                    <Button
-                      variant="ghost"
-                      className="grid h-7 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-sidebar-foreground transition-colors duration-150 hover:bg-sidebar-accent/50"
-                    >
-                      <FileText className="h-3.5 w-3.5" />
-                      <span className="text-xs truncate flex-1 min-w-0 text-left">
-                        {session.title}
-                      </span>
-                      <span className="w-9 truncate text-right text-[10px] text-muted-foreground">
-                        {formatSessionStatus(session.status)}
-                      </span>
-                    </Button>
-                  </Link>
-                ))}
+                {sessionPreviewList.map((session) =>
+                  renderSessionTaskItem(session, { compact: true }),
+                )}
               </div>
             )}
           </div>
@@ -677,33 +920,88 @@ export default function Sidebar({
               </div>
             ) : (
               <div className="space-y-2">
-                {orderedSessionTasks.map((session) => (
-                  <Link
-                    key={session.sessionId}
-                    href={`/session/${session.sessionId}?view=history`}
-                  >
-                    <Button
-                      variant="ghost"
-                      className="w-full min-w-0 justify-between h-10 overflow-hidden px-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                      onClick={() => setTasksDialogOpen(false)}
-                    >
-                      <span className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-4 h-4 shrink-0" />
-                        <span className="text-sm truncate min-w-0">
-                          {session.title}
-                        </span>
-                      </span>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {formatSessionStatus(session.status)}
-                      </span>
-                    </Button>
-                  </Link>
-                ))}
+                {orderedSessionTasks.map((session) =>
+                  renderSessionTaskItem(session, {
+                    onNavigate: () => setTasksDialogOpen(false),
+                  }),
+                )}
               </div>
             )}
           </ScrollArea>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>重命名任务</DialogTitle>
+            <DialogDescription>更新该会话在侧边栏中的显示标题。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              placeholder="输入新的任务标题"
+              maxLength={80}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleRenameSubmit();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRenameDialogOpen(false);
+                setRenameTarget(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => void handleRenameSubmit()}
+              disabled={renameSubmitting || !renameValue.trim()}
+            >
+              {renameSubmitting ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除任务会话？</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget?.title
+                ? `删除后将无法恢复「${deleteTarget.title}」的侧边栏入口和历史会话数据。`
+                : "删除后将无法恢复该任务会话。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setDeleteTarget(null);
+              }}
+            >
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleDeleteConfirm();
+              }}
+              disabled={deleteSubmitting}
+            >
+              {deleteSubmitting ? "删除中..." : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   );
 }

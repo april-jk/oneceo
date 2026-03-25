@@ -121,6 +121,12 @@
    - 保留为独立原子消息
    - 以 `Codex` 作者头部 + markdown 正文显示
    - 示例：`Searching for agents`、`Planning initial single-file game`
+   - `ws模式` 下对 App Server 的 `item/reasoning/summaryTextDelta` 不直接落盘
+   - 后端先按 `itemId + summaryIndex` 聚合，再投影成稳定的 `item/reasoning/summary`
+   - 平台只显示聚合后的解释性消息，避免把 token 级增量通知直接泄露到主对话区
+   - 聚合时必须保留原始空格和换行，不能对每个 delta 逐段 `trim`
+   - 同一轮 poll 内若同一条 reasoning summary 被连续更新，只保留最后一个快照落库
+   - 这样主对话区能按 Codex 原始时序看到“解释性消息 -> 工具/文件变更 -> 最终总结”，同时不会出现半截 reasoning 文本
 2. `agent_message` 类型
    - 作为最终正文块显示
    - 同样使用 `Codex` 作者头部
@@ -138,30 +144,244 @@
      - 操作语义，例如 `文件修改 / 复制文件 / 移动文件`
      - 目标文件名，例如 `index.html`
    - 原始长命令只放在 tooltip / 详情弹窗中
+   - 详情弹窗标题也必须继续使用语义化标题
+     - 例如 `文件修改 · index.html`
+     - 不允许回退成 `文件修改 · /bin/bash -lc "cat <<EOF ..."` 这种原始 shell 标题
+   - 详情弹窗正文应优先显示：
+     - `操作`
+     - `目标文件`
+     - `写入内容预览`（若命令可解析出 heredoc/写入正文）
+     - 仅在无法提取写入正文时才退回 `命令摘要`
+     - 而不是把完整 heredoc 直接拼进标题
    - 原因：这类命令本质仍是 `command_execution`，不是原生 diff；页面不应把整段 heredoc 当主正文
 4. `file_change` 类型
    - 显示为 `新建文件 / 更新文件 / 删除文件` 卡片
    - 点击后联动右侧内容预览或变更面板
+   - `item/fileChange/outputDelta` 这类底层增量通知不进入主对话区
+   - 只保留最终可消费的 `fileChange` 结果卡片
 5. `diff` 类型
    - 若事件中已带文件列表或变更对象，显示为 `变更草案` 卡片
    - 若缺少结构化文件列表，则退回普通 markdown/文本展示
-6. `approval_request` 类型
+   - 对同一 turn 内连续多次 `turn/diff/updated`，主对话区只显示最后一条最终 diff 卡片
+   - 若 diff 事件自身未带文件路径，可使用同一 turn 内后续 `fileChange` 的文件路径补齐标题
+   - 优先显示为 `变更 Diff · index.html`，避免退化成 `变更 Diff · 文件`
+   - 右侧 `最近更改` 面板不再按 Codex 底层 patch 事件逐条堆叠
+   - 对 `executor=codex` 的变更预览，按 `canonicalFile` 做文件级归并
+   - 同一个文件如果在一个会话中被多次连续修改，只保留该文件最新的一条预览项
+   - 目标是让 `最近更改` 表示“最近改了哪些文件”，而不是“最近收到哪些 fileChange/diff 通知”
+6. `turn/plan/updated`
+   - 不再作为内部噪音过滤
+   - 后端将 `params.plan` 或 `turn.plan` 归一进 metadata，并生成可直接展示的 markdown 摘要
+   - 前端按解释性消息插入主对话流，时序位于对应 turn 的工具/文件变更之前
+   - 目标是让用户看到 Codex 的“任务规划/决策说明 -> 原子执行 -> 最终总结”完整链路
+7. `approval_request` 类型
    - 显示为 `需要授权` 状态胶囊
    - 同时把授权说明正文显示出来
-7. `tool_execution` 类型
+8. `tool_execution` 类型
    - 若具备工具名/输出摘要，则按轻量工具卡片展示
    - 若缺少结构化字段，则退回普通正文块
-8. `stderr.line / stdout.line`
+9. `stderr.line / stdout.line`
    - 对 `executor=codex` 默认不进入主对话区
    - 例如 `codex_core::rollout::list: state db missing rollout path ...` 这类内部运行日志，不属于用户可消费消息
    - 这类内容保留在 runtime/调试层即可，不应污染主聊天流
-9. 原子消息 hover 详情
+10. 原子消息 hover 详情
    - `tool` / `command_execution` 类卡片在 hover 时显示结构化详情
    - 至少包含：工具名、命令、工作目录、目标路径或输出摘要
    - tooltip 使用多行文本，保证长命令和多字段信息仍可读
    - 当详情文本过长时，tooltip 只显示前三行摘要
    - 同时提供 `展示更多` 入口，点击后通过独立浮窗展示完整信息
    - 这样长命令、大段 shell heredoc 或大块代码不会直接塞满 hover 层
+11. 内容预览展开
+   - 在内容预览面板右上角 `收起` 左侧增加 `展开` 按钮
+   - 点击后，内容预览占据主界面，聊天面板暂时隐藏
+   - 再次点击按钮时切回 `还原`，恢复原来的聊天 + 预览并列布局
+   - 仅修改页面布局，不改变预览内容、预览标签和数据加载逻辑
+12. Codex 文件预览
+   - `内容预览 -> 文件` 在 `executor=codex` 下不再依赖 OpenCode server
+   - 后端 `workspace/tree|dir|file` 按 executor 分流：
+     - `opencode` 继续走现有 OSAC/OpenCode 文件接口
+     - `codex` 直接通过 E2B sandbox 文件系统读取
+   - Codex 文件树、目录分页、文件读取沿用现有前端面板结构与缓存协议
+   - 工作区根目录继续使用当前 `taskSessionId -> workspaceRoot` 约定，不新增路径规则
+   - 本轮目标仅为“Codex 下文件面板可用”，不重做前端交互，不修改 OpenCode 已验证链路
+13. Codex 文件预览缓存
+   - 对 `executor=codex`，平台需要在数据库中缓存“已读取过的文件目录与有限内容预览”
+   - 缓存目标：
+     - sandbox 正常运行时提升文件面板打开速度
+     - sandbox 关闭后，仍可看到大致目录结构和最近读取文件的有限内容预览
+   - 缓存范围仅限“用户在文件面板实际读取过的数据”：
+     - 已展开过的目录分页结果
+     - 已读取过的文件内容
+   - 不做全量工作区离线镜像，不主动遍历整个 workspace
+   - 文件内容缓存采用“有限预览”原则：
+     - 仅保存截断后的文本内容或可预览二进制的有限 base64
+     - 不保存超大文件的完整正文
+   - sandbox 关闭时的回退行为：
+     - `workspace/tree|dir|file` 优先返回数据库里的最近成功缓存
+
+### 4.0.4 处理中继续发送与停止交互
+
+当前直通模式下，发送框在执行中仍然是固定发送态，用户无法明确中断当前执行，也无法在处理中以“立即执行”的语义发出新的消息。
+
+这会带来两个问题：
+
+1. 用户看不到明确的停止入口
+2. 用户在处理中继续发送消息时，行为容易退化为排队或静默等待，不符合“继续对话”的直觉
+
+本轮统一交互规则如下：
+
+1. 作用范围
+   - 适用于直通模式下的全部执行器
+   - 包括 `opencode / claudecode / codex`
+   - 不修改非直通模式
+2. 按钮状态
+   - 当当前会话处于处理中且输入框为空时，发送按钮切换为 `停止`
+   - 当用户开始输入新消息时，按钮立即恢复为 `发送`
+   - 这样用户可以显式选择“停止当前执行”或“发送新消息覆盖当前执行”
+3. 处理阶段分层
+   - 当前“处理中”并不只有执行器阶段
+   - 还包括消息先进入意图识别 agent，再由其决定是否/如何发给执行器的阶段
+   - 因此停止和继续发送的语义必须区分：
+     - `intent_processing`
+     - `executor_processing`
+4. 停止语义
+   - 点击 `停止` 必须触发真实中断
+   - 不允许只修改前端状态
+   - 若当前消息仍停留在 `intent_processing`
+     - 必须立即停止意图识别 agent
+     - 同时阻塞该消息后续继续发往执行器
+     - 不允许出现“用户已停止，但旧消息稍后仍被发给执行器”
+   - 若当前消息已经进入 `executor_processing`
+     - 必须直接向当前执行器发送中断信号
+   - interrupt 成功后，对话流应收到对应的 `interrupted`/失败终态事件
+5. 处理中继续发送
+   - 当当前会话正在处理中、且用户输入了新的消息并点击 `发送` 时，行为必须按当前阶段分流
+   - 若旧消息仍停留在 `intent_processing`
+     - 先停止旧的意图识别 agent
+     - 阻塞旧消息继续发往执行器
+     - 保留 `旧消息 + 新消息`
+     - 再将这两条消息一起交给意图识别 agent 重新加工
+     - 由意图识别 agent 统一整理后再发给执行模块
+   - 若旧消息已经进入 `executor_processing`
+     - 先中断当前执行器
+     - 再立即发送新的消息
+   - 不允许把新消息排队到当前运行结束之后
+6. Codex 特殊要求
+   - `codex + sdk模式`
+     - 继续沿现有 executor interrupt 能力
+   - `codex + ws模式`
+     - 新消息发送时必须中断当前 app-server turn
+     - 然后在同一个会话、同一个 Codex thread 上立即创建新的 turn
+     - 不允许继续沿用当前“排队等待上一个 turn 完成”的语义
+7. 前端交互细则
+   - 点击 `停止` 时，输入框内容不被清空
+   - 输入框为空且正在处理中：
+     - Enter 不触发发送
+     - 点击按钮触发停止
+   - 输入框有内容且正在处理中：
+     - Enter 触发“按当前阶段分流处理”
+     - 点击按钮同样执行该动作
+8. 状态机约束
+   - `isProcessing=true + draft为空` -> 按钮显示 `停止`
+   - `isProcessing=true + draft非空` -> 按钮显示 `发送`
+   - `interrupting=true` 时按钮进入短暂 disabled/loading，避免重复点击
+   - 停止成功后，对话主视图必须立即插入一条原子消息：
+     - `消息发送被中止，等待进一步指令`
+   - 该消息用于替代“用户点了停止但页面没有反馈”的空窗
+   - 展示为普通原子消息，不使用 toast 代替
+9. 后端接口约束
+   - 新增明确的 `interrupt` 路由
+   - 不允许前端通过伪造消息类型来实现停止
+   - interrupt 必须按当前阶段和 session 当前 executor 分流：
+     - `intent_processing`
+       - 中断意图识别 agent
+       - 阻塞意图识别 agent 既有发送流程
+     - `executor_processing`
+       - `opencode` 走现有中断链路
+       - `codex sdk` 走现有 executor interrupt
+       - `codex ws` 走 app-server turn/job interrupt
+10. 正确性验收
+   - 同一会话处理中点击 `停止`，当前任务应停止
+   - 若停止发生在 `intent_processing`，旧消息不得继续发往执行器
+   - 同一会话处理中输入新消息并发送：
+     - 若在 `intent_processing`，旧消息与新消息必须被一起重新提交给意图识别 agent
+     - 若在 `executor_processing`，新消息应立即开始执行
+   - 对 `codex ws`，新的消息必须继续使用同一个 `executorSessionId/threadId`
+   - 不允许出现“前端显示已发送，但后端仍在排队等待旧任务完成”
+     - 响应需明确标记 `stale=true`
+     - 若数据库无缓存，再返回“执行环境已关闭，请重新启动”
+   - 目录缓存需要和文件缓存分开：
+   - 目录缓存用于恢复“看见有哪些文件/目录”
+   - 文件缓存用于恢复“最近打开过的文件预览”
+   - 本轮只为 Codex 增加这套缓存链路
+   - 不修改 OpenCode 已验证通过的 workspace cache 行为
+   - 运行时安全约束：
+     - 若部署环境尚未执行 `task_session_workspace_cache` 的数据库迁移，缓存链路必须自动降级为“缓存不可用”
+     - 缺表时只允许返回空缓存并记录告警，禁止因为缓存查询失败导致 API 进程崩溃
+   - Codex `workspace/dir` 路由要求：
+     - 目录读取主路径与 DB fallback 必须使用同一个 `tenantKey`
+     - 禁止在请求主流程里引用未定义的 `tenantKey`，否则会把文件列表读取直接打成 500
+
+### 4.0.3 Codex 解释性消息动态展示
+
+用户进一步确认，`ws模式` 下的解释性消息不能只作为普通静态 markdown 渲染，还需要体现 Codex 正在思考/规划的过程感。
+
+本轮新增交互目标：
+
+1. 解释性消息在“处理中”阶段，以渐进式逐字刷新展示
+2. 解释性消息结束后，不保留整段正文
+3. 结束后只保留该条解释性消息的标题/heading
+4. 解释性消息与原子消息仍按 Codex 原始时序插入，不允许重排
+
+具体规则：
+
+1. 适用范围
+   - 仅挂在 `executor=codex + transport=app_server` 的 `reasoning` / `turn/plan/updated` 解释性消息分支
+   - 不影响 OpenCode turn 展示
+   - 不影响 Codex 的 `agent_message / command_execution / file_change / diff`
+2. 处理中状态
+   - 对正在增量更新的解释性消息，前端保留完整正文
+   - 使用逐字滚动刷新效果，体现“正在思考/规划”
+   - 动效只作用于当前仍在更新的那一条消息，不扩散到已完成历史消息
+3. 完成后折叠
+   - 一旦该条解释性消息不再更新，页面将正文折叠掉
+   - 仅保留 heading / 第一行标题
+   - 终态直接显示为普通一行文本，不使用胶囊、边框或额外包裹
+   - 示例：
+     - `Planning 2048 mini game`
+     - `Optimizing tile behavior`
+     - `Updating the plan sequentially`
+4. heading 提取规则
+   - 优先使用 markdown 第一行 heading / strong heading
+   - 若不存在结构化 heading，则使用第一句短文本
+   - 若仍无法提取，则回退到截断后的前 1 行文本
+5. 与最终总结的关系
+   - 最终 `agent_message` 仍完整显示
+   - 只有解释性过程消息在完成后折叠为标题
+6. 与计划消息的关系
+   - `turn/plan/updated` 若为结构化计划摘要，处理中可完整展示
+   - 完成后保留计划标题与 todo list
+   - 仅隐藏计划说明性正文，不隐藏步骤列表
+7. 交互边界
+   - 本轮不增加“展开查看完整历史解释性正文”的交互
+   - 目标是压缩聊天主视图，突出时序感、科技感和执行结果
+8. 当前实现落点
+   - 前端新增 `agent_explanation` 聊天项类型
+   - `reasoning` 与 `turn/plan/updated` 统一走解释性消息分支
+   - 仅最后一条解释性消息保持展开，之前的解释性消息全部自动折叠为标题
+   - 标题优先取 markdown heading / strong heading / 第一行文本
+   - 折叠后的标题使用与普通消息一致的字号和字色，避免解释性标题视觉权重过高
+   - `turn/plan/updated` 在折叠态下额外保留 todo list
+   - 连续的 Codex 文本消息只在首条显示 `Codex` 作者头，后续连续消息省略作者头，直到被其他类型消息打断
+
+这样处理后，主对话区的理想形态是：
+
+1. 处理中时：
+   - 看到解释性消息逐字刷新
+   - 紧接着看到工具/文件/变更事件
+2. 处理完成后：
+   - 解释性消息自动收缩为简短标题
+   - 原子消息和最终总结保留完整内容
 
 ### 4.0.2 Codex 多轮历史一致性
 

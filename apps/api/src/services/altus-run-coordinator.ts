@@ -14,6 +14,26 @@ import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writ
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
 
+type StreamedToolCallDelta = {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+type StreamedToolCallState = {
+  index: number;
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 export class AltusRunCoordinator {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
@@ -36,9 +56,138 @@ export class AltusRunCoordinator {
     return Math.min(24, Math.floor(parsed));
   }
 
+  private getModelRetryLimit() {
+    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRIES || 1);
+    if (!Number.isFinite(parsed) || parsed < 0) return 1;
+    return Math.min(3, Math.floor(parsed));
+  }
+
+  private getModelRetryDelayMs(attempt: number) {
+    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRY_DELAY_MS || 800);
+    const baseDelay = !Number.isFinite(parsed) || parsed <= 0 ? 800 : Math.floor(parsed);
+    return Math.min(5000, baseDelay * Math.max(1, attempt));
+  }
+
+  private async delay(ms: number) {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private extractModelError(error: unknown) {
+    const raw = error instanceof Error ? error.message : String(error || 'managed_model_error');
+    try {
+      const parsed = JSON.parse(raw) as {
+        error?: {
+          message?: unknown;
+          type?: unknown;
+          code?: unknown;
+        };
+      };
+      const payload = parsed?.error;
+      return {
+        raw,
+        message: asText(payload?.message) || raw,
+        type: asText(payload?.type),
+        code: asText(payload?.code),
+      };
+    } catch {
+      return {
+        raw,
+        message: raw,
+        type: '',
+        code: '',
+      };
+    }
+  }
+
+  private isRetryableModelError(error: unknown) {
+    const parsed = this.extractModelError(error);
+    const normalized = `${parsed.code} ${parsed.type} ${parsed.message}`.toLowerCase();
+    return (
+      normalized.includes('upstream_timeout') ||
+      normalized.includes('upstream_unavailable') ||
+      normalized.includes('fetch failed') ||
+      normalized.includes('network error')
+    );
+  }
+
+  private isClarificationResponse(content: string) {
+    const normalized = asText(content);
+    if (!normalized) return false;
+    if (/[?？]/.test(normalized)) return true;
+    const keywords = [
+      'please clarify',
+      'please confirm',
+      'could you clarify',
+      'can you clarify',
+      'what kind',
+      'what would you like',
+      'which option',
+      'please specify',
+      '请说明',
+      '请确认',
+      '请告诉我',
+      '请问',
+      '请补充',
+      '为了更有针对性',
+      '希望优化哪些方面',
+      '是否需要',
+      '能否提供',
+      '哪个',
+      '哪种',
+      '哪一个',
+    ];
+    const lower = normalized.toLowerCase();
+    return keywords.some((keyword) => lower.includes(keyword.toLowerCase()));
+  }
+
+  private buildContinuationReminder(assistantContent: string) {
+    const reminder = [
+      'System reminder: continue from the latest tool result.',
+      'Do not repeat the request or ask for optional clarification unless the task is truly blocked.',
+      'Choose the next required tool call immediately, or call complete_task if the work is already done and verified.',
+    ];
+    const excerpt = truncate(asText(assistantContent), 600);
+    if (!excerpt) {
+      return reminder.join(' ');
+    }
+    return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
+  }
+
+  private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
+    await taskCreationFileMemoryStore.setPendingClarification(
+      state.input.sessionId,
+      input.question,
+      input.options
+    );
+    await this.setupService.persistTimelineMessage({
+      sessionId: state.input.sessionId,
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: input.question,
+      metadata: {
+        question: input.question,
+        options: input.options,
+        runId: state.input.runId,
+      },
+      messageKey: `managed:${state.input.runId}:clarification`,
+    });
+    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'clarification_requested', {
+      question: input.question,
+      options: input.options,
+      content: input.question,
+    });
+    return {
+      outcome: 'waiting_user' as const,
+      question: input.question,
+      options: input.options,
+    };
+  }
+
   private async callModel(input: {
     messages: ChatMessage[];
     signal: AbortSignal;
+    onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const response = await fetch(baseUrl, {
@@ -52,7 +201,7 @@ export class AltusRunCoordinator {
         tools: buildManagedToolDefinitions(),
         tool_choice: 'auto',
         temperature: 0.2,
-        stream: false,
+        stream: true,
       }),
       signal: input.signal,
     });
@@ -60,6 +209,15 @@ export class AltusRunCoordinator {
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(text || `llm_proxy_failed:${response.status}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream') && response.body) {
+      return this.readStreamedModelChoice({
+        response,
+        signal: input.signal,
+        onToolCallDelta: input.onToolCallDelta,
+      });
     }
 
     const payload = (await response.json()) as any;
@@ -70,6 +228,190 @@ export class AltusRunCoordinator {
     return choice as {
       content?: string | null;
       tool_calls?: ToolCall[];
+    };
+  }
+
+  private async callModelWithRetry(input: {
+    messages: ChatMessage[];
+    signal: AbortSignal;
+    onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+  }) {
+    const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (input.signal.aborted) {
+        throw new Error('managed_run_aborted');
+      }
+      try {
+        return await this.callModel(input);
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxAttempts || !this.isRetryableModelError(error)) {
+          throw error;
+        }
+        await this.delay(this.getModelRetryDelayMs(attempt));
+      }
+    }
+    throw (lastError instanceof Error ? lastError : new Error(String(lastError || 'managed_model_error')));
+  }
+
+  private parseSseBlock(rawBlock: string) {
+    const lines = rawBlock.split(/\r?\n/);
+    const dataLines: string[] = [];
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      if (!line || line.startsWith(':')) continue;
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim());
+      }
+    }
+    if (dataLines.length === 0) return null;
+    const rawData = dataLines.join('\n');
+    if (rawData === '[DONE]') {
+      return { done: true as const, payload: null };
+    }
+    try {
+      return {
+        done: false as const,
+        payload: JSON.parse(rawData) as any,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private mergeStreamToolCall(
+    toolCallsByIndex: Map<number, StreamedToolCallState>,
+    delta: StreamedToolCallDelta
+  ) {
+    const index = Number.isFinite(delta?.index) ? Math.max(0, Math.floor(Number(delta.index))) : 0;
+    const existing =
+      toolCallsByIndex.get(index) ||
+      ({
+        index,
+        id: '',
+        type: 'function',
+        function: {
+          name: '',
+          arguments: '',
+        },
+      } satisfies StreamedToolCallState);
+
+    const incomingId = asText(delta?.id);
+    if (incomingId) {
+      existing.id = incomingId;
+    }
+
+    const incomingType = asText(delta?.type);
+    if (incomingType === 'function') {
+      existing.type = 'function';
+    }
+
+    const incomingName = asText(delta?.function?.name);
+    if (incomingName) {
+      if (!existing.function.name) {
+        existing.function.name = incomingName;
+      } else if (!existing.function.name.endsWith(incomingName)) {
+        existing.function.name += incomingName;
+      }
+    }
+
+    const incomingArguments = typeof delta?.function?.arguments === 'string' ? delta.function.arguments : '';
+    if (incomingArguments) {
+      existing.function.arguments += incomingArguments;
+    }
+
+    toolCallsByIndex.set(index, existing);
+    return existing;
+  }
+
+  private toToolCalls(toolCallsByIndex: Map<number, StreamedToolCallState>): ToolCall[] {
+    return Array.from(toolCallsByIndex.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([index, toolCall]) => ({
+        id: toolCall.id || `streamed_tool_${index}`,
+        type: 'function',
+        function: {
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments || '{}',
+        },
+      }));
+  }
+
+  private async readStreamedModelChoice(input: {
+    response: Response;
+    signal: AbortSignal;
+    onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+  }) {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let assistantContent = '';
+    const toolCallsByIndex = new Map<number, StreamedToolCallState>();
+
+    const flushBlock = async (rawBlock: string) => {
+      const parsed = this.parseSseBlock(rawBlock);
+      if (!parsed) return false;
+      if (parsed.done) return true;
+
+      const payload = parsed.payload;
+      if (payload?.error && typeof payload.error === 'object') {
+        throw new Error(JSON.stringify(payload));
+      }
+
+      const choice = payload?.choices?.[0];
+      const delta = choice?.delta;
+
+      if (typeof delta?.content === 'string' && delta.content) {
+        assistantContent += delta.content;
+      }
+
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const toolCallDelta of delta.tool_calls as StreamedToolCallDelta[]) {
+          const merged = this.mergeStreamToolCall(toolCallsByIndex, toolCallDelta);
+          if (input.onToolCallDelta) {
+            await input.onToolCallDelta({
+              id: merged.id || `streamed_tool_${merged.index}`,
+              type: 'function',
+              function: {
+                name: merged.function.name,
+                arguments: merged.function.arguments,
+              },
+            });
+          }
+        }
+      }
+
+      return false;
+    };
+
+    for await (const chunk of input.response.body as any) {
+      if (input.signal.aborted) {
+        throw new Error('managed_run_aborted');
+      }
+      buffer += decoder.decode(chunk, { stream: true });
+      while (true) {
+        const separatorIndex = buffer.indexOf('\n\n');
+        if (separatorIndex < 0) break;
+        const rawBlock = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const done = await flushBlock(rawBlock);
+        if (done) {
+          return {
+            content: assistantContent,
+            tool_calls: this.toToolCalls(toolCallsByIndex),
+          };
+        }
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      await flushBlock(tail);
+    }
+
+    return {
+      content: assistantContent,
+      tool_calls: this.toToolCalls(toolCallsByIndex),
     };
   }
 
@@ -104,6 +446,7 @@ export class AltusRunCoordinator {
       state.input.userInput,
       systemPrompt
     );
+    let plainTextRecoveryUsed = false;
 
     for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
       if (signal.aborted) {
@@ -115,28 +458,60 @@ export class AltusRunCoordinator {
         content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
       });
 
-      const assistant = await this.callModel({
+      const toolProgressLengths = new Map<string, number>();
+      const assistant = await this.callModelWithRetry({
         messages,
         signal,
+        onToolCallDelta: async (toolCall) => {
+          const toolName = asText(toolCall?.function?.name);
+          const toolCallId = asText(toolCall?.id);
+          if (!toolName || !toolCallId) return;
+          const rawArguments = typeof toolCall?.function?.arguments === 'string' ? toolCall.function.arguments : '';
+          const previousLength = toolProgressLengths.get(toolCallId) || 0;
+          const currentLength = rawArguments.length;
+          if (previousLength > 0 && currentLength - previousLength < 48) {
+            return;
+          }
+          toolProgressLengths.set(toolCallId, currentLength);
+          await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_progress', {
+            toolName,
+            content: `正在准备工具 ${toolName}`,
+            arguments: parseToolArguments(rawArguments),
+            rawArguments,
+            toolCallId,
+          });
+        },
       });
       const assistantContent = truncate(asText(assistant.content), 24000);
       const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
 
       if (toolCalls.length === 0) {
-        messages.push({
-          role: 'assistant',
-          content: assistantContent || '',
-        });
+        if (assistantContent && this.isClarificationResponse(assistantContent)) {
+          return this.requestClarification(state, {
+            question: assistantContent,
+          });
+        }
+        if (assistantContent) {
+          messages.push({
+            role: 'assistant',
+            content: assistantContent,
+          });
+        }
+        if (plainTextRecoveryUsed) {
+          const plainTextExcerpt = assistantContent
+            ? truncate(assistantContent, 1000)
+            : 'empty assistant response';
+          throw new Error(`managed_model_plain_text_without_tool_call:${plainTextExcerpt}`);
+        }
         messages.push({
           role: 'user',
-          content: [
-            'System reminder: plain assistant text does not complete a managed run.',
-            'If work remains, continue by calling the required tools.',
-            'If the task is truly finished and verified, call complete_task with a concise summary and verification points.',
-          ].join(' '),
+          content: this.buildContinuationReminder(assistantContent),
         });
+        plainTextRecoveryUsed = true;
         continue;
       }
+
+      plainTextRecoveryUsed = false;
 
       messages.push({
         role: 'assistant',
@@ -158,35 +533,10 @@ export class AltusRunCoordinator {
         try {
           const result = await runtime.execute(toolName, args, signal);
           if (result.type === 'ask_user') {
-            await taskCreationFileMemoryStore.setPendingClarification(
-              state.input.sessionId,
-              result.question,
-              result.options
-            );
-            await this.setupService.persistTimelineMessage({
-              sessionId: state.input.sessionId,
-              role: 'agent',
-              messageType: 'clarification_request',
-              content: result.question,
-              metadata: {
-                question: result.question,
-                options: result.options,
-                runId: state.input.runId,
-              },
-              messageKey: `managed:${state.input.runId}:clarification`,
-            });
-            await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'clarification_requested', {
+            return this.requestClarification(state, {
               question: result.question,
               options: result.options,
-              content: result.question,
-              toolName,
-              toolCallId: toolCall.id,
             });
-            return {
-              outcome: 'waiting_user' as const,
-              question: result.question,
-              options: result.options,
-            };
           }
 
           if (result.type === 'complete') {
@@ -206,6 +556,7 @@ export class AltusRunCoordinator {
             await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_completed', {
               toolName,
               content: `工具 ${toolName} 已完成`,
+              arguments: args,
               toolCallId: toolCall.id,
               outputPreview: truncate(
                 JSON.stringify({
@@ -231,6 +582,7 @@ export class AltusRunCoordinator {
           await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_completed', {
             toolName,
             content: `工具 ${toolName} 已完成`,
+            arguments: args,
             toolCallId: toolCall.id,
             outputPreview: truncate(result.content, 4000),
           });
@@ -239,6 +591,7 @@ export class AltusRunCoordinator {
           await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_failed', {
             toolName,
             content: `工具 ${toolName} 失败`,
+            arguments: args,
             toolCallId: toolCall.id,
             error: message,
           });

@@ -37,8 +37,10 @@
 | M8 | `09_实施步骤_风险与验收.md` | 实施顺序、风险、验收标准 |
 | M9 | `10_Suna智能体架构与提示词研究.md` | Suna 的 run 架构、提示词系统、tool/MCP 装配、mode 设计研究与源码依据索引 |
 | M10 | `11_Altus与Suna调度架构差异整改清单.md` | Altus 当前实现与 Suna 在 run 调度、state、manager、execution engine、前端消息适配上的差异清单与代码级整改索引 |
+| M11 | `12_Suna预览卡片与Altus产物预览对齐设计.md` | Suna 的过程预览、完成卡片、HTML iframe 预览，以及 `Actions / Files / replay` 查看器与 oneceo Altus 对齐设计 |
+| M12 | `13_Suna流式执行链路与SSE事件流研究.md` | Suna 的 run 级 SSE、流式模型执行、tool output stream、前端重组机制，以及其与 oneceo 当前 `upstream_timeout` 问题的直接对照研究 |
 
-除 `M9-M10` 的专题研究外，`M0-M8` 每篇文档末尾也必须提供对应的 `Suna 代码参照`，开发时优先按该模块末尾列出的源码入口回查，不允许只依据概念描述实现。
+除 `M9-M12` 的专题研究外，`M0-M8` 每篇文档末尾也必须提供对应的 `Suna 代码参照`，开发时优先按该模块末尾列出的源码入口回查，不允许只依据概念描述实现。
 
 ## 设计原则
 

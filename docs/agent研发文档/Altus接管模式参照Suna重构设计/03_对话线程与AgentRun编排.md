@@ -132,6 +132,30 @@ Suna 风格的做法是中断 `run`，不是中断 `session`。
 3. 用户下一条消息会创建新 run
 4. 若上一个 run 产生“待用户回答”的问题，则新 run 在上下文里读取该问题继续执行
 
+### 4.4 工具结果后的继续执行约束
+
+Altus managed mode 在 `tool_call_completed -> waiting_tool -> 下一轮模型推理` 之间必须满足以下约束：
+
+1. 如果模型在读取最新 tool result 后直接返回“向用户追问”的纯文本，而不是 `tool_call`，coordinator 必须把该文本视为真实澄清请求，直接落成：
+   - timeline `clarification_request`
+   - run event `clarification_requested`
+   - run/session 状态切到 `waiting_user`
+2. 如果模型只返回说明性纯文本，但任务实际上未阻塞，coordinator 只允许追加一次 continuation reminder，强制模型立刻继续发起下一步 `tool_call` 或 `complete_task`。
+3. 如果 reminder 之后模型仍然继续返回纯文本且不发 `tool_call`，必须直接判定为协议违规并结束当前 run，禁止无限循环“继续处理工具结果”。
+
+这样做的目标不是兼容模型漂移，而是把 managed mode 的协议边界钉死，避免前端持续看到“继续处理工具结果”后最终才因为上游超时而失败。
+
+### 4.5 上游瞬时故障重试
+
+managed coordinator 对模型调用只允许做有界重试，不允许无上限等待：
+
+- 可重试错误：`upstream_timeout`、`upstream_unavailable`、`fetch failed`、`network error`
+- 默认重试次数：1 次
+- 上限：3 次
+- 每次重试之间做短暂退避，超过上限后立即按失败 run 收口
+
+这一层的目标是吸收上游供应商的瞬时抖动，但不改变 managed mode 的状态机，也不把真实逻辑错误伪装成“自动恢复”。
+
 ## 5. Managed 模式不再保留的旧结构
 
 以下结构不再作为 managed mode 主架构组成：

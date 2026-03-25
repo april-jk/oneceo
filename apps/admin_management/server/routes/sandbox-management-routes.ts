@@ -17,8 +17,8 @@ const timeoutSchema = z.object({
 const createSandboxSchema = z.object({
   template: z.string().optional(),
   timeoutMs: z.coerce.number().int().positive().optional(),
-  metadata: z.record(z.string()).optional(),
-  envs: z.record(z.string()).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+  envs: z.record(z.string(), z.string()).optional(),
   allowInternetAccess: z.boolean().optional(),
   secure: z.boolean().optional(),
   mcp: z.any().optional(),
@@ -41,6 +41,17 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   const router = Router();
 
   router.get(
+    '/runtime-registry',
+    asyncHandler(async (req, res) => {
+      const limit = req.query.limit === undefined
+        ? undefined
+        : z.coerce.number().int().min(1).max(300).parse(req.query.limit);
+      const result = await service.getRuntimeRegistry(limit ?? 100);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/overview',
     asyncHandler(async (req, res) => {
       const query = querySchema.parse(req.query);
@@ -51,6 +62,14 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
         metadata,
         templateId: query.templateId,
       });
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/environments/:sandboxId/runtime-detail',
+    asyncHandler(async (req, res) => {
+      const result = await service.getRuntimeDetail(req.params.sandboxId);
       return ok(res, result);
     })
   );
@@ -86,6 +105,38 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
     asyncHandler(async (req, res) => {
       const payload = createSandboxSchema.parse(req.body);
       const result = await service.createEnvironment(payload);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/archive',
+    asyncHandler(async (req, res) => {
+      const result = await service.archiveEnvironment(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/restore',
+    asyncHandler(async (req, res) => {
+      const result = await service.restoreEnvironment(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/connectivity-check',
+    asyncHandler(async (req, res) => {
+      const result = await service.connectivityCheck(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/refresh-runtime',
+    asyncHandler(async (req, res) => {
+      const result = await service.refreshRuntime(req.params.sandboxId);
       return ok(res, result);
     })
   );

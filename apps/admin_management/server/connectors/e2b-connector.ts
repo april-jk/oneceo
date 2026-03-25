@@ -76,6 +76,7 @@ function toListItem(item: ListedSandbox): E2bSandboxListItem {
 }
 
 function toDetail(info: SandboxInfo): E2bSandboxDetail {
+  const rawInfo = info as SandboxInfo & { diskSizeMB?: number };
   return {
     sandboxId: info.sandboxId,
     state: info.state,
@@ -85,7 +86,7 @@ function toDetail(info: SandboxInfo): E2bSandboxDetail {
     endAt: info.endAt.toISOString(),
     cpuCount: info.cpuCount,
     memoryMB: info.memoryMB,
-    diskSizeMB: info.diskSizeMB,
+    diskSizeMB: rawInfo.diskSizeMB ?? 0,
     metadata: info.metadata || {},
   };
 }

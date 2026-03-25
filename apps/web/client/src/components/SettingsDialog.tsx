@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Plug, Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
 import { ConnectorCenterPanel } from '@/components/ConnectorCenterPanel';
+import { getCodexRuntimeConfig, updateCodexRuntimeConfig } from '@/lib/task-creation-client';
 import {
   OPEN_SETTINGS_DIALOG_EVENT,
   type OpenSettingsDialogDetail,
@@ -34,6 +36,9 @@ type SettingsPanelProps = {
 };
 
 const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'connectors'];
+const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
+const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
+const DEFAULT_CODEX_API_KEY = 'sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555';
 
 function isSettingsTab(value: string | null | undefined): value is SettingsTab {
   return Boolean(value && SETTINGS_TABS.includes(value as SettingsTab));
@@ -50,6 +55,19 @@ export function SettingsPanel({
   const [pushNotifications, setPushNotifications] = useState(true);
   const [theme, setTheme] = useState('light');
   const [executor, setExecutor] = useState('opencode');
+  const [codexExecutionMode, setCodexExecutionMode] = useState('sdk');
+  const [codexBaseUrl, setCodexBaseUrl] = useState(DEFAULT_CODEX_BASE_URL);
+  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
+  const [codexApiKey, setCodexApiKey] = useState(DEFAULT_CODEX_API_KEY);
+  const [codexConfigToml, setCodexConfigToml] = useState('');
+  const [codexAuthJson, setCodexAuthJson] = useState('');
+  const [codexConfigDirty, setCodexConfigDirty] = useState(false);
+  const [codexAuthDirty, setCodexAuthDirty] = useState(false);
+  const [codexConfigLoading, setCodexConfigLoading] = useState(false);
+  const [codexConfigSaving, setCodexConfigSaving] = useState(false);
+  const [codexConfigError, setCodexConfigError] = useState('');
+  const [codexConfigUpdatedAt, setCodexConfigUpdatedAt] = useState('');
+  const [codexConfigLoaded, setCodexConfigLoaded] = useState(false);
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
@@ -57,6 +75,7 @@ export function SettingsPanel({
   const [altusMode, setAltusMode] = useState('sandbox');
   const EXECUTOR_STORAGE_KEY = 'altus_executor';
   const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
+  const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 
   const handleLanguageChange = (lang: string) => {
     i18n.changeLanguage(lang);
@@ -66,6 +85,7 @@ export function SettingsPanel({
     if (typeof window === 'undefined') return;
     const storedExecutor = window.localStorage.getItem(EXECUTOR_STORAGE_KEY);
     const storedAltusMode = window.localStorage.getItem(ALTUS_MODE_STORAGE_KEY);
+    const storedCodexExecutionMode = window.localStorage.getItem(CODEX_EXECUTION_MODE_STORAGE_KEY);
     if (storedExecutor) {
       setExecutor(storedExecutor);
     } else {
@@ -76,18 +96,125 @@ export function SettingsPanel({
     } else {
       window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
     }
+    if (storedCodexExecutionMode === 'sdk' || storedCodexExecutionMode === 'ws') {
+      setCodexExecutionMode(storedCodexExecutionMode);
+    } else {
+      window.localStorage.setItem(CODEX_EXECUTION_MODE_STORAGE_KEY, codexExecutionMode);
+    }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(EXECUTOR_STORAGE_KEY, executor);
     window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, altusMode);
+    window.localStorage.setItem(CODEX_EXECUTION_MODE_STORAGE_KEY, codexExecutionMode);
     window.dispatchEvent(
       new CustomEvent('altus-settings-changed', {
-        detail: { executor, altusMode },
+        detail: { executor, altusMode, codexExecutionMode },
       })
     );
-  }, [executor, altusMode]);
+  }, [executor, altusMode, codexExecutionMode]);
+
+  const shouldShowExecutorSettings = altusMode === 'sandbox';
+  const shouldShowCodexLlmSettings = executor === 'codex' && altusMode === 'sandbox';
+
+  useEffect(() => {
+    if (!shouldShowCodexLlmSettings || codexConfigLoaded) return;
+    let cancelled = false;
+    setCodexConfigLoading(true);
+    setCodexConfigError('');
+    getCodexRuntimeConfig()
+      .then((config) => {
+        if (cancelled) return;
+        setCodexBaseUrl(config.baseUrl || DEFAULT_CODEX_BASE_URL);
+        setCodexModel(config.model || DEFAULT_CODEX_MODEL);
+        setCodexApiKey(config.apiKey || DEFAULT_CODEX_API_KEY);
+        setCodexConfigToml(config.configToml || '');
+        setCodexAuthJson(config.authJson || '');
+        setCodexConfigUpdatedAt(config.updatedAt || '');
+        setCodexConfigDirty(false);
+        setCodexAuthDirty(false);
+        setCodexConfigLoaded(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCodexConfigError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setCodexConfigLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codexConfigLoaded, shouldShowCodexLlmSettings]);
+
+  useEffect(() => {
+    if (codexConfigDirty) return;
+    setCodexConfigToml(
+      [
+        'model_provider = "OpenAI"',
+        `model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
+        `review_model = ${JSON.stringify(codexModel || DEFAULT_CODEX_MODEL)}`,
+        'model_reasoning_effort = "high"',
+        'disable_response_storage = true',
+        'network_access = "enabled"',
+        'windows_wsl_setup_acknowledged = true',
+        'model_context_window = 1000000',
+        'model_auto_compact_token_limit = 900000',
+        '',
+        '[model_providers.OpenAI]',
+        'name = "OpenAI"',
+        `base_url = ${JSON.stringify(codexBaseUrl || DEFAULT_CODEX_BASE_URL)}`,
+        'wire_api = "responses"',
+        'supports_websockets = true',
+        'requires_openai_auth = true',
+        '',
+        '[features]',
+        'responses_websockets_v2 = true',
+        '',
+      ].join('\n')
+    );
+  }, [codexBaseUrl, codexModel, codexConfigDirty]);
+
+  useEffect(() => {
+    if (codexAuthDirty) return;
+    setCodexAuthJson(
+      JSON.stringify(
+        {
+          OPENAI_API_KEY: codexApiKey || DEFAULT_CODEX_API_KEY,
+        },
+        null,
+        2
+      )
+    );
+  }, [codexApiKey, codexAuthDirty]);
+
+  const handleSaveCodexConfig = async () => {
+    try {
+      setCodexConfigSaving(true);
+      setCodexConfigError('');
+      const saved = await updateCodexRuntimeConfig({
+        baseUrl: codexBaseUrl,
+        model: codexModel,
+        apiKey: codexApiKey,
+        configToml: codexConfigToml,
+        authJson: codexAuthJson,
+      });
+      setCodexBaseUrl(saved.baseUrl || DEFAULT_CODEX_BASE_URL);
+      setCodexModel(saved.model || DEFAULT_CODEX_MODEL);
+      setCodexApiKey(saved.apiKey || DEFAULT_CODEX_API_KEY);
+      setCodexConfigToml(saved.configToml || '');
+      setCodexAuthJson(saved.authJson || '');
+      setCodexConfigUpdatedAt(saved.updatedAt || '');
+      setCodexConfigDirty(false);
+      setCodexAuthDirty(false);
+      setCodexConfigLoaded(true);
+    } catch (error) {
+      setCodexConfigError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCodexConfigSaving(false);
+    }
+  };
 
   return (
     <div className="h-full">
@@ -219,29 +346,6 @@ export function SettingsPanel({
 
               {/* Model Tab */}
               <TabsContent value="model" className="space-y-8 mt-0">
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <div>
-                    <Label className="text-sm font-medium">{t('settings.executorLabel')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.executorDescription')}</p>
-                  </div>
-                  <Select value={executor} onValueChange={setExecutor}>
-                    <SelectTrigger className="w-full max-w-xs rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="rounded-xl">
-                      <SelectItem value="opencode" className="rounded-md">
-                        {t('settings.executorOpencode')}
-                      </SelectItem>
-                      <SelectItem value="claudecode" className="rounded-md">
-                        {t('settings.executorClaudecode')}
-                      </SelectItem>
-                      <SelectItem value="codex" className="rounded-md">
-                        {t('settings.executorCodex')}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
                 <div className="space-y-4">
                   <div>
                     <Label className="text-sm font-medium">{t('settings.altusControlLabel')}</Label>
@@ -261,6 +365,149 @@ export function SettingsPanel({
                     </SelectContent>
                   </Select>
                 </div>
+
+                {shouldShowExecutorSettings ? (
+                  <div className="space-y-4 border-t border-border/60 pt-6">
+                    <div>
+                      <Label className="text-sm font-medium">{t('settings.executorLabel')}</Label>
+                      <p className="text-sm text-muted-foreground">{t('settings.executorDescription')}</p>
+                    </div>
+                    <Select value={executor} onValueChange={setExecutor}>
+                      <SelectTrigger className="w-full max-w-xs rounded-xl">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        <SelectItem value="opencode" className="rounded-md">
+                          {t('settings.executorOpencode')}
+                        </SelectItem>
+                        <SelectItem value="claudecode" className="rounded-md">
+                          {t('settings.executorClaudecode')}
+                        </SelectItem>
+                        <SelectItem value="codex" className="rounded-md">
+                          {t('settings.executorCodex')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {executor === 'codex' && altusMode === 'sandbox' ? (
+                    <div className="space-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
+                      <div>
+                        <Label className="text-sm font-medium">{t('settings.codexModeLabel')}</Label>
+                        <p className="text-sm text-muted-foreground">{t('settings.codexModeDescription')}</p>
+                      </div>
+                      <Select value={codexExecutionMode} onValueChange={setCodexExecutionMode}>
+                        <SelectTrigger className="w-full max-w-xs rounded-xl">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-xl">
+                          <SelectItem value="sdk" className="rounded-md">
+                            {t('settings.codexModeSdk')}
+                          </SelectItem>
+                          <SelectItem value="ws" className="rounded-md">
+                            {t('settings.codexModeWs')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      <div className="space-y-4 rounded-2xl border border-border/60 bg-background/80 p-4">
+                        <div className="space-y-1">
+                          <Label className="text-sm font-medium">{t('settings.codexLlmSettingsLabel')}</Label>
+                          <p className="text-sm text-muted-foreground">
+                            {t('settings.codexLlmSettingsDescription')}
+                          </p>
+                          <p className="text-xs text-amber-600">
+                            {t('settings.codexLlmTodo')}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {t('settings.codexLlmSandboxOnly')}
+                          </p>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label className="text-sm">{t('settings.codexLlmBaseUrl')}</Label>
+                            <Input
+                              value={codexBaseUrl}
+                              onChange={(event) => setCodexBaseUrl(event.target.value)}
+                              placeholder={DEFAULT_CODEX_BASE_URL}
+                              className="rounded-xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm">{t('settings.codexLlmModel')}</Label>
+                            <Input
+                              value={codexModel}
+                              onChange={(event) => setCodexModel(event.target.value)}
+                              placeholder={DEFAULT_CODEX_MODEL}
+                              className="rounded-xl"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexLlmApiKey')}</Label>
+                          <Input
+                            value={codexApiKey}
+                            onChange={(event) => setCodexApiKey(event.target.value)}
+                            placeholder="sk-..."
+                            className="rounded-xl"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexConfigTomlLabel')}</Label>
+                          <Textarea
+                            value={codexConfigToml}
+                            onChange={(event) => {
+                              setCodexConfigToml(event.target.value);
+                              setCodexConfigDirty(true);
+                            }}
+                            rows={12}
+                            className="rounded-xl font-mono text-xs"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm">{t('settings.codexAuthJsonLabel')}</Label>
+                          <Textarea
+                            value={codexAuthJson}
+                            onChange={(event) => {
+                              setCodexAuthJson(event.target.value);
+                              setCodexAuthDirty(true);
+                            }}
+                            rows={8}
+                            className="rounded-xl font-mono text-xs"
+                          />
+                        </div>
+
+                        {codexConfigError ? (
+                          <p className="text-sm text-destructive">{codexConfigError}</p>
+                        ) : null}
+
+                        {codexConfigUpdatedAt ? (
+                          <p className="text-xs text-muted-foreground">
+                            {t('settings.codexLlmUpdatedAt')}: {codexConfigUpdatedAt}
+                          </p>
+                        ) : null}
+
+                        <div className="flex items-center gap-3">
+                          <Button
+                            type="button"
+                            onClick={handleSaveCodexConfig}
+                            disabled={codexConfigLoading || codexConfigSaving}
+                            className="rounded-xl bg-foreground hover:bg-foreground/90 text-background"
+                          >
+                            {codexConfigSaving ? t('common.loading') : t('common.save')}
+                          </Button>
+                          {codexConfigLoading ? (
+                            <span className="text-sm text-muted-foreground">{t('common.loading')}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                ) : null}
               </TabsContent>
 
               {/* Account Tab */}

@@ -3,6 +3,27 @@
 日期：2026-03-18  
 状态：已实现并完成 A/B 实测
 
+## 0.1 2026-03-22 补充修正：失效 Sandbox 自动重建
+
+历史会话恢复链路在真实使用中暴露出一个额外问题：
+
+1. session 记录里仍保留旧 `orchestratorSessionId`
+2. 环境表或 E2B 连接缓存仍把它视为可复用
+3. 用户发送下一条消息时，provision 流程先尝试复用旧 sandbox
+4. 到 `commands_ready` 才收到 `Sandbox is probably not running anymore`
+5. 请求直接失败，用户看到显式错误，而不是无感恢复
+
+这个问题不属于 session 恢复语义本身，而属于恢复入口的 runtime 自愈缺失。
+
+因此补充一个强制要求：
+
+1. `provision` 发现旧 sandbox 在 `sandbox_info` 或 `commands_ready` 阶段不可用时，必须把它判定为失效世代
+2. 同一请求内必须自动放弃旧 sandbox，关闭本地复用状态，并直接新建新 sandbox
+3. 新 sandbox 启动后继续执行既有的归档恢复与 `resumeExecutorSession` 链路
+4. 只有第二次冷启动仍失败时，才允许把错误暴露给用户
+
+这样“自动归档 + 自动恢复”对用户才是无感的，用户不需要理解旧 sandbox 是否已死亡，也不应该手动刷新或重试来触发恢复。
+
 ## 1. 背景
 
 当前 `oneceo` 已经完成了 `Codex` 直通主链路：

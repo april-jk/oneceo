@@ -7,7 +7,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Loader2, Send, CheckCircle2 } from "lucide-react";
+import { Loader2, Send, CheckCircle2, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   useTaskCreationAgent,
@@ -57,10 +57,12 @@ export default function TaskCreationChat({
   const {
     isConnected,
     isProcessing,
+    isInterrupting,
     messages,
     sessionId,
     currentQuestion,
     sendChatInput,
+    interruptCurrentRun,
     ensureSession,
     answerQuestion,
   } = useTaskCreationAgent({
@@ -128,6 +130,8 @@ export default function TaskCreationChat({
       setUserAnswer("");
     }
   };
+
+  const showStopButton = isProcessing && !currentQuestion && !userAnswer.trim();
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 md:flex-row">
@@ -213,19 +217,45 @@ export default function TaskCreationChat({
                       onChange={(e) => setUserAnswer(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
-                          handleAnswerSubmit();
+                          if (showStopButton) {
+                            void interruptCurrentRun(sessionId || undefined).catch((error) => {
+                              const text = error instanceof Error ? error.message : String(error || "");
+                              if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
+                                return;
+                              }
+                              toast.error(text || "停止执行失败");
+                            });
+                          } else {
+                            handleAnswerSubmit();
+                          }
                         }
                       }}
                       placeholder="请输入您的回答..."
                       className="flex-1"
                     />
-                    <Button
-                      onClick={handleAnswerSubmit}
-                      disabled={!userAnswer.trim()}
-                      size="icon"
-                    >
-                      <Send className="w-4 h-4" />
-                    </Button>
+                        <Button
+                          onClick={() => {
+                            if (showStopButton) {
+                              void interruptCurrentRun(sessionId || undefined).catch((error) => {
+                                const text = error instanceof Error ? error.message : String(error || "");
+                                if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
+                                  return;
+                                }
+                                toast.error(text || "停止执行失败");
+                              });
+                            } else {
+                              handleAnswerSubmit();
+                            }
+                          }}
+                          disabled={isInterrupting || (showStopButton ? false : !userAnswer.trim())}
+                          size="icon"
+                        >
+                          {showStopButton ? (
+                            <Square className="w-4 h-4" />
+                          ) : (
+                            <Send className="w-4 h-4" />
+                          )}
+                        </Button>
                   </div>
                 )}
               </Card>

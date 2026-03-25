@@ -103,6 +103,10 @@ class DatabaseManager {
     };
   }
 
+  get closed() {
+    return this.isClosed;
+  }
+
   async checkConnection(options: RetryOptions = {}): Promise<boolean> {
     const retries = options.retries ?? 3;
     const delayMs = options.delayMs ?? 1500;
@@ -153,6 +157,9 @@ class DatabaseManager {
   }
 
   async close(): Promise<void> {
+    if (this.isClosed) {
+      return;
+    }
     this.isClosed = true;
     await this.poolInstance.end();
   }
@@ -162,7 +169,8 @@ const GLOBAL_DB_MANAGER_KEY = '__oneceo_db_manager__';
 const globalState = globalThis as any;
 
 function getDatabaseManager(): DatabaseManager {
-  if (!globalState[GLOBAL_DB_MANAGER_KEY]) {
+  const existing = globalState[GLOBAL_DB_MANAGER_KEY] as DatabaseManager | undefined;
+  if (!existing || existing.closed) {
     globalState[GLOBAL_DB_MANAGER_KEY] = new DatabaseManager();
   }
   return globalState[GLOBAL_DB_MANAGER_KEY] as DatabaseManager;
@@ -204,5 +212,6 @@ export async function ensureDatabaseConnection(options: RetryOptions = {}): Prom
  */
 export async function closeDatabaseConnection() {
   await databaseManager.close();
+  delete globalState[GLOBAL_DB_MANAGER_KEY];
   console.log('数据库连接已关闭');
 }

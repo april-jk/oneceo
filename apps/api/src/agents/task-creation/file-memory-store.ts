@@ -2,6 +2,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 export type SessionDriver = 'altus' | 'opencode' | 'codex' | 'claudecode';
+export type CodexExecutionMode = 'sdk' | 'ws';
+export type CodexTransportMode = 'sdk' | 'app_server';
 
 export function deriveSessionDriver(input: {
   mode?: 'altus' | 'sandbox' | string;
@@ -45,6 +47,14 @@ export interface FileSessionMessage {
 export interface FileSessionRecord {
   id: string;
   title: string;
+  titleLocked?: boolean;
+  titleSource?: 'placeholder' | 'first_explicit_user_input' | 'manual';
+  titleResolvedAt?: string;
+  isFavorite?: boolean;
+  projectId?: string | null;
+  projectName?: string | null;
+  shareEnabled?: boolean;
+  shareToken?: string | null;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed';
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed';
   phase?: 'ideation' | 'analysis' | 'development' | 'testing' | 'repair' | 'delivery';
@@ -52,10 +62,12 @@ export interface FileSessionRecord {
   mode?: 'altus' | 'sandbox';
   driver?: SessionDriver;
   executor?: 'opencode' | 'claudecode' | 'codex' | string;
+  codexExecutionMode?: CodexExecutionMode;
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
     executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    transport?: CodexTransportMode | string;
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
@@ -306,7 +318,7 @@ class TaskCreationFileMemoryStore {
         ? memory.sessions.find((item) => item.id === sessionId)
         : null;
       if (existing) {
-        if (title?.trim()) {
+        if (title?.trim() && !existing.titleLocked) {
           existing.title = title.trim().slice(0, 80);
         }
         existing.updatedAt = now;
@@ -317,6 +329,13 @@ class TaskCreationFileMemoryStore {
       const session: FileSessionRecord = {
         id: sessionId || this.createId('session'),
         title: title.trim().slice(0, 80) || '新建任务会话',
+        titleLocked: false,
+        titleSource: 'placeholder',
+        isFavorite: false,
+        projectId: null,
+        projectName: null,
+        shareEnabled: false,
+        shareToken: null,
         status: 'in_progress',
         stage: 'collecting',
         phase: 'ideation',
@@ -533,6 +552,22 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async updateSessionCodexExecutionMode(
+    sessionId: string,
+    codexExecutionMode: FileSessionRecord['codexExecutionMode']
+  ): Promise<void> {
+    if (codexExecutionMode !== 'sdk' && codexExecutionMode !== 'ws') return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.codexExecutionMode === codexExecutionMode) return;
+      session.codexExecutionMode = codexExecutionMode;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
   async updateSessionDriver(sessionId: string, driver: FileSessionRecord['driver']): Promise<void> {
     if (!driver) return;
     await this.withLock(async () => {
@@ -546,12 +581,133 @@ class TaskCreationFileMemoryStore {
     });
   }
 
+  async updateSessionTitle(
+    sessionId: string,
+    title: string,
+    options?: {
+      lock?: boolean;
+      source?: FileSessionRecord['titleSource'];
+      force?: boolean;
+      resolvedAt?: string;
+    }
+  ): Promise<void> {
+    const nextTitle = title.trim().slice(0, 80);
+    if (!nextTitle) return;
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (session.titleLocked && !options?.force) return;
+
+      const nextLock = Boolean(options?.lock);
+      const nextSource = options?.source || session.titleSource || 'placeholder';
+      const nextResolvedAt =
+        options?.resolvedAt || (nextLock ? new Date().toISOString() : session.titleResolvedAt);
+      const titleChanged = session.title !== nextTitle;
+      const lockChanged = Boolean(session.titleLocked) !== nextLock;
+      const sourceChanged = session.titleSource !== nextSource;
+      const resolvedAtChanged = session.titleResolvedAt !== nextResolvedAt;
+
+      if (!titleChanged && !lockChanged && !sourceChanged && !resolvedAtChanged) {
+        return;
+      }
+
+      session.title = nextTitle;
+      session.titleLocked = nextLock;
+      session.titleSource = nextSource;
+      session.titleResolvedAt = nextResolvedAt;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionFavorite(sessionId: string, favorite: boolean): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      if (Boolean(session.isFavorite) === favorite) return;
+      session.isFavorite = favorite;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionProject(
+    sessionId: string,
+    payload: {
+      projectId?: string | null;
+      projectName?: string | null;
+    }
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const nextProjectId =
+        payload.projectId !== undefined ? (payload.projectId ? String(payload.projectId).trim() : null) : session.projectId || null;
+      const nextProjectName =
+        payload.projectName !== undefined
+          ? payload.projectName
+            ? String(payload.projectName).trim().slice(0, 80)
+            : null
+          : session.projectName || null;
+      if ((session.projectId || null) === nextProjectId && (session.projectName || null) === nextProjectName) {
+        return;
+      }
+      session.projectId = nextProjectId;
+      session.projectName = nextProjectName;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async updateSessionShare(
+    sessionId: string,
+    payload: {
+      shareEnabled?: boolean;
+      shareToken?: string | null;
+    }
+  ): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const session = memory.sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const nextShareEnabled =
+        payload.shareEnabled !== undefined ? Boolean(payload.shareEnabled) : Boolean(session.shareEnabled);
+      const nextShareToken =
+        payload.shareToken !== undefined
+          ? payload.shareToken
+            ? String(payload.shareToken).trim()
+            : null
+          : session.shareToken || null;
+      if (Boolean(session.shareEnabled) === nextShareEnabled && (session.shareToken || null) === nextShareToken) {
+        return;
+      }
+      session.shareEnabled = nextShareEnabled;
+      session.shareToken = nextShareToken;
+      session.updatedAt = new Date().toISOString();
+      await this.writeMemory(memory);
+    });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.withLock(async () => {
+      const memory = await this.readMemory();
+      const nextSessions = memory.sessions.filter((s) => s.id !== sessionId);
+      if (nextSessions.length === memory.sessions.length) return;
+      memory.sessions = nextSessions;
+      await this.writeMemory(memory);
+    });
+  }
+
   async updateRuntimeBinding(
     sessionId: string,
     runtime: {
       generation?: number;
       orchestratorSessionId?: string;
       executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      transport?: CodexTransportMode | string;
       executorSessionId?: string;
       opencodeSessionId?: string;
       codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
@@ -584,6 +740,16 @@ class TaskCreationFileMemoryStore {
           : runtime.opencodeSessionId !== undefined
             ? 'opencode'
             : currentExecutor;
+      const currentTransport =
+        typeof current.transport === 'string' && current.transport.trim()
+          ? current.transport.trim()
+          : undefined;
+      const requestedTransport =
+        runtime.transport !== undefined
+          ? String(runtime.transport || '').trim() || undefined
+          : requestedExecutor === 'codex'
+            ? currentTransport
+            : undefined;
       const currentExecutorSessionId = current.executorSessionId || current.opencodeSessionId || undefined;
       const currentPreviousExecutorSessionId = current.previousExecutorSessionId || undefined;
       const nextExecutorSessionId =
@@ -649,6 +815,7 @@ class TaskCreationFileMemoryStore {
         generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
         executor: requestedExecutor,
+        transport: requestedTransport,
         executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,
         codexRestoreStatus: nextCodexRestoreStatus,

@@ -10,6 +10,18 @@ import { archiveSandboxWorkspace } from './sandbox-archive-service';
 import { setSandboxMetadata, touchSandbox } from './sandbox-activity-service';
 import { resolveCodexArchiveDotCodexPath, resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { buildTimelineMessageKey, normalizeMessageTimelineMetadata } from '../utils/task-message-identity';
+import { codexAppServerService } from './codex-app-server-service';
+import { codexAppServerTurnService } from './codex-app-server-turn-service';
+import { codexRuntimeConfigService } from './codex-runtime-config-service';
+import {
+  extractAppServerErrorMessage,
+  extractAppServerTurnStatus,
+  buildCodexAppServerMetadata,
+  buildNotificationIdentity,
+  extractNotificationItemType,
+  summarizeCodexAppServerNotification,
+  type CodexAppServerNotification,
+} from './codex-app-server-protocol';
 
 type CodexDirectInput = {
   taskSessionId: string;
@@ -37,6 +49,7 @@ type CodexEventListener = (payload: CodexEventListenerPayload) => void | Promise
 type CodexRuntimeBinding = {
   orchestratorSessionId: string;
   executorSessionId?: string;
+  codexBinaryPath?: string;
   previousExecutorSessionId?: string;
   codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
   codexRestoreAt?: string;
@@ -45,8 +58,36 @@ type CodexRuntimeBinding = {
   generation?: number;
 };
 
+function preferCodexAppServer(): boolean {
+  return String(process.env.CODEX_TRANSPORT_MODE || 'osac')
+    .trim()
+    .toLowerCase() === 'app_server';
+}
+
+function resolveCodexAppServerWaitTimeoutMs(): number {
+  const configured = Number(process.env.CODEX_APP_SERVER_TURN_TIMEOUT_MS || '');
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.max(60_000, Math.floor(configured));
+  }
+  return 10 * 60_000;
+}
+
+function resolveCodexTransportMode(session: FileSessionRecord | null | undefined): 'sdk' | 'app_server' {
+  const runtimeTransport = asString(session?.runtime?.transport).toLowerCase();
+  if (runtimeTransport === 'app_server') return 'app_server';
+  if (runtimeTransport === 'sdk') return 'sdk';
+  const codexExecutionMode = asString((session as any)?.codexExecutionMode).toLowerCase();
+  if (codexExecutionMode === 'ws') return 'app_server';
+  if (codexExecutionMode === 'sdk') return 'sdk';
+  return preferCodexAppServer() ? 'app_server' : 'sdk';
+}
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asRawString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -174,6 +215,41 @@ function mapEventStage(eventType: string): CodexEventListenerPayload['message'][
   return 'executing';
 }
 
+function mapAppServerStage(notification: CodexAppServerNotification): CodexEventListenerPayload['message']['stage'] | undefined {
+  const method = notification.method;
+  if (method === 'turn/completed') {
+    const turnStatus = (extractAppServerTurnStatus(notification) || '').toLowerCase();
+    if (turnStatus === 'failed') return 'failed';
+    if (turnStatus === 'completed') return 'completed';
+    return 'executing';
+  }
+  if (method === 'error') return 'failed';
+  return 'executing';
+}
+
+function shouldPersistAppServerNotification(notification: CodexAppServerNotification): boolean {
+  const method = notification.method;
+  const itemType = (extractNotificationItemType(notification) || '').toLowerCase();
+  const turnStatus = (extractAppServerTurnStatus(notification) || '').toLowerCase();
+  const errorMessage = extractAppServerErrorMessage(notification);
+  if (method === 'thread/started') return false;
+  if (method === 'item/started') return false;
+  if (method === 'item/agentMessage/delta') return false;
+  if (method === 'item/reasoning/summaryPartAdded') return false;
+  if (method === 'item/reasoning/summaryTextDelta') return false;
+  if (method.startsWith('item/reasoning/') && method !== 'item/reasoning/summary') return false;
+  if (method === 'account/rateLimits/updated') return false;
+  if (method === 'thread/tokenUsage/updated') return false;
+  if (method === 'thread/status/changed') return false;
+  if (method.startsWith('codex/event/')) return false;
+  if (method === 'item/fileChange/outputDelta') return false;
+  if (method === 'turn/completed' && turnStatus === 'failed' && errorMessage) return false;
+  if (method === 'item/completed' && (itemType === 'usermessage' || itemType === 'reasoning')) {
+    return false;
+  }
+  return true;
+}
+
 async function resolveRuntimeBinding(
   taskSessionId: string,
   fallbackOrchestratorSessionId?: string
@@ -204,6 +280,19 @@ async function resolveRuntimeBinding(
 export class CodexRemoteService {
   private initialized = false;
   private listeners = new Set<CodexEventListener>();
+  private appServerJobs = new Map<
+    string,
+    {
+      jobId: string;
+      orchestratorSessionId: string;
+      executorSessionId: string;
+      notificationOffset: number;
+      pollTimer: NodeJS.Timeout | null;
+      polling: boolean;
+      stopped: boolean;
+      reasoningSummaries: Map<string, string>;
+    }
+  >();
 
   initialize() {
     if (this.initialized) return;
@@ -300,6 +389,7 @@ export class CodexRemoteService {
     taskSessionId: string,
     input: {
       orchestratorSessionId: string;
+      transport?: 'sdk' | 'app_server';
       executorSessionId?: string;
       previousExecutorSessionId?: string;
       codexRestoreStatus?: 'not_needed' | 'session_restored' | 'session_restore_failed' | 'state_restore_failed';
@@ -311,6 +401,7 @@ export class CodexRemoteService {
     await taskCreationFileMemoryStore.updateRuntimeBinding(taskSessionId, {
       orchestratorSessionId: input.orchestratorSessionId,
       executor: 'codex',
+      transport: input.transport,
       executorSessionId: input.executorSessionId || undefined,
       previousExecutorSessionId: input.previousExecutorSessionId || undefined,
       codexRestoreStatus: input.codexRestoreStatus,
@@ -625,8 +716,367 @@ fi
       session,
       orchestratorSessionId,
       executorSessionId: activeExecutorSessionId,
+      codexBinaryPath: asString(envMetadata.codexBinaryPath) || undefined,
       workspacePath,
     };
+  }
+
+  private async persistAppServerNotifications(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    executorSessionId: string,
+    notifications: CodexAppServerNotification[]
+  ) {
+    const retained: CodexAppServerNotification[] = [];
+    const seen = new Set<string>();
+    for (let index = notifications.length - 1; index >= 0; index -= 1) {
+      const notification = notifications[index]!;
+      const identity = buildNotificationIdentity(notification);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      retained.push(notification);
+    }
+    retained.reverse();
+
+    for (let index = 0; index < retained.length; index += 1) {
+      const notification = retained[index]!;
+
+      if (!shouldPersistAppServerNotification(notification)) {
+        continue;
+      }
+
+      const content = summarizeCodexAppServerNotification(notification);
+      const metadata = this.prepareTimelineMetadata(
+        'executor_event',
+        {
+          ...(notification.method === 'item/reasoning/summary'
+            ? {
+                messageKey: `codex-reasoning:${executorSessionId}:${asString(
+                  toRecord((notification.params as Record<string, unknown>).item).id
+                )}:${asString((notification.params as Record<string, unknown>).summaryIndex || '0') || '0'}`,
+              }
+            : {}),
+          executor: 'codex',
+          transport: 'app_server',
+          orchestratorSessionId,
+          executorSessionId,
+          opencodeSessionId: executorSessionId,
+          eventType: notification.method,
+          appServerNotification: {
+            method: notification.method,
+          },
+          ...buildCodexAppServerMetadata(notification),
+        },
+        {
+          createdAt: new Date(Date.now() + index).toISOString(),
+          seed: index + 1,
+        }
+      );
+
+      const stage = mapAppServerStage(notification);
+      if (stage === 'completed') {
+        const completedAt = new Date().toISOString();
+        await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+          status: 'completed',
+          stage: 'completed',
+        });
+        try {
+          await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'completed');
+        } catch (error) {
+          console.warn('[CODEX_APP_SERVER_STATUS_DB_COMPLETE_FAILED]', { sessionId: taskSessionId, error });
+        }
+        await this.updateActiveExecutorMetadata(orchestratorSessionId, {
+          executorSessionId,
+          eventType: notification.method,
+          turnCompletedAt: completedAt,
+        });
+        void archiveSandboxWorkspace(orchestratorSessionId, 'codex_app_server_turn_completed').catch((error) => {
+          console.warn('[CODEX_APP_SERVER_ARCHIVE_AFTER_COMPLETED_FAILED]', {
+            sessionId: taskSessionId,
+            orchestratorSessionId,
+            error,
+          });
+        });
+      } else if (stage === 'failed') {
+        await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+          status: 'failed',
+          stage: 'failed',
+        });
+        try {
+          await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'failed');
+        } catch (error) {
+          console.warn('[CODEX_APP_SERVER_STATUS_DB_FAILED_FAILED]', { sessionId: taskSessionId, error });
+        }
+      }
+
+      await this.persistMessage(taskSessionId, 'agent', 'executor_event', content, metadata, {
+        createdAt: new Date(Date.now() + index).toISOString(),
+        seed: index + 1,
+      });
+      await this.notify({
+        taskSessionId,
+        message: {
+          type: 'executor_event',
+          content,
+          metadata,
+          stage,
+          tone: stage === 'failed' ? 'error' : 'execution',
+        },
+      });
+    }
+  }
+
+  private clearAppServerJob(taskSessionId: string) {
+    const current = this.appServerJobs.get(taskSessionId);
+    if (!current) return;
+    current.stopped = true;
+    if (current.pollTimer) {
+      clearTimeout(current.pollTimer);
+      current.pollTimer = null;
+    }
+    this.appServerJobs.delete(taskSessionId);
+  }
+
+  private projectAppServerNotifications(
+    current: {
+      reasoningSummaries: Map<string, string>;
+    },
+    notifications: CodexAppServerNotification[]
+  ): CodexAppServerNotification[] {
+    const projected: CodexAppServerNotification[] = [];
+    for (const notification of notifications) {
+      if (notification.method === 'item/reasoning/summaryPartAdded') {
+        const itemId = asString(notification.params.itemId);
+        const summaryIndex = asString(notification.params.summaryIndex || '0') || '0';
+        if (itemId) {
+          current.reasoningSummaries.set(`${itemId}:${summaryIndex}`, '');
+        }
+        continue;
+      }
+      if (notification.method === 'item/reasoning/summaryTextDelta') {
+        const itemId = asString(notification.params.itemId);
+        const summaryIndex = asString(notification.params.summaryIndex || '0') || '0';
+        const delta = asRawString(notification.params.delta);
+        if (!itemId || !delta) {
+          continue;
+        }
+        const key = `${itemId}:${summaryIndex}`;
+        const nextText = `${current.reasoningSummaries.get(key) || ''}${delta}`;
+        current.reasoningSummaries.set(key, nextText);
+        projected.push({
+          method: 'item/reasoning/summary',
+          params: {
+            threadId: notification.params.threadId,
+            turnId: notification.params.turnId,
+            summaryIndex,
+            item: {
+              id: itemId,
+              type: 'reasoning',
+              text: nextText,
+            },
+          },
+        });
+        continue;
+      }
+      projected.push(notification);
+    }
+    return projected;
+  }
+
+  private scheduleAppServerJobPoll(taskSessionId: string, delayMs = 0) {
+    const current = this.appServerJobs.get(taskSessionId);
+    if (!current || current.stopped) return;
+    if (current.pollTimer) {
+      clearTimeout(current.pollTimer);
+    }
+    current.pollTimer = setTimeout(() => {
+      void this.pollAppServerJob(taskSessionId);
+    }, Math.max(0, delayMs));
+  }
+
+  private async emitAppServerJobError(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    executorSessionId: string,
+    content: string
+  ) {
+    const metadata = this.prepareTimelineMetadata(
+      'error',
+      {
+        executor: 'codex',
+        transport: 'app_server',
+        orchestratorSessionId,
+        executorSessionId,
+        opencodeSessionId: executorSessionId,
+      },
+      {
+        createdAt: new Date().toISOString(),
+      }
+    );
+    await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+      status: 'failed',
+      stage: 'failed',
+    });
+    try {
+      await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'failed');
+    } catch (error) {
+      console.warn('[CODEX_APP_SERVER_JOB_STATUS_DB_FAILED]', { sessionId: taskSessionId, error });
+    }
+    await this.persistMessage(taskSessionId, 'agent', 'error', content, metadata);
+    await this.notify({
+      taskSessionId,
+      message: {
+        type: 'error',
+        content,
+        metadata,
+        stage: 'failed',
+        tone: 'error',
+      },
+    });
+  }
+
+  private async pollAppServerJob(taskSessionId: string) {
+    const current = this.appServerJobs.get(taskSessionId);
+    if (!current || current.stopped || current.polling) return;
+    current.polling = true;
+    try {
+      const result = await codexAppServerTurnService.readTurnJob(
+        current.orchestratorSessionId,
+        current.jobId,
+        current.notificationOffset
+      );
+      if (current.stopped) return;
+
+      current.notificationOffset = result.nextOffset;
+
+      if (result.threadId && result.threadId !== current.executorSessionId) {
+        current.executorSessionId = result.threadId;
+        await this.updateRuntimeBinding(taskSessionId, {
+          orchestratorSessionId: current.orchestratorSessionId,
+          transport: 'app_server',
+          executorSessionId: current.executorSessionId,
+        });
+      }
+
+      const projectedNotifications = this.projectAppServerNotifications(
+        current,
+        result.notifications as CodexAppServerNotification[]
+      );
+
+      if (projectedNotifications.length > 0) {
+        await this.persistAppServerNotifications(
+          taskSessionId,
+          current.orchestratorSessionId,
+          current.executorSessionId,
+          projectedNotifications
+        );
+      }
+
+      if (result.status === 'failed') {
+        this.clearAppServerJob(taskSessionId);
+        const message = result.error || result.stderr || 'Codex App Server 执行失败';
+        await this.emitAppServerJobError(
+          taskSessionId,
+          current.orchestratorSessionId,
+          current.executorSessionId,
+          message
+        );
+        return;
+      }
+
+      if (result.status === 'completed') {
+        this.clearAppServerJob(taskSessionId);
+        return;
+      }
+
+      this.scheduleAppServerJobPoll(taskSessionId, 800);
+    } catch (error) {
+      console.warn('[CODEX_APP_SERVER_JOB_POLL_FAILED]', {
+        taskSessionId,
+        orchestratorSessionId: current.orchestratorSessionId,
+        error,
+      });
+      if (!current.stopped) {
+        this.scheduleAppServerJobPoll(taskSessionId, 1500);
+      }
+    } finally {
+      const latest = this.appServerJobs.get(taskSessionId);
+      if (latest) {
+        latest.polling = false;
+      }
+    }
+  }
+
+  async interruptCurrentRun(taskSessionId: string, orchestratorSessionId?: string): Promise<boolean> {
+    const normalizedTaskSessionId = asString(taskSessionId);
+    if (!normalizedTaskSessionId) {
+      throw new Error('taskSessionId is required');
+    }
+
+    const currentSession =
+      (await taskCreationFileMemoryStore.getSession(normalizedTaskSessionId)) || null;
+    const runtimeOrchestratorSessionId =
+      asString(orchestratorSessionId) || asString(currentSession?.runtime?.orchestratorSessionId);
+    const runtimeExecutorSessionId =
+      asString(currentSession?.runtime?.executorSessionId) ||
+      asString(currentSession?.runtime?.opencodeSessionId);
+    if (!runtimeOrchestratorSessionId) {
+      return false;
+    }
+
+    const transportMode = resolveCodexTransportMode(currentSession);
+    if (transportMode === 'app_server') {
+      const activeJob = this.appServerJobs.get(normalizedTaskSessionId);
+      this.clearAppServerJob(normalizedTaskSessionId);
+      await codexAppServerService.stopServer(runtimeOrchestratorSessionId);
+      await touchSandbox(runtimeOrchestratorSessionId, 'codex_interrupt');
+      const interruptedAt = new Date().toISOString();
+      const metadata = this.prepareTimelineMetadata(
+        'executor_event',
+        {
+          executor: 'codex',
+          transport: 'app_server',
+          orchestratorSessionId: runtimeOrchestratorSessionId,
+          executorSessionId:
+            asString(activeJob?.executorSessionId) || runtimeExecutorSessionId || undefined,
+          opencodeSessionId:
+            asString(activeJob?.executorSessionId) || runtimeExecutorSessionId || undefined,
+          eventType: 'turn.interrupted',
+          status: 'interrupted',
+        },
+        {
+          createdAt: interruptedAt,
+        }
+      );
+      await this.persistMessage(
+        normalizedTaskSessionId,
+        'agent',
+        'executor_event',
+        'interrupted',
+        metadata,
+        {
+          createdAt: interruptedAt,
+        }
+      );
+      await this.notify({
+        taskSessionId: normalizedTaskSessionId,
+        message: {
+          type: 'executor_event',
+          content: 'interrupted',
+          metadata,
+          stage: 'failed',
+          tone: 'system',
+        },
+      });
+      return true;
+    }
+
+    await osacAgentService.interruptExecutor(runtimeOrchestratorSessionId, {
+      executor: 'codex',
+      executorSessionId: runtimeExecutorSessionId || undefined,
+    });
+    await touchSandbox(runtimeOrchestratorSessionId, 'codex_interrupt');
+    return true;
   }
 
   async sendUserInput(input: CodexDirectInput): Promise<{
@@ -645,21 +1095,155 @@ fi
     const runtime = await this.ensureRuntime(taskSessionId, undefined, input.orchestratorSessionId);
     const currentSession = runtime.session || (await taskCreationFileMemoryStore.getSession(taskSessionId));
     const workspacePath = asString(input.workspacePath) || runtime.workspacePath;
+    const inputTimestamp = Date.now();
+    let accepted: {
+      orchestratorSessionId: string;
+      executorSessionId: string;
+    };
 
-    const accepted = await osacAgentService.sendExecutorInput(runtime.orchestratorSessionId, {
+    const transportMode = resolveCodexTransportMode(currentSession);
+    if (transportMode === 'app_server') {
+      const existingExecutorSessionId = runtime.executorSessionId || undefined;
+      await this.updateRuntimeBinding(taskSessionId, {
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        transport: 'app_server',
+        executorSessionId: existingExecutorSessionId,
+      });
+      await taskCreationFileMemoryStore.updateSessionExecutor(taskSessionId, 'codex');
+      await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+        status: 'in_progress',
+        stage: 'executing',
+        phase: currentSession?.phase ? (currentSession.phase as any) : 'development',
+        allowBackward: true,
+      });
+      try {
+        await taskCreationSessionDAO.updateSessionStatus(taskSessionId, 'in_progress');
+      } catch (error) {
+        console.warn('[CODEX_APP_SERVER_STATUS_DB_FAILED]', { taskSessionId, error });
+      }
+
+      await this.persistMessage(
+        taskSessionId,
+        input.source === 'agent' ? 'agent' : 'user',
+        input.source === 'agent' ? 'codex_agent_input' : 'codex_user_input',
+        content,
+        {
+          ...(input.clientMessageKey ? { messageKey: input.clientMessageKey } : {}),
+          executor: 'codex',
+          transport: 'app_server',
+          orchestratorSessionId: runtime.orchestratorSessionId,
+          executorSessionId: existingExecutorSessionId,
+          opencodeSessionId: existingExecutorSessionId,
+          workspacePath,
+          timestamp: inputTimestamp,
+          sessionEventSeq: inputTimestamp * 1000,
+          ...(input.clientMessageKey ? { clientMessageKey: input.clientMessageKey } : {}),
+        },
+        {
+          createdAt: new Date(inputTimestamp).toISOString(),
+          seed: inputTimestamp % 1000,
+        }
+      );
+
+      const acceptedAt = new Date(inputTimestamp + 1).toISOString();
+      const acceptedMetadata = this.prepareTimelineMetadata(
+        'status_update',
+        {
+          executor: 'codex',
+          transport: 'app_server',
+          orchestratorSessionId: runtime.orchestratorSessionId,
+          executorSessionId: existingExecutorSessionId,
+          opencodeSessionId: existingExecutorSessionId,
+          status: 'accepted',
+        },
+        {
+          createdAt: acceptedAt,
+          seed: (inputTimestamp % 1000) + 1,
+        }
+      );
+      await this.persistMessage(
+        taskSessionId,
+        'agent',
+        'status_update',
+        'Codex 已接收输入，正在执行...',
+        acceptedMetadata,
+        {
+          createdAt: acceptedAt,
+          seed: (inputTimestamp % 1000) + 1,
+        }
+      );
+      await this.notify({
+        taskSessionId,
+        message: {
+          type: 'status_update',
+          content: 'Codex 已接收输入，正在执行...',
+          metadata: acceptedMetadata,
+          stage: 'executing',
+          tone: 'system',
+        },
+      });
+
+      const runtimeConfig = await codexRuntimeConfigService.getByTaskSessionId(taskSessionId);
+      this.clearAppServerJob(taskSessionId);
+      const turnJob = await codexAppServerTurnService.startBackgroundTurn({
+        sessionId: runtime.orchestratorSessionId,
+        workspacePath,
+        prompt: content,
+        threadId: existingExecutorSessionId,
+        waitTimeoutMs: resolveCodexAppServerWaitTimeoutMs(),
+        model: runtimeConfig.model || process.env.CODEX_MODEL || process.env.OPENAI_MODEL || undefined,
+        codexBinaryPath: runtime.codexBinaryPath || undefined,
+        configToml: runtimeConfig.configToml,
+        authJson: runtimeConfig.authJson,
+      });
+      if (!turnJob.threadId) {
+        throw new Error('Codex App Server 未返回 threadId');
+      }
+      accepted = {
+        orchestratorSessionId: runtime.orchestratorSessionId,
+        executorSessionId: turnJob.threadId,
+      };
+      await this.updateRuntimeBinding(taskSessionId, {
+        orchestratorSessionId: accepted.orchestratorSessionId,
+        transport: 'app_server',
+        executorSessionId: accepted.executorSessionId,
+      });
+      await this.updateActiveExecutorMetadata(accepted.orchestratorSessionId, {
+        executorSessionId: accepted.executorSessionId,
+        eventType: 'turn.started',
+      });
+      await touchSandbox(accepted.orchestratorSessionId, 'codex_user_input');
+      this.appServerJobs.set(taskSessionId, {
+        jobId: turnJob.jobId,
+        orchestratorSessionId: accepted.orchestratorSessionId,
+        executorSessionId: accepted.executorSessionId,
+        notificationOffset: 0,
+        pollTimer: null,
+        polling: false,
+        stopped: false,
+        reasoningSummaries: new Map(),
+      });
+      this.scheduleAppServerJobPoll(taskSessionId, 0);
+      return accepted;
+    }
+
+    const osacAccepted = await osacAgentService.sendExecutorInput(runtime.orchestratorSessionId, {
       executor: 'codex',
       executorSessionId: runtime.executorSessionId || undefined,
       workspacePath,
       parts: [{ type: 'text', text: content }],
     });
 
-    if (!accepted.executorSessionId) {
+    if (!osacAccepted.executorSessionId) {
       throw new Error('Codex 未返回 executorSessionId');
     }
-
-    const inputTimestamp = Date.now();
+    accepted = {
+      orchestratorSessionId: osacAccepted.orchestratorSessionId,
+      executorSessionId: osacAccepted.executorSessionId,
+    };
     await this.updateRuntimeBinding(taskSessionId, {
       orchestratorSessionId: accepted.orchestratorSessionId,
+      transport: 'sdk',
       executorSessionId: accepted.executorSessionId,
     });
     await this.updateActiveExecutorMetadata(accepted.orchestratorSessionId, {

@@ -132,5 +132,91 @@
     - 现在优先显示 `文件修改 · index.html`
     - 并显示 `通过 shell 文件修改：index.html`
     - 原始长命令只放在详情层
+  - 已进一步修复 Codex 写文件命令的详情弹窗：
+    - 详情标题不再显示整条 `/bin/bash -lc "cat <<EOF ..."` 原始命令
+    - 现在统一显示语义化标题，例如 `文件修改 · index.html`
+    - 详情正文改成 `操作 / 目标文件 / 写入内容预览` 结构
+    - 若能从 heredoc 中提取真实写入内容，则优先显示写入内容，不再把整段 shell 命令当成主体
 - 本轮额外验证：
   - `apps/api` 受影响模块导入通过：`codex-display-metadata-import-ok`
+
+## 2026-03-18 标题锁定设计补充
+
+- 检查了当前会话标题生成路径，确认前端 `useTaskCreationAgent` 和后端 `POST /sessions` 都存在“按当前输入直接覆盖 title”的行为。
+- 新增设计文档《会话标题首次明确锁定设计》，目标是避免“你好/在吗”这类弱意图首句误锁定标题，并在首次明确任务后固定标题。
+- 已完成第一版实现：
+  - session 新增 `titleLocked / titleSource / titleResolvedAt`
+  - 后端新增 `POST /sessions/:sessionId/title/resolve`
+  - 前端改为占位标题建会话，首次明确消息才请求锁定标题
+- 已完成关键行为验证：
+  - `你好` 不锁定标题
+  - `帮我开发2048小游戏，使用html实现` 会锁定标题
+  - 锁定后标题不会回退为空，也不会继续被后续消息自动覆盖
+
+## 2026-03-18 侧边栏任务右键菜单设计补充
+
+- 检查了 [Sidebar.tsx](/Users/watson/codingProj/oneceo/apps/web/client/src/components/Sidebar.tsx) 的现有任务会话列表实现，确认预览列表和“全部任务”弹窗都可抽成统一 session item。
+- 检查了现有 [context-menu.tsx](/Users/watson/codingProj/oneceo/apps/web/client/src/components/ui/context-menu.tsx)，确认可以直接复用右键菜单组件，不需要新增菜单基础设施。
+- 新增设计文档 [侧边栏任务右键菜单设计.md](/Users/watson/codingProj/oneceo/docs/agent研发文档/侧边栏任务右键菜单设计.md)。
+- 当前设计建议按两阶段推进：
+  - 第一阶段先做：重命名、收藏/取消收藏、删除、右键菜单骨架
+  - 第二阶段再做：分享、移动到项目
+## 侧边栏任务右键菜单
+
+- 做了什么：
+  - 为侧边栏任务会话补了右键菜单，接入重命名、收藏/取消收藏、删除。
+  - `分享`、`移动到项目` 先按设计保留占位，菜单文案明确标注 `（待实现）`。
+  - 后端补了 session 轻量管理字段：`isFavorite / projectId / projectName / shareEnabled / shareToken`。
+- 遇到什么：
+  - 现有数据库会话模型没有这些轻量字段，若直接扩表会扩大本轮范围。
+  - 侧边栏预览列表和“全部任务”弹窗原本各自独立渲染，容易出现菜单行为不一致。
+- 计划如何解决：
+  - 本轮先以 file-memory summary 链路落地第一阶段能力，保持 DB 主流程不动。
+  - 二阶段再补分享和项目归属的真实后端能力。
+
+## Codex 纯 App Server 方案设计
+
+- 做了什么：
+  - 新增 [Codex纯AppServer模式实现设计.md](/Users/watson/codingProj/oneceo/docs/agent研发文档/Codex纯AppServer模式实现设计.md)
+  - 明确将 Codex 后续正式方向收敛为“纯 App Server 模式”
+  - 按功能拆分了设置切换、建会话、多轮对话、消息流、文件显示、原生 diff、审批、recent/history 缓冲、session 恢复、前端展示
+- 遇到什么：
+  - 当前 CLI/SDK 直通链路已经可用，但 richer item 尤其是原生 diff 语义不完整
+  - 若继续走“SDK + App Server 混合”，会形成双控制面和双事实来源
+- 计划如何解决：
+  - 先在测试分支验证 `codex app-server` 的真实 item 流
+  - 确认 `diff` 可稳定获取后，再按文档顺序切换 OSAC/API/前端主链路
+
+## Codex 纯 App Server 本地开发推进
+
+- 做了什么：
+  - 新增本地 App Server 启动层 [codex-app-server-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-service.ts)
+  - 新增协议归一化层 [codex-app-server-protocol.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-protocol.ts)
+  - 新增临时探针 [\_tmp_codex_app_server_probe.ts](/Users/watson/codingProj/oneceo/apps/api/scripts/_tmp/_tmp_codex_app_server_probe.ts)
+- 遇到什么：
+  - `codex app-server` 在 sandbox 内可以正常监听，但当前通过 E2B 公网 websocket 直连会返回 `502`
+  - 在 sandbox 内用常规 websocket client 连接 `ws://127.0.0.1:4321` 时，也没有完成标准 HTTP upgrade 握手
+- 计划如何解决：
+  - 后续本地实现切到 `stdio` 托管模式，仍然保持 pure app-server 协议，不把公网 websocket 作为主链路
+  - 先把 API 侧 App Server 适配层做出来，再接业务事件映射与前端展示
+  - 已补做本机 `stdio` 探针，确认真实存在：
+    - `fileChange.changes[].diff`
+    - `turn/diff/updated`
+    - `thread/read -> turn.items`
+  - 已补做本机 `thread/resume` 探针，确认跨 App Server 进程仍可沿用同一 `threadId` 继续上下文
+
+## Codex App Server API 适配层
+
+- 做了什么：
+  - 新增 [codex-app-server-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-service.ts)
+  - 新增 [codex-app-server-protocol.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-protocol.ts)
+  - 新增 [codex-app-server-turn-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/codex-app-server-turn-service.ts)
+- 遇到什么：
+  - sandbox 内 `wss/ws` 入口目前不稳定，不适合作为主链路
+  - 但 stdio 模式下协议与续聊能力已被本机实测验证
+- 计划如何解决：
+  - 下一步把 `codex-remote-service` 切到 App Server turn 结果映射
+  - 再把 `fileChange.diff / turn/diff/updated` 接进平台消息与预览面板
+  - 目前已补到 `codex-remote-service` 的实验接线，但默认仍保持旧 OSAC 链路
+  - 原因是 sandbox 内 App Server 真实返回与本机 stdio 不一致，暂未稳定拿到 `fileChange/diff`
+- App Server 方向今天补齐了关键结论：sandbox 内 `codex app-server` 失败的根因不是缺少 diff，而是认证方式不对。把认证从临时 env 透传改成写 `~/.codex/config.toml + auth.json` 后，已在 E2B sandbox `iyg2r9150vczz3kxvpfog` 上实测拿到 `reasoning + fileChange + turn/diff/updated + agentMessage`。没有修改本地 `.env`，只改了本地代码和测试链路。

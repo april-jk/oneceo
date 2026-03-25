@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Runtime Inspector - Metrics</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container": "#edeef0",
+                        "on-tertiary-container": "#ffc6b2",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "inverse-surface": "#2e3132",
+                        "surface-container-high": "#e7e8ea",
+                        "on-primary-container": "#c4d2ff",
+                        "background": "#f8f9fb",
+                        "on-primary-fixed": "#001848",
+                        "outline-variant": "#c3c6d6",
+                        "tertiary": "#7b2600",
+                        "error-container": "#ffdad6",
+                        "secondary-container": "#8af5be",
+                        "tertiary-fixed-dim": "#ffb59b",
+                        "on-secondary-fixed": "#002113",
+                        "primary-fixed": "#dae2ff",
+                        "on-tertiary-fixed-variant": "#812800",
+                        "on-primary-fixed-variant": "#0040a2",
+                        "on-surface-variant": "#434654",
+                        "on-background": "#191c1e",
+                        "tertiary-fixed": "#ffdbcf",
+                        "tertiary-container": "#a33500",
+                        "surface-container-low": "#f3f4f6",
+                        "on-secondary": "#ffffff",
+                        "on-tertiary-fixed": "#380d00",
+                        "surface-dim": "#d9dadc",
+                        "primary": "#003d9b",
+                        "on-error-container": "#93000a",
+                        "primary-fixed-dim": "#b2c5ff",
+                        "on-tertiary": "#ffffff",
+                        "primary-container": "#0052cc",
+                        "outline": "#737685",
+                        "on-error": "#ffffff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#005235",
+                        "secondary": "#006c47",
+                        "secondary-fixed-dim": "#71dba6",
+                        "on-primary": "#ffffff",
+                        "surface": "#f8f9fb",
+                        "on-secondary-container": "#00714b",
+                        "secondary-fixed": "#8df7c1",
+                        "inverse-on-surface": "#f0f1f3",
+                        "surface-variant": "#e1e2e4",
+                        "surface-bright": "#f8f9fb",
+                        "surface-tint": "#0c56d0",
+                        "surface-container-highest": "#e1e2e4",
+                        "inverse-primary": "#b2c5ff"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"],
+                        "mono": ["JetBrains Mono"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tonal-architecture-shift {
+            background-color: #f3f4f6;
+        }
+        .ghost-border {
+            border-color: rgba(195, 198, 214, 0.2);
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(20px);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body overflow-hidden h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="bg-gradient-to-r from-[#003d9b] to-[#0052cc] docked full-width top-0 z-50 shadow-lg flex justify-between items-center w-full px-6 py-3">
+<div class="flex items-center gap-8">
+<span class="text-lg font-bold text-white tracking-tighter">Runtime Inspector</span>
+<nav class="hidden md:flex items-center gap-6 font-['Inter'] font-semibold tracking-tight text-sm">
+<a class="text-blue-100/80 hover:text-white transition-colors" href="#">Runtime List</a>
+<a class="text-white border-b-2 border-white pb-1" href="#">Sandbox-123</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative">
+<input class="bg-white/10 border-none text-white placeholder-white/60 text-xs rounded px-3 py-1.5 w-64 focus:ring-1 focus:ring-white/30" placeholder="Search resources..." type="text"/>
+</div>
+<button class="bg-white/10 text-white px-3 py-1.5 rounded text-xs font-semibold hover:bg-white/20 transition-all active:scale-95">Refresh</button>
+<button class="bg-white text-primary px-3 py-1.5 rounded text-xs font-bold shadow-sm hover:bg-blue-50 transition-all active:scale-95">Deploy Changes</button>
+<div class="flex items-center gap-2 ml-2">
+<span class="material-symbols-outlined text-white text-xl cursor-pointer hover:bg-white/10 p-1 rounded transition-colors" data-icon="settings">settings</span>
+<span class="material-symbols-outlined text-white text-xl cursor-pointer hover:bg-white/10 p-1 rounded transition-colors" data-icon="help">help</span>
+<span class="material-symbols-outlined text-white text-xl cursor-pointer hover:bg-white/10 p-1 rounded transition-colors" data-icon="account_circle">account_circle</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-[240px] z-40 bg-[#f3f4f6] dark:bg-slate-900 flex flex-col pt-16 pb-4 border-r border-slate-200/20">
+<div class="px-6 py-6 border-b border-slate-200/10">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary flex items-center justify-center text-white">
+<span class="material-symbols-outlined text-lg" data-icon="view_in_ar">view_in_ar</span>
+</div>
+<div>
+<div class="text-sm font-bold text-primary">Sandbox-123</div>
+<div class="font-mono text-[10px] text-slate-500 uppercase">ID: 88291-OM</div>
+</div>
+</div>
+</div>
+<nav class="mt-4 flex-1">
+<div class="px-3 mb-2">
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest text-slate-400 px-3">Main Navigation</span>
+</div>
+<ul class="space-y-1 px-2">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="dashboard">dashboard</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Overview</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="hub">hub</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Connectivity</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="archive">archive</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Archive</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 bg-[#ffffff] text-[#003d9b] font-bold border-l-4 border-[#003d9b] shadow-sm" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="monitoring">monitoring</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Metrics</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings_input_component">settings_input_component</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider">Advanced</span>
+</a>
+</li>
+</ul>
+</nav>
+<div class="mt-auto px-2 space-y-1 border-t border-slate-200/10 pt-4">
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="menu_book">menu_book</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider text-slate-500">Documentation</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-500 hover:bg-slate-200/50 transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="support_agent">support_agent</span>
+<span class="font-['Inter'] text-xs font-medium uppercase tracking-wider text-slate-500">Support</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-[240px] mt-[52px] overflow-y-auto bg-background p-6">
+<!-- Breadcrumbs & Header -->
+<div class="mb-8">
+<div class="flex items-center gap-2 text-[11px] font-mono text-slate-400 mb-2 uppercase tracking-tighter">
+<span>Runtime List</span>
+<span class="material-symbols-outlined text-[12px]" data-icon="chevron_right">chevron_right</span>
+<span class="text-primary font-bold">Sandbox-123</span>
+</div>
+<div class="flex justify-between items-end">
+<div>
+<h1 class="text-2xl font-extrabold text-on-surface tracking-tight leading-none mb-1">Resource Metrics</h1>
+<p class="text-sm text-on-surface-variant font-medium">Real-time performance telemetry for Sandbox-123 environment.</p>
+</div>
+<div class="flex bg-surface-container-low p-1 rounded-lg">
+<button class="px-4 py-1.5 text-xs font-bold bg-surface-container-lowest text-primary shadow-sm rounded">1h</button>
+<button class="px-4 py-1.5 text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors">6h</button>
+<button class="px-4 py-1.5 text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors">24h</button>
+</div>
+</div>
+</div>
+<!-- Bento Performance Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+<!-- CPU Card -->
+<div class="bg-surface-container-lowest p-4 rounded border ghost-border relative overflow-hidden group hover:shadow-md transition-shadow">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-lg" data-icon="memory">memory</span>
+<span class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">CPU Utilization</span>
+</div>
+<span class="text-[10px] font-mono bg-secondary-container text-on-secondary-container px-2 py-0.5 rounded uppercase">Healthy</span>
+</div>
+<div class="flex items-baseline gap-2 mb-2">
+<span class="text-3xl font-extrabold tracking-tighter">42.8</span>
+<span class="text-sm font-bold text-on-surface-variant">%</span>
+</div>
+<div class="h-12 w-full mt-2 relative">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 40">
+<path d="M0 35 Q 10 30, 20 32 T 40 25 T 60 28 T 80 20 T 100 22" fill="none" stroke="#003d9b" stroke-width="2"></path>
+<path d="M0 35 Q 10 30, 20 32 T 40 25 T 60 28 T 80 20 T 100 22 V 40 H 0 Z" fill="url(#grad-cpu)" opacity="0.1"></path>
+<defs>
+<lineargradient id="grad-cpu" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#003d9b;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#003d9b;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+</svg>
+</div>
+</div>
+<!-- Memory Card -->
+<div class="bg-surface-container-lowest p-4 rounded border ghost-border relative overflow-hidden group hover:shadow-md transition-shadow">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-lg" data-icon="database">database</span>
+<span class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Memory Usage</span>
+</div>
+<span class="text-[10px] font-mono bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded uppercase">Nominal</span>
+</div>
+<div class="flex items-baseline gap-2 mb-2">
+<span class="text-3xl font-extrabold tracking-tighter">6.4</span>
+<span class="text-sm font-bold text-on-surface-variant">GB / 16GB</span>
+</div>
+<div class="h-12 w-full mt-2 relative">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 40">
+<path d="M0 20 Q 15 22, 30 18 T 50 22 T 70 20 T 100 15" fill="none" stroke="#006c47" stroke-width="2"></path>
+<path d="M0 20 Q 15 22, 30 18 T 50 22 T 70 20 T 100 15 V 40 H 0 Z" fill="url(#grad-mem)" opacity="0.1"></path>
+<defs>
+<lineargradient id="grad-mem" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#006c47;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#006c47;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+</svg>
+</div>
+</div>
+<!-- Disk Card -->
+<div class="bg-surface-container-lowest p-4 rounded border ghost-border relative overflow-hidden group hover:shadow-md transition-shadow">
+<div class="flex justify-between items-start mb-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary-container text-lg" data-icon="hard_drive">hard_drive</span>
+<span class="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Disk IOPS</span>
+</div>
+<span class="text-[10px] font-mono bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase">Warning</span>
+</div>
+<div class="flex items-baseline gap-2 mb-2">
+<span class="text-3xl font-extrabold tracking-tighter">842</span>
+<span class="text-sm font-bold text-on-surface-variant">OPS/S</span>
+</div>
+<div class="h-12 w-full mt-2 relative">
+<svg class="w-full h-full" preserveaspectratio="none" viewbox="0 0 100 40">
+<path d="M0 38 L 10 35 L 20 10 L 30 25 L 40 5 L 50 30 L 60 15 L 70 35 L 80 20 L 90 25 L 100 10" fill="none" stroke="#a33500" stroke-width="2"></path>
+<path d="M0 38 L 10 35 L 20 10 L 30 25 L 40 5 L 50 30 L 60 15 L 70 35 L 80 20 L 90 25 L 100 10 V 40 H 0 Z" fill="url(#grad-disk)" opacity="0.1"></path>
+<defs>
+<lineargradient id="grad-disk" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#a33500;stop-opacity:1"></stop>
+<stop offset="100%" style="stop-color:#a33500;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+</svg>
+</div>
+</div>
+</div>
+<!-- Main Time-Series Chart Area -->
+<div class="bg-surface-container-lowest rounded border ghost-border p-6 mb-6">
+<div class="flex justify-between items-start mb-8">
+<div>
+<h3 class="text-sm font-bold text-on-surface uppercase tracking-widest mb-1">Utilization Timeline</h3>
+<p class="text-xs text-on-surface-variant">Aggregated telemetry across all runtime cores (Last 1 hour)</p>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-primary"></div>
+<span class="text-[10px] font-bold uppercase text-on-surface-variant">CPU</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-secondary"></div>
+<span class="text-[10px] font-bold uppercase text-on-surface-variant">Memory</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-tertiary-container"></div>
+<span class="text-[10px] font-bold uppercase text-on-surface-variant">Disk IO</span>
+</div>
+</div>
+</div>
+<!-- High Fidelity Mock Chart -->
+<div class="h-[400px] w-full relative flex items-end gap-1">
+<!-- Y Axis Labels -->
+<div class="absolute left-0 top-0 h-full flex flex-col justify-between text-[10px] font-mono text-slate-400 -translate-x-8 pr-2">
+<span>100%</span>
+<span>75%</span>
+<span>50%</span>
+<span>25%</span>
+<span>0%</span>
+</div>
+<!-- Chart Content Area -->
+<div class="relative w-full h-full border-l border-b ghost-border">
+<!-- Grid Lines -->
+<div class="absolute inset-0 flex flex-col justify-between pointer-events-none">
+<div class="w-full border-t ghost-border h-px"></div>
+<div class="w-full border-t ghost-border h-px"></div>
+<div class="w-full border-t ghost-border h-px"></div>
+<div class="w-full border-t ghost-border h-px"></div>
+</div>
+<!-- Complex SVG Path for Metric Lines -->
+<svg class="absolute inset-0 w-full h-full" preserveaspectratio="none">
+<!-- CPU Path -->
+<path d="M0 320 Q 50 280, 100 300 T 200 240 T 300 280 T 400 220 T 500 250 T 600 180 T 700 210 T 800 140 T 900 160 T 1000 120" fill="none" stroke="#003d9b" stroke-linejoin="round" stroke-width="3"></path>
+<!-- Memory Path -->
+<path d="M0 240 Q 50 250, 100 245 T 200 242 T 300 248 T 400 240 T 500 245 T 600 240 T 700 243 T 800 238 T 900 242 T 1000 240" fill="none" stroke="#006c47" stroke-dasharray="0" stroke-linejoin="round" stroke-width="3"></path>
+<!-- Disk Path -->
+<path d="M0 380 L 100 370 L 150 200 L 200 380 L 300 360 L 350 150 L 400 380 L 500 375 L 550 100 L 600 380 L 750 370 L 800 120 L 900 380 L 1000 375" fill="none" opacity="0.7" stroke="#a33500" stroke-linejoin="round" stroke-width="2"></path>
+</svg>
+<!-- Time Axis Labels -->
+<div class="absolute bottom-0 left-0 w-full flex justify-between text-[10px] font-mono text-slate-400 translate-y-6">
+<span>14:00</span>
+<span>14:10</span>
+<span>14:20</span>
+<span>14:30</span>
+<span>14:40</span>
+<span>14:50</span>
+<span>15:00</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Bottom Utilization Summary -->
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+<!-- Data Detail Cards -->
+<div class="lg:col-span-3 bg-surface-container-lowest rounded border ghost-border overflow-hidden">
+<table class="w-full text-left">
+<thead>
+<tr class="bg-surface-container-low">
+<th class="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Resource Node</th>
+<th class="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant text-right">Current</th>
+<th class="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant text-right">Peak (1h)</th>
+<th class="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant text-right">Average</th>
+<th class="px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Threshold Status</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-slate-100">
+<tr class="hover:bg-surface-container-high transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+<span class="text-xs font-bold text-on-surface">Primary Compute Engine</span>
+</div>
+</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface font-semibold">42.8%</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">88.2%</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">36.1%</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-secondary-container text-on-secondary-container">Within Limits</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-high transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-xs font-bold text-on-surface">Shared Memory Pool</span>
+</div>
+</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface font-semibold">6.4 GB</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">7.1 GB</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">6.2 GB</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-surface-variant text-on-surface-variant">Stable</span>
+</td>
+</tr>
+<tr class="hover:bg-surface-container-high transition-colors">
+<td class="px-6 py-4">
+<div class="flex items-center gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-container"></div>
+<span class="text-xs font-bold text-on-surface">Flash Storage IO</span>
+</div>
+</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface font-semibold">842 OPS</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">1,420 OPS</td>
+<td class="px-6 py-4 text-right font-mono text-xs text-on-surface">615 OPS</td>
+<td class="px-6 py-4">
+<span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-error-container text-on-error-container">Spike Detected</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Side Health Summary -->
+<div class="bg-inverse-surface rounded border border-slate-700 p-5 flex flex-col justify-between">
+<div>
+<div class="flex items-center gap-2 mb-4">
+<span class="material-symbols-outlined text-secondary-fixed-dim" data-icon="verified_user">verified_user</span>
+<span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Environment Integrity</span>
+</div>
+<h4 class="text-white text-lg font-bold mb-2 tracking-tight">System Operational</h4>
+<p class="text-xs text-slate-400 leading-relaxed mb-6">Environment heartbeat is steady. All runtime containers are reporting metrics within the 95th percentile of expected performance.</p>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between items-center text-[10px]">
+<span class="text-slate-400 uppercase font-medium">Uptime</span>
+<span class="text-white font-mono">14d 06h 22m</span>
+</div>
+<div class="flex justify-between items-center text-[10px]">
+<span class="text-slate-400 uppercase font-medium">Last Incident</span>
+<span class="text-slate-400 font-mono">N/A</span>
+</div>
+<div class="h-1 bg-slate-700 w-full rounded overflow-hidden mt-4">
+<div class="h-full bg-secondary-fixed-dim w-[98%]"></div>
+</div>
+<div class="flex justify-between items-center text-[9px] text-slate-500 uppercase font-bold tracking-widest">
+<span>Availability</span>
+<span>99.98%</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer Spacing -->
+<div class="h-12"></div>
+</main>
+</div>
+</body></html>

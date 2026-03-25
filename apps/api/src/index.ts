@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import type { WebSocketEvent } from '@oneceo/shared';
 import agentRoutes from './routes/agent-routes';
 import taskCreationRoutes from './routes/task-creation-routes';
+import altusManagedRoutes from './routes/altus-managed-routes';
 import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
@@ -112,6 +113,7 @@ app.post('/api/projects', (req, res) => {
 
 // 任务创建相关 API
 app.use('/api/task-creation', taskCreationRoutes);
+app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
@@ -205,6 +207,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 const PORT = process.env.PORT || 4000;
 let shuttingDown = false;
+let isListening = false;
+let listenRetryTimer: NodeJS.Timeout | null = null;
+let listenAttempts = 0;
+const maxListenRetries = Math.max(0, Number(process.env.API_PORT_RETRY_ATTEMPTS || 12));
+const listenRetryDelayMs = Math.max(100, Number(process.env.API_PORT_RETRY_DELAY_MS || 500));
 
 async function shutdown(signal: string, exitCode = 0) {
   if (shuttingDown) return;
@@ -213,6 +220,10 @@ async function shutdown(signal: string, exitCode = 0) {
   console.log(`[API] shutdown start: ${signal}`);
 
   try {
+    if (listenRetryTimer) {
+      clearTimeout(listenRetryTimer);
+      listenRetryTimer = null;
+    }
     stopSandboxArchiveJob();
   } catch (error) {
     console.warn('[API] stopSandboxArchiveJob failed:', error);
@@ -232,7 +243,11 @@ async function shutdown(signal: string, exitCode = 0) {
 
   await new Promise<void>((resolve) => {
     try {
-      httpServer.close(() => resolve());
+      if (isListening) {
+        httpServer.close(() => resolve());
+      } else {
+        resolve();
+      }
     } catch (_error) {
       resolve();
     }
@@ -248,13 +263,30 @@ async function shutdown(signal: string, exitCode = 0) {
 }
 
 httpServer.on('error', (error: any) => {
-  if (error?.code === 'EADDRINUSE') {
+  if (error?.code === 'EADDRINUSE' && !isListening && !shuttingDown) {
+    if (listenAttempts < maxListenRetries) {
+      listenAttempts += 1;
+      console.warn(
+        `[API] Port ${PORT} is temporarily in use. Retry ${listenAttempts}/${maxListenRetries} in ${listenRetryDelayMs}ms.`
+      );
+      if (listenRetryTimer) {
+        clearTimeout(listenRetryTimer);
+      }
+      listenRetryTimer = setTimeout(() => {
+        listenRetryTimer = null;
+        if (!shuttingDown && !isListening) {
+          httpServer.listen(PORT);
+        }
+      }, listenRetryDelayMs);
+      return;
+    }
     console.error(
       `[API] Port ${PORT} is already in use. Another api dev process may still be running.`
     );
-  } else {
-    console.error('[API] httpServer error:', error);
+    void shutdown('httpServer:error', 1);
+    return;
   }
+  console.error('[API] httpServer error:', error);
   void shutdown('httpServer:error', 1);
 });
 
@@ -262,26 +294,35 @@ httpServer.on('error', (error: any) => {
 taskCreationWebSocketService.initialize(httpServer);
 osacLlmProxyBridgeService.initialize();
 
-httpServer.listen(PORT, () => {
-  console.log('');
-  console.log('🚀 oneceo.ai API Server');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`📡 API server running on http://localhost:${PORT}`);
-  console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
-  console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  
-  // 启动后先进行数据库连通性重试检测
-  void testDatabaseConnection({ retries: 5, delayMs: 1500 });
-  // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
-  void osacPersistentRecoveryService.recoverReadySessions();
-  // 预热连接器相关表，避免首次访问时因未迁移报错
-  void connectorStorageBootstrap.ensureReady();
-  // 启动 Sandbox 空闲归档任务
-  startSandboxArchiveJob();
-  
-  console.log('');
+async function startServer() {
+  await connectorStorageBootstrap.ensureReady();
+
+  httpServer.listen(PORT, () => {
+    isListening = true;
+    listenAttempts = 0;
+    console.log('');
+    console.log('🚀 oneceo.ai API Server');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`📡 API server running on http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
+    console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
+    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    
+    // 启动后先进行数据库连通性重试检测
+    void testDatabaseConnection({ retries: 5, delayMs: 1500 });
+    // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
+    void osacPersistentRecoveryService.recoverReadySessions();
+    // 启动 Sandbox 空闲归档任务
+    startSandboxArchiveJob();
+    
+    console.log('');
+  });
+}
+
+void startServer().catch((error) => {
+  console.error('[API] startup failed before listen:', error);
+  process.exit(1);
 });
 
 process.on('SIGINT', () => {

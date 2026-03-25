@@ -18,6 +18,8 @@ import type {
   E2bTemplateBuildInfo,
   E2bTemplateBuildLogsResponse,
   E2bTemplateWithBuilds,
+  SandboxRuntimeDetail,
+  SandboxRuntimeRegistry,
   SandboxManagementOverview,
   VmDetailResponse,
   VmIpInfo,
@@ -283,6 +285,10 @@ export const api = {
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
+  getSandboxRuntimeRegistry: (limit = 100) =>
+    request<SandboxRuntimeRegistry>(`/api/sandbox-management/runtime-registry?limit=${limit}`),
+  getSandboxRuntimeDetail: (sandboxId: string) =>
+    request<SandboxRuntimeDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/runtime-detail`),
   getSandboxEnvironment: (sandboxId: string) =>
     request<E2bSandboxDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}`),
   getSandboxFullInfo: (sandboxId: string) =>
@@ -301,6 +307,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  refreshSandboxRuntime: (sandboxId: string) =>
+    request<SandboxRuntimeDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/refresh-runtime`, {
+      method: 'POST',
+    }),
+  archiveSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/archive`, {
+      method: 'POST',
+    }),
+  restoreSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/restore`, {
+      method: 'POST',
+    }),
+  checkSandboxConnectivity: (sandboxId: string) =>
+    request<Record<string, unknown>>(
+      `/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/connectivity-check`,
+      {
+        method: 'POST',
+      }
+    ),
   setSandboxTimeout: (sandboxId: string, timeoutMs: number) =>
     request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/timeout`, {
       method: 'POST',

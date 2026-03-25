@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Runtime Inspector - Connectivity</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts: Inter & JetBrains Mono for Technical Data -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container": "#edeef0",
+                        "on-tertiary-container": "#ffc6b2",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "inverse-surface": "#2e3132",
+                        "surface-container-high": "#e7e8ea",
+                        "on-primary-container": "#c4d2ff",
+                        "background": "#f8f9fb",
+                        "on-primary-fixed": "#001848",
+                        "outline-variant": "#c3c6d6",
+                        "tertiary": "#7b2600",
+                        "error-container": "#ffdad6",
+                        "secondary-container": "#8af5be",
+                        "tertiary-fixed-dim": "#ffb59b",
+                        "on-secondary-fixed": "#002113",
+                        "primary-fixed": "#dae2ff",
+                        "on-tertiary-fixed-variant": "#812800",
+                        "on-primary-fixed-variant": "#0040a2",
+                        "on-surface-variant": "#434654",
+                        "on-background": "#191c1e",
+                        "tertiary-fixed": "#ffdbcf",
+                        "tertiary-container": "#a33500",
+                        "surface-container-low": "#f3f4f6",
+                        "on-secondary": "#ffffff",
+                        "on-tertiary-fixed": "#380d00",
+                        "surface-dim": "#d9dadc",
+                        "primary": "#003d9b",
+                        "on-error-container": "#93000a",
+                        "primary-fixed-dim": "#b2c5ff",
+                        "on-tertiary": "#ffffff",
+                        "primary-container": "#0052cc",
+                        "outline": "#737685",
+                        "on-error": "#ffffff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#005235",
+                        "secondary": "#006c47",
+                        "secondary-fixed-dim": "#71dba6",
+                        "on-primary": "#ffffff",
+                        "surface": "#f8f9fb",
+                        "on-secondary-container": "#00714b",
+                        "secondary-fixed": "#8df7c1",
+                        "inverse-on-surface": "#f0f1f3",
+                        "surface-variant": "#e1e2e4",
+                        "surface-bright": "#f8f9fb",
+                        "surface-tint": "#0c56d0",
+                        "surface-container-highest": "#e1e2e4",
+                        "inverse-primary": "#b2c5ff"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"],
+                        "mono": ["JetBrains Mono", "monospace"]
+                    },
+                    borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" },
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+    </style>
+</head>
+<body class="bg-background text-on-surface flex h-screen overflow-hidden">
+<!-- TopAppBar -->
+<header class="bg-gradient-to-r from-[#003d9b] to-[#0052cc] dark:from-blue-900 dark:to-blue-800 text-white font-['Inter'] font-semibold tracking-tight text-sm docked full-width top-0 z-50 shadow-lg shadow-[0_24px_48px_-12px_rgba(25,28,30,0.08)] flex justify-between items-center w-full px-6 py-3 fixed h-14">
+<div class="flex items-center gap-6">
+<span class="text-lg font-bold text-white tracking-tighter">Runtime Inspector</span>
+<nav class="hidden md:flex gap-4 items-center">
+<span class="text-blue-100/80 hover:text-white transition-colors cursor-pointer">Runtime List</span>
+<span class="text-white/40 font-normal">/</span>
+<span class="text-white border-b-2 border-white pb-1 cursor-pointer">Sandbox-123</span>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 mr-2">
+<button class="px-3 py-1 bg-white/10 hover:bg-white/20 transition-all duration-200 rounded text-xs">Refresh</button>
+<button class="px-3 py-1 bg-white text-primary font-bold hover:bg-blue-50 transition-all duration-200 rounded text-xs shadow-sm">Deploy Changes</button>
+</div>
+<div class="flex gap-3">
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 rounded transition-all">settings</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 rounded transition-all">help</span>
+<span class="material-symbols-outlined cursor-pointer hover:bg-white/10 p-1 rounded transition-all">account_circle</span>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="bg-[#f3f4f6] dark:bg-slate-900 fixed left-0 top-0 h-screen w-[240px] z-40 no-line tonal-architecture-shift flat no-shadows border-r border-slate-200/20 flex flex-col h-full pt-16 pb-4">
+<div class="px-6 py-4 mb-4">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container flex items-center justify-center text-white">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">view_in_ar</span>
+</div>
+<div>
+<h3 class="font-bold text-on-surface text-sm leading-tight">Sandbox-123</h3>
+<p class="text-[10px] text-on-surface-variant font-mono uppercase tracking-wider">ID: 88291-OM</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<div class="px-4 py-2 flex items-center gap-3 text-slate-500 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">dashboard</span>
+<span>Overview</span>
+</div>
+<div class="px-4 py-2 flex items-center gap-3 bg-[#ffffff] text-[#003d9b] font-bold border-l-4 border-[#003d9b] cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-all">
+<span class="material-symbols-outlined text-lg">hub</span>
+<span>Connectivity</span>
+</div>
+<div class="px-4 py-2 flex items-center gap-3 text-slate-500 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">archive</span>
+<span>Archive</span>
+</div>
+<div class="px-4 py-2 flex items-center gap-3 text-slate-500 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">monitoring</span>
+<span>Metrics</span>
+</div>
+<div class="px-4 py-2 flex items-center gap-3 text-slate-500 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">settings_input_component</span>
+<span>Advanced</span>
+</div>
+</nav>
+<div class="mt-auto border-t border-slate-200/40 pt-4">
+<div class="px-4 py-2 flex items-center gap-3 text-slate-400 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">menu_book</span>
+<span>Documentation</span>
+</div>
+<div class="px-4 py-2 flex items-center gap-3 text-slate-400 hover:bg-slate-200/50 cursor-pointer font-['Inter'] text-xs font-medium uppercase tracking-wider transition-colors">
+<span class="material-symbols-outlined text-lg">support_agent</span>
+<span>Support</span>
+</div>
+</div>
+</aside>
+<!-- Main Content Workbench Area -->
+<main class="ml-[240px] mt-14 flex-1 h-[calc(100vh-3.5rem)] overflow-y-auto bg-background p-8">
+<div class="max-w-6xl mx-auto space-y-8">
+<!-- Header Section -->
+<div class="flex flex-col gap-1">
+<div class="flex items-center text-[10px] text-on-surface-variant/70 uppercase tracking-widest font-bold">
+<span>Runtime List</span>
+<span class="material-symbols-outlined text-[12px] mx-1">chevron_right</span>
+<span>Sandbox-123</span>
+</div>
+<div class="flex justify-between items-end">
+<div>
+<h1 class="text-3xl font-extrabold text-on-surface tracking-tighter leading-none mb-1">Connectivity Inspector</h1>
+<p class="text-sm text-on-surface-variant/80">Monitor real-time network handshakes and endpoint availability for Sandbox instance.</p>
+</div>
+<div class="flex gap-2">
+<div class="bg-surface-container-low px-3 py-2 flex items-center gap-2 rounded border border-outline-variant/10">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-[10px] font-bold uppercase text-secondary">Operational</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Top Section: Status Cards (Bento Style) -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+<div class="bg-surface-container-lowest p-4 rounded border border-outline-variant/10 shadow-sm transition-all hover:bg-surface-bright">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Handshake Status</span>
+<span class="material-symbols-outlined text-secondary text-lg">check_circle</span>
+</div>
+<div class="flex items-baseline gap-2">
+<span class="text-2xl font-bold text-on-surface">OK</span>
+<span class="text-[10px] text-secondary font-mono">24ms Latency</span>
+</div>
+<div class="mt-4 h-1 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-full"></div>
+</div>
+</div>
+<div class="bg-surface-container-lowest p-4 rounded border border-outline-variant/10 shadow-sm transition-all hover:bg-surface-bright">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Registry Connection</span>
+<span class="material-symbols-outlined text-secondary text-lg">linked_services</span>
+</div>
+<div class="flex items-baseline gap-2">
+<span class="text-2xl font-bold text-on-surface">Connected</span>
+<span class="text-[10px] text-secondary font-mono">TLS 1.3 Active</span>
+</div>
+<div class="mt-4 h-1 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-[92%]"></div>
+</div>
+</div>
+<div class="bg-surface-container-lowest p-4 rounded border border-outline-variant/10 shadow-sm transition-all hover:bg-surface-bright">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Auth Token State</span>
+<span class="material-symbols-outlined text-secondary text-lg">verified_user</span>
+</div>
+<div class="flex items-baseline gap-2">
+<span class="text-2xl font-bold text-on-surface">Valid</span>
+<span class="text-[10px] text-on-surface-variant/60 font-mono">Exp: 14h 22m</span>
+</div>
+<div class="mt-4 h-1 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[65%]"></div>
+</div>
+</div>
+</div>
+<!-- Middle Section: Configuration Endpoint Map -->
+<div class="bg-surface-container-lowest rounded overflow-hidden border border-outline-variant/10 shadow-[0_2px_4px_rgba(0,0,0,0.02)]">
+<div class="px-6 py-4 bg-surface-container-low border-b border-outline-variant/5 flex justify-between items-center">
+<h2 class="text-xs font-bold uppercase tracking-widest text-on-surface-variant">Configuration Endpoint Map</h2>
+<span class="text-[10px] text-on-surface-variant font-medium">4 Registered Endpoints</span>
+</div>
+<div class="divide-y divide-outline-variant/10">
+<!-- Endpoint Item -->
+<div class="px-6 py-3 flex items-center group hover:bg-surface-container-low/50 transition-colors">
+<div class="w-1/4">
+<span class="text-[11px] font-mono font-semibold text-primary">osacEndpoint</span>
+</div>
+<div class="w-2/4">
+<span class="text-[11px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded">https://osac.runtime-inspector.internal/v2/sandbox-123</span>
+</div>
+<div class="w-1/4 flex justify-end">
+<button class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-on-surface-variant bg-surface-container-low rounded hover:bg-surface-container-high transition-all opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-xs">content_copy</span>
+                                COPY
+                            </button>
+</div>
+</div>
+<!-- Endpoint Item -->
+<div class="px-6 py-3 flex items-center group hover:bg-surface-container-low/50 transition-colors">
+<div class="w-1/4">
+<span class="text-[11px] font-mono font-semibold text-primary">opencodeBaseUrl</span>
+</div>
+<div class="w-2/4">
+<span class="text-[11px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded">https://opencode.internal/api/sandbox-123-master</span>
+</div>
+<div class="w-1/4 flex justify-end">
+<button class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-on-surface-variant bg-surface-container-low rounded hover:bg-surface-container-high transition-all opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-xs">content_copy</span>
+                                COPY
+                            </button>
+</div>
+</div>
+<!-- Endpoint Item -->
+<div class="px-6 py-3 flex items-center group hover:bg-surface-container-low/50 transition-colors">
+<div class="w-1/4">
+<span class="text-[11px] font-mono font-semibold text-primary">workspaceRoot</span>
+</div>
+<div class="w-2/4">
+<span class="text-[11px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded">/opt/runtime/sandboxes/88291-OM/workdir</span>
+</div>
+<div class="w-1/4 flex justify-end">
+<button class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-on-surface-variant bg-surface-container-low rounded hover:bg-surface-container-high transition-all opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-xs">content_copy</span>
+                                COPY
+                            </button>
+</div>
+</div>
+<!-- Endpoint Item -->
+<div class="px-6 py-3 flex items-center group hover:bg-surface-container-low/50 transition-colors">
+<div class="w-1/4">
+<span class="text-[11px] font-mono font-semibold text-primary">stateRoot</span>
+</div>
+<div class="w-2/4">
+<span class="text-[11px] font-mono text-on-surface-variant bg-surface-container-low px-2 py-0.5 rounded">/var/lib/runtime-inspector/state/88291-OM</span>
+</div>
+<div class="w-1/4 flex justify-end">
+<button class="flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold text-on-surface-variant bg-surface-container-low rounded hover:bg-surface-container-high transition-all opacity-0 group-hover:opacity-100">
+<span class="material-symbols-outlined text-xs">content_copy</span>
+                                COPY
+                            </button>
+</div>
+</div>
+</div>
+</div>
+<!-- Bottom Section: Check Result Log -->
+<div class="bg-surface-container-lowest rounded overflow-hidden border border-outline-variant/10 shadow-[0_4px_12px_rgba(25,28,30,0.04)]">
+<div class="px-6 py-4 flex justify-between items-center border-b border-outline-variant/5">
+<div>
+<h2 class="text-xs font-bold uppercase tracking-widest text-on-surface-variant mb-0.5">Check Result Log</h2>
+<p class="text-[10px] text-on-surface-variant/60">Live feedback from connectivity diagnostics</p>
+</div>
+<button class="flex items-center gap-2 px-4 py-2 bg-primary text-white text-xs font-bold rounded shadow-sm hover:bg-primary-container transition-all active:scale-95">
+<span class="material-symbols-outlined text-sm">play_arrow</span>
+                        Run Connectivity Check
+                    </button>
+</div>
+<div class="bg-inverse-surface p-6 font-mono text-[11px] leading-relaxed h-[300px] overflow-y-auto custom-scrollbar">
+<div class="space-y-1">
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.032</span>
+<span class="text-[#8af5be]">[INFO]</span>
+<span class="text-inverse-on-surface">Initializing diagnostics for Sandbox-123...</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.144</span>
+<span class="text-[#8af5be]">[INFO]</span>
+<span class="text-inverse-on-surface">Resolving hostname: osac.runtime-inspector.internal</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.210</span>
+<span class="text-[#8af5be]">[SUCCESS]</span>
+<span class="text-inverse-on-surface">DNS Resolution: 10.244.1.88 [A Record Found]</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.405</span>
+<span class="text-[#8af5be]">[INFO]</span>
+<span class="text-inverse-on-surface">Establishing TCP handshake via port 443...</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.450</span>
+<span class="text-[#8af5be]">[SUCCESS]</span>
+<span class="text-inverse-on-surface">Socket opened successfully. Path delay: 0.12ms.</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.600</span>
+<span class="text-primary-fixed-dim">[AUTH]</span>
+<span class="text-inverse-on-surface">Verifying session token: ID_88291...</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:01.821</span>
+<span class="text-[#8af5be]">[SUCCESS]</span>
+<span class="text-inverse-on-surface">Session validated. Scopes granted: READ, WRITE, INSPECT.</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:02.001</span>
+<span class="text-[#8af5be]">[INFO]</span>
+<span class="text-inverse-on-surface">Pinging workspaceRoot: /opt/runtime/sandboxes/88291-OM/workdir</span>
+</div>
+<div class="flex gap-4">
+<span class="text-on-surface-variant/40 shrink-0">12:45:02.115</span>
+<span class="text-[#8af5be]">[SUCCESS]</span>
+<span class="text-inverse-on-surface">Workspace path reachable. Write permissions verified.</span>
+</div>
+<div class="flex gap-4 pt-2">
+<span class="text-on-surface-variant/40 shrink-0">12:45:02.120</span>
+<span class="text-[#8af5be]">[COMPLETE]</span>
+<span class="text-inverse-on-surface font-bold">All 4 connectivity checks passed. System nominal.</span>
+</div>
+<div class="flex gap-4 animate-pulse">
+<span class="text-on-surface-variant/40 shrink-0">12:45:02.122</span>
+<span class="text-white">_</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer Meta -->
+<div class="flex justify-between items-center text-[10px] text-on-surface-variant/50 pt-4 pb-12">
+<div class="flex items-center gap-4">
+<span>Region: US-EAST-1</span>
+<span>Node: NODE-8A-882</span>
+</div>
+<div>
+<span>Last full audit: 12 minutes ago</span>
+</div>
+</div>
+</div>
+</main>
+</body></html>

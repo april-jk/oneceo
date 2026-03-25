@@ -1,14 +1,23 @@
 import { getApiBaseUrl, getTaskCreationWsUrl } from "@/lib/runtime-config";
-import { buildClientIdentityHeaders } from "@/lib/client-identity";
+import { buildClientIdentityHeaders, getClientUserId } from "@/lib/client-identity";
 
 export type TaskCreationSessionSummary = {
   id: string;
   title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string;
+  isFavorite?: boolean;
+  projectId?: string | null;
+  projectName?: string | null;
+  shareEnabled?: boolean;
+  shareToken?: string | null;
   status?: string;
   stage?: string;
   phase?: string;
   driver?: "altus" | "opencode" | "claudecode" | "codex";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   updatedAt?: string;
 };
 
@@ -17,6 +26,7 @@ export type CreateTaskCreationSessionInput = {
   title?: string;
   mode?: "sandbox" | "altus";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   initialMessage?: string;
   initialMessageType?: "user_input" | "user_response";
 };
@@ -58,6 +68,26 @@ export type TaskCreationRuntimeStatus = {
   codexRestoreSourceKey?: string;
   previousExecutorSessionId?: string;
   codexRestoreFailureReason?: string;
+};
+
+export type TaskCreationManagedRunSummary = {
+  id: string;
+  runId?: string;
+  sessionId: string;
+  status?: string;
+  model?: string | null;
+  stopReason?: string | null;
+  streamUrl?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string | null;
+  sequence?: number | null;
+};
+
+export type StartTaskCreationManagedRunInput = {
+  content: string;
+  messageKey?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type TaskCreationUploadedAttachment = {
@@ -177,15 +207,25 @@ export type TaskCreationDatabaseRowsPage = {
 export type TaskCreationSessionDetail = {
   id: string;
   title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string;
+  isFavorite?: boolean;
+  projectId?: string | null;
+  projectName?: string | null;
+  shareEnabled?: boolean;
+  shareToken?: string | null;
   status?: string;
   stage?: string;
   phase?: string;
   driver?: "altus" | "opencode" | "claudecode" | "codex";
   executor?: "opencode" | "claudecode" | "codex";
+  codexExecutionMode?: "sdk" | "ws";
   runtime?: {
     generation?: number;
     orchestratorSessionId?: string;
     executor?: "opencode" | "claudecode" | "codex";
+    transport?: "sdk" | "app_server";
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: "not_needed" | "session_restored" | "session_restore_failed" | "state_restore_failed";
@@ -245,6 +285,15 @@ export type WorkspaceFile = {
   previewType?: "text" | "markdown" | "image" | "video" | "audio" | "pdf" | "binary";
   previewAvailable?: boolean;
   binaryTooLarge?: boolean;
+};
+
+export type CodexRuntimeConfig = {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  configToml: string;
+  authJson: string;
+  updatedAt?: string;
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeoutMs?: number }): Promise<T> {
@@ -319,6 +368,36 @@ export async function createTaskCreationSession(
   return result?.data || null;
 }
 
+export async function getCodexRuntimeConfig(): Promise<CodexRuntimeConfig> {
+  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
+  const result = await fetchJson<{ data?: CodexRuntimeConfig }>(url);
+  if (result?.data) return result.data;
+  throw new Error("failed to load codex runtime config");
+}
+
+export async function updateCodexRuntimeConfig(input: {
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  configToml?: string;
+  authJson?: string;
+}): Promise<CodexRuntimeConfig> {
+  const url = `${getApiBaseUrl()}/api/task-creation/codex/runtime-config`;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input || {}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: CodexRuntimeConfig };
+  if (result?.data) return result.data;
+  throw new Error("failed to save codex runtime config");
+}
+
 export async function listTaskCreationMessages(sessionId: string): Promise<TaskCreationHistoryMessage[]> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/messages`;
@@ -387,6 +466,35 @@ export async function createTaskCreationDraftSession(title?: string): Promise<Ta
   return result.data;
 }
 
+export async function resolveTaskCreationSessionTitle(
+  sessionId: string,
+  message: string
+): Promise<{
+  id: string;
+  title?: string;
+  titleLocked?: boolean;
+  titleSource?: "placeholder" | "first_explicit_user_input" | "manual";
+  titleResolvedAt?: string | null;
+  resolved?: boolean;
+} | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/title/resolve`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      message,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`);
+  }
+  const result = (await response.json()) as { data?: any };
+  return result?.data || null;
+}
+
 export async function getTaskCreationSession(sessionId: string): Promise<TaskCreationSessionDetail | null> {
   const safeSessionId = encodeURIComponent(sessionId);
   const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
@@ -401,6 +509,144 @@ export async function getTaskCreationSession(sessionId: string): Promise<TaskCre
   }
   const result = (await response.json()) as { data?: TaskCreationSessionDetail };
   return result?.data || null;
+}
+
+export async function startTaskCreationManagedRun(
+  sessionId: string,
+  input: StartTaskCreationManagedRunInput
+): Promise<TaskCreationManagedRunSummary> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/sessions/${safeSessionId}/runs`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input || {}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary };
+  if (!result?.data) {
+    throw new Error("managed run empty");
+  }
+  return result.data;
+}
+
+export async function getLatestTaskCreationManagedRun(
+  sessionId: string
+): Promise<TaskCreationManagedRunSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/sessions/${safeSessionId}/runs/latest`;
+  const response = await fetch(url, {
+    headers: buildClientIdentityHeaders(),
+    cache: 'no-store',
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary | null };
+  return result?.data || null;
+}
+
+export function getTaskCreationManagedRunStreamUrl(
+  runId: string,
+  options?: { afterSequence?: number | null; clientId?: string }
+): string {
+  const safeRunId = encodeURIComponent(runId);
+  const params = new URLSearchParams();
+  if (typeof options?.afterSequence === "number" && Number.isFinite(options.afterSequence) && options.afterSequence > 0) {
+    params.set("afterSequence", String(Math.floor(options.afterSequence)));
+  }
+  if (options?.clientId) {
+    params.set("clientId", options.clientId);
+  }
+  const userId = getClientUserId();
+  if (userId) {
+    params.set("userId", userId);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return `${getApiBaseUrl()}/api/altus-managed/runs/${safeRunId}/stream${suffix}`;
+}
+
+export async function stopTaskCreationManagedRun(
+  runId: string,
+  options?: { reason?: string; clientMessageKey?: string }
+): Promise<TaskCreationManagedRunSummary | null> {
+  const safeRunId = encodeURIComponent(runId);
+  const url = `${getApiBaseUrl()}/api/altus-managed/runs/${safeRunId}/stop`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      reason: options?.reason || undefined,
+      clientMessageKey: options?.clientMessageKey || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationManagedRunSummary | null };
+  return result?.data || null;
+}
+
+export async function renameTaskCreationSessionTitle(
+  sessionId: string,
+  title: string
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/title/rename`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function toggleTaskCreationSessionFavorite(
+  sessionId: string,
+  favorite: boolean
+): Promise<TaskCreationSessionSummary | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/favorite`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({ favorite }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationSessionSummary };
+  return result?.data || null;
+}
+
+export async function deleteTaskCreationSession(sessionId: string): Promise<void> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }
 
 export async function getTaskCreationDebugInfo(sessionId: string): Promise<TaskCreationDebugInfo | null> {
@@ -592,6 +838,55 @@ export async function touchTaskCreationRuntime(sessionId: string): Promise<void>
   }
 }
 
+export async function interruptTaskCreationRuntime(
+  sessionId: string,
+  options?: { clientMessageKey?: string }
+): Promise<{
+  interrupted: boolean;
+  phase?: "intent_processing" | "executor_processing";
+  executor?: "opencode" | "claudecode" | "codex";
+  orchestratorSessionId?: string;
+  executorSessionId?: string;
+  reason?: string;
+  replayPending?: boolean;
+}> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/runtime/interrupt`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      preserveForRetry: true,
+      clientMessageKey: options?.clientMessageKey || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as {
+    data?: {
+      interrupted?: boolean;
+      phase?: "intent_processing" | "executor_processing";
+      executor?: "opencode" | "claudecode" | "codex";
+      orchestratorSessionId?: string;
+      executorSessionId?: string;
+      reason?: string;
+      replayPending?: boolean;
+    };
+  };
+  return {
+    interrupted: Boolean(result?.data?.interrupted),
+    phase: result?.data?.phase,
+    executor: result?.data?.executor,
+    orchestratorSessionId: result?.data?.orchestratorSessionId,
+    executorSessionId: result?.data?.executorSessionId,
+    reason: result?.data?.reason,
+    replayPending: Boolean(result?.data?.replayPending),
+  };
+}
+
 export async function listOsacMessages(orchestratorSessionId: string, limit: number = 120): Promise<OsacMessageRecord[]> {
   const safeSessionId = encodeURIComponent(orchestratorSessionId);
   const url = `${getApiBaseUrl()}/api/sandbox/osac/${safeSessionId}/messages?limit=${limit}`;
@@ -673,6 +968,16 @@ export async function getWorkspaceFile(sessionId: string, filePath: string): Pro
     throw new Error("workspace file empty");
   }
   return result.data;
+}
+
+export function getWorkspaceRawFileUrl(sessionId: string, filePath: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const encodedPath = String(filePath || "")
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/raw/${encodedPath}`;
 }
 
 export async function uploadTaskCreationAttachment(

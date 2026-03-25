@@ -1,4 +1,4 @@
-import { runConnectorMigration } from '../db/migrate';
+import { runMigration } from '../db/migrate';
 
 class ConnectorStorageBootstrap {
   private readyPromise: Promise<void> | null = null;
@@ -6,7 +6,7 @@ class ConnectorStorageBootstrap {
   async ensureReady() {
     if (!this.readyPromise) {
       this.readyPromise = (async () => {
-        await runConnectorMigration();
+        await runMigration();
       })().catch((error) => {
         this.readyPromise = null;
         throw error;

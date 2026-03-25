@@ -970,6 +970,16 @@ export async function getWorkspaceFile(sessionId: string, filePath: string): Pro
   return result.data;
 }
 
+export function getWorkspaceRawFileUrl(sessionId: string, filePath: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const encodedPath = String(filePath || "")
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/raw/${encodedPath}`;
+}
+
 export async function uploadTaskCreationAttachment(
   sessionId: string,
   file: File

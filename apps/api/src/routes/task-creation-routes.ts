@@ -1131,6 +1131,10 @@ function resolveWorkspaceExecutor(session?: FileSessionRecord | null): string {
   return String(session?.runtime?.executor || session?.driver || '').trim().toLowerCase();
 }
 
+function isE2bWorkspaceExecutor(executor: string): boolean {
+  return executor === 'codex' || executor === 'altus';
+}
+
 function resolveWorkspaceAbsolutePath(workspaceRoot: string, relativePath: string): string {
   const root = workspaceRoot.replace(/\/+$/, '');
   const normalized = normalizeWorkspacePath(relativePath);
@@ -2233,6 +2237,20 @@ function inferMimeTypeFromExt(filePath: string): string | undefined {
   const ext = getFileExt(filePath);
   if (!ext) return undefined;
   const map: Record<string, string> = {
+    txt: 'text/plain',
+    text: 'text/plain',
+    html: 'text/html',
+    htm: 'text/html',
+    css: 'text/css',
+    js: 'text/javascript',
+    mjs: 'text/javascript',
+    cjs: 'text/javascript',
+    json: 'application/json',
+    csv: 'text/csv',
+    tsv: 'text/tab-separated-values',
+    xml: 'application/xml',
+    yaml: 'application/yaml',
+    yml: 'application/yaml',
     png: 'image/png',
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',
@@ -2262,6 +2280,19 @@ function resolveMimeType(filePath: string, fromUpstream?: string): string {
   const normalized = (fromUpstream || '').trim().toLowerCase();
   if (normalized) return normalized;
   return inferMimeTypeFromExt(filePath) || 'application/octet-stream';
+}
+
+function isTextLikeMimeType(mimeType: string): boolean {
+  const normalized = String(mimeType || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.startsWith('text/') ||
+    normalized === 'application/json' ||
+    normalized === 'application/xml' ||
+    normalized === 'application/yaml' ||
+    normalized === 'application/javascript' ||
+    normalized === 'text/javascript'
+  );
 }
 
 function detectPreviewType(filePath: string, mimeType: string, isBinary: boolean): WorkspacePreviewType {
@@ -4098,7 +4129,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       includeIgnored,
     });
     const codexCachedRow =
-      workspaceExecutor === 'codex'
+      isE2bWorkspaceExecutor(workspaceExecutor)
         ? await taskSessionWorkspaceCacheDAO.get({
             sessionId,
             tenantKey,
@@ -4108,7 +4139,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
         : null;
     const codexCachedPage = asWorkspaceDirectoryCachePayload(codexCachedRow?.data);
     const tryCodexDirFallback = async () => {
-      if (workspaceExecutor !== 'codex') return null;
+      if (!isE2bWorkspaceExecutor(workspaceExecutor)) return null;
       if (!codexCachedPage) return null;
       return res.json({
         success: true,
@@ -4127,7 +4158,11 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       });
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
-    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+    if (
+      !isE2bWorkspaceExecutor(workspaceExecutor) &&
+      runtimeStatus?.status &&
+      runtimeStatus.status !== 'ready'
+    ) {
       const fallback = await tryCodexDirFallback();
       if (fallback) return fallback;
       return res.status(409).json({
@@ -4138,12 +4173,12 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
 
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const listWorkspaceNodes = async () =>
-      workspaceExecutor === 'codex'
+      isE2bWorkspaceExecutor(workspaceExecutor)
         ? await listSandboxDirectory(orchestratorSessionId, workspaceRoot, dirPath)
         : (await ensureOpencodeServer(orchestratorSessionId, workspaceRoot),
           await listOpencodeDirectory(orchestratorSessionId, workspaceRoot, dirPath));
     let nodes = await listWorkspaceNodes();
-    if (workspaceExecutor === 'codex' && dirPath === '' && nodes.length === 0) {
+    if (isE2bWorkspaceExecutor(workspaceExecutor) && dirPath === '' && nodes.length === 0) {
       const runtime = (session?.runtime || {}) as Record<string, unknown>;
       const restoreSourceKey =
         asText(runtime.codexRestoreSourceKey) || asText(runtime.r2RestoreSourceKey) || asText(runtime.r2ArchiveKey);
@@ -4196,12 +4231,12 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       nextCursor: end < total ? end : null,
     };
     const shouldUseHistoricalCache =
-      workspaceExecutor === 'codex' &&
+      isE2bWorkspaceExecutor(workspaceExecutor) &&
       dirPath === '' &&
       total === 0 &&
       Boolean(codexCachedPage && codexCachedPage.items.length > 0);
     const shouldUseMessageHistoryFallback =
-      workspaceExecutor === 'codex' &&
+      isE2bWorkspaceExecutor(workspaceExecutor) &&
       dirPath === '' &&
       total === 0 &&
       !shouldUseHistoricalCache;
@@ -4233,7 +4268,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       }
     }
 
-    if (workspaceExecutor === 'codex') {
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
         tenantKey,
@@ -4260,7 +4295,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const includeIgnored = !['0', 'false', 'no'].includes(
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
-    if (workspaceExecutor === 'codex') {
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const cached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4318,7 +4353,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
           cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
         });
       }
-      if (workspaceExecutor === 'codex') {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4337,7 +4372,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
 
     const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
     if (!orchestratorSessionId) {
-      if (workspaceExecutor === 'codex') {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4358,8 +4393,12 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       });
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
-    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
-      if (workspaceExecutor === 'codex') {
+    if (
+      !isE2bWorkspaceExecutor(workspaceExecutor) &&
+      runtimeStatus?.status &&
+      runtimeStatus.status !== 'ready'
+    ) {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4385,7 +4424,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const maxEntries = clampNumber(Number(req.query.maxEntries || 2000), 200, 5000);
 
     const parsed =
-      workspaceExecutor === 'codex'
+      isE2bWorkspaceExecutor(workspaceExecutor)
         ? await buildWorkspaceTreeFromSandbox({
             orchestratorSessionId,
             workspaceRoot,
@@ -4407,7 +4446,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       60000
     );
     await taskCreationCacheStore.setWorkspaceTree(tenantKey, sessionId, parsed, ttlMs);
-    if (workspaceExecutor === 'codex') {
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
         tenantKey,
@@ -4426,7 +4465,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const tenantKey = resolveTenantKey(req);
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
-    if (resolveWorkspaceExecutor(session) === 'codex') {
+    if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4496,7 +4535,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
           cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
         });
       }
-      if (workspaceExecutor === 'codex') {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4515,7 +4554,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 
     const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
     if (!orchestratorSessionId) {
-      if (workspaceExecutor === 'codex') {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4537,7 +4576,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     }
     const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
     if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
-      if (workspaceExecutor === 'codex') {
+      if (isE2bWorkspaceExecutor(workspaceExecutor)) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4577,7 +4616,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     let isBinary: boolean;
     let mimeType: string;
 
-    if (workspaceExecutor === 'codex') {
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
       const bytes = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
       const buffer = Buffer.from(bytes);
@@ -4670,7 +4709,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
-    if (workspaceExecutor === 'codex') {
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
         tenantKey,
@@ -4696,7 +4735,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         await markSandboxClosed(orchestratorSessionId);
       }
       const normalizedPath = String(req.query.path || '').trim().replace(/\\/g, '/');
-      if (resolveWorkspaceExecutor(session) === 'codex') {
+      if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -4718,7 +4757,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     }
     const relativePath = String(req.query.path || '').trim();
     const normalizedPath = relativePath.replace(/\\/g, '/');
-    if (resolveWorkspaceExecutor(session) === 'codex') {
+    if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4748,6 +4787,82 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       success: false,
       error: getPublicErrorMessage('读取工作区文件失败，请稍后重试'),
     });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/workspace/raw/*
+ * 以原始内容返回会话工作区内的单个文件，供 iframe 预览和新标签页打开使用
+ */
+router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
+    if (!wildcardPath || isUnsafePath(wildcardPath)) {
+      return res.status(400).type('text/plain; charset=utf-8').send('非法路径');
+    }
+
+    const normalizedPath = wildcardPath.replace(/\\/g, '/');
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!session) {
+      return res.status(404).type('text/plain; charset=utf-8').send('会话不存在');
+    }
+
+    const workspaceExecutor = resolveWorkspaceExecutor(session);
+    const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+    if (!orchestratorSessionId) {
+      return res.status(409).type('text/plain; charset=utf-8').send('执行环境未就绪，无法读取文件');
+    }
+
+    const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+    if (runtimeStatus?.status && runtimeStatus.status !== 'ready') {
+      return res.status(409).type('text/plain; charset=utf-8').send('执行环境未启动，无法读取文件');
+    }
+
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    let buffer: Buffer;
+    let mimeType: string;
+
+    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
+      const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
+      buffer = Buffer.from(await e2bConnector.readFile(orchestratorSessionId, absolutePath));
+      mimeType = resolveMimeType(normalizedPath);
+    } else {
+      await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
+      const content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
+      const isBinary = content.type !== 'text' || content.encoding === 'base64';
+      mimeType = resolveMimeType(normalizedPath, content.mimeType);
+      if (isBinary) {
+        const encoded =
+          content.encoding === 'base64'
+            ? String(content.content || '').trim()
+            : Buffer.from(String(content.content || ''), 'utf8').toString('base64');
+        buffer = Buffer.from(encoded, 'base64');
+      } else {
+        buffer = Buffer.from(String(content.content || ''), 'utf8');
+      }
+    }
+
+    await touchSandbox(orchestratorSessionId, 'workspace_file');
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader(
+      'Content-Type',
+      isTextLikeMimeType(mimeType) ? `${mimeType}; charset=utf-8` : mimeType
+    );
+    return res.status(200).send(buffer);
+  } catch (error: any) {
+    const { sessionId } = req.params;
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (isSandboxNotFoundError(error)) {
+      const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
+      if (orchestratorSessionId) {
+        await markSandboxClosed(orchestratorSessionId);
+      }
+      return res.status(409).type('text/plain; charset=utf-8').send('执行环境已关闭，请重新启动');
+    }
+    console.error('获取工作区原始文件失败:', error);
+    return res.status(500).type('text/plain; charset=utf-8').send('获取工作区原始文件失败，请稍后重试');
   }
 });
 

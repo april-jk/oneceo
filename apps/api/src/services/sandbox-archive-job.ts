@@ -123,6 +123,11 @@ function isSandboxNotFound(error: unknown): boolean {
   return false;
 }
 
+function isMissingArchiveContextError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return message.includes('无法确定归档目录：缺少 taskSessionId 与 workspaceRoot');
+}
+
 function isDbConnectionError(error: unknown): boolean {
   if (!error) return false;
   const texts: string[] = [];
@@ -223,7 +228,7 @@ async function runOnce(): Promise<void> {
         continue;
       }
       const archiveStatus = String((metadata as any).archiveStatus || '').toLowerCase();
-      if (archiveStatus === 'in_progress') {
+      if (archiveStatus === 'in_progress' || archiveStatus === 'skipped_missing_context') {
         continue;
       }
 
@@ -274,6 +279,24 @@ async function runOnce(): Promise<void> {
             lastDbFailureAt = Date.now();
             console.warn('[SANDBOX_ARCHIVE_JOB] db error', env.sessionId, error);
             return;
+          }
+          if (isMissingArchiveContextError(error)) {
+            console.warn('[SANDBOX_ARCHIVE_JOB] idle archive skipped due to missing context', env.sessionId);
+            try {
+              await sandboxArchiveJobDeps.setSandboxMetadata(env.sessionId, {
+                archiveStatus: 'skipped_missing_context',
+                archiveReason: 'idle_timeout',
+                archiveError: error instanceof Error ? error.message : String(error),
+              });
+            } catch (metaError) {
+              if (isDbConnectionError(metaError)) {
+                lastDbFailureAt = Date.now();
+                console.warn('[SANDBOX_ARCHIVE_JOB] set skip metadata failed (db)', env.sessionId, metaError);
+                return;
+              }
+              console.warn('[SANDBOX_ARCHIVE_JOB] set skip metadata failed', env.sessionId, metaError);
+            }
+            continue;
           }
           if (isSandboxNotFound(error)) {
             try {

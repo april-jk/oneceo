@@ -84,6 +84,7 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
+  deployTaskCreationSession,
   getWorkspaceRawFileUrl,
   uploadTaskCreationAttachment,
 } from "@/lib/task-creation-client";
@@ -685,6 +686,32 @@ export default function Home() {
     setPreviewOpen(true);
   };
 
+  const deployFromArtifactCard = async (_path: string) => {
+    if (!sessionId) {
+      toast.error("缺少会话信息");
+      return;
+    }
+
+    try {
+      const result = await deployTaskCreationSession(sessionId);
+      setPreviewWorkspacePath(null);
+      setPreviewTab("deployment");
+      setPreviewOpen(true);
+
+      const deploymentUrl = result?.latestStaticUrl || result?.latestUrl || "";
+      if (deploymentUrl) {
+        toast.success(
+          `已触发部署：${deploymentUrl.replace(/^https?:\/\//, "")}`,
+        );
+      } else {
+        toast.success("已触发部署");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "触发部署失败");
+      throw error;
+    }
+  };
+
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
   const activeAltusReplay =
@@ -876,6 +903,7 @@ export default function Home() {
                   onOpenDiffPreview={openDiffPreview}
                   onOpenManagedReplay={openAltusReplay}
                   onOpenWorkspacePreview={openWorkspacePreview}
+                  onDeployArtifact={deployFromArtifactCard}
                 />
               ))}
             </AnimatePresence>
@@ -3119,6 +3147,7 @@ function MessageBubble({
   onOpenDiffPreview,
   onOpenManagedReplay,
   onOpenWorkspacePreview,
+  onDeployArtifact,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -3134,6 +3163,7 @@ function MessageBubble({
     },
   ) => void;
   onOpenWorkspacePreview?: (path: string) => void;
+  onDeployArtifact?: (path: string) => Promise<void> | void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -3303,6 +3333,7 @@ function MessageBubble({
           artifacts={item.artifacts}
           displayMode="web-preview"
           onOpenViewer={onOpenWorkspacePreview}
+          onDeployRequested={onDeployArtifact}
         />
       </div>
     );

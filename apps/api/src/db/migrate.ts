@@ -5,7 +5,58 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { db, ensureDatabaseConnection } from '../config/database';
+import { db, databasePool, ensureDatabaseConnection } from '../config/database';
+
+type SchemaReadinessReport = {
+  ready: boolean;
+  missing: string[];
+};
+
+const REQUIRED_TABLES = [
+  'task_creation_sessions',
+  'conversation_messages',
+  'task_session_recent_messages',
+  'task_session_workspace_cache',
+  'task_session_runs',
+  'task_session_run_events',
+  'task_session_sandbox_bindings',
+  'task_session_connector_snapshots',
+  'sandbox_execution_environments',
+  'user_connector_accounts',
+  'user_connector_profiles',
+  'user_codex_runtime_configs',
+  'task_session_connector_bindings',
+  'connector_auth_requests',
+] as const;
+
+const REQUIRED_COLUMNS = [
+  ['conversation_messages', 'message_key'],
+  ['conversation_messages', 'timeline_cursor'],
+  ['conversation_messages', 'runtime_generation'],
+  ['conversation_messages', 'updated_at'],
+  ['task_session_recent_messages', 'message_id'],
+  ['task_session_recent_messages', 'message_key'],
+  ['task_session_recent_messages', 'timeline_cursor'],
+  ['task_session_recent_messages', 'runtime_generation'],
+  ['task_session_recent_messages', 'updated_at'],
+  ['task_session_connector_bindings', 'profile_id'],
+  ['task_session_connector_bindings', 'enabled_tools'],
+  ['task_session_connector_bindings', 'session_config_json'],
+  ['task_session_connector_bindings', 'definition_snapshot_json'],
+  ['connector_auth_requests', 'profile_id'],
+  ['connector_auth_requests', 'profile_draft_json'],
+] as const;
+
+const REQUIRED_INDEXES = [
+  'idx_conversation_messages_session_message_key',
+  'idx_conversation_messages_session_timeline',
+  'idx_task_session_recent_messages_session_message_key',
+  'idx_task_session_recent_messages_session_timeline',
+  'idx_task_session_workspace_cache_session_unique',
+  'idx_task_session_run_events_run_sequence',
+  'idx_task_session_sandbox_bindings_session_id',
+  'idx_task_session_connector_bindings_session_connector',
+] as const;
 
 /**
  * 创建数据库表的 SQL 语句
@@ -524,6 +575,70 @@ CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_session_type
 CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
   ON task_session_workspace_cache(updated_at);
 `;
+
+export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
+  await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
+
+  const [tableResult, columnResult, indexResult] = await Promise.all([
+    databasePool.query<{ table_name: string }>(
+      `
+        select table_name
+        from information_schema.tables
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+      `,
+      [REQUIRED_TABLES]
+    ),
+    databasePool.query<{ table_name: string; column_name: string }>(
+      `
+        select table_name, column_name
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+      `,
+      [Array.from(new Set(REQUIRED_COLUMNS.map(([tableName]) => tableName)))]
+    ),
+    databasePool.query<{ indexname: string }>(
+      `
+        select indexname
+        from pg_indexes
+        where schemaname = 'public'
+          and indexname = any($1::text[])
+      `,
+      [REQUIRED_INDEXES]
+    ),
+  ]);
+
+  const existingTables = new Set(tableResult.rows.map((row) => row.table_name));
+  const existingColumns = new Set(
+    columnResult.rows.map((row) => `${row.table_name}.${row.column_name}`)
+  );
+  const existingIndexes = new Set(indexResult.rows.map((row) => row.indexname));
+  const missing: string[] = [];
+
+  for (const tableName of REQUIRED_TABLES) {
+    if (!existingTables.has(tableName)) {
+      missing.push(`table:${tableName}`);
+    }
+  }
+
+  for (const [tableName, columnName] of REQUIRED_COLUMNS) {
+    if (!existingColumns.has(`${tableName}.${columnName}`)) {
+      missing.push(`column:${tableName}.${columnName}`);
+    }
+  }
+
+  for (const indexName of REQUIRED_INDEXES) {
+    if (!existingIndexes.has(indexName)) {
+      missing.push(`index:${indexName}`);
+    }
+  }
+
+  return {
+    ready: missing.length === 0,
+    missing,
+  };
+}
 
 /**
  * 运行数据库迁移

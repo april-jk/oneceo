@@ -142,6 +142,15 @@
 
 也就是说，`suna` 的“最终卡片”是工具结果视图，不是聊天正文增强。
 
+### 5.4 oneceo 当前落地补充（2026-03-26）
+
+- `apps/web/client/src/components/AltusArtifactPreviewCard.tsx`
+  - 顶部右上角主按钮改为“部署”，不再承担“打开查看器”语义
+  - 首页对话流里的 `managed_artifact_card` 点击后直接调用现有 `deployTaskCreationSession(sessionId)`，联动平台侧部署服务
+  - 部署成功后切到右侧 `OpencodePreviewPanel` 的 `deployment` tab，复用已有部署面板与状态轮询
+- `Open` 按钮继续保留为查看当前产物文件/网页的入口
+- `AltusRunReplayDrawer` 不接部署动作，继续保持 run 回放里的文件查看语义
+
 ## 6. 文件/网页预览的底层组件链
 
 ### 6.1 FileAttachment 是总分发器

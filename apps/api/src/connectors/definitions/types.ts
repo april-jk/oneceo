@@ -7,6 +7,8 @@ export type ConnectorKey =
   | 'vercel'
   | 'postgres';
 
+export type ConnectorCategory = 'app' | 'custom_api' | 'custom_mcp';
+
 export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
 
 export type ConnectorConfigField = {
@@ -35,9 +37,13 @@ export type ConnectorOauthProvider = {
 
 export type ConnectorDefinition = {
   key: ConnectorKey;
+  category: ConnectorCategory;
   name: string;
   description: string;
   icon: string;
+  featured?: boolean;
+  isNew?: boolean;
+  sortOrder?: number;
   authMode: ConnectorAuthMode;
   available: boolean;
   availabilityReason?: string;

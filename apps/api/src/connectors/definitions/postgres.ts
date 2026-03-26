@@ -3,9 +3,11 @@ import type { ConnectorDefinition } from './types';
 export function buildPostgresDefinition(): ConnectorDefinition {
   return {
     key: 'postgres',
+    category: 'app',
     name: 'Postgres',
     description: '历史遗留 Postgres 连接器；当前仅为兼容旧数据保留，不出现在菜单中。',
     icon: 'database',
+    sortOrder: 999,
     authMode: 'dsn',
     available: true,
     configFields: [

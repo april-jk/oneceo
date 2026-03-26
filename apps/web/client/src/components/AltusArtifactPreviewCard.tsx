@@ -12,6 +12,7 @@ import {
   ExternalLink,
   Loader2,
   Monitor,
+  Rocket,
 } from "lucide-react";
 
 export type AltusArtifactFile = {
@@ -24,6 +25,7 @@ type AltusArtifactPreviewCardProps = {
   artifacts: AltusArtifactFile[];
   displayMode?: "artifact-browser" | "web-preview";
   onOpenViewer?: (path: string) => void;
+  onDeployRequested?: (path: string) => Promise<void> | void;
 };
 
 function getFilename(path: string): string {
@@ -41,6 +43,7 @@ export default function AltusArtifactPreviewCard({
   artifacts,
   displayMode = "artifact-browser",
   onOpenViewer,
+  onDeployRequested,
 }: AltusArtifactPreviewCardProps) {
   const normalizedArtifacts = useMemo(() => {
     const unique = new Map<string, AltusArtifactFile>();
@@ -76,6 +79,7 @@ export default function AltusArtifactPreviewCard({
   const [codeFile, setCodeFile] = useState<WorkspaceFile | null>(null);
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [deploying, setDeploying] = useState(false);
 
   useEffect(() => {
     setSelectedPath(defaultPath);
@@ -129,6 +133,18 @@ export default function AltusArtifactPreviewCard({
     ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
     : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
 
+  const handleDeploy = async () => {
+    if (!selectedArtifact || !onDeployRequested || deploying) {
+      return;
+    }
+    try {
+      setDeploying(true);
+      await Promise.resolve(onDeployRequested(selectedArtifact.path));
+    } finally {
+      setDeploying(false);
+    }
+  };
+
   if (visibleArtifacts.length === 0) {
     return null;
   }
@@ -151,7 +167,23 @@ export default function AltusArtifactPreviewCard({
                   <div className="min-w-0 text-sm font-medium truncate">
                     {getFilename(selectedArtifact?.path || previewPath || "artifact")}
                   </div>
-                  {selectedArtifact && onOpenViewer ? (
+                  {selectedArtifact && onDeployRequested ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 rounded-full"
+                      onClick={() => void handleDeploy()}
+                      disabled={deploying}
+                      title="Deploy website"
+                    >
+                      {deploying ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Rocket className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  ) : selectedArtifact && onOpenViewer ? (
                     <Button
                       type="button"
                       variant="ghost"

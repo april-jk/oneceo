@@ -6,17 +6,11 @@ import {
   Book,
   Check,
   CheckCircle2,
-  Cloud,
-  Database,
-  Figma,
-  Github,
   Link2,
   Loader2,
-  NotepadText,
   Plug,
   Search,
   Settings2,
-  Slack,
   Unplug,
 } from "lucide-react";
 
@@ -49,6 +43,7 @@ import {
   type ConnectorProfile,
   type SessionConnectorStatus,
 } from "@/lib/connectors-client";
+import { resolveConnectorIcon } from "@/lib/connector-ui";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { cn } from "@/lib/utils";
 
@@ -56,16 +51,6 @@ interface ConnectorDialogProps {
   sessionId?: string | null;
   className?: string;
 }
-
-const iconMap = {
-  github: Github,
-  slack: Slack,
-  notion: NotepadText,
-  supabase: Database,
-  figma: Figma,
-  vercel: Cloud,
-  postgres: Database,
-} as const;
 
 function formatStatus(value: string | null | undefined) {
   if (!value) return "unknown";
@@ -225,7 +210,9 @@ export default function ConnectorDialog({
 
   const mergedConnectors = useMemo(
     () =>
-      catalog.map((item) => {
+      catalog
+        .filter((item) => item.category === "app")
+        .map((item) => {
         const connectorProfiles = profilesByConnector[item.key] || [];
         const selectedProfileId = resolvePreferredProfileId(
           connectorProfiles,
@@ -442,7 +429,7 @@ export default function ConnectorDialog({
                         Boolean(session?.attached) &&
                         session?.attachedProfileId === selectedProfileId;
                       const isGithub = item.key === "github";
-                      const DetailIcon = iconMap[item.icon as keyof typeof iconMap] || Link2;
+                      const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                       const canAttach =
                         Boolean(sessionId) &&
                         item.available &&
@@ -741,7 +728,10 @@ export default function ConnectorDialog({
                         >
                           <div className="flex items-center gap-2">
                             <div className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-muted text-foreground/90">
-                              <Github className="h-3.5 w-3.5" />
+                              {(() => {
+                                const GithubIcon = resolveConnectorIcon(item.icon);
+                                return <GithubIcon className="h-3.5 w-3.5" />;
+                              })()}
                             </div>
                             <span className="text-[13px] text-foreground">配置 GitHub</span>
                           </div>
@@ -767,7 +757,7 @@ export default function ConnectorDialog({
                   const attachedToSelected =
                     Boolean(session?.attached) &&
                     session?.attachedProfileId === selectedProfileId;
-                  const DetailIcon = iconMap[item.icon as keyof typeof iconMap] || Link2;
+                  const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                   const guide = CONNECTOR_GUIDES[item.key];
                   const canAttach =
                     Boolean(sessionId) &&

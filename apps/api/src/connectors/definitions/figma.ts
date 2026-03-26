@@ -8,9 +8,12 @@ export function buildFigmaDefinition(): ConnectorDefinition {
   const remoteUrl = asText(process.env.FIGMA_MCP_REMOTE_URL);
   return {
     key: 'figma',
+    category: 'app',
     name: 'Figma',
     description: '在平台外部管理 Figma access token，并把对应 MCP 连接投影到 sandbox 内使用。',
     icon: 'figma',
+    isNew: true,
+    sortOrder: 50,
     authMode: 'token',
     available: Boolean(remoteUrl),
     availabilityReason: remoteUrl ? undefined : '部署环境未配置 Figma MCP remote URL',

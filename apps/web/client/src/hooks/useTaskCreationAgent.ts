@@ -3518,10 +3518,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [clearReconnectTimer]);
 
   // 回答澄清问题
-  const answerQuestion = useCallback((answer: string) => {
+  const answerQuestion = useCallback((answer: string, options?: SendInputOptions) => {
     if (isManagedAltusMode()) {
       void sendChatInputRef.current(answer, {
-        sessionId: sessionId || undefined,
+        ...(options || {}),
+        sessionId: options?.sessionId || sessionId || undefined,
       });
       setCurrentQuestion(null);
       return;
@@ -3531,25 +3532,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
     const messageKey = generateClientMessageKey('user');
+    const messageMetadata = {
+      ...(options?.metadata || {}),
+      messageKey,
+    };
 
-    trackPendingLocalMessage(sessionId, {
+    trackPendingLocalMessage(options?.sessionId || sessionId, {
       messageKey,
       type: 'user_response',
       content: answer,
-      metadata: {
-        messageKey,
-      },
-      sessionId: sessionId || undefined,
+      metadata: messageMetadata,
+      sessionId: options?.sessionId || sessionId || undefined,
     });
 
     wsRef.current.send(
       JSON.stringify({
         type: 'user_response',
         content: answer,
-        sessionId: sessionId || undefined,
-        metadata: {
-          messageKey,
-        },
+        sessionId: options?.sessionId || sessionId || undefined,
+        metadata: messageMetadata,
       })
     );
 
@@ -3560,9 +3561,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           messageKey,
           type: 'user_response',
           content: answer,
-          metadata: {
-            messageKey,
-          },
+          metadata: messageMetadata,
+          sessionId: options?.sessionId || sessionId || undefined,
         },
         WELCOME_MESSAGE
       )

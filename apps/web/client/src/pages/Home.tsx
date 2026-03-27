@@ -525,12 +525,17 @@ export default function Home() {
 
   async function submitPrompt(rawInput: string) {
     const trimmed = rawInput.trim();
-    const hasAttachments = attachments.length > 0;
+    const attachmentDrafts = [...attachments];
+    const hasAttachments = attachmentDrafts.length > 0;
     const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
     const baseText =
       trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!baseText) return;
     const altusMode = readAltusMode();
+
+    if (hasAttachments) {
+      setAttachments([]);
+    }
 
     try {
       let activeSessionId = (sessionId || "").trim();
@@ -541,7 +546,7 @@ export default function Home() {
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (altusMode !== "managed" && hasAttachments) {
         uploadedAttachments = await Promise.all(
-          attachments.map((item) =>
+          attachmentDrafts.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
           ),
         );
@@ -556,7 +561,7 @@ export default function Home() {
                 originalInput: displayText,
               }
             : undefined,
-          files: hasAttachments ? attachments.map((item) => item.file) : undefined,
+          files: hasAttachments ? attachmentDrafts.map((item) => item.file) : undefined,
         });
       } else {
         await sendChatInput(
@@ -572,11 +577,15 @@ export default function Home() {
           },
         );
       }
-
-      if (hasAttachments) {
-        setAttachments([]);
-      }
     } catch (error) {
+      if (hasAttachments) {
+        setAttachments((current) =>
+          mergePendingAttachments(
+            current,
+            attachmentDrafts.map((item) => item.file),
+          ).attachments,
+        );
+      }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
   }
@@ -605,9 +614,72 @@ export default function Home() {
     setMessage("");
   };
 
+  async function submitQuestionAnswer(rawInput: string) {
+    const trimmed = rawInput.trim();
+    const attachmentDrafts = [...attachments];
+    const hasAttachments = attachmentDrafts.length > 0;
+    const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
+    const baseText =
+      trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!baseText) return;
+
+    const altusMode = readAltusMode();
+    const activeSessionId = (sessionId || "").trim() || undefined;
+
+    if (hasAttachments) {
+      setAttachments([]);
+    }
+
+    try {
+      let uploadedAttachments: UploadedTaskAttachment[] = [];
+      if (altusMode !== "managed" && hasAttachments && activeSessionId) {
+        uploadedAttachments = await Promise.all(
+          attachmentDrafts.map((item) =>
+            uploadTaskCreationAttachment(activeSessionId, item.file),
+          ),
+        );
+      }
+
+      exitHistoryView();
+      if (altusMode === "managed") {
+        await answerQuestion(baseText, {
+          sessionId: activeSessionId,
+          metadata: hasAttachments
+            ? {
+                originalInput: displayText,
+              }
+            : undefined,
+          files: hasAttachments ? attachmentDrafts.map((item) => item.file) : undefined,
+        });
+      } else {
+        await answerQuestion(
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
+          {
+            sessionId: activeSessionId,
+            metadata: uploadedAttachments.length
+              ? {
+                  attachments: uploadedAttachments,
+                  originalInput: displayText,
+                }
+              : undefined,
+          },
+        );
+      }
+    } catch (error) {
+      if (hasAttachments) {
+        setAttachments((current) =>
+          mergePendingAttachments(
+            current,
+            attachmentDrafts.map((item) => item.file),
+          ).attachments,
+        );
+      }
+      toast.error(error instanceof Error ? error.message : "附件发送失败");
+    }
+  }
+
   const handleAnswerQuestion = (answer: string) => {
-    exitHistoryView();
-    answerQuestion(answer);
+    void submitQuestionAnswer(answer);
   };
 
   const quickActions = [
@@ -978,19 +1050,16 @@ export default function Home() {
                   rows={2}
                 />
 
-                {!currentQuestion ? (
-                  <AttachmentChipList
-                    attachments={attachments}
-                    onRemove={removeAttachment}
-                  />
-                ) : null}
+                <AttachmentChipList
+                  attachments={attachments}
+                  onRemove={removeAttachment}
+                />
 
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
                     <div className="flex items-center gap-1">
                       <AttachmentPickerButton
                         onSelectFiles={handleAttachmentSelect}
-                        disabled={Boolean(currentQuestion)}
                       />
 
                       <ConnectorDialog sessionId={sessionId} />
@@ -1082,7 +1151,7 @@ export default function Home() {
                             disabled={
                               isInterrupting ||
                               (currentQuestion
-                                ? !message.trim()
+                                ? !message.trim() && attachments.length === 0
                                 : showStopButton
                                   ? false
                                   : !message.trim() && attachments.length === 0)

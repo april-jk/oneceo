@@ -90,12 +90,26 @@ export type StartTaskCreationManagedRunInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type SubmitTaskCreationManagedInput = {
+  sessionId?: string;
+  content: string;
+  messageKey?: string;
+  metadata?: Record<string, unknown>;
+  files?: File[];
+};
+
 export type TaskCreationUploadedAttachment = {
   name: string;
   path: string;
   size: number;
   mimeType?: string;
   uploadedAt?: string;
+};
+
+export type SubmitTaskCreationManagedInputResult = {
+  sessionId: string;
+  attachments: TaskCreationUploadedAttachment[];
+  run: TaskCreationManagedRunSummary;
 };
 
 export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
@@ -1001,6 +1015,39 @@ export async function uploadTaskCreationAttachment(
   const result = (await response.json()) as { data?: TaskCreationUploadedAttachment };
   if (!result?.data) {
     throw new Error("attachment upload empty");
+  }
+  return result.data;
+}
+
+export async function submitTaskCreationManagedInput(
+  input: SubmitTaskCreationManagedInput
+): Promise<SubmitTaskCreationManagedInputResult> {
+  const formData = new FormData();
+  if (input.sessionId) {
+    formData.set("sessionId", input.sessionId);
+  }
+  formData.set("content", input.content);
+  if (input.messageKey) {
+    formData.set("messageKey", input.messageKey);
+  }
+  if (input.metadata && Object.keys(input.metadata).length > 0) {
+    formData.set("metadata", JSON.stringify(input.metadata));
+  }
+  for (const file of input.files || []) {
+    formData.append("files", file, file.name);
+  }
+
+  const response = await fetch(`${getApiBaseUrl()}/api/altus-managed/inputs`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: SubmitTaskCreationManagedInputResult };
+  if (!result?.data?.run) {
+    throw new Error("managed input result empty");
   }
   return result.data;
 }

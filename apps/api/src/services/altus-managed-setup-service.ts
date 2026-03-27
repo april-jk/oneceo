@@ -10,7 +10,8 @@ import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
-import { asText, type ChatMessage } from './altus-managed-shared';
+import { asText, pickObject, type ChatMessage } from './altus-managed-shared';
+import { buildAttachmentContextPrompt } from './task-attachment-service';
 
 function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
   const normalized = asText(role).toLowerCase();
@@ -30,6 +31,46 @@ function isHistoryMessageRelevant(input: { role: unknown; messageType: unknown }
   if (messageType === 'opencode_event') return false;
   if (messageType === 'error' || messageType === 'opencode_error') return false;
   return true;
+}
+
+function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>): string {
+  const seenPaths = new Set<string>();
+  const contexts: Array<{
+    name: string;
+    path: string;
+    size: number;
+    mimeType?: string;
+    excerpt: string;
+    truncated: boolean;
+    extractedAt: string;
+    extraction: 'utf8_text';
+  }> = [];
+
+  for (const item of history) {
+    const metadata = pickObject(item.metadata);
+    const rawContexts = Array.isArray(metadata.attachmentContext) ? metadata.attachmentContext : [];
+    for (const raw of rawContexts) {
+      const record = pickObject(raw);
+      const path = asText(record.path);
+      const excerpt = asText(record.excerpt);
+      if (!path || !excerpt || seenPaths.has(path)) {
+        continue;
+      }
+      seenPaths.add(path);
+      contexts.push({
+        name: asText(record.name) || path.split('/').pop() || 'attachment',
+        path,
+        size: typeof record.size === 'number' && Number.isFinite(record.size) ? record.size : 0,
+        mimeType: asText(record.mimeType) || undefined,
+        excerpt,
+        truncated: record.truncated === true,
+        extractedAt: asText(record.extractedAt) || new Date(0).toISOString(),
+        extraction: 'utf8_text',
+      });
+    }
+  }
+
+  return buildAttachmentContextPrompt(contexts.slice(-6));
 }
 
 export class AltusManagedSetupService {
@@ -198,6 +239,7 @@ export class AltusManagedSetupService {
     systemPrompt: string
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
+    const attachmentContextPrompt = collectAttachmentContextPrompt(history);
     const relevant = history
       .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
       .slice(-24)
@@ -205,17 +247,32 @@ export class AltusManagedSetupService {
         role: normalizeHistoryRole(item.role)!,
         content: asText(item.content),
       }));
+    const latestHistory = relevant[relevant.length - 1];
+    const shouldAppendCurrentInput =
+      latestHistory?.role !== 'user' || asText(latestHistory.content) !== asText(currentInput);
 
     return [
       {
         role: 'system' as const,
         content: systemPrompt,
       },
+      ...(attachmentContextPrompt
+        ? [
+            {
+              role: 'system' as const,
+              content: attachmentContextPrompt,
+            },
+          ]
+        : []),
       ...relevant,
-      {
-        role: 'user' as const,
-        content: currentInput,
-      },
+      ...(shouldAppendCurrentInput
+        ? [
+            {
+              role: 'user' as const,
+              content: currentInput,
+            },
+          ]
+        : []),
     ];
   }
 }

@@ -81,7 +81,8 @@ export class AltusManagedRunEntryService {
     await this.eventWriter.appendRunEvent(run.id, sessionId, 'run_ack', {
       status: 'queued',
       content: 'managed run 已创建',
-      messageKey,
+      sourceMessageKey: messageKey,
+      messageKey: `managed:${run.id}:run_ack`,
     });
 
     const state = new AltusRunState({

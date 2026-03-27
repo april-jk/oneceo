@@ -45,6 +45,15 @@ function getMessageAttachments(
   });
 }
 
+function readAltusMode(): "sandbox" | "managed" {
+  if (typeof window === "undefined") return "sandbox";
+  try {
+    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
+  } catch {
+    return "sandbox";
+  }
+}
+
 export default function TaskCreationChat({
   onPlanGenerated,
   initialInput,
@@ -87,10 +96,11 @@ export default function TaskCreationChat({
 
     hasSentInitialInputRef.current = true;
     void (async () => {
+      const altusMode = readAltusMode();
       let targetSessionId = (sessionId || "").trim() || undefined;
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
-      if (hasAttachments) {
+      if (altusMode !== "managed" && hasAttachments) {
         targetSessionId = await ensureSession(text || "已添加附件");
         uploadedAttachments = await Promise.all(
           initialAttachments.map((file) =>
@@ -99,18 +109,30 @@ export default function TaskCreationChat({
         );
       }
 
-      await sendChatInput(
-        appendAttachmentsToPrompt(baseText, uploadedAttachments),
-        {
+      if (altusMode === "managed") {
+        await sendChatInput(baseText, {
           sessionId: targetSessionId,
-          metadata: uploadedAttachments.length
+          metadata: hasAttachments
             ? {
-                attachments: uploadedAttachments,
                 originalInput: text || "已添加附件",
               }
             : undefined,
-        },
-      );
+          files: hasAttachments ? initialAttachments : undefined,
+        });
+      } else {
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
+          {
+            sessionId: targetSessionId,
+            metadata: uploadedAttachments.length
+              ? {
+                  attachments: uploadedAttachments,
+                  originalInput: text || "已添加附件",
+                }
+              : undefined,
+          },
+        );
+      }
     })().catch((error) => {
       console.error("任务创建附件发送失败:", error);
       toast.error(error instanceof Error ? error.message : "附件发送失败");

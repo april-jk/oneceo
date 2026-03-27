@@ -114,6 +114,15 @@ function escapeMessageKeySelector(value: string): string {
   return value.replace(/["\\]/g, "\\$&");
 }
 
+function readAltusMode(): "sandbox" | "managed" {
+  if (typeof window === "undefined") return "sandbox";
+  try {
+    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
+  } catch {
+    return "sandbox";
+  }
+}
+
 function readPersistedScrollAnchor(
   raw: string | null,
 ): PersistedMessageScrollAnchor | null {
@@ -521,15 +530,16 @@ export default function Home() {
     const baseText =
       trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!baseText) return;
+    const altusMode = readAltusMode();
 
     try {
       let activeSessionId = (sessionId || "").trim();
-      if (hasAttachments && !activeSessionId) {
+      if (altusMode !== "managed" && hasAttachments && !activeSessionId) {
         activeSessionId = await ensureSession(displayText || "新建任务会话");
       }
 
       let uploadedAttachments: UploadedTaskAttachment[] = [];
-      if (hasAttachments) {
+      if (altusMode !== "managed" && hasAttachments) {
         uploadedAttachments = await Promise.all(
           attachments.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
@@ -538,20 +548,32 @@ export default function Home() {
       }
 
       exitHistoryView();
-      await sendChatInput(
-        appendAttachmentsToPrompt(baseText, uploadedAttachments),
-        {
+      if (altusMode === "managed") {
+        await sendChatInput(baseText, {
           sessionId: activeSessionId || undefined,
-          metadata: uploadedAttachments.length
+          metadata: hasAttachments
             ? {
-                attachments: uploadedAttachments,
                 originalInput: displayText,
               }
             : undefined,
-        },
-      );
+          files: hasAttachments ? attachments.map((item) => item.file) : undefined,
+        });
+      } else {
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
+          {
+            sessionId: activeSessionId || undefined,
+            metadata: uploadedAttachments.length
+              ? {
+                  attachments: uploadedAttachments,
+                  originalInput: displayText,
+                }
+              : undefined,
+          },
+        );
+      }
 
-      if (uploadedAttachments.length) {
+      if (hasAttachments) {
         setAttachments([]);
       }
     } catch (error) {

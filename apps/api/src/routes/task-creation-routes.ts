@@ -52,87 +52,16 @@ import {
   resolveRemoteAttachmentTarget,
   type RemoteAttachmentProvider,
 } from '../services/remote-attachment-service';
+import {
+  TASK_ATTACHMENT_MAX_BYTES,
+  isAllowedAttachmentFile,
+  sanitizeAttachmentName,
+} from '../services/task-attachment-service';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
-const TASK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  'txt',
-  'md',
-  'markdown',
-  'mdx',
-  'csv',
-  'tsv',
-  'json',
-  'jsonl',
-  'xml',
-  'yaml',
-  'yml',
-  'log',
-  'rtf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'pdf',
-  'odt',
-  'ods',
-  'odp',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'svg',
-  'bmp',
-  'ico',
-  'tif',
-  'tiff',
-  'heic',
-  'heif',
-  'sql',
-  'ini',
-  'cfg',
-  'conf',
-  'toml',
-  'env',
-  'sh',
-  'py',
-  'js',
-  'jsx',
-  'ts',
-  'tsx',
-  'css',
-  'scss',
-  'less',
-  'html',
-  'htm',
-]);
-const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
-  'application/json',
-  'application/ld+json',
-  'application/xml',
-  'application/yaml',
-  'application/x-yaml',
-  'application/pdf',
-  'application/rtf',
-  'application/msword',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/vnd.oasis.opendocument.presentation',
-  'application/x-sh',
-  'application/sql',
-]);
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const recentHistoryHydrationQueuedAt = new Map<string, number>();
-const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
 const DEFAULT_SESSION_TITLE = '新建任务会话';
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
@@ -1347,33 +1276,6 @@ function normalizeWorkspacePath(input: string): string {
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function sanitizeAttachmentName(input: string): string {
-  const raw = input.split(/[\\/]/).pop() || 'attachment';
-  const normalized = raw.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
-  return normalized.slice(0, 120) || 'attachment';
-}
-
-function getAttachmentExtension(input: string): string {
-  const normalized = (input || '').trim().toLowerCase();
-  const base = normalized.split(/[\\/]/).pop() || '';
-  const dotIndex = base.lastIndexOf('.');
-  if (dotIndex < 0) return '';
-  return base.slice(dotIndex + 1);
-}
-
-function isAllowedAttachmentFile(input: { name: string; mimeType?: string }): boolean {
-  const extension = getAttachmentExtension(input.name);
-  if (extension && ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
-    return true;
-  }
-  const mimeType = (input.mimeType || '').trim().toLowerCase();
-  if (!mimeType) return false;
-  if (ALLOWED_ATTACHMENT_MIME_TYPES.has(mimeType)) {
-    return true;
-  }
-  return ALLOWED_ATTACHMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
 }
 
 function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {

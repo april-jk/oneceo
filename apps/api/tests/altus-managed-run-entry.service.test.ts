@@ -102,6 +102,9 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   const eventCall = setupCalls.find((entry) => entry.type === 'event') as any;
   assert.equal(eventCall.args[0], 'run-1');
   assert.equal(eventCall.args[2], 'run_ack');
+  assert.equal(eventCall.args[3].sourceMessageKey, 'msg-1');
+  assert.equal(eventCall.args[3].messageKey, 'managed:run-1:run_ack');
+  assert.notEqual(eventCall.args[3].messageKey, 'msg-1');
 
   assert.equal(capturedState?.input.runId, 'run-1');
   assert.equal(capturedState?.input.sessionId, 'session-1');

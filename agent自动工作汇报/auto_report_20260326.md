@@ -33,3 +33,17 @@
 - 前端设置页 `apps/web/client/src/components/ConnectorCenterPanel.tsx` 已改为搜索、推荐区、应用区、profile 选择、OAuth/保存/默认项/删除的统一面板，不再使用旧的左列列表 + 嵌套弹层作为一级入口。
 - 会话页 `apps/web/client/src/components/ConnectorDialog.tsx` 已收口为仅消费 `app` 类 catalog 和 profile 挂载，不再承担设置页配置职责。
 - 已完成 `pnpm --filter web check` 和连接器相关定向测试；`pnpm --filter api type-check` 仍被仓库内既有历史错误阻塞，本次未继续扩散处理无关模块。
+
+## 新增工作记录：PPT 办公 skill 附件模板
+
+- 复核了当前 skill 链路，确认 `apps/web` 里的“使用技能”目前是生成 `skill brief markdown` 附件，不是直接调用 OSAC 热加载；而 `apps/api/src/services/osac-agent-service.ts` 在 E2B 模式下仍明确不支持 `LOAD_SKILL`。
+- 已新增 `docs/agent研发文档/技能附件_PPT办公技能模板设计.md`，说明本轮为什么先沿用 skill 附件链路，并记录外部 presentation skills 的参照点。
+- 已将 `AttachmentPickerButton` 中内联的 skill 模板抽到独立模块，新增 `PPT 办公` 模板，便于后续继续补办公类 skills。
+- 新的 PPT skill 会要求后续代理按“结论先行、逐页大纲、视觉建议、speaker notes、最终 PPTX 或可导出 slide source”的方式交付。
+
+## 新增工作记录：参照 MiniMax Office skills 扩展办公模板
+
+- 按用户要求参照 `MiniMax-AI/skills` 的 `pptx-generator`、`minimax-docx`、`minimax-xlsx` 三个 Office 相关 skill，对现有模板体系做了二次收敛。
+- 已把 Office 模板从单个 `PPT 办公` 扩展为三项：`PPT 办公`、`Word 文档`、`Excel 表格`。
+- 改进点不是简单改文案，而是把 MiniMax 里的“任务分流”思路带进模板：PPT 区分 create/edit/read，Word 区分新建/编辑/套模板，Excel 区分分析/新建/编辑/校验。
+- 已同步把设计文档升级为 Office 套件视角，并更新前端回归用例，使其按模板源自动校验所有 skill 项是否在菜单中可见。

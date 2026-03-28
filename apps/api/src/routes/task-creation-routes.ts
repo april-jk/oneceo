@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
+  taskSessionRunDAO,
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
@@ -57,6 +58,8 @@ import {
   isAllowedAttachmentFile,
   sanitizeAttachmentName,
 } from '../services/task-attachment-service';
+import { downloadFromR2 } from '../services/r2-client';
+import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
@@ -821,6 +824,25 @@ async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot
   }
 }
 
+async function syncTaskSessionSandboxBinding(
+  sessionId: string,
+  sandboxId: string,
+  workspaceRoot: string | null | undefined
+) {
+  const normalizedSandboxId = asText(sandboxId);
+  if (!normalizedSandboxId) return;
+  const resolvedWorkspaceRoot = asText(workspaceRoot) || resolveOpencodeWorkspacePath(sessionId);
+  await taskSessionRunDAO.upsertSandboxBinding({
+    sessionId,
+    sandboxId: normalizedSandboxId,
+    workspaceRoot: resolvedWorkspaceRoot,
+    status: 'ready',
+    metadataJson: {
+      provider: 'e2b',
+    },
+  });
+}
+
 function resolveRuntimeExecutor(session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime'>): 'opencode' | 'codex' {
   const preferred =
     asText(session.runtime?.executor) ||
@@ -860,6 +882,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
             },
           });
         }
+        await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         return {
@@ -893,6 +916,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
     previousExecutorSessionId:
       executor === 'codex' ? session.runtime?.executorSessionId || undefined : undefined,
   });
+  await syncTaskSessionSandboxBinding(sessionId, provision.sessionId, workspaceRoot);
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
 
@@ -2184,6 +2208,37 @@ function resolveMimeType(filePath: string, fromUpstream?: string): string {
   return inferMimeTypeFromExt(filePath) || 'application/octet-stream';
 }
 
+function buildDeliverableDownloadPath(sessionId: string, artifactId: string): string {
+  return `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/deliverables/${encodeURIComponent(artifactId)}/download`;
+}
+
+function serializeDeliverableArtifact(input: {
+  sessionId: string;
+  id: string;
+  runId: string;
+  path: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string | null;
+}) {
+  return {
+    id: input.id,
+    runId: input.runId,
+    path: input.path,
+    name: input.name,
+    mimeType: input.mimeType,
+    size: input.sizeBytes,
+    createdAt: input.createdAt,
+    downloadPath: buildDeliverableDownloadPath(input.sessionId, input.id),
+  };
+}
+
+function buildAttachmentDisposition(fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 function isTextLikeMimeType(mimeType: string): boolean {
   const normalized = String(mimeType || '').trim().toLowerCase();
   if (!normalized) return false;
@@ -3162,6 +3217,56 @@ router.post(
     }
   }
 );
+
+router.get('/sessions/:sessionId/deliverables', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const runId = asText(req.query.runId);
+    const deliverables = await taskSessionDeliverableService.listSessionDeliverables(sessionId, {
+      runId: runId || null,
+    });
+    return res.json({
+      success: true,
+      data: deliverables.map((item) => serializeDeliverableArtifact(item)),
+    });
+  } catch (error: any) {
+    console.error('获取交付物列表失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取交付物列表失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, artifactId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const artifact = await taskSessionDeliverableService.getSessionDeliverable(sessionId, artifactId);
+    if (!artifact) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('交付物不存在'),
+      });
+    }
+
+    const body = await downloadFromR2(artifact.storageKey);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', String(body.length));
+    res.setHeader('Content-Disposition', buildAttachmentDisposition(artifact.displayName));
+    return res.status(200).send(body);
+  } catch (error: any) {
+    console.error('下载交付物失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '下载交付物失败'),
+    });
+  }
+});
 
 /**
  * POST /api/task-creation/sessions/:sessionId/runtime/start

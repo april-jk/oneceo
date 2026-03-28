@@ -272,6 +272,37 @@ function buildOptimisticAttachments(files: File[]): TaskCreationUploadedAttachme
   }));
 }
 
+function readUploadedAttachments(value: unknown): TaskCreationUploadedAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is TaskCreationUploadedAttachment => {
+    return (
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as TaskCreationUploadedAttachment).name === 'string' &&
+      typeof (item as TaskCreationUploadedAttachment).size === 'number'
+    );
+  });
+}
+
+function mergeUploadedAttachments(
+  base: TaskCreationUploadedAttachment[],
+  incoming: TaskCreationUploadedAttachment[]
+): TaskCreationUploadedAttachment[] {
+  const merged = new Map<string, TaskCreationUploadedAttachment>();
+  for (const item of [...base, ...incoming]) {
+    const key = [
+      item.attachmentKind || 'uploaded_file',
+      item.templateId || '',
+      item.path || '',
+      item.name || '',
+      String(item.size || 0),
+      item.inlineContent || '',
+    ].join(':');
+    merged.set(key, item);
+  }
+  return Array.from(merged.values());
+}
+
 const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指令';
 
 // Altus 控制模式存储键：
@@ -1382,6 +1413,14 @@ export function resolveManagedStreamMessageKey(input: {
   );
 }
 
+function resolveExplicitAgentMessageKey(message: Partial<AgentMessage>): string {
+  if (asText(message.messageKey)) {
+    return asText(message.messageKey);
+  }
+  const metadata = toRecord(message.metadata);
+  return asText(metadata.messageKey);
+}
+
 function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   const messageKey = resolveAgentMessageKey(message);
   const metadata = toRecord(message.metadata);
@@ -1459,6 +1498,8 @@ export function mergeRealtimeMessage(
   const isDuplicateUserMessage =
     (message.type === 'user_input' || message.type === 'user_response') &&
     lastMessage?.type === message.type &&
+    !resolveExplicitAgentMessageKey(message) &&
+    !resolveExplicitAgentMessageKey(lastMessage || {}) &&
     (message.content || '').trim() &&
     (message.content || '').trim() === (lastMessage?.content || '').trim();
   if (isDuplicateUserMessage) {
@@ -2191,6 +2232,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const reconnectingRef = useRef(false);
   const connectRef = useRef<() => void>(() => {});
   const outboundQueueRef = useRef<string[]>([]);
+  const messagesRef = useRef<AgentMessage[]>([]);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
   const ensureRuntimeRef = useRef<(targetSessionId?: string) => Promise<void>>(async () => {});
@@ -2212,6 +2254,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const activeProcessingMessageKeyRef = useRef<string | null>(null);
   const pendingLocalMessagesRef = useRef<Map<string, AgentMessage[]>>(new Map());
   const pendingSessionSyncRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -3728,23 +3774,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     isLoadingOlderHistoryRef.current = false;
     setIsLoadingOlderHistory(false);
     const cached = readHistoryViewCache(historySessionId);
+    const cachedMessages = cached
+      ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
+      : null;
     if (cached) {
       oldestHistoryCursorRef.current = cached.oldestCursor;
       setHasOlderHistory(cached.hasOlderHistory);
-      const cachedWithPending = mergeWithPendingLocalMessages(historySessionId, cached.messages);
-      setMessages(cachedWithPending);
-      syncQuestionAndRuntimeState(cachedWithPending);
+      setMessages(cachedMessages || cached.messages);
+      syncQuestionAndRuntimeState(cachedMessages || cached.messages);
     }
     try {
       const recent = await getTaskCreationRecentMessages(historySessionId);
       const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
       const shouldFallbackToHistory =
-        normalizedRecent.length === 0 && (!cached || cached.messages.length === 0);
+        normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
       if (shouldFallbackToHistory) {
         throw new Error('recent cache empty');
       }
-      const merged = cached
-        ? mergeHistoryAgentMessages(cached.messages, normalizedRecent)
+      const merged = cachedMessages
+        ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
         : normalizedRecent;
       const cachedExpanded = cached
         ? cached.messages.length > normalizedRecent.length ||
@@ -3770,8 +3818,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           limit: HISTORY_PAGE_SIZE,
         });
         const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
-        const mergedFallback = cached
-          ? mergeHistoryAgentMessages(cached.messages, normalizedFallback)
+        const mergedFallback = cachedMessages
+          ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
           : normalizedFallback;
         const cachedExpanded = cached
           ? cached.messages.length > normalizedFallback.length ||
@@ -4386,9 +4434,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
 
       const messageKey = generateClientMessageKey('user');
+      const metadataAttachments = readUploadedAttachments(toRecord(options?.metadata).attachments);
+      const combinedAttachments = mergeUploadedAttachments(
+        metadataAttachments,
+        optimisticAttachments
+      );
       const messageMetadata = {
         ...(options?.metadata || {}),
-        ...(optimisticAttachments.length ? { attachments: optimisticAttachments } : {}),
+        ...(combinedAttachments.length ? { attachments: combinedAttachments } : {}),
         messageKey,
       };
 

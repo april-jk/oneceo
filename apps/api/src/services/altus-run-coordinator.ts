@@ -13,6 +13,10 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import {
+  TaskSessionDeliverableService,
+  taskSessionDeliverableService,
+} from './task-session-deliverable-service';
 
 type StreamedToolCallDelta = {
   index?: number;
@@ -38,7 +42,8 @@ export class AltusRunCoordinator {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
-    private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService
+    private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
+    private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService
   ) {}
 
   private getModelName() {
@@ -51,9 +56,10 @@ export class AltusRunCoordinator {
   }
 
   private getMaxToolRounds() {
-    const parsed = Number(process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS || 12);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 12;
-    return Math.min(24, Math.floor(parsed));
+    const fallback = 32;
+    const parsed = Number(process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS || fallback);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(32, Math.floor(parsed));
   }
 
   private getModelRetryLimit() {
@@ -540,6 +546,17 @@ export class AltusRunCoordinator {
           }
 
           if (result.type === 'complete') {
+            if (!state.sandboxId || !state.workspaceRoot) {
+              throw new Error('managed_run_missing_sandbox_context');
+            }
+            const deliverables = await this.deliverableService.persistManagedRunDeliverables({
+              sessionId: state.input.sessionId,
+              runId: state.input.runId,
+              sandboxId: state.sandboxId,
+              workspaceRoot: state.workspaceRoot,
+              attachments: result.attachments || [],
+            });
+            state.deliverables = deliverables;
             const finalContent = this.buildCompletionMessage(result.summary, result.verification);
             await this.setupService.persistTimelineMessage({
               sessionId: state.input.sessionId,
@@ -550,6 +567,7 @@ export class AltusRunCoordinator {
                 agent: 'assistant',
                 runId: state.input.runId,
                 verification: result.verification,
+                deliverables,
               },
               messageKey: `managed:${state.input.runId}:assistant_final`,
             });
@@ -562,6 +580,8 @@ export class AltusRunCoordinator {
                 JSON.stringify({
                   summary: result.summary,
                   verification: result.verification,
+                  attachments: result.attachments,
+                  deliverables,
                 }),
                 4000
               ),
@@ -569,8 +589,9 @@ export class AltusRunCoordinator {
             await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'assistant_message', {
               content: finalContent,
               messageKey: `managed:${state.input.runId}:assistant_final`,
+              deliverables,
             });
-            return { outcome: 'completed' as const, content: finalContent };
+            return { outcome: 'completed' as const, content: finalContent, deliverables };
           }
 
           messages.push({
@@ -630,7 +651,9 @@ export class AltusRunCoordinator {
         return;
       }
 
-      state.markCompleted();
+      state.markCompleted({
+        deliverables: state.deliverables,
+      });
       await this.lifecycleService.markCompleted(state);
     } catch (error) {
       if (abortController.signal.aborted || asText((error as Error)?.message) === 'managed_run_aborted') {

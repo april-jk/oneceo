@@ -20,6 +20,8 @@ import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  partitionPendingAttachments,
   type UploadedTaskAttachment,
 } from "@/lib/task-attachments";
 import { toast } from "sonner";
@@ -97,36 +99,50 @@ export default function TaskCreationChat({
     hasSentInitialInputRef.current = true;
     void (async () => {
       const altusMode = readAltusMode();
+      const merged = mergePendingAttachments([], initialAttachments);
+      merged.rejected.forEach((item) => toast.error(item));
+      const { uploadableAttachments, inlinePromptAttachments } =
+        partitionPendingAttachments(merged.attachments);
       let targetSessionId = (sessionId || "").trim() || undefined;
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
-      if (altusMode !== "managed" && hasAttachments) {
+      if (altusMode !== "managed" && uploadableAttachments.length > 0) {
         targetSessionId = await ensureSession(text || "已添加附件");
         uploadedAttachments = await Promise.all(
-          initialAttachments.map((file) =>
-            uploadTaskCreationAttachment(targetSessionId!, file),
+          uploadableAttachments.map((item) =>
+            uploadTaskCreationAttachment(targetSessionId!, item.file),
           ),
         );
       }
 
       if (altusMode === "managed") {
-        await sendChatInput(baseText, {
-          sessionId: targetSessionId,
-          metadata: hasAttachments
-            ? {
-                originalInput: text || "已添加附件",
-              }
-            : undefined,
-          files: hasAttachments ? initialAttachments : undefined,
-        });
-      } else {
         await sendChatInput(
-          appendAttachmentsToPrompt(baseText, uploadedAttachments),
+          appendAttachmentsToPrompt(baseText, inlinePromptAttachments),
           {
             sessionId: targetSessionId,
-            metadata: uploadedAttachments.length
+            metadata: hasAttachments
               ? {
-                  attachments: uploadedAttachments,
+                  ...(inlinePromptAttachments.length
+                    ? { attachments: inlinePromptAttachments }
+                    : {}),
+                  originalInput: text || "已添加附件",
+                }
+              : undefined,
+            files: uploadableAttachments.map((item) => item.file),
+          },
+        );
+      } else {
+        const promptAttachments = [
+          ...uploadedAttachments,
+          ...inlinePromptAttachments,
+        ];
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, promptAttachments),
+          {
+            sessionId: targetSessionId,
+            metadata: promptAttachments.length
+              ? {
+                  attachments: promptAttachments,
                   originalInput: text || "已添加附件",
                 }
               : undefined,

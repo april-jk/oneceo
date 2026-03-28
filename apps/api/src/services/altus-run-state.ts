@@ -1,4 +1,5 @@
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
+import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -8,6 +9,7 @@ export class AltusRunState {
   sandboxId: string | null = null;
   workspaceRoot: string | null = null;
   sandboxReused = false;
+  deliverables: TaskSessionDeliverableArtifactRecord[] = [];
 
   constructor(
     readonly input: {
@@ -35,9 +37,10 @@ export class AltusRunState {
     this.status = 'waiting_user';
   }
 
-  markCompleted() {
+  markCompleted(input?: { deliverables?: TaskSessionDeliverableArtifactRecord[] }) {
     this.status = 'completed';
     this.completedAt = new Date();
+    this.deliverables = Array.isArray(input?.deliverables) ? input.deliverables : this.deliverables;
   }
 
   markFailed(reason: string) {

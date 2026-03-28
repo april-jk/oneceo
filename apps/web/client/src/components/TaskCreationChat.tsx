@@ -20,6 +20,8 @@ import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  partitionPendingAttachments,
   type UploadedTaskAttachment,
 } from "@/lib/task-attachments";
 import { toast } from "sonner";
@@ -87,25 +89,34 @@ export default function TaskCreationChat({
 
     hasSentInitialInputRef.current = true;
     void (async () => {
+      const merged = mergePendingAttachments([], initialAttachments);
+      merged.rejected.forEach((item) => toast.error(item));
+      const { uploadableAttachments, inlinePromptAttachments } =
+        partitionPendingAttachments(merged.attachments);
       let targetSessionId = (sessionId || "").trim() || undefined;
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
-      if (hasAttachments) {
+      if (uploadableAttachments.length > 0) {
         targetSessionId = await ensureSession(text || "已添加附件");
         uploadedAttachments = await Promise.all(
-          initialAttachments.map((file) =>
-            uploadTaskCreationAttachment(targetSessionId!, file),
+          uploadableAttachments.map((item) =>
+            uploadTaskCreationAttachment(targetSessionId!, item.file),
           ),
         );
       }
 
+      const promptAttachments = [
+        ...uploadedAttachments,
+        ...inlinePromptAttachments,
+      ];
+
       await sendChatInput(
-        appendAttachmentsToPrompt(baseText, uploadedAttachments),
+        appendAttachmentsToPrompt(baseText, promptAttachments),
         {
           sessionId: targetSessionId,
-          metadata: uploadedAttachments.length
+          metadata: promptAttachments.length
             ? {
-                attachments: uploadedAttachments,
+                attachments: promptAttachments,
                 originalInput: text || "已添加附件",
               }
             : undefined,

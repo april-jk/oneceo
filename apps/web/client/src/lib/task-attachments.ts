@@ -1,6 +1,7 @@
 export const MAX_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
-export const DEFAULT_ATTACHMENT_PROMPT = "请查看我添加的附件，并基于附件内容继续处理。";
+export const DEFAULT_ATTACHMENT_PROMPT =
+  "请查看我添加的附件，并基于附件内容继续处理。";
 export const ATTACHMENT_ACCEPT = [
   ".txt",
   ".md",
@@ -62,6 +63,9 @@ export type PendingAttachment = {
   size: number;
   type: string;
   file: File;
+  attachmentKind?: "uploaded_file" | "inline_skill";
+  inlineContent?: string;
+  templateId?: string;
 };
 
 export type UploadedTaskAttachment = {
@@ -70,7 +74,18 @@ export type UploadedTaskAttachment = {
   size: number;
   mimeType?: string;
   uploadedAt?: string;
+  attachmentKind?: "uploaded_file" | "inline_skill";
+  inlineContent?: string;
+  templateId?: string;
 };
+
+type SkillAttachmentFileMeta = {
+  templateId: string;
+  templateName: string;
+  content: string;
+};
+
+const SKILL_ATTACHMENT_META_KEY = "__oneceoSkillAttachmentMeta";
 
 let pendingDraftFiles: File[] = [];
 
@@ -150,13 +165,28 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   "application/sql",
 ]);
 
-const ALLOWED_ATTACHMENT_MIME_PREFIXES = [
-  "text/",
-  "image/",
-];
+const ALLOWED_ATTACHMENT_MIME_PREFIXES = ["text/", "image/"];
 
 function buildAttachmentId(file: File) {
   return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function readSkillAttachmentFileMeta(file: File): SkillAttachmentFileMeta | null {
+  const raw = (file as File & {
+    [SKILL_ATTACHMENT_META_KEY]?: SkillAttachmentFileMeta;
+  })[SKILL_ATTACHMENT_META_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  const templateId =
+    typeof raw.templateId === "string" ? raw.templateId.trim() : "";
+  const templateName =
+    typeof raw.templateName === "string" ? raw.templateName.trim() : "";
+  const content = typeof raw.content === "string" ? raw.content : "";
+  if (!templateId || !templateName || !content) return null;
+  return {
+    templateId,
+    templateName,
+    content,
+  };
 }
 
 function getAttachmentExtension(filename: string): string {
@@ -167,7 +197,27 @@ function getAttachmentExtension(filename: string): string {
   return base.slice(dotIndex + 1);
 }
 
-export function isSupportedAttachmentFile(file: Pick<File, "name" | "type">): boolean {
+export function tagSkillAttachmentFile(
+  file: File,
+  input: {
+    templateId: string;
+    templateName: string;
+    content: string;
+  }
+): File {
+  (file as File & {
+    [SKILL_ATTACHMENT_META_KEY]?: SkillAttachmentFileMeta;
+  })[SKILL_ATTACHMENT_META_KEY] = {
+    templateId: input.templateId.trim(),
+    templateName: input.templateName.trim(),
+    content: input.content,
+  };
+  return file;
+}
+
+export function isSupportedAttachmentFile(
+  file: Pick<File, "name" | "type">
+): boolean {
   const extension = getAttachmentExtension(file.name);
   if (extension && ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
     return true;
@@ -177,7 +227,9 @@ export function isSupportedAttachmentFile(file: Pick<File, "name" | "type">): bo
   if (ALLOWED_ATTACHMENT_MIME_TYPES.has(mimeType)) {
     return true;
   }
-  return ALLOWED_ATTACHMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
+  return ALLOWED_ATTACHMENT_MIME_PREFIXES.some((prefix) =>
+    mimeType.startsWith(prefix)
+  );
 }
 
 export function getUnsupportedAttachmentMessage(filename: string): string {
@@ -193,7 +245,8 @@ export function formatAttachmentSize(size: number): string {
     value /= 1024;
     unitIndex += 1;
   }
-  const display = value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1);
+  const display =
+    value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1);
   return `${display} ${units[unitIndex]}`;
 }
 
@@ -220,12 +273,16 @@ export function mergePendingAttachments(
       rejected.push(`最多只能添加 ${MAX_ATTACHMENT_COUNT} 个附件`);
       break;
     }
+    const skillMeta = readSkillAttachmentFileMeta(file);
     next.push({
       id,
       name: file.name,
       size: file.size,
       type: file.type || "application/octet-stream",
       file,
+      attachmentKind: skillMeta ? "inline_skill" : "uploaded_file",
+      inlineContent: skillMeta?.content,
+      templateId: skillMeta?.templateId,
     });
     existing.add(id);
   }
@@ -233,13 +290,68 @@ export function mergePendingAttachments(
   return { attachments: next, rejected };
 }
 
+export function partitionPendingAttachments(current: PendingAttachment[]): {
+  uploadableAttachments: PendingAttachment[];
+  inlinePromptAttachments: UploadedTaskAttachment[];
+} {
+  const uploadableAttachments: PendingAttachment[] = [];
+  const inlinePromptAttachments: UploadedTaskAttachment[] = [];
+
+  for (const item of current) {
+    if (item.attachmentKind === "inline_skill" && item.inlineContent) {
+      inlinePromptAttachments.push({
+        name: item.name,
+        path: `inline-skill:${item.templateId || item.id}`,
+        size: item.size,
+        mimeType: item.type || "text/markdown",
+        attachmentKind: "inline_skill",
+        inlineContent: item.inlineContent,
+        templateId: item.templateId,
+      });
+      continue;
+    }
+    uploadableAttachments.push(item);
+  }
+
+  return {
+    uploadableAttachments,
+    inlinePromptAttachments,
+  };
+}
+
 export function appendAttachmentsToPrompt(
   text: string,
-  uploaded: UploadedTaskAttachment[]
+  attachments: UploadedTaskAttachment[]
 ): string {
-  if (!uploaded.length) return text;
-  const lines = uploaded.map((item) => `- ${item.path}${item.name ? ` (${item.name})` : ""}`);
-  return `${text}\n\n已添加以下附件，可直接在工作区中访问：\n${lines.join("\n")}`;
+  if (!attachments.length) return text;
+
+  const sections = [text];
+  const workspaceAttachments = attachments.filter((item) => !item.inlineContent);
+  const inlineSkillAttachments = attachments.filter((item) => item.inlineContent);
+
+  if (workspaceAttachments.length > 0) {
+    const lines = workspaceAttachments.map(
+      (item) => `- ${item.path}${item.name ? ` (${item.name})` : ""}`
+    );
+    sections.push(
+      `已添加以下附件，可直接在工作区中访问：\n${lines.join("\n")}`
+    );
+  }
+
+  if (inlineSkillAttachments.length > 0) {
+    const blocks = inlineSkillAttachments.map((item) => {
+      const title = item.name || item.templateId || "Skill Brief";
+      return [`### ${title}`, item.inlineContent || ""].join("\n\n");
+    });
+    sections.push(
+      [
+        "以下 skill 说明已经直接附加到当前消息，请直接遵循这些说明执行，不要再尝试从工作区或 `.attachments` 中读取这些 skill 文件：",
+        ...blocks,
+      ].join("\n\n")
+    );
+  }
+
+  return sections.filter(Boolean).join("\n\n");
 }
 
 export function stashPendingDraftAttachments(files: File[]) {

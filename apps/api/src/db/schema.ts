@@ -164,6 +164,38 @@ export const taskSessionRunEvents = pgTable(
   })
 );
 
+export const taskSessionDeliverableArtifacts = pgTable(
+  'task_session_deliverable_artifacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => taskSessionRuns.id, { onDelete: 'cascade' }),
+    sandboxId: text('sandbox_id').notNull(),
+    sourcePath: text('source_path').notNull(),
+    displayName: text('display_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    storageKey: text('storage_key').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    runCreatedIdx: index('idx_task_session_deliverable_artifacts_run_created_at').on(
+      table.runId,
+      table.createdAt
+    ),
+    sessionCreatedIdx: index('idx_task_session_deliverable_artifacts_session_created_at').on(
+      table.sessionId,
+      table.createdAt
+    ),
+    storageKeyUnique: uniqueIndex('idx_task_session_deliverable_artifacts_storage_key').on(table.storageKey),
+  })
+);
+
 export const taskSessionSandboxBindings = pgTable(
   'task_session_sandbox_bindings',
   {
@@ -428,6 +460,8 @@ export type TaskSessionRun = typeof taskSessionRuns.$inferSelect;
 export type NewTaskSessionRun = typeof taskSessionRuns.$inferInsert;
 export type TaskSessionRunEvent = typeof taskSessionRunEvents.$inferSelect;
 export type NewTaskSessionRunEvent = typeof taskSessionRunEvents.$inferInsert;
+export type TaskSessionDeliverableArtifact = typeof taskSessionDeliverableArtifacts.$inferSelect;
+export type NewTaskSessionDeliverableArtifact = typeof taskSessionDeliverableArtifacts.$inferInsert;
 export type TaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferSelect;
 export type NewTaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferInsert;
 export type TaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferSelect;

@@ -41,6 +41,12 @@ export type ToolCall = {
   };
 };
 
+export type ManagedCompletionAttachment = {
+  path: string;
+  name?: string;
+  mimeType?: string;
+};
+
 type JsonSchema =
   | {
       type: 'string' | 'number' | 'integer' | 'boolean';
@@ -182,6 +188,84 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'web_search',
+        description:
+          'Search the web for external facts, sources, and candidate images. Prefer this for PPT/docx/xlsx tasks that need current information or visual assets.',
+        parameters: objectSchema(
+          {
+            query: { type: 'string', description: 'Search query in natural language.' },
+            topic: {
+              type: 'string',
+              description: 'Optional search topic. Use general, news, or finance.',
+            },
+            maxResults: {
+              type: 'integer',
+              description: 'Maximum number of search results to return, max 8.',
+            },
+            includeImages: {
+              type: 'boolean',
+              description: 'Whether to include candidate image URLs in the result.',
+            },
+            searchDepth: {
+              type: 'string',
+              description: 'Optional search depth. Use basic for speed or advanced for richer retrieval.',
+            },
+            includeDomains: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional domain allowlist.',
+            },
+            excludeDomains: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional domain blocklist.',
+            },
+            timeRange: {
+              type: 'string',
+              description: 'Optional recency filter. Use day, week, month, or year when needed.',
+            },
+          },
+          ['query']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_extract',
+        description:
+          'Extract structured content and images from known web pages after web_search identified useful URLs.',
+        parameters: objectSchema(
+          {
+            urls: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'One or more URLs to extract.',
+            },
+            extractDepth: {
+              type: 'string',
+              description: 'Optional extract depth. Use basic or advanced.',
+            },
+            includeImages: {
+              type: 'boolean',
+              description: 'Whether to include extracted image URLs.',
+            },
+            format: {
+              type: 'string',
+              description: 'Optional extract format. Use markdown or text.',
+            },
+            timeoutSeconds: {
+              type: 'number',
+              description: 'Optional extraction timeout in seconds, max 60.',
+            },
+          },
+          ['urls']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'ask_user',
         description: 'Ask the user one precise clarification question when blocked by missing requirements.',
         parameters: objectSchema(
@@ -213,6 +297,28 @@ export function buildManagedToolDefinitions() {
               type: 'array',
               items: { type: 'string' },
               description: 'Optional short verification points, such as commands run or files checked.',
+            },
+            attachments: {
+              type: 'array',
+              description:
+                'Required when the task produces user-downloadable files such as pptx/docx/xlsx/pdf/zip. Each attachment must point to a workspace-relative file path that already exists.',
+              items: objectSchema(
+                {
+                  path: {
+                    type: 'string',
+                    description: 'Workspace-relative file path of the final deliverable.',
+                  },
+                  name: {
+                    type: 'string',
+                    description: 'Optional download filename to show to the user.',
+                  },
+                  mimeType: {
+                    type: 'string',
+                    description: 'Optional explicit MIME type for the deliverable.',
+                  },
+                },
+                ['path']
+              ),
             },
           },
           ['summary']

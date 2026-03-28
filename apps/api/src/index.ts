@@ -56,6 +56,11 @@ if (proxyEnabled) {
 
 const app = express();
 const httpServer = createServer(app);
+const llmProxyBodyLimitMbRaw = Number(process.env.LLM_PROXY_BODY_LIMIT_MB || 64);
+const llmProxyBodyLimitMb = Number.isFinite(llmProxyBodyLimitMbRaw)
+  ? Math.min(128, Math.max(1, Math.floor(llmProxyBodyLimitMbRaw)))
+  : 64;
+const llmProxyBodyLimit = `${llmProxyBodyLimitMb}mb`;
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -69,7 +74,7 @@ const io = new Server(httpServer, {
 
 app.use(cors());
 // LLM proxy uses raw body for streaming compatibility
-app.use('/api/llm-proxy', express.raw({ type: '*/*' }));
+app.use('/api/llm-proxy', express.raw({ type: '*/*', limit: llmProxyBodyLimit }));
 app.use(express.json());
 
 // 请求日志

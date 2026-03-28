@@ -1316,6 +1316,14 @@ function resolveAgentMessageKey(message: Partial<AgentMessage>): string {
   ].join(':');
 }
 
+function resolveExplicitAgentMessageKey(message: Partial<AgentMessage>): string {
+  if (asText(message.messageKey)) {
+    return asText(message.messageKey);
+  }
+  const metadata = toRecord(message.metadata);
+  return asText(metadata.messageKey);
+}
+
 function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   const messageKey = resolveAgentMessageKey(message);
   const metadata = toRecord(message.metadata);
@@ -1393,6 +1401,8 @@ function mergeRealtimeMessage(
   const isDuplicateUserMessage =
     (message.type === 'user_input' || message.type === 'user_response') &&
     lastMessage?.type === message.type &&
+    !resolveExplicitAgentMessageKey(message) &&
+    !resolveExplicitAgentMessageKey(lastMessage || {}) &&
     (message.content || '').trim() &&
     (message.content || '').trim() === (lastMessage?.content || '').trim();
   if (isDuplicateUserMessage) {
@@ -1791,6 +1801,42 @@ function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[
   return merged;
 }
 
+function isPendingLocalUserMessageForSession(
+  message: AgentMessage | null | undefined,
+  historySessionId: string
+): boolean {
+  if (!message || (message.type !== 'user_input' && message.type !== 'user_response')) {
+    return false;
+  }
+  if ((message.sessionId || '').trim() !== historySessionId.trim()) {
+    return false;
+  }
+  const metadata = toRecord(message.metadata);
+  return (
+    asPositiveInt(metadata.sessionEventSeq) === null &&
+    asPositiveInt(metadata.timelineCursor) === null
+  );
+}
+
+function mergePendingLocalUserMessages(
+  historySessionId: string,
+  normalized: AgentMessage[],
+  current: AgentMessage[]
+): AgentMessage[] {
+  if (!historySessionId || current.length === 0) {
+    return normalized;
+  }
+
+  const pending = current.filter((item) =>
+    isPendingLocalUserMessageForSession(item, historySessionId)
+  );
+  if (pending.length === 0) {
+    return normalized;
+  }
+
+  return mergeHistoryAgentMessages(normalized, pending);
+}
+
 function hasLegacyHistoryNoise(messages: AgentMessage[]): boolean {
   return messages.some((message) => {
     const content = asText(message.content);
@@ -2097,6 +2143,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const reconnectingRef = useRef(false);
   const connectRef = useRef<() => void>(() => {});
   const outboundQueueRef = useRef<string[]>([]);
+  const messagesRef = useRef<AgentMessage[]>([]);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
   const ensureRuntimeRef = useRef<(targetSessionId?: string) => Promise<void>>(async () => {});
@@ -2116,6 +2163,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
   const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
   const activeProcessingMessageKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -3552,7 +3603,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (activeHistorySessionRef.current && activeHistorySessionRef.current !== historySessionId) {
         return;
       }
-      setMessages(normalized);
+      const nextMessages = mergePendingLocalUserMessages(
+        historySessionId,
+        normalized,
+        messagesRef.current
+      );
+      setMessages(nextMessages);
       if (typeof options?.hasOlderHistory === 'boolean') {
         setHasOlderHistory(options.hasOlderHistory);
       }
@@ -3561,11 +3617,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
       writeHistoryViewCache(
         historySessionId,
-        normalized,
+        nextMessages,
         options?.oldestCursor ?? oldestHistoryCursorRef.current,
         options?.hasOlderHistory ?? hasOlderHistory
       );
-      syncQuestionAndRuntimeState(normalized);
+      syncQuestionAndRuntimeState(nextMessages);
     },
     [hasOlderHistory, syncQuestionAndRuntimeState]
   );
@@ -3590,22 +3646,29 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     isLoadingOlderHistoryRef.current = false;
     setIsLoadingOlderHistory(false);
     const cached = readHistoryViewCache(historySessionId);
+    const cachedMessages = cached
+      ? mergePendingLocalUserMessages(
+          historySessionId,
+          cached.messages,
+          messagesRef.current
+        )
+      : null;
     if (cached) {
       oldestHistoryCursorRef.current = cached.oldestCursor;
       setHasOlderHistory(cached.hasOlderHistory);
-      setMessages(cached.messages);
-      syncQuestionAndRuntimeState(cached.messages);
+      setMessages(cachedMessages || cached.messages);
+      syncQuestionAndRuntimeState(cachedMessages || cached.messages);
     }
     try {
       const recent = await getTaskCreationRecentMessages(historySessionId);
       const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
       const shouldFallbackToHistory =
-        normalizedRecent.length === 0 && (!cached || cached.messages.length === 0);
+        normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
       if (shouldFallbackToHistory) {
         throw new Error('recent cache empty');
       }
-      const merged = cached
-        ? mergeHistoryAgentMessages(cached.messages, normalizedRecent)
+      const merged = cachedMessages
+        ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
         : normalizedRecent;
       const cachedExpanded = cached
         ? cached.messages.length > normalizedRecent.length ||
@@ -3631,8 +3694,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           limit: HISTORY_PAGE_SIZE,
         });
         const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
-        const mergedFallback = cached
-          ? mergeHistoryAgentMessages(cached.messages, normalizedFallback)
+        const mergedFallback = cachedMessages
+          ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
           : normalizedFallback;
         const cachedExpanded = cached
           ? cached.messages.length > normalizedFallback.length ||

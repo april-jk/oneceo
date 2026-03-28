@@ -33,6 +33,38 @@ function isHistoryMessageRelevant(input: { role: unknown; messageType: unknown }
 }
 
 export class AltusManagedSetupService {
+  private async reuseKnownSandbox(sessionId: string, sandboxId: string, workspaceRoot: string) {
+    const normalizedSandboxId = asText(sandboxId);
+    if (!normalizedSandboxId) {
+      return null;
+    }
+
+    try {
+      await e2bConnector.getSandboxInfo(normalizedSandboxId);
+      await taskSessionRunDAO.upsertSandboxBinding({
+        sessionId,
+        sandboxId: normalizedSandboxId,
+        workspaceRoot,
+        status: 'ready',
+        metadataJson: {
+          provider: 'e2b',
+        },
+      });
+      await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
+        orchestratorSessionId: normalizedSandboxId,
+      });
+      await sandboxExecutionEnvironmentDAO.updateStatus(normalizedSandboxId, 'ready', null).catch(() => null);
+      return {
+        sandboxId: normalizedSandboxId,
+        workspaceRoot,
+        reused: true,
+      };
+    } catch {
+      await sandboxExecutionEnvironmentDAO.updateStatus(normalizedSandboxId, 'closed', null).catch(() => null);
+      return null;
+    }
+  }
+
   async ensureSessionOwnership(sessionId: string, userId: string) {
     let session = await taskCreationSessionDAO.getSession(sessionId);
     if (!session) {
@@ -86,20 +118,30 @@ export class AltusManagedSetupService {
 
   async ensureSandbox(sessionId: string, sessionTitle?: string | null) {
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
+    const runtimeSandboxId = asText(sessionMemory?.runtime?.orchestratorSessionId);
+    if (runtimeSandboxId) {
+      const reusedFromRuntime = await this.reuseKnownSandbox(sessionId, runtimeSandboxId, workspaceRoot);
+      if (reusedFromRuntime) {
+        return reusedFromRuntime;
+      }
+    }
+
     const existing = await taskSessionRunDAO.getSandboxBindingBySession(sessionId);
     if (existing?.sandboxId) {
+      const reusedFromBinding = await this.reuseKnownSandbox(
+        sessionId,
+        existing.sandboxId,
+        existing.workspaceRoot || workspaceRoot
+      );
+      if (reusedFromBinding) {
+        return reusedFromBinding;
+      }
       try {
-        await e2bConnector.getSandboxInfo(existing.sandboxId);
-        await taskSessionRunDAO.touchSandboxBinding(sessionId, 'ready');
-        await sandboxExecutionEnvironmentDAO.updateStatus(existing.sandboxId, 'ready', null);
-        return {
-          sandboxId: existing.sandboxId,
-          workspaceRoot: existing.workspaceRoot || workspaceRoot,
-          reused: true,
-        };
-      } catch {
         await taskSessionRunDAO.touchSandboxBinding(sessionId, 'failed');
         await sandboxExecutionEnvironmentDAO.updateStatus(existing.sandboxId, 'closed', null).catch(() => null);
+      } catch {
+        // ignore stale binding cleanup failures and continue provisioning a new sandbox
       }
     }
 

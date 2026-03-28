@@ -3,6 +3,9 @@ import { AltusRunState } from './altus-run-state';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 
+const RUN_COMPLETED_TEXT = 'managed run 已完成';
+const RUN_STOPPED_TEXT = '已停止当前处理';
+
 export class AltusRunLifecycleService {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
@@ -24,7 +27,7 @@ export class AltusRunLifecycleService {
     });
     await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_status', {
       status: 'running',
-      content: state.sandboxReused ? '已恢复会话 sandbox，开始执行' : '已创建新的 sandbox，开始执行',
+      content: state.sandboxReused ? '已复用会话 sandbox，开始执行' : '已创建新的 sandbox，开始执行',
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
     });
@@ -42,6 +45,9 @@ export class AltusRunLifecycleService {
   async markCompleted(state: AltusRunState) {
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'completed', {
       completedAt: state.completedAt || new Date(),
+      metadataJson: {
+        deliverables: state.deliverables,
+      },
     });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'completed',
@@ -49,9 +55,27 @@ export class AltusRunLifecycleService {
       phase: 'delivery',
       clearClarification: true,
     });
+    await this.setupService.persistTimelineMessage({
+      sessionId: state.input.sessionId,
+      role: 'system',
+      messageType: 'status_update',
+      content: RUN_COMPLETED_TEXT,
+      metadata: {
+        stage: 'completed',
+        tone: 'review',
+        eventType: 'run_completed',
+        runId: state.input.runId,
+        sessionId: state.input.sessionId,
+        executor: 'altus',
+        executionMode: 'managed',
+        deliverables: state.deliverables,
+      },
+      messageKey: `managed:${state.input.runId}:run_completed`,
+    });
     await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_completed', {
       status: 'completed',
-      content: 'managed run 已完成',
+      content: RUN_COMPLETED_TEXT,
+      deliverables: state.deliverables,
     });
   }
 
@@ -70,7 +94,7 @@ export class AltusRunLifecycleService {
       sessionId: state.input.sessionId,
       role: 'system',
       messageType: 'status_update',
-      content: '已停止当前处理',
+      content: RUN_STOPPED_TEXT,
       metadata: {
         stage: 'failed',
         tone: 'system',
@@ -81,7 +105,7 @@ export class AltusRunLifecycleService {
     });
     await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_stopped', {
       status: 'stopped',
-      content: '已停止当前处理',
+      content: RUN_STOPPED_TEXT,
     });
   }
 

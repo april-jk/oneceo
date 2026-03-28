@@ -19,6 +19,7 @@ const REQUIRED_TABLES = [
   'task_session_workspace_cache',
   'task_session_runs',
   'task_session_run_events',
+  'task_session_deliverable_artifacts',
   'task_session_sandbox_bindings',
   'task_session_connector_snapshots',
   'sandbox_execution_environments',
@@ -54,6 +55,7 @@ const REQUIRED_INDEXES = [
   'idx_task_session_recent_messages_session_timeline',
   'idx_task_session_workspace_cache_session_unique',
   'idx_task_session_run_events_run_sequence',
+  'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
 ] as const;
@@ -423,6 +425,29 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
 ${connectorTablesSQL}
 `;
 
+const deliverableTablesSQL = `
+CREATE TABLE IF NOT EXISTS task_session_deliverable_artifacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  run_id UUID NOT NULL REFERENCES task_session_runs(id) ON DELETE CASCADE,
+  sandbox_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_run_created_at
+  ON task_session_deliverable_artifacts(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_session_created_at
+  ON task_session_deliverable_artifacts(session_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_storage_key
+  ON task_session_deliverable_artifacts(storage_key);
+`;
+
 const backfillMessageStorageSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
 
@@ -650,6 +675,7 @@ export async function runMigration() {
     
     // 执行创建表的 SQL
     await db.execute(sql.raw(createTablesSQL));
+    await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
     console.log('✅ 数据库迁移完成！');
@@ -658,6 +684,7 @@ export async function runMigration() {
     console.log('  - conversation_messages');
     console.log('  - task_session_recent_messages');
     console.log('  - task_session_workspace_cache');
+    console.log('  - task_session_deliverable_artifacts');
     console.log('  - intent_recognition_results');
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
@@ -702,6 +729,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS task_session_recent_messages CASCADE;
       DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
+      DROP TABLE IF EXISTS task_session_deliverable_artifacts CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;

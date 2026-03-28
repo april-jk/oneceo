@@ -268,6 +268,35 @@ function buildSandboxEnv(): Record<string, string> {
       env[key] = value.trim();
     }
   }
+  const sandboxApiKey = pickString(process.env.SANDBOX_OPENAI_API_KEY);
+  const sandboxBaseUrl =
+    pickString(process.env.SANDBOX_OPENAI_BASE_URL) || pickString(process.env.SANDBOX_OPENAI_API_BASE);
+  const sandboxModel = pickString(process.env.SANDBOX_OPENAI_MODEL);
+  const sandboxApiType = pickString(process.env.SANDBOX_OPENAI_API_TYPE)?.toLowerCase() || null;
+  const sandboxOverrideEnabled = Boolean(sandboxApiKey || sandboxBaseUrl || sandboxModel || sandboxApiType);
+
+  if (sandboxApiKey) {
+    env.OPENAI_API_KEY = sandboxApiKey;
+    env.CODEX_API_KEY = sandboxApiKey;
+    env.OPENCODE_API_KEY = sandboxApiKey;
+  }
+  if (sandboxBaseUrl) {
+    env.OPENAI_BASE_URL = sandboxBaseUrl;
+    env.OPENAI_API_BASE = sandboxBaseUrl;
+    env.CODEX_BASE_URL = sandboxBaseUrl;
+    env.OPENCODE_BASE_URL = sandboxBaseUrl;
+  }
+  if (sandboxModel) {
+    env.OPENAI_MODEL = sandboxModel;
+    env.CODEX_MODEL = sandboxModel;
+    env.OPENCODE_MODEL = sandboxModel;
+  }
+  if (sandboxApiType) {
+    env.LLM_PROXY_UPSTREAM_API_TYPE = sandboxApiType;
+  }
+  if (sandboxOverrideEnabled) {
+    env.OPENCODE_PROVIDER_ID = 'openai';
+  }
   if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) {
     env.CODEX_API_KEY = env.OPENAI_API_KEY;
   }

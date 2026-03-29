@@ -60,6 +60,8 @@ import {
 } from '../services/task-attachment-service';
 import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
+import { platformSkillService } from '../services/platform-skill-service';
+import { userSkillService } from '../services/user-skill-service';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
@@ -87,6 +89,135 @@ const WEAK_INTENT_TITLE_INPUTS = new Set([
   '？',
   '?',
 ]);
+
+router.get('/skills', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.listAvailableSkills(currentUser.userId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取平台 skills 失败:', error);
+    return res.status(500).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取平台 skills 失败'),
+    });
+  }
+});
+
+router.get('/settings/skills', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.listSettings(currentUser.userId);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    console.error('获取用户技能设置失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取用户技能设置失败'),
+    });
+  }
+});
+
+router.post('/settings/skills/platform/:skillId/enable', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.enablePlatformSkill(currentUser.userId, req.params.skillId);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('启用平台技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '启用平台技能失败'),
+    });
+  }
+});
+
+router.post('/settings/skills/platform/:skillId/disable', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.disablePlatformSkill(currentUser.userId, req.params.skillId);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('停用平台技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '停用平台技能失败'),
+    });
+  }
+});
+
+router.post('/settings/skills/custom', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.createCustomSkill(currentUser.userId, {
+      slug: req.body?.slug,
+      name: req.body?.name,
+      description: req.body?.description,
+      category: req.body?.category,
+      bodyMarkdown: req.body?.bodyMarkdown,
+    });
+    return res.status(201).json({ success: true, data });
+  } catch (error: any) {
+    console.error('创建自定义技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '创建自定义技能失败'),
+    });
+  }
+});
+
+router.put('/settings/skills/custom/:customSkillId', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.updateCustomSkill(currentUser.userId, req.params.customSkillId, {
+      name: req.body?.name,
+      description: req.body?.description,
+      category: req.body?.category,
+      bodyMarkdown: req.body?.bodyMarkdown,
+    });
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('更新自定义技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '更新自定义技能失败'),
+    });
+  }
+});
+
+router.post('/settings/skills/custom/:customSkillId/archive', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.archiveCustomSkill(currentUser.userId, req.params.customSkillId);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('归档自定义技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '归档自定义技能失败'),
+    });
+  }
+});
+
+router.post('/settings/skills/custom/:customSkillId/activate', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const data = await userSkillService.activateCustomSkill(currentUser.userId, req.params.customSkillId);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('启用自定义技能失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '启用自定义技能失败'),
+    });
+  }
+});
 
 router.get('/codex/runtime-config', async (req, res) => {
   try {

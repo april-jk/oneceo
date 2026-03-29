@@ -98,15 +98,41 @@ export type SubmitTaskCreationManagedInput = {
   files?: File[];
 };
 
+export type TaskCreationPlatformSkill = {
+  sourceType?: "platform" | "custom";
+  skillId: string;
+  revisionId: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  revisionNumber: number | null;
+};
+
+export type TaskCreationUserCustomSkill = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: "active" | "archived";
+  bodyMarkdown?: string;
+  updatedAt: string;
+};
+
+export type TaskCreationUserSkillSettings = {
+  platformCatalog: Array<TaskCreationPlatformSkill & { enabled: boolean }>;
+  customSkills: TaskCreationUserCustomSkill[];
+  availableSkills: TaskCreationPlatformSkill[];
+};
+
 export type TaskCreationUploadedAttachment = {
   name: string;
   path: string;
   size: number;
   mimeType?: string;
   uploadedAt?: string;
-  attachmentKind?: "uploaded_file" | "inline_skill";
-  inlineContent?: string;
-  templateId?: string;
+  attachmentKind?: "uploaded_file";
 };
 
 export type SubmitTaskCreationManagedInputResult = {
@@ -376,6 +402,130 @@ export async function listTaskCreationSessions(
   const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function listTaskCreationSkills(): Promise<TaskCreationPlatformSkill[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/skills`;
+  const result = await fetchJson<{ data?: TaskCreationPlatformSkill[] }>(url);
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationUserSkillSettings(): Promise<TaskCreationUserSkillSettings> {
+  const url = `${getApiBaseUrl()}/api/task-creation/settings/skills`;
+  const result = await fetchJson<{ data?: TaskCreationUserSkillSettings }>(url);
+  if (result?.data) return result.data;
+  throw new Error("failed to load user skill settings");
+}
+
+export async function enableTaskCreationPlatformSkill(skillId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/platform/${encodeURIComponent(skillId)}/enable`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function disableTaskCreationPlatformSkill(skillId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/platform/${encodeURIComponent(skillId)}/disable`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function createTaskCreationCustomSkill(input: {
+  slug: string;
+  name: string;
+  description?: string;
+  category?: string;
+  bodyMarkdown: string;
+}): Promise<TaskCreationUserCustomSkill> {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/custom`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationUserCustomSkill };
+  if (!result.data) {
+    throw new Error("custom skill empty");
+  }
+  return result.data;
+}
+
+export async function updateTaskCreationCustomSkill(
+  customSkillId: string,
+  input: {
+    name?: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown?: string;
+  }
+): Promise<TaskCreationUserCustomSkill> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}`,
+    {
+      method: "PUT",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(input),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationUserCustomSkill };
+  if (!result.data) {
+    throw new Error("custom skill empty");
+  }
+  return result.data;
+}
+
+export async function archiveTaskCreationCustomSkill(customSkillId: string) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}/archive`,
+    {
+      method: "POST",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({}),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function activateTaskCreationCustomSkill(customSkillId: string) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}/activate`,
+    {
+      method: "POST",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({}),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }
 
 export async function createTaskCreationSession(

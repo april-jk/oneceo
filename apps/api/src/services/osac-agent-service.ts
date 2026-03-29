@@ -15,6 +15,7 @@ import { auditOsacAction } from '../utils/osac-audit';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { sessionConnectorService } from './session-connector-service';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 
 type OpencodePartInput = {
   type: string;
@@ -634,15 +635,28 @@ PY`;
 
   async loadSkill(
     sessionId: string,
-    _input?: { skillName: string; skillContent: string; overwrite?: boolean }
+    input?: { skillName: string; skillContent: string; overwrite?: boolean }
   ) {
     auditOsacAction('LOAD_SKILL', { sessionId });
-    throw new Error('E2B 模式不支持 OSAC Skill 管理');
+    if (!input?.skillName || !input.skillContent) {
+      throw new Error('缺少 skillName 或 skillContent');
+    }
+    return sandboxSkillSyncService.upsertCustomSkill({
+      orchestratorSessionId: sessionId,
+      skillName: input.skillName,
+      skillContent: input.skillContent,
+    });
   }
 
-  async unloadSkill(sessionId: string, _skillName?: string) {
+  async unloadSkill(sessionId: string, skillName?: string) {
     auditOsacAction('UNLOAD_SKILL', { sessionId });
-    throw new Error('E2B 模式不支持 OSAC Skill 管理');
+    if (!skillName) {
+      throw new Error('缺少 skillName');
+    }
+    return sandboxSkillSyncService.removeSkill({
+      orchestratorSessionId: sessionId,
+      skillName,
+    });
   }
 
   async addMcpServer(
@@ -1100,7 +1114,10 @@ PY`;
       throwExecutorError(reply);
     }
     const payload = asPayloadRecord(reply);
-    const status = toRecord(payload.status);
+    const status =
+      payload.status && typeof payload.status === 'object'
+        ? (payload.status as Record<string, unknown>)
+        : {};
     return {
       executor,
       executorSessionId: asString(payload.executorSessionId) || input.executorSessionId,

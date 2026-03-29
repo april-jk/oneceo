@@ -22,10 +22,14 @@ const REQUIRED_TABLES = [
   'task_session_deliverable_artifacts',
   'task_session_sandbox_bindings',
   'task_session_connector_snapshots',
+  'platform_skills',
+  'platform_skill_revisions',
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
   'user_codex_runtime_configs',
+  'user_platform_skill_bindings',
+  'user_custom_skills',
   'task_session_connector_bindings',
   'connector_auth_requests',
 ] as const;
@@ -46,6 +50,16 @@ const REQUIRED_COLUMNS = [
   ['task_session_connector_bindings', 'definition_snapshot_json'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
+  ['platform_skills', 'slug'],
+  ['platform_skills', 'published_revision_id'],
+  ['platform_skill_revisions', 'skill_id'],
+  ['platform_skill_revisions', 'revision_number'],
+  ['platform_skill_revisions', 'body_markdown'],
+  ['user_platform_skill_bindings', 'user_id'],
+  ['user_platform_skill_bindings', 'platform_skill_id'],
+  ['user_custom_skills', 'user_id'],
+  ['user_custom_skills', 'slug'],
+  ['user_custom_skills', 'body_markdown'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -58,6 +72,10 @@ const REQUIRED_INDEXES = [
   'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
+  'idx_platform_skills_slug',
+  'idx_platform_skill_revisions_skill_revision',
+  'idx_user_platform_skill_bindings_user_skill',
+  'idx_user_custom_skills_user_slug',
 ] as const;
 
 /**
@@ -326,6 +344,56 @@ CREATE TABLE IF NOT EXISTS task_session_connector_snapshots (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- 平台 skills 主表
+CREATE TABLE IF NOT EXISTS platform_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'general',
+  status TEXT NOT NULL DEFAULT 'active',
+  published_revision_id UUID,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 平台 skills revision 表
+CREATE TABLE IF NOT EXISTS platform_skill_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  skill_id UUID NOT NULL REFERENCES platform_skills(id) ON DELETE CASCADE,
+  revision_number INTEGER NOT NULL,
+  slug_snapshot TEXT NOT NULL,
+  name_snapshot TEXT NOT NULL,
+  description_snapshot TEXT NOT NULL DEFAULT '',
+  category_snapshot TEXT NOT NULL DEFAULT 'general',
+  body_markdown TEXT NOT NULL,
+  published_at TIMESTAMP,
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_platform_skill_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  platform_skill_id UUID NOT NULL REFERENCES platform_skills(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_custom_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'general',
+  status TEXT NOT NULL DEFAULT 'active',
+  body_markdown TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- 意图识别结果表
 CREATE TABLE IF NOT EXISTS intent_recognition_results (
   id UUID PRIMARY KEY,
@@ -422,6 +490,30 @@ CREATE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_sandbox_id
   ON task_session_sandbox_bindings(sandbox_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
   ON task_session_connector_snapshots(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skills_slug
+  ON platform_skills(slug);
+CREATE INDEX IF NOT EXISTS idx_platform_skills_status
+  ON platform_skills(status);
+CREATE INDEX IF NOT EXISTS idx_platform_skills_published_revision_id
+  ON platform_skills(published_revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revisions_skill_revision
+  ON platform_skill_revisions(skill_id, revision_number);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_skill_created_at
+  ON platform_skill_revisions(skill_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_published_at
+  ON platform_skill_revisions(published_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_skill
+  ON user_platform_skill_bindings(user_id, platform_skill_id);
+CREATE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_id
+  ON user_platform_skill_bindings(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_platform_skill_id
+  ON user_platform_skill_bindings(platform_skill_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skills_user_slug
+  ON user_custom_skills(user_id, slug);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skills_user_status
+  ON user_custom_skills(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skills_updated_at
+  ON user_custom_skills(updated_at);
 ${connectorTablesSQL}
 `;
 
@@ -733,6 +825,8 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS user_custom_skills CASCADE;
+      DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
       DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;

@@ -5,6 +5,11 @@ import type {
   ConversationSessionsResponse,
   DashboardOverview,
   HostListResponse,
+  SkillDetail,
+  SkillRenderedRevision,
+  SkillRevision,
+  SkillSummary,
+  SkillValidationResult,
   KvmJobInfo,
   KvmSandboxInfo,
   KvmSandboxPortMapping,
@@ -256,6 +261,65 @@ export const api = {
     requestForm<Record<string, unknown>>(`/api/kvm/vms/${encodeURIComponent(vmId)}/files`, formData),
   uploadSessionFile: (sessionId: string, formData: FormData) =>
     requestForm<Record<string, unknown>>(`/api/kvm/sessions/${encodeURIComponent(sessionId)}/files`, formData),
+  listSkills: (query?: { query?: string; status?: string; category?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.query) params.set('query', query.query);
+    if (query?.status) params.set('status', query.status);
+    if (query?.category) params.set('category', query.category);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<SkillSummary[]>(`/api/skill-management${suffix}`);
+  },
+  getSkill: (skillId: string) => request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`),
+  createSkill: (payload: {
+    slug: string;
+    name: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown: string;
+    createdBy?: string;
+  }) =>
+    request<SkillDetail>('/api/skill-management', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSkill: (
+    skillId: string,
+    payload: {
+      name?: string;
+      description?: string;
+      category?: string;
+      bodyMarkdown?: string;
+      createdBy?: string;
+    }
+  ) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveSkill: (skillId: string) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  activateSkill: (skillId: string) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  listSkillRevisions: (skillId: string) =>
+    request<SkillRevision[]>(`/api/skill-management/${encodeURIComponent(skillId)}/revisions`),
+  getRenderedSkillRevision: (skillId: string, revisionId: string) =>
+    request<SkillRenderedRevision>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/rendered`
+    ),
+  validateSkillRevision: (skillId: string, revisionId: string, sessionId: string) =>
+    request<SkillValidationResult>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionId }),
+      }
+    ),
   deleteVmFile: (vmId: string, query: { targetPath: string; recursive?: boolean; ignoreMissing?: boolean; sessionId?: string }) => {
     const params = new URLSearchParams();
     params.set('targetPath', query.targetPath);

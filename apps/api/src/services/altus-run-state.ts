@@ -1,5 +1,6 @@
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
 import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
+import type { ManagedSkillContext } from './altus-managed-shared';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -20,6 +21,7 @@ export class AltusRunState {
       userInput: string;
       sessionTitle?: string | null;
       connectors: unknown[];
+      skills: ManagedSkillContext[];
     }
   ) {
     this.status = 'queued';

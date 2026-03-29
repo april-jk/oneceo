@@ -94,6 +94,18 @@ export type AdminSkillDetail = {
   publishedRevisionId: string | null;
   latestBodyMarkdown: string;
   renderedSkillMarkdown: string | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources?: Array<{
+    id: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    createdAt: string;
+  }>;
   updatedAt: string;
 };
 
@@ -113,6 +125,41 @@ export type AdminSkillRenderedRevision = {
   slug: string;
   renderedMarkdown: string;
   signature: string;
+};
+
+export type AdminSkillRevisionResources = {
+  skill: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  revision: {
+    id: string;
+    revisionNumber: number;
+  };
+  resourceSummary: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources: Array<{
+    id: string;
+    resourceKey: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    title: string;
+    summary: string;
+    contentStorage: 'database' | 'object_storage';
+    mimeType: string;
+    storagePath: string | null;
+    storageLocatorJson: Record<string, unknown> | null;
+    loadStage: string;
+    sortOrder: number;
+    contentMarkdown: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 };
 
 export type AdminSkillValidationResult = {
@@ -404,6 +451,11 @@ export class OneceoApiConnector {
     description?: string;
     category?: string;
     bodyMarkdown: string;
+    resources?: Array<{
+      resourcePath: string;
+      resourceType?: 'reference' | 'template';
+      contentMarkdown: string;
+    }>;
     createdBy?: string;
   }) {
     return this.request<AdminSkillDetail>('/api/internal/skills', {
@@ -419,6 +471,11 @@ export class OneceoApiConnector {
       description?: string;
       category?: string;
       bodyMarkdown?: string;
+      resources?: Array<{
+        resourcePath: string;
+        resourceType?: 'reference' | 'template';
+        contentMarkdown: string;
+      }>;
       createdBy?: string;
     }
   ) {
@@ -447,6 +504,12 @@ export class OneceoApiConnector {
   getRenderedSkillRevision(skillId: string, revisionId: string) {
     return this.request<AdminSkillRenderedRevision>(
       `/api/internal/skills/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/rendered`
+    );
+  }
+
+  getSkillRevisionResources(skillId: string, revisionId: string) {
+    return this.request<AdminSkillRevisionResources>(
+      `/api/internal/skills/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/resources`
     );
   }
 

@@ -17,6 +17,11 @@ export class SkillManagementService {
     description?: string;
     category?: string;
     bodyMarkdown: string;
+    resources?: Array<{
+      resourcePath: string;
+      resourceType?: 'reference' | 'template';
+      contentMarkdown: string;
+    }>;
     createdBy?: string;
   }) {
     return this.oneceoApi.createSkill(input);
@@ -29,6 +34,11 @@ export class SkillManagementService {
       description?: string;
       category?: string;
       bodyMarkdown?: string;
+      resources?: Array<{
+        resourcePath: string;
+        resourceType?: 'reference' | 'template';
+        contentMarkdown: string;
+      }>;
       createdBy?: string;
     }
   ) {
@@ -49,6 +59,10 @@ export class SkillManagementService {
 
   getRenderedRevision(skillId: string, revisionId: string) {
     return this.oneceoApi.getRenderedSkillRevision(skillId, revisionId);
+  }
+
+  getRevisionResources(skillId: string, revisionId: string) {
+    return this.oneceoApi.getSkillRevisionResources(skillId, revisionId);
   }
 
   validateRevision(skillId: string, revisionId: string, sessionId: string) {

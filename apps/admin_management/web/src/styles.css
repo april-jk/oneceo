@@ -322,6 +322,7 @@ a {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .skill-form-grid {
@@ -363,13 +364,21 @@ a {
 
 .revision-item {
   display: grid;
-  grid-template-columns: 92px 100px 1fr;
+  grid-template-columns: minmax(0, 1.2fr) minmax(88px, 120px) minmax(110px, 1fr);
   gap: 12px;
   padding: 12px 14px;
   border-radius: 14px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.85);
   text-align: left;
+  min-width: 0;
+}
+
+.revision-item > span,
+.revision-item > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .revision-item.active {
@@ -400,11 +409,75 @@ a {
   color: var(--text);
 }
 
+.validation-result div,
+.validation-result span,
+.validation-result strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.skill-doc-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1.6fr);
+  gap: 18px;
+  min-width: 0;
+}
+
+.skill-doc-nav,
+.skill-doc-editor-pane {
+  min-width: 0;
+}
+
+.skill-doc-nav {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.skill-doc-nav-item {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.85);
+  text-align: left;
+}
+
+.skill-doc-nav-item strong,
+.skill-doc-nav-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.skill-doc-nav-item strong {
+  color: var(--text);
+}
+
+.skill-doc-nav-item span {
+  color: var(--text-soft);
+  font-size: 0.84rem;
+}
+
+.skill-doc-nav-item.active {
+  border-color: rgba(15, 143, 119, 0.28);
+  background: rgba(15, 143, 119, 0.08);
+}
+
 @media (max-width: 1180px) {
   .skill-toolbar,
   .skill-layout,
   .skill-secondary-grid,
-  .skill-form-grid {
+  .skill-form-grid,
+  .skill-doc-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .revision-item {
     grid-template-columns: 1fr;
   }
 }
@@ -1430,10 +1503,16 @@ tbody tr:hover {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.modal-header > div {
+  min-width: 0;
 }
 
 .modal-header h2 {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .modal-grid {
@@ -1442,8 +1521,8 @@ tbody tr:hover {
 
 .modal-tab-grid {
   margin-bottom: 16px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
   padding: 0;
   border-radius: 0;
   background: #f3f4f6;
@@ -1454,7 +1533,7 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 46px;
+  min-height: 54px;
   padding: 12px 16px;
   border: 0;
   border-left: 4px solid transparent;
@@ -1465,6 +1544,7 @@ tbody tr:hover {
   letter-spacing: 0.08em;
   font-size: 11px;
   font-weight: 700;
+  min-width: 0;
 }
 
 .inspector-tab-card:hover {
@@ -1487,7 +1567,9 @@ tbody tr:hover {
 }
 
 .inspector-tab-card-label {
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .modal-body {
@@ -1950,6 +2032,14 @@ tbody tr:hover {
   .modal-grid {
     grid-template-columns: 1fr;
   }
+
+  .modal-header {
+    flex-direction: column;
+  }
+
+  .modal-tab-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1995,6 +2085,10 @@ tbody tr:hover {
   .secondary-btn,
   .toggle-btn {
     width: 100%;
+  }
+
+  .modal-tab-grid {
+    grid-template-columns: 1fr;
   }
 }
 

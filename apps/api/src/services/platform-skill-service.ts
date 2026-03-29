@@ -414,17 +414,33 @@ export class PlatformSkillService {
     if (!skill || !revision || revision.skillId !== skill.id) {
       throw new Error('revision 不存在');
     }
+    const layered = await this.listEffectiveResourceIndexes(revision.id);
     const { resources, resourceSummary } = await this.toRevisionResources(revision.id);
+    const resourceByPath = new Map(resources.map((item) => [normalizeResourcePath(item.resourcePath), item]));
     return {
       skill,
       revision,
-      resources: resources.map((item) => ({
-        id: item.id,
-        resourcePath: normalizeResourcePath(item.resourcePath),
-        resourceType: assertResourceType(item.resourceType),
-        contentMarkdown: item.contentMarkdown,
-        createdAt: toIso(item.createdAt) || new Date().toISOString(),
-      })),
+      resources: layered.map((item) => {
+        const normalizedPath = normalizeResourcePath(item.resourcePath);
+        const resource = resourceByPath.get(normalizedPath);
+        return {
+          id: item.id,
+          resourceKey: item.resourceKey,
+          resourcePath: normalizedPath,
+          resourceType: assertResourceType(asText(item.resourceKind)),
+          title: asText(item.title),
+          summary: asText(item.summary),
+          contentStorage: asText(item.contentStorage) || 'database',
+          mimeType: asText(item.mimeType) || 'text/markdown',
+          storagePath: asText(item.storagePath) || null,
+          storageLocatorJson: item.storageLocatorJson ?? null,
+          loadStage: asText(item.loadStage) || 'on_demand',
+          sortOrder: Number(item.sortOrder || 0),
+          contentMarkdown: resource?.contentMarkdown || '',
+          createdAt: toIso(resource?.createdAt || item.createdAt) || new Date().toISOString(),
+          updatedAt: toIso(item.updatedAt) || new Date().toISOString(),
+        };
+      }),
       resourceSummary,
     };
   }

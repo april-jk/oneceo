@@ -26,6 +26,41 @@ export function createSkillManagementRoutes(service: SkillManagementService) {
   );
 
   router.post(
+    '/import/folder-preview',
+    asyncHandler(async (req, res) => {
+      const result = await service.previewFolderImport(req.body || {});
+      res.status(201);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/import/folder',
+    asyncHandler(async (req, res) => {
+      const result = await service.importFolder(req.body || {});
+      res.status(201);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/import/folder-jobs',
+    asyncHandler(async (req, res) => {
+      const result = await service.createFolderImportJob(req.body || {});
+      res.status(202);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/import/folder-jobs/:jobId',
+    asyncHandler(async (req, res) => {
+      const result = await service.getFolderImportJob(req.params.jobId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
     '/',
     asyncHandler(async (req, res) => {
       const result = await service.createSkill(req.body || {});

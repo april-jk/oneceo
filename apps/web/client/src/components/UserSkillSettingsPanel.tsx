@@ -34,12 +34,35 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatResourceSummary(skill: TaskCreationPlatformSkill) {
+  const summary = skill.resourceSummary;
+  if (!summary || summary.totalCount <= 0) {
+    return "无额外资源";
+  }
+  return `${summary.referenceCount} 个参考，${summary.templateCount} 个模板`;
+}
+
 const EMPTY_FORM = {
   id: "",
   slug: "",
   name: "",
   description: "",
   category: "general",
+  bodyMarkdown: "",
+  documents: [] as Array<{
+    documentKey: string;
+    documentPath: string;
+    title: string;
+    summary: string;
+    bodyMarkdown: string;
+  }>,
+};
+
+const EMPTY_DOCUMENT = {
+  documentKey: "",
+  documentPath: "",
+  title: "",
+  summary: "",
   bodyMarkdown: "",
 };
 
@@ -53,6 +76,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
   const [busyKey, setBusyKey] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingCustomSkillId, setEditingCustomSkillId] = useState("");
+  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
 
   const loadSettings = async () => {
     setLoading(true);
@@ -69,7 +93,15 @@ export function UserSkillSettingsPanel({ onError }: Props) {
             description: current.description,
             category: current.category,
             bodyMarkdown: current.bodyMarkdown || "",
+            documents: (current.documents || []).map((item) => ({
+              documentKey: item.documentKey,
+              documentPath: item.documentPath,
+              title: item.title,
+              summary: item.summary,
+              bodyMarkdown: item.bodyMarkdown,
+            })),
           });
+          setSelectedDocumentIndex(0);
         }
       }
     } catch (error) {
@@ -120,12 +152,21 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       description: skill.description,
       category: skill.category,
       bodyMarkdown: skill.bodyMarkdown || "",
+      documents: (skill.documents || []).map((item) => ({
+        documentKey: item.documentKey,
+        documentPath: item.documentPath,
+        title: item.title,
+        summary: item.summary,
+        bodyMarkdown: item.bodyMarkdown,
+      })),
     });
+    setSelectedDocumentIndex(0);
   };
 
   const resetForm = () => {
     setEditingCustomSkillId("");
     setForm(EMPTY_FORM);
+    setSelectedDocumentIndex(0);
   };
 
   const handleSaveCustomSkill = async () => {
@@ -135,6 +176,15 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       description: asText(form.description),
       category: asText(form.category) || "general",
       bodyMarkdown: form.bodyMarkdown,
+      documents: form.documents
+        .map((item, index) => ({
+          documentKey: normalizeSlug(item.documentKey || item.documentPath || `doc-${index + 1}`),
+          documentPath: asText(item.documentPath),
+          title: asText(item.title),
+          summary: asText(item.summary),
+          bodyMarkdown: item.bodyMarkdown,
+        }))
+        .filter((item) => item.documentPath && asText(item.bodyMarkdown)),
     };
     const actionKey = editingCustomSkillId ? `custom:update:${editingCustomSkillId}` : "custom:create";
     setBusyKey(actionKey);
@@ -152,6 +202,33 @@ export function UserSkillSettingsPanel({ onError }: Props) {
     } finally {
       setBusyKey("");
     }
+  };
+
+  const selectedDocument = form.documents[selectedDocumentIndex] || null;
+
+  const updateDocument = (index: number, patch: Partial<(typeof EMPTY_DOCUMENT)>) => {
+    setForm((prev) => ({
+      ...prev,
+      documents: prev.documents.map((item, currentIndex) =>
+        currentIndex === index ? { ...item, ...patch } : item
+      ),
+    }));
+  };
+
+  const addDocument = () => {
+    setForm((prev) => ({
+      ...prev,
+      documents: [...prev.documents, { ...EMPTY_DOCUMENT, documentKey: `doc-${prev.documents.length + 1}` }],
+    }));
+    setSelectedDocumentIndex(form.documents.length);
+  };
+
+  const removeDocument = (index: number) => {
+    setForm((prev) => ({
+      ...prev,
+      documents: prev.documents.filter((_, currentIndex) => currentIndex !== index),
+    }));
+    setSelectedDocumentIndex((prev) => Math.max(0, Math.min(prev, form.documents.length - 2)));
   };
 
   const handleToggleCustomStatus = async (skill: TaskCreationUserCustomSkill) => {
@@ -192,6 +269,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                 <span className="text-muted-foreground">
                   {item.sourceType === "custom" ? "自定义" : "平台"}
                 </span>
+                {item.resourceSummary?.totalCount ? (
+                  <span className="text-muted-foreground">{formatResourceSummary(item)}</span>
+                ) : null}
               </span>
             ))}
             {!settings?.availableSkills.length ? (
@@ -225,6 +305,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   </span>
                 </div>
                 <p className="text-sm text-muted-foreground">{skill.description || "暂无描述"}</p>
+                <p className="text-xs text-muted-foreground">{formatResourceSummary(skill)}</p>
               </div>
               <Button
                 type="button"
@@ -245,7 +326,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
         <div>
           <Label className="text-sm font-medium">自定义 skills</Label>
           <p className="text-sm text-muted-foreground">
-            这里维护你自己的技能正文，保存后可以直接在用户态 attachment picker 中使用。
+            这里维护你自己的纯数据库型技能。主正文会直接进入 skill 入口，渐进式文档会以 markdown 资源方式存储，按需在运行时加载。
           </p>
         </div>
 
@@ -300,7 +381,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   {editingCustomSkillId ? "编辑自定义 skill" : "新建自定义 skill"}
                 </Label>
                 <p className="text-sm text-muted-foreground">
-                  slug 创建后建议保持稳定，便于后续在 sandbox 内识别。
+                  用户态只支持纯数据库型 skills。文档相对路径会固定恢复到用户 skill 根目录下。
                 </p>
               </div>
               {editingCustomSkillId ? (
@@ -356,6 +437,123 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   rows={14}
                   className="rounded-xl font-mono text-xs"
                 />
+              </div>
+              <div className="grid gap-4 rounded-2xl border border-border/60 bg-background/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <Label className="text-sm font-medium">渐进式文档</Label>
+                    <p className="text-xs text-muted-foreground">
+                      用于补充设计说明、约束、例子等 markdown 文档。仅支持文本型数据库资源。
+                    </p>
+                  </div>
+                  <Button type="button" variant="outline" className="rounded-xl" onClick={addDocument}>
+                    新增文档
+                  </Button>
+                </div>
+                <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+                  <div className="space-y-2">
+                    {form.documents.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
+                        还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类纯 markdown 文档。
+                      </div>
+                    ) : (
+                      form.documents.map((item, index) => (
+                        <button
+                          key={`${item.documentKey || "doc"}:${index}`}
+                          type="button"
+                          className={`w-full rounded-xl border px-3 py-3 text-left ${
+                            selectedDocumentIndex === index
+                              ? "border-primary bg-primary/5"
+                              : "border-border/60 bg-background"
+                          }`}
+                          onClick={() => setSelectedDocumentIndex(index)}
+                        >
+                          <div className="text-sm font-medium">{item.title || item.documentPath || `文档 ${index + 1}`}</div>
+                          <div className="text-xs text-muted-foreground">{item.documentPath || "未设置路径"}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {selectedDocument ? (
+                      <>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label className="text-sm">文档路径</Label>
+                            <Input
+                              value={selectedDocument.documentPath}
+                              onChange={(event) =>
+                                updateDocument(selectedDocumentIndex, { documentPath: event.target.value })
+                              }
+                              placeholder="references/overview.md"
+                              className="rounded-xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm">文档 Key</Label>
+                            <Input
+                              value={selectedDocument.documentKey}
+                              onChange={(event) =>
+                                updateDocument(selectedDocumentIndex, { documentKey: event.target.value })
+                              }
+                              placeholder="overview"
+                              className="rounded-xl"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label className="text-sm">标题</Label>
+                            <Input
+                              value={selectedDocument.title}
+                              onChange={(event) =>
+                                updateDocument(selectedDocumentIndex, { title: event.target.value })
+                              }
+                              placeholder="总体说明"
+                              className="rounded-xl"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm">摘要</Label>
+                            <Input
+                              value={selectedDocument.summary}
+                              onChange={(event) =>
+                                updateDocument(selectedDocumentIndex, { summary: event.target.value })
+                              }
+                              placeholder="告诉模型这份文档适合什么时候读"
+                              className="rounded-xl"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-sm">Markdown 文档</Label>
+                          <Textarea
+                            value={selectedDocument.bodyMarkdown}
+                            onChange={(event) =>
+                              updateDocument(selectedDocumentIndex, { bodyMarkdown: event.target.value })
+                            }
+                            rows={10}
+                            className="rounded-xl font-mono text-xs"
+                          />
+                        </div>
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-xl"
+                            onClick={() => removeDocument(selectedDocumentIndex)}
+                          >
+                            删除当前文档
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
+                        选择左侧文档进行编辑，或先新增一份渐进式文档。
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="flex gap-3">
                 <Button

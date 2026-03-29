@@ -1,4 +1,4 @@
-import type { ManagedSkillContext } from './altus-managed-shared';
+import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
 
 function asText(value: unknown): string {
@@ -312,6 +312,11 @@ export class AltusManagedPromptService {
         `- source: ${skill.sourceType}`,
         `- slug: ${skill.slug}`,
         `- revision: ${skill.revisionNumber ?? '-'}`,
+        `- resources: ${
+          skill.resourceSummary && skill.resourceSummary.totalCount > 0
+            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
+            : 'no extra resources'
+        }`,
       ].join('\n');
       return `${header}\n\n${skill.renderedMarkdown}`;
     });
@@ -323,6 +328,31 @@ export class AltusManagedPromptService {
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '',
       ...sections,
+    ].join('\n');
+  }
+
+  buildSkillCatalogPrompt(skills: ManagedSkillCatalogEntry[]) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    const lines = skills.map((skill) => {
+      const resourceSummary = skill.resourceSummary;
+      const resourceLabel =
+        resourceSummary && resourceSummary.totalCount > 0
+          ? `${resourceSummary.referenceCount} references, ${resourceSummary.templateCount} templates`
+          : 'no extra resources';
+      return `- ${skill.slug}: ${skill.description || skill.name} | category=${skill.category} | revision=${skill.revisionNumber ?? '-'} | resources=${resourceLabel}`;
+    });
+
+    return [
+      '# Available skills catalog',
+      '- This is the metadata catalog of skills the current user can use.',
+      '- Do not assume the full skill body is loaded from this list alone.',
+      '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
+      '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the exact `skillId`, `revisionId`, and `resourcePath`.',
+      '',
+      ...lines,
     ].join('\n');
   }
 }

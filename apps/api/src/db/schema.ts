@@ -279,6 +279,151 @@ export const platformSkillRevisions = pgTable(
   })
 );
 
+export const platformSkillRevisionResources = pgTable(
+  'platform_skill_revision_resources',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => platformSkillRevisions.id, { onDelete: 'cascade' }),
+    resourcePath: text('resource_path').notNull(),
+    resourceType: text('resource_type').notNull().default('reference'),
+    contentMarkdown: text('content_markdown').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    revisionPathUnique: uniqueIndex('idx_platform_skill_revision_resources_revision_path').on(
+      table.revisionId,
+      table.resourcePath
+    ),
+    revisionIdx: index('idx_platform_skill_revision_resources_revision_id').on(table.revisionId),
+  })
+);
+
+export const platformSkillRevisionEntries = pgTable(
+  'platform_skill_revision_entries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => platformSkillRevisions.id, { onDelete: 'cascade' }),
+    entryName: text('entry_name').notNull(),
+    entryDescription: text('entry_description').notNull().default(''),
+    allowedToolsJson: jsonb('allowed_tools_json').notNull().default(sql`'[]'::jsonb`),
+    bodyMarkdown: text('body_markdown').notNull(),
+    renderVersion: integer('render_version').notNull().default(1),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    revisionUnique: uniqueIndex('idx_platform_skill_revision_entries_revision_id').on(table.revisionId),
+  })
+);
+
+export const platformSkillRevisionResourceIndexes = pgTable(
+  'platform_skill_revision_resource_indexes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => platformSkillRevisions.id, { onDelete: 'cascade' }),
+    resourceKey: text('resource_key').notNull(),
+    resourcePath: text('resource_path').notNull(),
+    resourceKind: text('resource_kind').notNull().default('reference'),
+    title: text('title').notNull().default(''),
+    summary: text('summary').notNull().default(''),
+    contentStorage: text('content_storage').notNull().default('database'),
+    mimeType: text('mime_type').notNull().default('text/markdown'),
+    storagePath: text('storage_path'),
+    storageLocatorJson: jsonb('storage_locator_json'),
+    loadStage: text('load_stage').notNull().default('on_demand'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    revisionKeyUnique: uniqueIndex('idx_platform_skill_resource_indexes_revision_key').on(
+      table.revisionId,
+      table.resourceKey
+    ),
+    revisionPathUnique: uniqueIndex('idx_platform_skill_resource_indexes_revision_path').on(
+      table.revisionId,
+      table.resourcePath
+    ),
+    revisionSortIdx: index('idx_platform_skill_resource_indexes_revision_sort').on(
+      table.revisionId,
+      table.sortOrder
+    ),
+  })
+);
+
+export const platformSkillRevisionResourceBodies = pgTable(
+  'platform_skill_revision_resource_bodies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    resourceIndexId: uuid('resource_index_id')
+      .notNull()
+      .references(() => platformSkillRevisionResourceIndexes.id, { onDelete: 'cascade' }),
+    contentFormat: text('content_format').notNull().default('markdown'),
+    contentMode: text('content_mode').notNull().default('inline'),
+    fullTextHash: text('full_text_hash'),
+    contentSize: integer('content_size').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    resourceIndexUnique: uniqueIndex('idx_platform_skill_resource_bodies_resource_index_id').on(table.resourceIndexId),
+  })
+);
+
+export const platformSkillRevisionResourceChunks = pgTable(
+  'platform_skill_revision_resource_chunks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    resourceBodyId: uuid('resource_body_id')
+      .notNull()
+      .references(() => platformSkillRevisionResourceBodies.id, { onDelete: 'cascade' }),
+    chunkIndex: integer('chunk_index').notNull(),
+    chunkRole: text('chunk_role').notNull().default('body'),
+    chunkSummary: text('chunk_summary').notNull().default(''),
+    contentText: text('content_text').notNull(),
+    tokenEstimate: integer('token_estimate').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    bodyChunkUnique: uniqueIndex('idx_platform_skill_resource_chunks_body_chunk').on(
+      table.resourceBodyId,
+      table.chunkIndex
+    ),
+    bodyRoleIdx: index('idx_platform_skill_resource_chunks_body_role').on(table.resourceBodyId, table.chunkRole),
+  })
+);
+
+export const platformSkillRevisionResourceLinks = pgTable(
+  'platform_skill_revision_resource_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => platformSkillRevisions.id, { onDelete: 'cascade' }),
+    fromType: text('from_type').notNull(),
+    fromId: uuid('from_id').notNull(),
+    toResourceIndexId: uuid('to_resource_index_id')
+      .notNull()
+      .references(() => platformSkillRevisionResourceIndexes.id, { onDelete: 'cascade' }),
+    linkType: text('link_type').notNull().default('suggested'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    revisionFromIdx: index('idx_platform_skill_resource_links_revision_from').on(
+      table.revisionId,
+      table.fromType,
+      table.fromId
+    ),
+    revisionToIdx: index('idx_platform_skill_resource_links_revision_to').on(table.revisionId, table.toResourceIndexId),
+  })
+);
+
 /**
  * 意图识别结果表
  * 
@@ -481,6 +626,38 @@ export const userCustomSkills = pgTable(
   })
 );
 
+export const userCustomSkillDocuments = pgTable(
+  'user_custom_skill_documents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    customSkillId: uuid('custom_skill_id')
+      .notNull()
+      .references(() => userCustomSkills.id, { onDelete: 'cascade' }),
+    documentKey: text('document_key').notNull(),
+    documentPath: text('document_path').notNull(),
+    title: text('title').notNull().default(''),
+    summary: text('summary').notNull().default(''),
+    bodyMarkdown: text('body_markdown').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    customSkillKeyUnique: uniqueIndex('idx_user_custom_skill_documents_skill_key').on(
+      table.customSkillId,
+      table.documentKey
+    ),
+    customSkillPathUnique: uniqueIndex('idx_user_custom_skill_documents_skill_path').on(
+      table.customSkillId,
+      table.documentPath
+    ),
+    customSkillSortIdx: index('idx_user_custom_skill_documents_skill_sort').on(
+      table.customSkillId,
+      table.sortOrder
+    ),
+  })
+);
+
 export const taskSessionConnectorBindings = pgTable(
   'task_session_connector_bindings',
   {
@@ -560,6 +737,18 @@ export type PlatformSkill = typeof platformSkills.$inferSelect;
 export type NewPlatformSkill = typeof platformSkills.$inferInsert;
 export type PlatformSkillRevision = typeof platformSkillRevisions.$inferSelect;
 export type NewPlatformSkillRevision = typeof platformSkillRevisions.$inferInsert;
+export type PlatformSkillRevisionResource = typeof platformSkillRevisionResources.$inferSelect;
+export type NewPlatformSkillRevisionResource = typeof platformSkillRevisionResources.$inferInsert;
+export type PlatformSkillRevisionEntry = typeof platformSkillRevisionEntries.$inferSelect;
+export type NewPlatformSkillRevisionEntry = typeof platformSkillRevisionEntries.$inferInsert;
+export type PlatformSkillRevisionResourceIndex = typeof platformSkillRevisionResourceIndexes.$inferSelect;
+export type NewPlatformSkillRevisionResourceIndex = typeof platformSkillRevisionResourceIndexes.$inferInsert;
+export type PlatformSkillRevisionResourceBody = typeof platformSkillRevisionResourceBodies.$inferSelect;
+export type NewPlatformSkillRevisionResourceBody = typeof platformSkillRevisionResourceBodies.$inferInsert;
+export type PlatformSkillRevisionResourceChunk = typeof platformSkillRevisionResourceChunks.$inferSelect;
+export type NewPlatformSkillRevisionResourceChunk = typeof platformSkillRevisionResourceChunks.$inferInsert;
+export type PlatformSkillRevisionResourceLink = typeof platformSkillRevisionResourceLinks.$inferSelect;
+export type NewPlatformSkillRevisionResourceLink = typeof platformSkillRevisionResourceLinks.$inferInsert;
 
 export type IntentRecognitionResult = typeof intentRecognitionResults.$inferSelect;
 export type NewIntentRecognitionResult = typeof intentRecognitionResults.$inferInsert;
@@ -587,6 +776,8 @@ export type UserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferSe
 export type NewUserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferInsert;
 export type UserCustomSkill = typeof userCustomSkills.$inferSelect;
 export type NewUserCustomSkill = typeof userCustomSkills.$inferInsert;
+export type UserCustomSkillDocument = typeof userCustomSkillDocuments.$inferSelect;
+export type NewUserCustomSkillDocument = typeof userCustomSkillDocuments.$inferInsert;
 
 export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
 export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;

@@ -11,6 +11,7 @@ import type {
   SkillImportPreview,
   SkillRenderedRevision,
   SkillRevision,
+  SkillRevisionResources,
   SkillSummary,
   SkillValidationResult,
   KvmJobInfo,
@@ -279,6 +280,11 @@ export const api = {
     description?: string;
     category?: string;
     bodyMarkdown: string;
+    resources?: Array<{
+      resourcePath: string;
+      resourceType?: 'reference' | 'template';
+      contentMarkdown: string;
+    }>;
     createdBy?: string;
   }) =>
     request<SkillDetail>('/api/skill-management', {
@@ -292,6 +298,11 @@ export const api = {
       description?: string;
       category?: string;
       bodyMarkdown?: string;
+      resources?: Array<{
+        resourcePath: string;
+        resourceType?: 'reference' | 'template';
+        contentMarkdown: string;
+      }>;
       createdBy?: string;
     }
   ) =>
@@ -314,6 +325,10 @@ export const api = {
   getRenderedSkillRevision: (skillId: string, revisionId: string) =>
     request<SkillRenderedRevision>(
       `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/rendered`
+    ),
+  getSkillRevisionResources: (skillId: string, revisionId: string) =>
+    request<SkillRevisionResources>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/resources`
     ),
   validateSkillRevision: (skillId: string, revisionId: string, sessionId: string) =>
     request<SkillValidationResult>(

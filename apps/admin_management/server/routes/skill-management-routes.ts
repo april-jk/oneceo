@@ -109,6 +109,14 @@ export function createSkillManagementRoutes(service: SkillManagementService) {
     })
   );
 
+  router.get(
+    '/:skillId/revisions/:revisionId/resources',
+    asyncHandler(async (req, res) => {
+      const result = await service.getRevisionResources(req.params.skillId, req.params.revisionId);
+      return ok(res, result);
+    })
+  );
+
   router.post(
     '/:skillId/revisions/:revisionId/validate',
     asyncHandler(async (req, res) => {

@@ -321,6 +321,18 @@ export interface SkillDetail {
   publishedRevisionId: string | null;
   latestBodyMarkdown: string;
   renderedSkillMarkdown: string | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources?: Array<{
+    id: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    createdAt: string;
+  }>;
   updatedAt: string;
 }
 
@@ -340,6 +352,41 @@ export interface SkillRenderedRevision {
   slug: string;
   renderedMarkdown: string;
   signature: string;
+}
+
+export interface SkillRevisionResources {
+  skill: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  revision: {
+    id: string;
+    revisionNumber: number;
+  };
+  resourceSummary: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources: Array<{
+    id: string;
+    resourceKey: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    title: string;
+    summary: string;
+    contentStorage: 'database' | 'object_storage';
+    mimeType: string;
+    storagePath: string | null;
+    storageLocatorJson: Record<string, unknown> | null;
+    loadStage: string;
+    sortOrder: number;
+    contentMarkdown: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 }
 
 export interface SkillValidationResult {

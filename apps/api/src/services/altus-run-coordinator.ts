@@ -487,10 +487,11 @@ export class AltusRunCoordinator {
       workspaceRoot: state.workspaceRoot,
       connectors: state.input.connectors as any,
     });
+    const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
-      systemPrompt
+      skillPrompt ? `${systemPrompt}\n\n${skillPrompt}` : systemPrompt
     );
     let plainTextRecoveryUsed = false;
 

@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { api } from './api';
 import { KvmControlCenter } from './components/KvmControlCenter';
+import { SkillManagementSection } from './components/SkillManagementSection';
 import type {
   AgentManagementOverview,
   AuditLogEntry,
@@ -36,7 +37,7 @@ import type {
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'agent' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'sandbox' | 'audit';
 type HostTrendPoint = {
   timestamp: number;
   timeLabel: string;
@@ -49,6 +50,7 @@ const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string; tag: 
   { key: 'kvm', label: 'KVM 管理', subtitle: '虚拟机与资源', tag: 'KVM' },
   { key: 'conversation', label: '对话管理', subtitle: '任务创建会话', tag: 'MSG' },
   { key: 'agent', label: '智能体管理', subtitle: 'Agent 运行状态', tag: 'AGT' },
+  { key: 'skill', label: '技能管理', subtitle: '平台技能与 revision', tag: 'SKL' },
   { key: 'sandbox', label: '执行环境管理', subtitle: 'Sandbox 与 OSAC', tag: 'SBX' },
   { key: 'audit', label: '审计日志', subtitle: '操作追踪', tag: 'LOG' },
 ];
@@ -829,6 +831,8 @@ export default function App() {
           await loadConversationSessions();
         } else if (section === 'agent') {
           await loadAgentSection();
+        } else if (section === 'skill') {
+          setError(null);
         } else if (section === 'sandbox') {
           await loadSandboxSection();
         } else {
@@ -1060,12 +1064,16 @@ export default function App() {
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
+      : activeSection === 'skill'
+        ? true
       : activeSection === 'sandbox' || kvmShowsSandbox
         ? sandboxOverview?.sandboxApi.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
     activeSection === 'agent'
       ? 'Agent 服务'
+      : activeSection === 'skill'
+        ? 'Oneceo API'
       : activeSection === 'sandbox' || kvmShowsSandbox
         ? 'Sandbox 服务'
         : 'KVM 服务';
@@ -3261,6 +3269,7 @@ const renderAuditSection = () => (
     if (activeSection === 'kvm') return kvmMode === 'sandbox' ? renderSandboxSection() : renderKvmSection();
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
+    if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
@@ -3279,6 +3288,17 @@ const renderAuditSection = () => (
               <span className="env-badge">OPS</span>
             </div>
             <p className="sidebar-copy">统一查看 KVM、会话、智能体、Sandbox 与操作审计。</p>
+            <button
+              type="button"
+              className={`nav-item ${activeSection === 'skill' ? 'active' : ''}`}
+              onClick={() => setActiveSection('skill')}
+            >
+              <span className="nav-item-tag">SKL</span>
+              <span className="nav-item-body">
+                <span>平台 Skills</span>
+                <small>全局模板、revision 与用户联动</small>
+              </span>
+            </button>
           </div>
           <nav className="sidebar-nav" aria-label="Primary">
             {NAV_ITEMS.map((item) => (

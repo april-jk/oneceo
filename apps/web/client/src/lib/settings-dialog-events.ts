@@ -1,6 +1,6 @@
 import type { ConnectorKey } from "@/lib/connectors-client";
 
-export type SettingsTab = "account" | "model" | "settings" | "connectors";
+export type SettingsTab = "account" | "model" | "settings" | "skills" | "connectors";
 
 export type OpenSettingsDialogDetail = {
   tab?: SettingsTab;
@@ -9,6 +9,7 @@ export type OpenSettingsDialogDetail = {
 };
 
 export const OPEN_SETTINGS_DIALOG_EVENT = "oneceo:open-settings-dialog";
+export const TASK_CREATION_SKILLS_UPDATED_EVENT = "oneceo:task-creation-skills-updated";
 
 export function openSettingsDialog(detail: OpenSettingsDialogDetail = {}) {
   if (typeof window === "undefined") return;
@@ -17,4 +18,9 @@ export function openSettingsDialog(detail: OpenSettingsDialogDetail = {}) {
       detail,
     })
   );
+}
+
+export function notifyTaskCreationSkillsUpdated() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(TASK_CREATION_SKILLS_UPDATED_EVENT));
 }

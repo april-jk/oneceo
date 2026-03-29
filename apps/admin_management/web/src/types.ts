@@ -298,6 +298,61 @@ export interface ConversationSessionDetailResponse {
   };
 }
 
+export interface SkillSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  publishedRevisionNumber: number | null;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SkillDetail {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  latestBodyMarkdown: string;
+  renderedSkillMarkdown: string | null;
+  updatedAt: string;
+}
+
+export interface SkillRevision {
+  id: string;
+  revisionNumber: number;
+  createdAt: string;
+  createdBy?: string | null;
+  publishedAt?: string | null;
+  isPublished: boolean;
+}
+
+export interface SkillRenderedRevision {
+  skillId: string;
+  revisionId: string;
+  revisionNumber: number;
+  slug: string;
+  renderedMarkdown: string;
+  signature: string;
+}
+
+export interface SkillValidationResult {
+  sessionId: string;
+  skillId: string;
+  revisionId: string;
+  slug: string | null;
+  skillPath: string | null;
+  signature: string;
+  restartTriggered: boolean;
+  syncedAt: string;
+}
+
 export interface ConversationTraceEvent {
   id: string;
   timestamp?: string;

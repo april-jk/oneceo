@@ -33,6 +33,7 @@ import {
   type OpencodePendingQuestion,
 } from './opencode-question-adapter';
 import { DEFAULT_CODEX_MODEL } from '../utils/codex-runtime-config';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -3364,6 +3365,7 @@ export class OpencodeRemoteService {
     workspacePath?: string;
     source?: 'user' | 'agent';
     clientMessageKey?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<{ orchestratorSessionId: string; opencodeSessionId: string }> {
     const taskSessionId = asString(input.taskSessionId);
     const content = String(input.content || '').trim();
@@ -3423,6 +3425,11 @@ export class OpencodeRemoteService {
       try {
         return await this.withOpencodeLock(orchestratorSessionId, async () => {
           await this.ensureWorkspaceGit(orchestratorSessionId, workspacePath);
+          await sandboxSkillSyncService.syncSelectedSkills({
+            taskSessionId,
+            orchestratorSessionId,
+            skills: input.metadata?.skills,
+          });
           await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
             workspacePath: workspacePath || undefined,
             host: opencodeHost,
@@ -3477,6 +3484,7 @@ export class OpencodeRemoteService {
             messageType,
             content,
             {
+              ...(input.metadata || {}),
               orchestratorSessionId,
               opencodeSessionId,
               workspacePath,

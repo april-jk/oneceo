@@ -3288,17 +3288,6 @@ const renderAuditSection = () => (
               <span className="env-badge">OPS</span>
             </div>
             <p className="sidebar-copy">统一查看 KVM、会话、智能体、Sandbox 与操作审计。</p>
-            <button
-              type="button"
-              className={`nav-item ${activeSection === 'skill' ? 'active' : ''}`}
-              onClick={() => setActiveSection('skill')}
-            >
-              <span className="nav-item-tag">SKL</span>
-              <span className="nav-item-body">
-                <span>平台 Skills</span>
-                <small>全局模板、revision 与用户联动</small>
-              </span>
-            </button>
           </div>
           <nav className="sidebar-nav" aria-label="Primary">
             {NAV_ITEMS.map((item) => (

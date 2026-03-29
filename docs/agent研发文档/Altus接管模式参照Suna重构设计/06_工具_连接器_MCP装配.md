@@ -55,6 +55,18 @@ Altus managed 重构后也必须采用同样策略。
 - 不再使用当前三层 Agent 各自分散的 system prompt
 - 改成一个 managed agent 的统一 prompt 入口
 - 对“修改文件/创建项目/生成代码”类请求，prompt 必须明确要求先走工具执行，再回传摘要
+- prompt 必须明确要求先判断任务等级：
+  - `simple`
+  - `normal`
+  - `complex`
+- 对 `complex` 任务，prompt 必须明确要求先形成详细 todo，再按步骤逐项执行与验证
+- `complex` 的判断条件必须至少覆盖：
+  - 多文件
+  - 多子系统
+  - 调试链路长
+  - 依赖关系不清楚
+  - 需要分阶段验证
+  - 涉及迁移、运行时、基础设施或环境变更
 - 不允许把完整实现代码直接作为聊天正文输出并跳过 `write_file` / `shell_execute`
 - managed mode 需要一个显式终止工具，语义参照 `suna` 的 `message_tool.complete(...)`
 - Altus run 不应因为模型输出了一段普通 assistant 正文就直接判定完成；应由 `complete_task` 这类 terminating tool 作为唯一的正常完成信号

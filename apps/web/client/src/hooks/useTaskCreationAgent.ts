@@ -20,9 +20,10 @@ import {
   listOsacMessages,
   resolveTaskCreationSessionTitle,
   startTaskCreationRuntime,
-  startTaskCreationManagedRun,
+  submitTaskCreationManagedInput,
   stopTaskCreationManagedRun,
   touchTaskCreationRuntime,
+  type TaskCreationUploadedAttachment,
   type TaskCreationHistoryMessage,
   type OsacMessageRecord,
 } from '@/lib/task-creation-client';
@@ -81,6 +82,7 @@ export interface UseTaskCreationAgentOptions {
 }
 
 type SendInputOptions = {
+  files?: File[];
   metadata?: Record<string, unknown>;
   sessionId?: string;
 };
@@ -259,6 +261,46 @@ function compactText(value: string, maxLen: number = 320): string {
   const text = value.trim().replace(/\s+/g, ' ');
   if (!text) return '';
   return text;
+}
+
+function buildOptimisticAttachments(files: File[]): TaskCreationUploadedAttachment[] {
+  return files.map((file) => ({
+    name: file.name,
+    path: '',
+    size: file.size,
+    mimeType: file.type || 'application/octet-stream',
+  }));
+}
+
+function readUploadedAttachments(value: unknown): TaskCreationUploadedAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is TaskCreationUploadedAttachment => {
+    return (
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as TaskCreationUploadedAttachment).name === 'string' &&
+      typeof (item as TaskCreationUploadedAttachment).size === 'number'
+    );
+  });
+}
+
+function mergeUploadedAttachments(
+  base: TaskCreationUploadedAttachment[],
+  incoming: TaskCreationUploadedAttachment[]
+): TaskCreationUploadedAttachment[] {
+  const merged = new Map<string, TaskCreationUploadedAttachment>();
+  for (const item of [...base, ...incoming]) {
+    const key = [
+      item.attachmentKind || 'uploaded_file',
+      item.templateId || '',
+      item.path || '',
+      item.name || '',
+      String(item.size || 0),
+      item.inlineContent || '',
+    ].join(':');
+    merged.set(key, item);
+  }
+  return Array.from(merged.values());
 }
 
 const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指令';
@@ -1316,6 +1358,69 @@ function resolveAgentMessageKey(message: Partial<AgentMessage>): string {
   ].join(':');
 }
 
+function isManagedToolEventType(eventType: string): boolean {
+  return (
+    eventType === 'tool_call_started' ||
+    eventType === 'tool_call_progress' ||
+    eventType === 'tool_call_completed' ||
+    eventType === 'tool_call_failed'
+  );
+}
+
+function isManagedSystemEventType(eventType: string): boolean {
+  return (
+    eventType === 'run_ack' ||
+    eventType === 'run_status' ||
+    eventType === 'run_completed' ||
+    eventType === 'run_failed' ||
+    eventType === 'run_stopped' ||
+    eventType === 'artifact_updated'
+  );
+}
+
+export function resolveManagedStreamMessageKey(input: {
+  eventType: string;
+  runId?: string | null;
+  toolCallId?: string | null;
+  sequence?: number | null;
+  payloadMessageKey?: unknown;
+  envelopeMessageKey?: unknown;
+}): string {
+  const eventType = asText(input.eventType).toLowerCase() || 'message';
+  const runId = asText(input.runId);
+  const toolCallId = asText(input.toolCallId);
+  const payloadMessageKey = asText(input.payloadMessageKey);
+  const envelopeMessageKey = asText(input.envelopeMessageKey);
+
+  if (isManagedToolEventType(eventType) && runId && toolCallId) {
+    return `managed:${runId}:tool:${toolCallId}`;
+  }
+
+  if (isManagedSystemEventType(eventType)) {
+    if (eventType === 'artifact_updated' && runId) {
+      const sequence = input.sequence ?? null;
+      return typeof sequence === 'number' && Number.isFinite(sequence) && sequence > 0
+        ? `managed:${runId}:artifact_updated:${Math.floor(sequence)}`
+        : `managed:${runId}:artifact_updated`;
+    }
+    return runId ? `managed:${runId}:${eventType}` : `managed:${eventType}`;
+  }
+
+  return (
+    payloadMessageKey ||
+    envelopeMessageKey ||
+    (runId ? `managed:${runId}:${eventType}` : `managed:${eventType}`)
+  );
+}
+
+function resolveExplicitAgentMessageKey(message: Partial<AgentMessage>): string {
+  if (asText(message.messageKey)) {
+    return asText(message.messageKey);
+  }
+  const metadata = toRecord(message.metadata);
+  return asText(metadata.messageKey);
+}
+
 function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   const messageKey = resolveAgentMessageKey(message);
   const metadata = toRecord(message.metadata);
@@ -1329,7 +1434,7 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   };
 }
 
-function mergeRealtimeMessage(
+export function mergeRealtimeMessage(
   prev: AgentMessage[],
   message: AgentMessage,
   welcomeMessage: string
@@ -1393,6 +1498,8 @@ function mergeRealtimeMessage(
   const isDuplicateUserMessage =
     (message.type === 'user_input' || message.type === 'user_response') &&
     lastMessage?.type === message.type &&
+    !resolveExplicitAgentMessageKey(message) &&
+    !resolveExplicitAgentMessageKey(lastMessage || {}) &&
     (message.content || '').trim() &&
     (message.content || '').trim() === (lastMessage?.content || '').trim();
   if (isDuplicateUserMessage) {
@@ -1791,6 +1898,34 @@ function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[
   return merged;
 }
 
+export function reconcileHistoryWithPendingLocalMessages(
+  historyMessages: AgentMessage[],
+  pendingLocalMessages: AgentMessage[]
+): {
+  messages: AgentMessage[];
+  remainingPending: AgentMessage[];
+} {
+  if (pendingLocalMessages.length === 0) {
+    return {
+      messages: historyMessages,
+      remainingPending: [],
+    };
+  }
+
+  const confirmedKeys = new Set(historyMessages.map((item) => getHistoryMessageKey(item)));
+  const remainingPending = pendingLocalMessages.filter(
+    (item) => !confirmedKeys.has(getHistoryMessageKey(item))
+  );
+
+  return {
+    messages:
+      remainingPending.length > 0
+        ? mergeHistoryAgentMessages(historyMessages, remainingPending)
+        : historyMessages,
+    remainingPending,
+  };
+}
+
 function hasLegacyHistoryNoise(messages: AgentMessage[]): boolean {
   return messages.some((message) => {
     const content = asText(message.content);
@@ -2097,6 +2232,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const reconnectingRef = useRef(false);
   const connectRef = useRef<() => void>(() => {});
   const outboundQueueRef = useRef<string[]>([]);
+  const messagesRef = useRef<AgentMessage[]>([]);
   const onPlanGeneratedRef = useRef(options?.onPlanGenerated);
   const onErrorRef = useRef(options?.onError);
   const ensureRuntimeRef = useRef<(targetSessionId?: string) => Promise<void>>(async () => {});
@@ -2116,6 +2252,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
   const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
   const activeProcessingMessageKeyRef = useRef<string | null>(null);
+  const pendingLocalMessagesRef = useRef<Map<string, AgentMessage[]>>(new Map());
+  const pendingSessionSyncRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const resetConversationState = useCallback((nextSessionId: string | null = null) => {
     setMessages([]);
@@ -2163,6 +2305,26 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const setPendingSandboxPrompt = useCallback((nextPrompt: PendingSandboxPrompt | null) => {
     pendingSandboxPromptRef.current = nextPrompt;
     setPendingSandboxPromptVersion((value) => value + 1);
+  }, []);
+
+  const trackPendingLocalMessage = useCallback((targetSessionId: string | null | undefined, message: AgentMessage) => {
+    const normalizedSessionId = asText(targetSessionId);
+    if (!normalizedSessionId) return;
+    const nextMessage = normalizeAgentMessageIdentity(message);
+    const existing = pendingLocalMessagesRef.current.get(normalizedSessionId) || [];
+    const merged = mergeHistoryAgentMessages(existing, [nextMessage]);
+    pendingLocalMessagesRef.current.set(normalizedSessionId, merged);
+  }, []);
+
+  const mergeWithPendingLocalMessages = useCallback((historySessionId: string, historyMessages: AgentMessage[]) => {
+    const pending = pendingLocalMessagesRef.current.get(historySessionId) || [];
+    const reconciled = reconcileHistoryWithPendingLocalMessages(historyMessages, pending);
+    if (reconciled.remainingPending.length > 0) {
+      pendingLocalMessagesRef.current.set(historySessionId, reconciled.remainingPending);
+    } else {
+      pendingLocalMessagesRef.current.delete(historySessionId);
+    }
+    return reconciled.messages;
   }, []);
 
   const interruptCurrentRun = useCallback(
@@ -2280,6 +2442,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
 
   const bindSessionId = useCallback((nextSessionId: string) => {
     if (!nextSessionId) return;
+    pendingSessionSyncRef.current = nextSessionId;
     setSessionId(nextSessionId);
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
     const params = new URLSearchParams(window.location.search);
@@ -2304,6 +2467,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const resolvedSessionId = pathSessionId || querySessionId || '';
 
     if (createNewToken) {
+      pendingSessionSyncRef.current = null;
       if (sessionId !== null || messages.length > 0) {
         resetConversationState(null);
       }
@@ -2311,12 +2475,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     }
 
     if (resolvedSessionId) {
+      if (pendingSessionSyncRef.current === resolvedSessionId) {
+        if (sessionId !== resolvedSessionId) {
+          setSessionId(resolvedSessionId);
+          window.localStorage.setItem(SESSION_STORAGE_KEY, resolvedSessionId);
+        }
+        return;
+      }
       if (resolvedSessionId !== sessionId) {
         resetConversationState(resolvedSessionId);
       }
       return;
     }
   }, [location, search, sessionId, messages.length, resetConversationState]);
+
+  useEffect(() => {
+    if (pendingSessionSyncRef.current && pendingSessionSyncRef.current === sessionId) {
+      pendingSessionSyncRef.current = null;
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     setRuntimeEnabled(autoRuntime);
@@ -2522,19 +2699,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         asText(envelope.text);
 
       const toolCallId = asText(payload.toolCallId) || asText(envelope.toolCallId);
-      const isManagedToolEvent =
-        eventType === 'tool_call_started' ||
-        eventType === 'tool_call_progress' ||
-        eventType === 'tool_call_completed' ||
-        eventType === 'tool_call_failed';
-      const messageKey =
-        asText(payload.messageKey) ||
-        asText(envelope.messageKey) ||
-        (isManagedToolEvent && runId && toolCallId
-          ? `managed:${runId}:tool:${toolCallId}`
-          : runId
-            ? `managed:${runId}:${eventType}`
-            : `managed:${eventType}`);
+      const isManagedToolEvent = isManagedToolEventType(eventType);
+      const messageKey = resolveManagedStreamMessageKey({
+        eventType,
+        runId,
+        toolCallId,
+        sequence,
+        payloadMessageKey: payload.messageKey,
+        envelopeMessageKey: envelope.messageKey,
+      });
 
       const baseMetadata: Record<string, unknown> = {
         ...payload,
@@ -3391,10 +3564,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [clearReconnectTimer]);
 
   // 回答澄清问题
-  const answerQuestion = useCallback((answer: string) => {
+  const answerQuestion = useCallback((answer: string, options?: SendInputOptions) => {
     if (isManagedAltusMode()) {
       void sendChatInputRef.current(answer, {
-        sessionId: sessionId || undefined,
+        ...(options || {}),
+        sessionId: options?.sessionId || sessionId || undefined,
       });
       setCurrentQuestion(null);
       return;
@@ -3404,15 +3578,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return;
     }
     const messageKey = generateClientMessageKey('user');
+    const messageMetadata = {
+      ...(options?.metadata || {}),
+      messageKey,
+    };
+
+    trackPendingLocalMessage(options?.sessionId || sessionId, {
+      messageKey,
+      type: 'user_response',
+      content: answer,
+      metadata: messageMetadata,
+      sessionId: options?.sessionId || sessionId || undefined,
+    });
 
     wsRef.current.send(
       JSON.stringify({
         type: 'user_response',
         content: answer,
-        sessionId: sessionId || undefined,
-        metadata: {
-          messageKey,
-        },
+        sessionId: options?.sessionId || sessionId || undefined,
+        metadata: messageMetadata,
       })
     );
 
@@ -3423,15 +3607,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           messageKey,
           type: 'user_response',
           content: answer,
-          metadata: {
-            messageKey,
-          },
+          metadata: messageMetadata,
+          sessionId: options?.sessionId || sessionId || undefined,
         },
         WELCOME_MESSAGE
       )
     );
     setCurrentQuestion(null);
-  }, [sessionId]);
+  }, [sessionId, trackPendingLocalMessage]);
 
   // 清空消息
   const clearMessages = useCallback(() => {
@@ -3552,7 +3735,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (activeHistorySessionRef.current && activeHistorySessionRef.current !== historySessionId) {
         return;
       }
-      setMessages(normalized);
+      const mergedWithPending = mergeWithPendingLocalMessages(historySessionId, normalized);
+      setMessages(mergedWithPending);
       if (typeof options?.hasOlderHistory === 'boolean') {
         setHasOlderHistory(options.hasOlderHistory);
       }
@@ -3561,13 +3745,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
       writeHistoryViewCache(
         historySessionId,
-        normalized,
+        mergedWithPending,
         options?.oldestCursor ?? oldestHistoryCursorRef.current,
         options?.hasOlderHistory ?? hasOlderHistory
       );
-      syncQuestionAndRuntimeState(normalized);
+      syncQuestionAndRuntimeState(mergedWithPending);
     },
-    [hasOlderHistory, syncQuestionAndRuntimeState]
+    [hasOlderHistory, mergeWithPendingLocalMessages, syncQuestionAndRuntimeState]
   );
 
   const loadHistory = useCallback(async (
@@ -3590,22 +3774,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     isLoadingOlderHistoryRef.current = false;
     setIsLoadingOlderHistory(false);
     const cached = readHistoryViewCache(historySessionId);
+    const cachedMessages = cached
+      ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
+      : null;
     if (cached) {
       oldestHistoryCursorRef.current = cached.oldestCursor;
       setHasOlderHistory(cached.hasOlderHistory);
-      setMessages(cached.messages);
-      syncQuestionAndRuntimeState(cached.messages);
+      setMessages(cachedMessages || cached.messages);
+      syncQuestionAndRuntimeState(cachedMessages || cached.messages);
     }
     try {
       const recent = await getTaskCreationRecentMessages(historySessionId);
       const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
       const shouldFallbackToHistory =
-        normalizedRecent.length === 0 && (!cached || cached.messages.length === 0);
+        normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
       if (shouldFallbackToHistory) {
         throw new Error('recent cache empty');
       }
-      const merged = cached
-        ? mergeHistoryAgentMessages(cached.messages, normalizedRecent)
+      const merged = cachedMessages
+        ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
         : normalizedRecent;
       const cachedExpanded = cached
         ? cached.messages.length > normalizedRecent.length ||
@@ -3631,8 +3818,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           limit: HISTORY_PAGE_SIZE,
         });
         const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
-        const mergedFallback = cached
-          ? mergeHistoryAgentMessages(cached.messages, normalizedFallback)
+        const mergedFallback = cachedMessages
+          ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
           : normalizedFallback;
         const cachedExpanded = cached
           ? cached.messages.length > normalizedFallback.length ||
@@ -4165,6 +4352,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     setIsProcessing(true);
     setCurrentQuestion(null);
     activeProcessingMessageKeyRef.current = messageKey;
+    trackPendingLocalMessage(targetSessionId, {
+      messageKey,
+      type: 'user_input',
+      content: input,
+      metadata: messageMetadata,
+      sessionId: targetSessionId,
+    });
     setMessages((prev) =>
       mergeRealtimeMessage(
         prev,
@@ -4204,11 +4398,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         executor: readExecutor(),
       },
     });
-  }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, orchestratorSessionId, sendOrQueueMessage, sessionId]);
+  }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, orchestratorSessionId, sendOrQueueMessage, sessionId, trackPendingLocalMessage]);
 
   const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
     if (!text) return;
+    const optimisticAttachments = Array.isArray(options?.files) ? buildOptimisticAttachments(options.files) : [];
 
     let activeSessionId = (() => {
       if (options?.sessionId) return options.sessionId;
@@ -4239,14 +4434,27 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
 
       const messageKey = generateClientMessageKey('user');
+      const metadataAttachments = readUploadedAttachments(toRecord(options?.metadata).attachments);
+      const combinedAttachments = mergeUploadedAttachments(
+        metadataAttachments,
+        optimisticAttachments
+      );
       const messageMetadata = {
         ...(options?.metadata || {}),
+        ...(combinedAttachments.length ? { attachments: combinedAttachments } : {}),
         messageKey,
       };
 
       setIsProcessing(true);
       setCurrentQuestion(null);
       activeProcessingMessageKeyRef.current = messageKey;
+      trackPendingLocalMessage(activeSessionId, {
+        messageKey,
+        type: 'user_input',
+        content: text,
+        metadata: messageMetadata,
+        sessionId: activeSessionId || undefined,
+      });
       setMessages((prev) =>
         mergeRealtimeMessage(
           prev,
@@ -4262,44 +4470,62 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       );
 
       try {
-        await createTaskCreationSession({
-          sessionId: activeSessionId,
-          mode: 'altus',
-        });
-        if (shouldAttemptSessionTitleResolve(text)) {
-          try {
-            const resolved = await resolveTaskCreationSessionTitle(activeSessionId, text);
-            if (resolved?.resolved && typeof resolved.title === 'string' && resolved.title.trim()) {
-              dispatchTaskCreationSessionUpdated({
-                sessionId: activeSessionId,
-                title: resolved.title.trim(),
-                status: 'in_progress',
-              });
-            }
-          } catch (error) {
-            console.warn('[TaskCreationAgent] managed title resolve failed:', error);
-          }
-        }
-      } catch (error) {
-        console.warn('[TaskCreationAgent] managed session ensure failed:', error);
-      }
-
-      try {
-        const result = await startTaskCreationManagedRun(activeSessionId, {
+        const result = await submitTaskCreationManagedInput({
+          sessionId: activeSessionId || undefined,
           content: text,
           messageKey,
           metadata: {
             ...messageMetadata,
             altusMode: 'managed',
           },
+          files: options?.files || [],
         });
-        const nextRunId = ((result?.id || result?.runId || '') as string).trim();
+        const resolvedSessionId = ((result?.sessionId || activeSessionId || '') as string).trim();
+        if (resolvedSessionId && resolvedSessionId !== activeSessionId) {
+          activeSessionId = resolvedSessionId;
+          bindSessionId(resolvedSessionId);
+        }
+        const run = result?.run;
+        if (Array.isArray(result?.attachments) && result.attachments.length > 0) {
+          setMessages((prev) =>
+            mergeRealtimeMessage(
+              prev,
+              {
+                messageKey,
+                type: 'user_input',
+                content: text,
+                metadata: {
+                  ...messageMetadata,
+                  attachments: result.attachments,
+                },
+                sessionId: activeSessionId || undefined,
+              },
+              WELCOME_MESSAGE
+            )
+          );
+        }
+        const nextRunId = ((run?.id || run?.runId || '') as string).trim();
         if (!nextRunId) {
           throw new Error('managed run id missing');
         }
+        if (activeSessionId && shouldAttemptSessionTitleResolve(text)) {
+          void resolveTaskCreationSessionTitle(activeSessionId, text)
+            .then((resolved) => {
+              if (resolved?.resolved && typeof resolved.title === 'string' && resolved.title.trim()) {
+                dispatchTaskCreationSessionUpdated({
+                  sessionId: activeSessionId!,
+                  title: resolved.title.trim(),
+                  status: 'in_progress',
+                });
+              }
+            })
+            .catch((error) => {
+              console.warn('[TaskCreationAgent] managed title resolve failed:', error);
+            });
+        }
         managedRunIdRef.current = nextRunId;
         setManagedRunId(nextRunId);
-        setManagedRunStatus(normalizeManagedRunStatus(result?.status) || 'starting');
+        setManagedRunStatus(normalizeManagedRunStatus(run?.status) || 'starting');
         setManagedRunError(null);
         setManagedRunStreaming(true);
         setIsConnected(true);
@@ -4337,6 +4563,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       setIsProcessing(true);
       setCurrentQuestion(null);
       activeProcessingMessageKeyRef.current = messageKey;
+      trackPendingLocalMessage(activeSessionId, {
+        messageKey,
+        type: 'user_input',
+        content: text,
+        metadata: messageMetadata,
+        sessionId: activeSessionId || undefined,
+      });
       setMessages((prev) =>
         mergeRealtimeMessage(
           prev,
@@ -4523,6 +4756,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     interruptCurrentRun,
     isProcessing,
     setPendingSandboxPrompt,
+    trackPendingLocalMessage,
   ]);
 
   useEffect(() => {

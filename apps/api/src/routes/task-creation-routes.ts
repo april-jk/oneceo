@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
+  taskSessionRunDAO,
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
@@ -52,87 +53,18 @@ import {
   resolveRemoteAttachmentTarget,
   type RemoteAttachmentProvider,
 } from '../services/remote-attachment-service';
+import {
+  TASK_ATTACHMENT_MAX_BYTES,
+  isAllowedAttachmentFile,
+  sanitizeAttachmentName,
+} from '../services/task-attachment-service';
+import { downloadFromR2 } from '../services/r2-client';
+import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
-const TASK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
-  'txt',
-  'md',
-  'markdown',
-  'mdx',
-  'csv',
-  'tsv',
-  'json',
-  'jsonl',
-  'xml',
-  'yaml',
-  'yml',
-  'log',
-  'rtf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'pdf',
-  'odt',
-  'ods',
-  'odp',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'svg',
-  'bmp',
-  'ico',
-  'tif',
-  'tiff',
-  'heic',
-  'heif',
-  'sql',
-  'ini',
-  'cfg',
-  'conf',
-  'toml',
-  'env',
-  'sh',
-  'py',
-  'js',
-  'jsx',
-  'ts',
-  'tsx',
-  'css',
-  'scss',
-  'less',
-  'html',
-  'htm',
-]);
-const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
-  'application/json',
-  'application/ld+json',
-  'application/xml',
-  'application/yaml',
-  'application/x-yaml',
-  'application/pdf',
-  'application/rtf',
-  'application/msword',
-  'application/vnd.ms-excel',
-  'application/vnd.ms-powerpoint',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.oasis.opendocument.text',
-  'application/vnd.oasis.opendocument.spreadsheet',
-  'application/vnd.oasis.opendocument.presentation',
-  'application/x-sh',
-  'application/sql',
-]);
 const recentHistoryHydrationInFlight = new Map<string, Promise<void>>();
 const recentHistoryHydrationQueuedAt = new Map<string, number>();
-const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['text/', 'image/'];
 const DEFAULT_SESSION_TITLE = '新建任务会话';
 const WEAK_INTENT_TITLE_INPUTS = new Set([
   '你好',
@@ -892,6 +824,25 @@ async function ensureOpencodeServer(orchestratorSessionId: string, workspaceRoot
   }
 }
 
+async function syncTaskSessionSandboxBinding(
+  sessionId: string,
+  sandboxId: string,
+  workspaceRoot: string | null | undefined
+) {
+  const normalizedSandboxId = asText(sandboxId);
+  if (!normalizedSandboxId) return;
+  const resolvedWorkspaceRoot = asText(workspaceRoot) || resolveOpencodeWorkspacePath(sessionId);
+  await taskSessionRunDAO.upsertSandboxBinding({
+    sessionId,
+    sandboxId: normalizedSandboxId,
+    workspaceRoot: resolvedWorkspaceRoot,
+    status: 'ready',
+    metadataJson: {
+      provider: 'e2b',
+    },
+  });
+}
+
 function resolveRuntimeExecutor(session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime'>): 'opencode' | 'codex' {
   const preferred =
     asText(session.runtime?.executor) ||
@@ -931,6 +882,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
             },
           });
         }
+        await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         return {
@@ -964,6 +916,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
     previousExecutorSessionId:
       executor === 'codex' ? session.runtime?.executorSessionId || undefined : undefined,
   });
+  await syncTaskSessionSandboxBinding(sessionId, provision.sessionId, workspaceRoot);
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
 
@@ -1347,33 +1300,6 @@ function normalizeWorkspacePath(input: string): string {
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function sanitizeAttachmentName(input: string): string {
-  const raw = input.split(/[\\/]/).pop() || 'attachment';
-  const normalized = raw.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
-  return normalized.slice(0, 120) || 'attachment';
-}
-
-function getAttachmentExtension(input: string): string {
-  const normalized = (input || '').trim().toLowerCase();
-  const base = normalized.split(/[\\/]/).pop() || '';
-  const dotIndex = base.lastIndexOf('.');
-  if (dotIndex < 0) return '';
-  return base.slice(dotIndex + 1);
-}
-
-function isAllowedAttachmentFile(input: { name: string; mimeType?: string }): boolean {
-  const extension = getAttachmentExtension(input.name);
-  if (extension && ALLOWED_ATTACHMENT_EXTENSIONS.has(extension)) {
-    return true;
-  }
-  const mimeType = (input.mimeType || '').trim().toLowerCase();
-  if (!mimeType) return false;
-  if (ALLOWED_ATTACHMENT_MIME_TYPES.has(mimeType)) {
-    return true;
-  }
-  return ALLOWED_ATTACHMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix));
 }
 
 function parseRemoteAttachmentProvider(value: unknown): RemoteAttachmentProvider {
@@ -2280,6 +2206,37 @@ function resolveMimeType(filePath: string, fromUpstream?: string): string {
   const normalized = (fromUpstream || '').trim().toLowerCase();
   if (normalized) return normalized;
   return inferMimeTypeFromExt(filePath) || 'application/octet-stream';
+}
+
+function buildDeliverableDownloadPath(sessionId: string, artifactId: string): string {
+  return `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/deliverables/${encodeURIComponent(artifactId)}/download`;
+}
+
+function serializeDeliverableArtifact(input: {
+  sessionId: string;
+  id: string;
+  runId: string;
+  path: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string | null;
+}) {
+  return {
+    id: input.id,
+    runId: input.runId,
+    path: input.path,
+    name: input.name,
+    mimeType: input.mimeType,
+    size: input.sizeBytes,
+    createdAt: input.createdAt,
+    downloadPath: buildDeliverableDownloadPath(input.sessionId, input.id),
+  };
+}
+
+function buildAttachmentDisposition(fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_') || 'download';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 function isTextLikeMimeType(mimeType: string): boolean {
@@ -3260,6 +3217,56 @@ router.post(
     }
   }
 );
+
+router.get('/sessions/:sessionId/deliverables', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const runId = asText(req.query.runId);
+    const deliverables = await taskSessionDeliverableService.listSessionDeliverables(sessionId, {
+      runId: runId || null,
+    });
+    return res.json({
+      success: true,
+      data: deliverables.map((item) => serializeDeliverableArtifact(item)),
+    });
+  } catch (error: any) {
+    console.error('获取交付物列表失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取交付物列表失败'),
+    });
+  }
+});
+
+router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const { sessionId, artifactId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const artifact = await taskSessionDeliverableService.getSessionDeliverable(sessionId, artifactId);
+    if (!artifact) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('交付物不存在'),
+      });
+    }
+
+    const body = await downloadFromR2(artifact.storageKey);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', artifact.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Length', String(body.length));
+    res.setHeader('Content-Disposition', buildAttachmentDisposition(artifact.displayName));
+    return res.status(200).send(body);
+  } catch (error: any) {
+    console.error('下载交付物失败:', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '下载交付物失败'),
+    });
+  }
+});
 
 /**
  * POST /api/task-creation/sessions/:sessionId/runtime/start

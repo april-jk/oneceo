@@ -1,14 +1,106 @@
 import express from 'express';
+import multer from 'multer';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { altusManagedRunService } from '../services/altus-managed-run-service';
+import { altusManagedInputService } from '../services/altus-managed-input-service';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
+import {
+  TASK_ATTACHMENT_MAX_BYTES,
+  TASK_ATTACHMENT_MAX_COUNT,
+} from '../services/task-attachment-service';
 
 const router = express.Router();
+const managedAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: TASK_ATTACHMENT_MAX_BYTES,
+    files: TASK_ATTACHMENT_MAX_COUNT,
+  },
+});
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
+
+function parseMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      throw new Error('metadata 必须是合法 JSON 对象');
+    }
+    return undefined;
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function runManagedUploadMiddleware(req: express.Request, res: express.Response) {
+  return new Promise<void>((resolve, reject) => {
+    managedAttachmentUpload.array('files', TASK_ATTACHMENT_MAX_COUNT)(req, res, (error) => {
+      if (!error) {
+        resolve();
+        return;
+      }
+      if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          reject(new Error('单个附件不能超过 10 MB'));
+          return;
+        }
+        if (error.code === 'LIMIT_FILE_COUNT') {
+          reject(new Error(`最多只能添加 ${TASK_ATTACHMENT_MAX_COUNT} 个附件`));
+          return;
+        }
+      }
+      reject(error);
+    });
+  });
+}
+
+router.post('/inputs', async (req, res) => {
+  try {
+    await runManagedUploadMiddleware(req, res);
+    const currentUser = currentUserResolver.require(req);
+    const files = Array.isArray(req.files)
+      ? req.files.map((file) => ({
+          name: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          buffer: file.buffer,
+        }))
+      : [];
+    const metadata = parseMetadata(req.body?.metadata);
+    const result = await altusManagedInputService.submit(currentUser.userId, {
+      sessionId: asText(req.body?.sessionId) || undefined,
+      content: asText(req.body?.content),
+      messageKey: asText(req.body?.messageKey) || undefined,
+      metadata,
+      files,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        sessionId: result.sessionId,
+        attachments: result.attachments,
+        run: result.run,
+      },
+    });
+  } catch (error: any) {
+    console.error('[ALTUS_MANAGED_INPUT_FAILED]', error);
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '提交 Altus managed 输入失败'),
+    });
+  }
+});
 
 router.post('/sessions/:sessionId/runs', async (req, res) => {
   try {

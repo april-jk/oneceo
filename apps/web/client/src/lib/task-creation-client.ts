@@ -90,12 +90,40 @@ export type StartTaskCreationManagedRunInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type SubmitTaskCreationManagedInput = {
+  sessionId?: string;
+  content: string;
+  messageKey?: string;
+  metadata?: Record<string, unknown>;
+  files?: File[];
+};
+
 export type TaskCreationUploadedAttachment = {
   name: string;
   path: string;
   size: number;
   mimeType?: string;
   uploadedAt?: string;
+  attachmentKind?: "uploaded_file" | "inline_skill";
+  inlineContent?: string;
+  templateId?: string;
+};
+
+export type SubmitTaskCreationManagedInputResult = {
+  sessionId: string;
+  attachments: TaskCreationUploadedAttachment[];
+  run: TaskCreationManagedRunSummary;
+};
+
+export type TaskCreationDeliverableArtifact = {
+  id: string;
+  runId: string;
+  path: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  createdAt?: string | null;
+  downloadPath?: string;
 };
 
 export type RemoteAttachmentProvider = "website" | "google-drive" | "onedrive";
@@ -980,6 +1008,51 @@ export function getWorkspaceRawFileUrl(sessionId: string, filePath: string): str
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/raw/${encodedPath}`;
 }
 
+export function getTaskCreationDeliverableDownloadUrl(sessionId: string, artifactId: string): string {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const safeArtifactId = encodeURIComponent(artifactId);
+  return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deliverables/${safeArtifactId}/download`;
+}
+
+export async function listTaskCreationDeliverables(
+  sessionId: string,
+  options?: { runId?: string }
+): Promise<TaskCreationDeliverableArtifact[]> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const params = new URLSearchParams();
+  if (options?.runId) {
+    params.set("runId", options.runId);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deliverables${suffix}`;
+  const result = await fetchJson<{ data?: TaskCreationDeliverableArtifact[] }>(url);
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function downloadTaskCreationDeliverable(
+  sessionId: string,
+  artifact: Pick<TaskCreationDeliverableArtifact, "id" | "name">
+): Promise<void> {
+  const response = await fetch(getTaskCreationDeliverableDownloadUrl(sessionId, artifact.id), {
+    headers: buildClientIdentityHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const blob = await response.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = artifact.name || "deliverable";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl);
+  }, 0);
+}
+
 export async function uploadTaskCreationAttachment(
   sessionId: string,
   file: File
@@ -1001,6 +1074,39 @@ export async function uploadTaskCreationAttachment(
   const result = (await response.json()) as { data?: TaskCreationUploadedAttachment };
   if (!result?.data) {
     throw new Error("attachment upload empty");
+  }
+  return result.data;
+}
+
+export async function submitTaskCreationManagedInput(
+  input: SubmitTaskCreationManagedInput
+): Promise<SubmitTaskCreationManagedInputResult> {
+  const formData = new FormData();
+  if (input.sessionId) {
+    formData.set("sessionId", input.sessionId);
+  }
+  formData.set("content", input.content);
+  if (input.messageKey) {
+    formData.set("messageKey", input.messageKey);
+  }
+  if (input.metadata && Object.keys(input.metadata).length > 0) {
+    formData.set("metadata", JSON.stringify(input.metadata));
+  }
+  for (const file of input.files || []) {
+    formData.append("files", file, file.name);
+  }
+
+  const response = await fetch(`${getApiBaseUrl()}/api/altus-managed/inputs`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: SubmitTaskCreationManagedInputResult };
+  if (!result?.data?.run) {
+    throw new Error("managed input result empty");
   }
   return result.data;
 }

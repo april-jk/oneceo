@@ -30,22 +30,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ATTACHMENT_ACCEPT } from "@/lib/task-attachments";
+import { ATTACHMENT_ACCEPT, tagSkillAttachmentFile } from "@/lib/task-attachments";
 import {
   fetchRemoteTaskAttachment,
   type RemoteAttachmentProvider,
 } from "@/lib/task-creation-client";
+import {
+  SKILL_ATTACHMENT_TEMPLATES,
+  type SkillAttachmentTemplate,
+} from "@/lib/skill-attachment-templates";
 
 type AttachmentPickerButtonProps = {
   onSelectFiles: (files: File[]) => void | Promise<void>;
   disabled?: boolean;
-};
-
-type SkillAttachmentTemplate = {
-  id: string;
-  name: string;
-  description: string;
-  content: string;
 };
 
 const CLOUD_PROVIDER_ITEMS: Array<{
@@ -70,52 +67,15 @@ const CLOUD_PROVIDER_ITEMS: Array<{
   },
 ];
 
-const SKILL_ATTACHMENT_TEMPLATES: SkillAttachmentTemplate[] = [
-  {
-    id: "requirements-breakdown",
-    name: "需求拆解",
-    description: "把目标整理成范围、约束和交付项",
-    content: [
-      "# Skill Brief: 需求拆解",
-      "",
-      "请先完成以下分析：",
-      "- 明确用户目标和核心场景",
-      "- 列出功能范围、非目标和关键约束",
-      "- 输出可执行的交付清单与优先级",
-    ].join("\n"),
-  },
-  {
-    id: "implementation-plan",
-    name: "实现方案",
-    description: "整理技术栈、模块划分和实施顺序",
-    content: [
-      "# Skill Brief: 实现方案",
-      "",
-      "请基于当前需求给出实现方案：",
-      "- 推荐合适的技术栈和数据存储",
-      "- 拆分核心模块及接口",
-      "- 给出从 MVP 到完善版本的实施步骤",
-    ].join("\n"),
-  },
-  {
-    id: "test-checklist",
-    name: "测试清单",
-    description: "补齐关键测试点和验收标准",
-    content: [
-      "# Skill Brief: 测试清单",
-      "",
-      "请围绕当前任务补充测试视角：",
-      "- 核心功能用例",
-      "- 边界条件与异常处理",
-      "- 最小验收标准与回归范围",
-    ].join("\n"),
-  },
-];
-
 function buildSkillAttachment(template: SkillAttachmentTemplate): File {
-  return new File([template.content], `skill-${template.id}.md`, {
+  const file = new File([template.content], `skill-${template.id}.md`, {
     type: "text/markdown",
     lastModified: Date.now(),
+  });
+  return tagSkillAttachmentFile(file, {
+    templateId: template.id,
+    templateName: template.name,
+    content: template.content,
   });
 }
 

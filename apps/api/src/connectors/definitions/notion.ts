@@ -45,9 +45,12 @@ export function buildNotionDefinition(): ConnectorDefinition {
   const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
   return {
     key: 'notion',
+    category: 'app',
     name: 'Notion',
     description: '在平台外部管理 Notion 授权，并按 profile 将能力投影到 sandbox 内使用。',
     icon: 'notion',
+    featured: true,
+    sortOrder: 20,
     authMode: oauth ? 'oauth' : 'token',
     available: Boolean(remoteUrl),
     availabilityReason: remoteUrl ? undefined : '部署环境未配置 Notion MCP remote URL',

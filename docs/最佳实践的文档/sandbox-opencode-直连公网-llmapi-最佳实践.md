@@ -15,6 +15,23 @@
 - `OSAC_EXECUTION_ENABLED=false`
 - `OSAC_LLM_PROXY_ENABLE=false`
 
+### 1.1 配置隔离要求
+
+当平台主链路的 LLM 代理使用了与 Sandbox 直连链路不同的协议口径时，必须为 Sandbox 单独下发配置，不能直接复用平台主链路的协议类型。
+
+当前建议使用以下独立变量：
+
+- `SANDBOX_OPENAI_API_KEY`
+- `SANDBOX_OPENAI_BASE_URL`
+- `SANDBOX_OPENAI_MODEL`
+- `SANDBOX_OPENAI_API_TYPE`
+
+推荐口径：
+
+1. 主平台链路继续按自身协议接入 `llm-proxy`。
+2. Sandbox/OpenCode 直连链路固定走 OpenAI-compatible。
+3. Sandbox 预检与 `opencode.json` 统一读取 `SANDBOX_OPENAI_*` 映射后的环境变量，避免被平台主链路的 `LLM_PROXY_UPSTREAM_API_TYPE` 误伤。
+
 ## 2. 前置条件
 
 1. 已有可用 session（VM 运行中，已绑定）。

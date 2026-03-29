@@ -1,6 +1,8 @@
 import express from 'express';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { platformSkillService } from '../services/platform-skill-service';
+import { platformSkillImportService } from '../services/platform-skill-import-service';
+import { platformSkillImportJobService } from '../services/platform-skill-import-job-service';
 import { sandboxSkillSyncService } from '../services/sandbox-skill-sync-service';
 
 const router = express.Router();
@@ -27,6 +29,78 @@ function requireInternalToken(req: express.Request, res: express.Response, next:
 }
 
 router.use(requireInternalToken);
+
+router.post('/skills/import/folder-preview', async (req, res) => {
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const data = platformSkillImportService.parseFolderImport({
+      rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
+      files: files.map((item) => ({
+        relativePath: item?.relativePath,
+        content: item?.content,
+      })),
+    });
+    return res.status(201).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '导入 skill 文件夹预览失败'),
+    });
+  }
+});
+
+router.post('/skills/import/folder', async (req, res) => {
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const data = await platformSkillService.importSkillFolder({
+      rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
+      files: files.map((item) => ({
+        relativePath: item?.relativePath,
+        content: item?.content,
+      })),
+      createdBy: asText(req.body?.createdBy) || 'admin_management',
+      skillId: asText(req.body?.skillId) || null,
+    });
+    return res.status(201).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '导入 skill 文件夹失败'),
+    });
+  }
+});
+
+router.post('/skills/import/folder-jobs', async (req, res) => {
+  try {
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    const data = await platformSkillImportJobService.start({
+      rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
+      files: files.map((item) => ({
+        relativePath: item?.relativePath,
+        content: item?.content,
+      })),
+      createdBy: asText(req.body?.createdBy) || 'admin_management',
+      skillId: asText(req.body?.skillId) || null,
+    });
+    return res.status(202).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '创建 skill 文件夹导入任务失败'),
+    });
+  }
+});
+
+router.get('/skills/import/folder-jobs/:jobId', async (req, res) => {
+  const data = platformSkillImportJobService.get(req.params.jobId);
+  if (!data) {
+    return res.status(404).json({
+      success: false,
+      error: getPublicErrorMessage('导入任务不存在'),
+    });
+  }
+  return res.json({ success: true, data });
+});
 
 router.get('/skills', async (req, res) => {
   try {

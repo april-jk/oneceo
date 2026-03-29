@@ -6,6 +6,9 @@ import type {
   DashboardOverview,
   HostListResponse,
   SkillDetail,
+  SkillImportJob,
+  SkillImportResult,
+  SkillImportPreview,
   SkillRenderedRevision,
   SkillRevision,
   SkillSummary,
@@ -320,6 +323,36 @@ export const api = {
         body: JSON.stringify({ sessionId }),
       }
     ),
+  previewSkillFolderImport: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+  }) =>
+    request<SkillImportPreview>('/api/skill-management/import/folder-preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  importSkillFolder: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) =>
+    request<SkillImportResult>('/api/skill-management/import/folder', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createSkillFolderImportJob: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) =>
+    request<SkillImportJob>('/api/skill-management/import/folder-jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getSkillFolderImportJob: (jobId: string) =>
+    request<SkillImportJob>(`/api/skill-management/import/folder-jobs/${encodeURIComponent(jobId)}`),
   deleteVmFile: (vmId: string, query: { targetPath: string; recursive?: boolean; ignoreMissing?: boolean; sessionId?: string }) => {
     const params = new URLSearchParams();
     params.set('targetPath', query.targetPath);

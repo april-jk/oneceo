@@ -1,8 +1,10 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from '../../config/database';
 import {
+  userCustomSkillDocuments,
   userCustomSkills,
   userPlatformSkillBindings,
+  type NewUserCustomSkillDocument,
   type NewUserCustomSkill,
   type NewUserPlatformSkillBinding,
 } from '../schema';
@@ -105,6 +107,91 @@ export class UserSkillDAO {
       .where(and(eq(userCustomSkills.userId, userId), eq(userCustomSkills.id, customSkillId)))
       .returning();
     return row || null;
+  }
+
+  async listCustomSkillDocuments(userId: string, customSkillId: string) {
+    return db
+      .select({
+        id: userCustomSkillDocuments.id,
+        customSkillId: userCustomSkillDocuments.customSkillId,
+        documentKey: userCustomSkillDocuments.documentKey,
+        documentPath: userCustomSkillDocuments.documentPath,
+        title: userCustomSkillDocuments.title,
+        summary: userCustomSkillDocuments.summary,
+        bodyMarkdown: userCustomSkillDocuments.bodyMarkdown,
+        sortOrder: userCustomSkillDocuments.sortOrder,
+        createdAt: userCustomSkillDocuments.createdAt,
+        updatedAt: userCustomSkillDocuments.updatedAt,
+      })
+      .from(userCustomSkillDocuments)
+      .innerJoin(userCustomSkills, eq(userCustomSkillDocuments.customSkillId, userCustomSkills.id))
+      .where(and(eq(userCustomSkills.userId, userId), eq(userCustomSkillDocuments.customSkillId, customSkillId)))
+      .orderBy(asc(userCustomSkillDocuments.sortOrder), asc(userCustomSkillDocuments.documentPath));
+  }
+
+  async getCustomSkillDocumentByPath(userId: string, customSkillId: string, documentPath: string) {
+    const [row] = await db
+      .select({
+        id: userCustomSkillDocuments.id,
+        customSkillId: userCustomSkillDocuments.customSkillId,
+        documentKey: userCustomSkillDocuments.documentKey,
+        documentPath: userCustomSkillDocuments.documentPath,
+        title: userCustomSkillDocuments.title,
+        summary: userCustomSkillDocuments.summary,
+        bodyMarkdown: userCustomSkillDocuments.bodyMarkdown,
+        sortOrder: userCustomSkillDocuments.sortOrder,
+        createdAt: userCustomSkillDocuments.createdAt,
+        updatedAt: userCustomSkillDocuments.updatedAt,
+      })
+      .from(userCustomSkillDocuments)
+      .innerJoin(userCustomSkills, eq(userCustomSkillDocuments.customSkillId, userCustomSkills.id))
+      .where(
+        and(
+          eq(userCustomSkills.userId, userId),
+          eq(userCustomSkillDocuments.customSkillId, customSkillId),
+          eq(userCustomSkillDocuments.documentPath, documentPath)
+        )
+      )
+      .limit(1);
+    return row || null;
+  }
+
+  async replaceCustomSkillDocuments(
+    userId: string,
+    customSkillId: string,
+    documents: Array<Omit<NewUserCustomSkillDocument, 'id' | 'customSkillId' | 'createdAt' | 'updatedAt'>>
+  ) {
+    return db.transaction(async (tx) => {
+      const [skill] = await tx
+        .select()
+        .from(userCustomSkills)
+        .where(and(eq(userCustomSkills.userId, userId), eq(userCustomSkills.id, customSkillId)))
+        .limit(1);
+      if (!skill) {
+        throw new Error('自定义 skill 不存在');
+      }
+
+      await tx.delete(userCustomSkillDocuments).where(eq(userCustomSkillDocuments.customSkillId, customSkillId));
+      if (!documents.length) {
+        return [];
+      }
+
+      return tx
+        .insert(userCustomSkillDocuments)
+        .values(
+          documents.map((item) => ({
+            customSkillId,
+            documentKey: item.documentKey,
+            documentPath: item.documentPath,
+            title: item.title,
+            summary: item.summary,
+            bodyMarkdown: item.bodyMarkdown,
+            sortOrder: item.sortOrder,
+            updatedAt: new Date(),
+          }))
+        )
+        .returning();
+    });
   }
 }
 

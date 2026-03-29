@@ -478,8 +478,10 @@ export class AltusRunCoordinator {
     }
 
     const runtime = new AltusManagedToolRuntime({
+      sessionId: state.input.sessionId,
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
+      activeSkills: state.input.skills,
     });
     const systemPrompt = altusManagedPromptService.buildSystemPrompt({
       sessionId: state.input.sessionId,
@@ -487,11 +489,13 @@ export class AltusRunCoordinator {
       workspaceRoot: state.workspaceRoot,
       connectors: state.input.connectors as any,
     });
+    const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);
+    const compositeSystemPrompt = [systemPrompt, skillCatalogPrompt, skillPrompt].filter(Boolean).join('\n\n');
     const messages = await this.setupService.buildConversationMessages(
       state.input.sessionId,
       state.input.userInput,
-      skillPrompt ? `${systemPrompt}\n\n${skillPrompt}` : systemPrompt
+      compositeSystemPrompt
     );
     let plainTextRecoveryUsed = false;
 

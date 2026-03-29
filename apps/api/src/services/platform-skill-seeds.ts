@@ -4,6 +4,11 @@ export type PlatformSkillSeed = {
   description: string;
   category: string;
   bodyMarkdown: string;
+  resources?: Array<{
+    resourcePath: string;
+    resourceType?: 'reference' | 'template';
+    contentMarkdown: string;
+  }>;
 };
 
 const PPT_PHASE_SKILLS = [
@@ -100,6 +105,32 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
       '- 如使用外部资料，必须保留来源 URL，可放在 speaker notes、附录页或验证说明中。',
       '- 当 `.pptx` 已生成且完成一次验证后，立即将其作为最终交付物完成。',
     ].join('\n'),
+    resources: [
+      {
+        resourcePath: 'references/slide-structure-guide.md',
+        resourceType: 'reference',
+        contentMarkdown: [
+          '# PPT Slide Structure Guide',
+          '',
+          '- 封面页应明确主题、副标题和场景，不要堆砌说明性段落。',
+          '- 正文页优先采用“标题 + 核心观点 + 结构化证据”布局，而不是整页项目符号。',
+          '- 汇总页应回收关键结论、下一步行动和需要保留的来源信息。',
+        ].join('\n'),
+      },
+      {
+        resourcePath: 'templates/business-deck-outline.md',
+        resourceType: 'template',
+        contentMarkdown: [
+          '# Business Deck Outline',
+          '',
+          '1. 封面：主题、对象、日期',
+          '2. 背景与问题：现状、痛点、影响',
+          '3. 核心分析：证据、对比、洞察',
+          '4. 方案与路径：行动方案、里程碑、负责人',
+          '5. 收尾：结论、建议、后续行动',
+        ].join('\n'),
+      },
+    ],
   },
   {
     slug: 'office-docx',
@@ -121,6 +152,22 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
       '- 如使用外部资料，必须保留来源 URL，可放在参考资料、附录、脚注式说明或验证说明中。',
       '- 当 `.docx` 已生成且完成一次结构或文件验证后，立即将其作为最终交付物完成。',
     ].join('\n'),
+    resources: [
+      {
+        resourcePath: 'templates/formal-report-outline.md',
+        resourceType: 'template',
+        contentMarkdown: [
+          '# Formal Report Outline',
+          '',
+          '1. 标题与摘要',
+          '2. 背景与目标',
+          '3. 现状分析',
+          '4. 建议方案',
+          '5. 实施步骤',
+          '6. 风险与附录',
+        ].join('\n'),
+      },
+    ],
   },
   {
     slug: 'office-xlsx',
@@ -142,5 +189,18 @@ export const PLATFORM_SKILL_SEEDS: PlatformSkillSeed[] = [
       '- 如使用外部数据，必须保留来源 URL、日期、单位和口径说明。',
       '- 当 `.xlsx` 已生成且完成一次文件或 workbook 结构验证后，立即将其作为最终交付物完成。',
     ].join('\n'),
+    resources: [
+      {
+        resourcePath: 'references/workbook-qa-checklist.md',
+        resourceType: 'reference',
+        contentMarkdown: [
+          '# Workbook QA Checklist',
+          '',
+          '- 至少区分输入区、计算区、输出区，避免所有内容堆在一张表。',
+          '- 关键汇总值优先保留公式，不要只粘贴结果。',
+          '- 当使用外部数据时，增加来源说明和更新时间。',
+        ].join('\n'),
+      },
+    ],
   },
 ];

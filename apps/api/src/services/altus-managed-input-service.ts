@@ -61,6 +61,7 @@ export class AltusManagedInputService {
     }
 
     const sandbox = await this.setupService.ensureSandbox(sessionId);
+    const availableSkills = await userSkillService.listAvailableSkills(userId);
     const resolvedSkills = await userSkillService.resolveSelectionsForSession(
       sessionId,
       pickObject(input.metadata).skills
@@ -81,6 +82,7 @@ export class AltusManagedInputService {
       attachments.length > 0 ? buildAttachmentContextRecords(attachments, normalizedUploads) : [];
     const metadata = {
       ...pickObject(input.metadata),
+      ...(availableSkills.length > 0 ? { managedSkillCatalog: availableSkills } : {}),
       ...(resolvedSkills.length > 0 ? { managedSkillContext: resolvedSkills } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(attachmentContext.length > 0 ? { attachmentContext } : {}),

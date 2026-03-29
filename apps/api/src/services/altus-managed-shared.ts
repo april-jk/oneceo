@@ -42,6 +42,29 @@ export type ManagedSkillContext = {
   category: string;
   renderedMarkdown: string;
   revisionNumber: number | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
+};
+
+export type ManagedSkillCatalogEntry = {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  revisionNumber: number | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
 };
 
 export type ManagedRunSummary = {
@@ -291,6 +314,25 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'load_skill_resource',
+        description:
+          'Load one markdown resource file for an already selected skill into the sandbox skill directory when the current task needs more detail.',
+        parameters: objectSchema(
+          {
+            skillId: { type: 'string', description: 'Skill id from the active skill list.' },
+            revisionId: { type: 'string', description: 'Revision id from the active skill list.' },
+            resourcePath: {
+              type: 'string',
+              description: 'Relative markdown resource path such as references/foo.md or templates/bar.md.',
+            },
+          },
+          ['skillId', 'revisionId', 'resourcePath']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'ask_user',
         description: 'Ask the user one precise clarification question when blocked by missing requirements.',
         parameters: objectSchema(
@@ -379,6 +421,63 @@ export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {
         typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
           ? record.revisionNumber
           : null,
+      resourceSummary: readSkillResourceSummary(record.resourceSummary),
+    });
+  }
+  return results;
+}
+
+function readSkillResourceSummary(value: unknown) {
+  const record = pickObject(value);
+  const paths = Array.isArray(record.paths)
+    ? record.paths.map((item) => asText(item)).filter(Boolean).slice(0, 32)
+    : [];
+  const totalCount =
+    typeof record.totalCount === 'number' && Number.isFinite(record.totalCount) ? Math.max(0, record.totalCount) : 0;
+  const referenceCount =
+    typeof record.referenceCount === 'number' && Number.isFinite(record.referenceCount)
+      ? Math.max(0, record.referenceCount)
+      : 0;
+  const templateCount =
+    typeof record.templateCount === 'number' && Number.isFinite(record.templateCount)
+      ? Math.max(0, record.templateCount)
+      : 0;
+  if (totalCount === 0 && paths.length === 0 && referenceCount === 0 && templateCount === 0) {
+    return null;
+  }
+  return {
+    totalCount,
+    referenceCount,
+    templateCount,
+    paths,
+  };
+}
+
+export function readManagedSkillCatalog(value: unknown): ManagedSkillCatalogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const results: ManagedSkillCatalogEntry[] = [];
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    const name = asText(record.name);
+    if (!skillId || !revisionId || !slug || !name) {
+      continue;
+    }
+    results.push({
+      sourceType: asText(record.sourceType) === 'custom' ? 'custom' : 'platform',
+      skillId,
+      revisionId,
+      slug,
+      name,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? record.revisionNumber
+          : null,
+      resourceSummary: readSkillResourceSummary(record.resourceSummary),
     });
   }
   return results;

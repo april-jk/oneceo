@@ -11,6 +11,17 @@ function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function parseResources(input: unknown) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => ({
+      resourcePath: item?.resourcePath,
+      resourceType: item?.resourceType,
+      contentMarkdown: item?.contentMarkdown,
+    }))
+    .filter((item) => asText(item.resourcePath) && asText(item.contentMarkdown));
+}
+
 function requireInternalToken(req: express.Request, res: express.Response, next: express.NextFunction) {
   const configured = asText(process.env.ONECEO_INTERNAL_TOKEN);
   if (!configured) {
@@ -138,6 +149,7 @@ router.post('/skills', async (req, res) => {
       description: req.body?.description,
       category: req.body?.category,
       bodyMarkdown: req.body?.bodyMarkdown,
+      resources: parseResources(req.body?.resources),
       createdBy: asText(req.body?.createdBy) || 'admin_management',
     });
     return res.status(201).json({ success: true, data });
@@ -156,6 +168,7 @@ router.put('/skills/:skillId', async (req, res) => {
       description: req.body?.description,
       category: req.body?.category,
       bodyMarkdown: req.body?.bodyMarkdown,
+      resources: parseResources(req.body?.resources),
       createdBy: asText(req.body?.createdBy) || 'admin_management',
     });
     return res.json({ success: true, data });
@@ -221,6 +234,18 @@ router.get('/skills/:skillId/revisions/:revisionId/rendered', async (req, res) =
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '渲染 revision 失败'),
+    });
+  }
+});
+
+router.get('/skills/:skillId/revisions/:revisionId/resources', async (req, res) => {
+  try {
+    const data = await platformSkillService.listRevisionResources(req.params.skillId, req.params.revisionId);
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取 revision resources 失败'),
     });
   }
 });

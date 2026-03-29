@@ -5,6 +5,7 @@ import type {
   SkillImportPreview,
   SkillRenderedRevision,
   SkillRevision,
+  SkillRevisionResources,
   SkillSummary,
   SkillValidationResult,
 } from '../types';
@@ -15,6 +16,14 @@ type EditorState = {
   description: string;
   category: string;
   bodyMarkdown: string;
+  documents: Array<{
+    documentKey: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    title: string;
+    summary: string;
+    bodyMarkdown: string;
+  }>;
 };
 
 type ImportedFolderPayload = {
@@ -30,6 +39,7 @@ const EMPTY_EDITOR: EditorState = {
   description: '',
   category: 'general',
   bodyMarkdown: '',
+  documents: [],
 };
 
 function toEditorState(detail: SkillDetail): EditorState {
@@ -39,12 +49,34 @@ function toEditorState(detail: SkillDetail): EditorState {
     description: detail.description || '',
     category: detail.category || 'general',
     bodyMarkdown: detail.latestBodyMarkdown || '',
+    documents: [],
   };
 }
+
+const EMPTY_DOCUMENT = {
+  documentKey: '',
+  resourcePath: '',
+  resourceType: 'reference' as const,
+  title: '',
+  summary: '',
+  bodyMarkdown: '',
+};
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatBytes(value?: number | null) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function storageLabel(value?: string | null) {
+  return value === 'object_storage' ? '存储桶' : '数据库';
 }
 
 async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativePath: string; content: string }>> {
@@ -81,14 +113,19 @@ export function SkillManagementSection({ onError }: Props) {
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
   const [renderedRevision, setRenderedRevision] = useState<SkillRenderedRevision | null>(null);
+  const [revisionResources, setRevisionResources] = useState<SkillRevisionResources | null>(null);
+  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [validationSessionId, setValidationSessionId] = useState('');
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'rendered' | 'validation'>('editor');
   const [filters, setFilters] = useState({
     query: '',
     status: 'all',
     category: '',
   });
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
+  const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [importPreview, setImportPreview] = useState<SkillImportPreview | null>(null);
@@ -130,6 +167,9 @@ export function SkillManagementSection({ onError }: Props) {
       setRevisions([]);
       setSelectedRevisionId(null);
       setRenderedRevision(null);
+      setRevisionResources(null);
+      setSelectedResourcePath(null);
+      setSelectedDocumentIndex(0);
       return;
     }
     if (!selectedSkillId || !next.some((item) => item.id === selectedSkillId)) {
@@ -146,6 +186,7 @@ export function SkillManagementSection({ onError }: Props) {
       setDetail(nextDetail);
       setRevisions(nextRevisions);
       setEditor(toEditorState(nextDetail));
+      setSelectedDocumentIndex(0);
       const publishedRevision =
         nextRevisions.find((item) => item.isPublished) || nextRevisions[0] || null;
       const nextRevisionId = publishedRevision?.id || null;
@@ -186,6 +227,42 @@ export function SkillManagementSection({ onError }: Props) {
   }, [selectedRevisionId, selectedSkillId, onError]);
 
   useEffect(() => {
+    if (!selectedSkillId || !selectedRevisionId || !detailDialogOpen || isCreating) {
+      setRevisionResources(null);
+      setSelectedResourcePath(null);
+      return;
+    }
+    void api
+      .getSkillRevisionResources(selectedSkillId, selectedRevisionId)
+      .then((next) => {
+        setRevisionResources(next);
+        setSelectedResourcePath((prev) => {
+          if (prev && next.resources.some((item) => item.resourcePath === prev)) {
+            return prev;
+          }
+          return next.resources[0]?.resourcePath || null;
+        });
+        setEditor((prev) => ({
+          ...prev,
+          documents: next.resources
+            .filter((item) => item.contentStorage === 'database')
+            .map((item, index) => ({
+              documentKey: item.resourceKey || `doc-${index + 1}`,
+              resourcePath: item.resourcePath,
+              resourceType: item.resourceType === 'template' ? 'template' : 'reference',
+              title: item.title || item.resourcePath.split('/').pop() || item.resourcePath,
+              summary: item.summary || '',
+              bodyMarkdown: item.contentMarkdown || '',
+            })),
+        }));
+        setSelectedDocumentIndex(0);
+      })
+      .catch((error) => {
+        onError(error instanceof Error ? error.message : '技能资源加载失败');
+      });
+  }, [detailDialogOpen, isCreating, onError, selectedRevisionId, selectedSkillId]);
+
+  useEffect(() => {
     if (!importDialogOpen || !importJobId) return;
     let stopped = false;
     const timer = window.setInterval(() => {
@@ -207,6 +284,8 @@ export function SkillManagementSection({ onError }: Props) {
             setIsCreating(false);
             await loadSkills();
             setSelectedSkillId(job.result.skill.id);
+            setDetailDialogOpen(true);
+            setDetailTab('resources');
             onError(null);
           }
           if (job.status === 'failed') {
@@ -229,11 +308,53 @@ export function SkillManagementSection({ onError }: Props) {
     };
   }, [importDialogOpen, importJobId, loadSkills, onError]);
 
+  const openCreateDialog = () => {
+    setIsCreating(true);
+    setDetailDialogOpen(true);
+    setDetailTab('editor');
+    setSelectedSkillId(null);
+    setDetail(null);
+    setRevisions([]);
+    setSelectedRevisionId(null);
+    setRenderedRevision(null);
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
+    resetImportState();
+    setEditor(EMPTY_EDITOR);
+  };
+
+  const openDetailDialog = (skillId: string) => {
+    setIsCreating(false);
+    setDetailDialogOpen(true);
+    setDetailTab('editor');
+    setSelectedSkillId(skillId);
+  };
+
+  const closeDetailDialog = () => {
+    setDetailDialogOpen(false);
+    setDetailTab('editor');
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
+    if (isCreating) {
+      setIsCreating(false);
+      setEditor(EMPTY_EDITOR);
+    }
+  };
+
   const handleCreate = async () => {
     setBusy(true);
     try {
       const created = await api.createSkill({
         ...editor,
+        resources: editor.documents
+          .map((item, index) => ({
+            resourcePath: item.resourcePath.trim(),
+            resourceType: item.resourceType,
+            contentMarkdown: item.bodyMarkdown,
+          }))
+          .filter((item) => item.resourcePath && item.contentMarkdown.trim()),
         createdBy: 'admin_management',
       });
       setIsCreating(false);
@@ -255,6 +376,13 @@ export function SkillManagementSection({ onError }: Props) {
         description: editor.description,
         category: editor.category,
         bodyMarkdown: editor.bodyMarkdown,
+        resources: editor.documents
+          .map((item) => ({
+            resourcePath: item.resourcePath.trim(),
+            resourceType: item.resourceType,
+            contentMarkdown: item.bodyMarkdown,
+          }))
+          .filter((item) => item.resourcePath && item.contentMarkdown.trim()),
         createdBy: 'admin_management',
       });
       await loadSkills();
@@ -302,6 +430,50 @@ export function SkillManagementSection({ onError }: Props) {
     }
   };
 
+  const selectedDocument = editor.documents[selectedDocumentIndex] || null;
+
+  const updateDocument = (
+    index: number,
+    patch: Partial<{
+      documentKey: string;
+      resourcePath: string;
+      resourceType: 'reference' | 'template';
+      title: string;
+      summary: string;
+      bodyMarkdown: string;
+    }>
+  ) => {
+    setEditor((prev) => ({
+      ...prev,
+      documents: prev.documents.map((item, currentIndex) =>
+        currentIndex === index ? { ...item, ...patch } : item
+      ),
+    }));
+  };
+
+  const addDocument = () => {
+    setEditor((prev) => ({
+      ...prev,
+      documents: [
+        ...prev.documents,
+        {
+          ...EMPTY_DOCUMENT,
+          documentKey: `doc-${prev.documents.length + 1}`,
+          resourcePath: `references/doc-${prev.documents.length + 1}.md`,
+        },
+      ],
+    }));
+    setSelectedDocumentIndex(editor.documents.length);
+  };
+
+  const removeDocument = (index: number) => {
+    setEditor((prev) => ({
+      ...prev,
+      documents: prev.documents.filter((_, currentIndex) => currentIndex !== index),
+    }));
+    setSelectedDocumentIndex((prev) => Math.max(0, Math.min(prev, editor.documents.length - 2)));
+  };
+
   return (
     <main className="content-stack">
       <section className="panel fade-in">
@@ -315,16 +487,7 @@ export function SkillManagementSection({ onError }: Props) {
             <button
               type="button"
               className="ghost-btn"
-              onClick={() => {
-                setIsCreating(true);
-                setSelectedSkillId(null);
-                setDetail(null);
-                setRevisions([]);
-                setSelectedRevisionId(null);
-                setRenderedRevision(null);
-                resetImportState();
-                setEditor(EMPTY_EDITOR);
-              }}
+              onClick={openCreateDialog}
             >
               新建技能
             </button>
@@ -368,6 +531,19 @@ export function SkillManagementSection({ onError }: Props) {
                       description: preview.discoveryDescription,
                       category: 'general',
                       bodyMarkdown: preview.entry.bodyMarkdown,
+                      documents: preview.resources
+                        .filter((item) => item.resourceKind === 'reference' || item.resourceKind === 'template')
+                        .map((item, index) => ({
+                          documentKey: item.resourceKey || `doc-${index + 1}`,
+                          resourcePath: item.resourcePath,
+                          resourceType: item.resourceKind === 'template' ? 'template' : 'reference',
+                          title: item.title || item.resourcePath,
+                          summary: item.summary || '',
+                          bodyMarkdown: item.chunks
+                            .filter((chunk) => chunk.chunkRole === 'body' || item.chunks.length === 1)
+                            .map((chunk) => chunk.contentText)
+                            .join(''),
+                        })),
                     });
                     onError(null);
                   })
@@ -423,189 +599,465 @@ export function SkillManagementSection({ onError }: Props) {
           </button>
         </div>
 
-        <div className="skill-layout">
-          <div className="skill-list">
-            <table className="skill-table">
-              <thead>
+        <div className="skill-list">
+          <table className="skill-table">
+            <thead>
+              <tr>
+                <th>技能</th>
+                <th>分类</th>
+                <th>状态</th>
+                <th>Published</th>
+              </tr>
+            </thead>
+            <tbody>
+              {skills.length === 0 ? (
                 <tr>
-                  <th>技能</th>
-                  <th>分类</th>
-                  <th>状态</th>
-                  <th>Published</th>
+                  <td colSpan={4} className="table-empty">
+                    暂无技能
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {skills.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="table-empty">
-                      暂无技能
-                    </td>
-                  </tr>
-                ) : (
-                  skills.map((item) => (
-                    <tr
-                      key={item.id}
-                      className={selectedSkillId === item.id ? 'selected' : ''}
-                      onClick={() => {
-                        setIsCreating(false);
-                        setSelectedSkillId(item.id);
-                      }}
-                    >
-                      <td>
-                        <strong>{item.name}</strong>
-                        <div className="cell-subtle">{item.slug}</div>
-                      </td>
-                      <td>{item.category}</td>
-                      <td>
-                        <span className={`status-pill status-${item.status}`}>{item.status}</span>
-                      </td>
-                      <td>{item.publishedRevisionNumber ? `rev.${item.publishedRevisionNumber}` : '-'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="skill-editor-card">
-            <div className="editor-header">
-              <div>
-                <h3>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h3>
-                <p className="cell-subtle">
-                  {isCreating
-                    ? '直接创建 skill + revision'
-                    : `更新时间 ${formatDateTime(detail?.updatedAt)}`}
-                </p>
-              </div>
-              {!isCreating && detail ? (
-                <button type="button" className="ghost-btn" onClick={handleArchiveToggle} disabled={busy}>
-                  {detail.status === 'archived' ? '重新启用' : '归档技能'}
-                </button>
-              ) : null}
-            </div>
-
-            <div className="skill-form-grid">
-              <label className="form-field">
-                <span>Slug</span>
-                <input
-                  className="control-input"
-                  value={editor.slug}
-                  disabled={!isCreating}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, slug: event.target.value }))}
-                />
-              </label>
-              <label className="form-field">
-                <span>名称</span>
-                <input
-                  className="control-input"
-                  value={editor.name}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
-                />
-              </label>
-              <label className="form-field">
-                <span>分类</span>
-                <input
-                  className="control-input"
-                  value={editor.category}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, category: event.target.value }))}
-                />
-              </label>
-              <label className="form-field field-span-2">
-                <span>描述</span>
-                <input
-                  className="control-input"
-                  value={editor.description}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
-                />
-              </label>
-              <label className="form-field field-span-2">
-                <span>Markdown 正文</span>
-                <textarea
-                  className="control-textarea"
-                  rows={14}
-                  value={editor.bodyMarkdown}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, bodyMarkdown: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="section-actions">
-              {isCreating ? (
-                <button type="button" className="primary-btn" onClick={handleCreate} disabled={busy}>
-                  创建并发布
-                </button>
               ) : (
-                <button type="button" className="primary-btn" onClick={handleSave} disabled={busy || !selectedSkillId}>
-                  保存为新 revision
-                </button>
+                skills.map((item) => (
+                  <tr
+                    key={item.id}
+                    className={selectedSkillId === item.id && detailDialogOpen ? 'selected' : ''}
+                    onClick={() => openDetailDialog(item.id)}
+                  >
+                    <td>
+                      <strong>{item.name}</strong>
+                      <div className="cell-subtle">{item.slug}</div>
+                    </td>
+                    <td>{item.category}</td>
+                    <td>
+                      <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                    </td>
+                    <td>{item.publishedRevisionNumber ? `rev.${item.publishedRevisionNumber}` : '-'}</td>
+                  </tr>
+                ))
               )}
-            </div>
-          </div>
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <section className="skill-secondary-grid">
-        <article className="panel fade-in">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Revision History</p>
-              <h2>Revision 历史</h2>
-            </div>
-          </div>
-          <div className="revision-list">
-            {revisions.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`revision-item ${selectedRevisionId === item.id ? 'active' : ''}`}
-                onClick={() => setSelectedRevisionId(item.id)}
-              >
-                <span>rev.{item.revisionNumber}</span>
-                <span>{item.isPublished ? 'published' : 'draft'}</span>
-                <span>{formatDateTime(item.createdAt)}</span>
-              </button>
-            ))}
-            {!revisions.length ? <div className="table-empty">暂无 revision</div> : null}
-          </div>
-        </article>
-
-        <article className="panel fade-in">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Sandbox Validation</p>
-              <h2>Sandbox 验证</h2>
-            </div>
-          </div>
-          <div className="validation-box">
-            <label className="form-field">
-              <span>目标 sessionId</span>
-              <input
-                className="control-input"
-                placeholder="输入已有 task sessionId"
-                value={validationSessionId}
-                onChange={(event) => setValidationSessionId(event.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={handleValidate}
-              disabled={busy || !selectedSkillId || !selectedRevisionId || !validationSessionId.trim()}
-            >
-              同步到 sandbox 并验证
-            </button>
-            <pre className="code-block">{renderedRevision?.renderedMarkdown || '选择 revision 后显示渲染结果'}</pre>
-            {validationResult ? (
-              <div className="validation-result">
-                <div>skillPath: {validationResult.skillPath || '-'}</div>
-                <div>signature: {validationResult.signature}</div>
-                <div>restartTriggered: {String(validationResult.restartTriggered)}</div>
-                <div>syncedAt: {formatDateTime(validationResult.syncedAt)}</div>
+      {detailDialogOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeDetailDialog}>
+          <div
+            className="modal-card"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="section-tag">Skill Inspector</p>
+                <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
+                <p className="cell-subtle">
+                  {isCreating
+                    ? '直接创建平台 skill，并在同一窗口完成正文与资源校验'
+                    : `${detail?.slug || '-'} · 更新时间 ${formatDateTime(detail?.updatedAt)}`}
+                </p>
               </div>
-            ) : null}
+              <div className="section-actions">
+                {!isCreating && detail ? (
+                  <button type="button" className="ghost-btn" onClick={handleArchiveToggle} disabled={busy}>
+                    {detail.status === 'archived' ? '重新启用' : '归档技能'}
+                  </button>
+                ) : null}
+                <button type="button" className="secondary-btn" onClick={closeDetailDialog}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="button-grid modal-tab-grid">
+              <button
+                type="button"
+                className={`inspector-tab-card ${detailTab === 'editor' ? 'active' : ''}`}
+                onClick={() => setDetailTab('editor')}
+              >
+                <span className="inspector-tab-card-key mono">01</span>
+                <span className="inspector-tab-card-label">编辑与 Revision</span>
+              </button>
+              <button
+                type="button"
+                className={`inspector-tab-card ${detailTab === 'resources' ? 'active' : ''}`}
+                onClick={() => setDetailTab('resources')}
+                disabled={isCreating}
+              >
+                <span className="inspector-tab-card-key mono">02</span>
+                <span className="inspector-tab-card-label">复合资源</span>
+              </button>
+              <button
+                type="button"
+                className={`inspector-tab-card ${detailTab === 'rendered' ? 'active' : ''}`}
+                onClick={() => setDetailTab('rendered')}
+                disabled={isCreating}
+              >
+                <span className="inspector-tab-card-key mono">03</span>
+                <span className="inspector-tab-card-label">渲染结果</span>
+              </button>
+              <button
+                type="button"
+                className={`inspector-tab-card ${detailTab === 'validation' ? 'active' : ''}`}
+                onClick={() => setDetailTab('validation')}
+                disabled={isCreating}
+              >
+                <span className="inspector-tab-card-key mono">04</span>
+                <span className="inspector-tab-card-label">Sandbox 验证</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              {detailTab === 'editor' ? (
+                <div className="detail-grid modal-grid">
+                  <article className="sub-panel">
+                    <div className="editor-header">
+                      <div>
+                        <h3>{isCreating ? '基本信息' : 'Revision 编辑器'}</h3>
+                        <p className="cell-subtle">
+                          {isCreating ? '填写后直接创建并发布' : '保存会生成新的 published revision'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="skill-form-grid">
+                      <label className="form-field">
+                        <span>Slug</span>
+                        <input
+                          className="control-input"
+                          value={editor.slug}
+                          disabled={!isCreating}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, slug: event.target.value }))}
+                        />
+                      </label>
+                      <label className="form-field">
+                        <span>名称</span>
+                        <input
+                          className="control-input"
+                          value={editor.name}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
+                        />
+                      </label>
+                      <label className="form-field">
+                        <span>分类</span>
+                        <input
+                          className="control-input"
+                          value={editor.category}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, category: event.target.value }))}
+                        />
+                      </label>
+                      <label className="form-field field-span-2">
+                        <span>描述</span>
+                        <input
+                          className="control-input"
+                          value={editor.description}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
+                        />
+                      </label>
+                      <label className="form-field field-span-2">
+                        <span>Markdown 正文</span>
+                        <textarea
+                          className="control-textarea"
+                          rows={16}
+                          value={editor.bodyMarkdown}
+                          onChange={(event) => setEditor((prev) => ({ ...prev, bodyMarkdown: event.target.value }))}
+                        />
+                      </label>
+                      <div className="form-field field-span-2">
+                        <div className="editor-header">
+                          <div>
+                            <span>渐进式文档</span>
+                            <div className="cell-subtle">支持多份数据库型 markdown 文档，交互与用户态编辑器保持一致。</div>
+                          </div>
+                          <button type="button" className="ghost-btn" onClick={addDocument}>
+                            新增文档
+                          </button>
+                        </div>
+                        <div className="skill-doc-editor-grid">
+                          <div className="skill-doc-nav">
+                            {editor.documents.length === 0 ? (
+                              <div className="table-empty">
+                                还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类 markdown 文件。
+                              </div>
+                            ) : (
+                              editor.documents.map((item, index) => (
+                                <button
+                                  key={`${item.documentKey || 'doc'}:${index}`}
+                                  type="button"
+                                  className={`skill-doc-nav-item ${selectedDocumentIndex === index ? 'active' : ''}`}
+                                  onClick={() => setSelectedDocumentIndex(index)}
+                                >
+                                  <strong>{item.title || item.resourcePath || `文档 ${index + 1}`}</strong>
+                                  <span>{item.resourceType}</span>
+                                  <span>{item.resourcePath || '未设置路径'}</span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                          <div className="skill-doc-editor-pane">
+                            {selectedDocument ? (
+                              <>
+                                <div className="skill-form-grid">
+                                  <label className="form-field">
+                                    <span>文档路径</span>
+                                    <input
+                                      className="control-input"
+                                      value={selectedDocument.resourcePath}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, { resourcePath: event.target.value })
+                                      }
+                                      placeholder="references/overview.md"
+                                    />
+                                  </label>
+                                  <label className="form-field">
+                                    <span>文档 Key</span>
+                                    <input
+                                      className="control-input"
+                                      value={selectedDocument.documentKey}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, { documentKey: event.target.value })
+                                      }
+                                      placeholder="overview"
+                                    />
+                                  </label>
+                                  <label className="form-field">
+                                    <span>资源类型</span>
+                                    <select
+                                      className="control-input"
+                                      value={selectedDocument.resourceType}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, {
+                                          resourceType: event.target.value === 'template' ? 'template' : 'reference',
+                                        })
+                                      }
+                                    >
+                                      <option value="reference">reference</option>
+                                      <option value="template">template</option>
+                                    </select>
+                                  </label>
+                                  <label className="form-field">
+                                    <span>标题</span>
+                                    <input
+                                      className="control-input"
+                                      value={selectedDocument.title}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, { title: event.target.value })
+                                      }
+                                      placeholder="总体说明"
+                                    />
+                                  </label>
+                                  <label className="form-field field-span-2">
+                                    <span>摘要</span>
+                                    <input
+                                      className="control-input"
+                                      value={selectedDocument.summary}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, { summary: event.target.value })
+                                      }
+                                      placeholder="告诉模型这份文档适合什么时候读"
+                                    />
+                                  </label>
+                                  <label className="form-field field-span-2">
+                                    <span>Markdown 文档</span>
+                                    <textarea
+                                      className="control-textarea"
+                                      rows={12}
+                                      value={selectedDocument.bodyMarkdown}
+                                      onChange={(event) =>
+                                        updateDocument(selectedDocumentIndex, { bodyMarkdown: event.target.value })
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                                <div className="section-actions">
+                                  <button
+                                    type="button"
+                                    className="ghost-btn"
+                                    onClick={() => removeDocument(selectedDocumentIndex)}
+                                  >
+                                    删除当前文档
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="table-empty">选择左侧文档进行编辑，或先新增一份渐进式文档。</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="section-actions">
+                      {isCreating ? (
+                        <button type="button" className="primary-btn" onClick={handleCreate} disabled={busy}>
+                          创建并发布
+                        </button>
+                      ) : (
+                        <button type="button" className="primary-btn" onClick={handleSave} disabled={busy || !selectedSkillId}>
+                          保存为新 revision
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                  <article className="sub-panel">
+                    <p className="kpi-title">Revision 历史</p>
+                    <div className="revision-list">
+                      {revisions.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`revision-item ${selectedRevisionId === item.id ? 'active' : ''}`}
+                          onClick={() => setSelectedRevisionId(item.id)}
+                        >
+                          <span>rev.{item.revisionNumber}</span>
+                          <span>{item.isPublished ? 'published' : 'draft'}</span>
+                          <span>{formatDateTime(item.createdAt)}</span>
+                        </button>
+                      ))}
+                      {!revisions.length ? <div className="table-empty">暂无 revision</div> : null}
+                    </div>
+                    {!isCreating && detail ? (
+                      <div className="validation-result">
+                        <div>publishedRevisionId: {detail.publishedRevisionId || '-'}</div>
+                        <div>资源数量: {detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</div>
+                        <div>引用路径数: {detail.resourceSummary?.paths?.length ?? 0}</div>
+                      </div>
+                    ) : null}
+                  </article>
+                </div>
+              ) : null}
+
+              {detailTab === 'resources' ? (
+                <div className="detail-grid modal-grid">
+                  <article className="sub-panel">
+                    <div className="section-heading">
+                      <div>
+                        <p className="eyebrow">Composite Resources</p>
+                        <h2>当前 revision 资源</h2>
+                      </div>
+                    </div>
+                    <div className="revision-list">
+                      {revisionResources?.resources.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`revision-item ${selectedResourcePath === item.resourcePath ? 'active' : ''}`}
+                          onClick={() => setSelectedResourcePath(item.resourcePath)}
+                        >
+                          <span>{item.resourcePath}</span>
+                          <span>{item.resourceType}</span>
+                          <span>{storageLabel(item.contentStorage)}</span>
+                        </button>
+                      ))}
+                      {!revisionResources?.resources.length ? (
+                        <div className="table-empty">当前 revision 暂无额外资源</div>
+                      ) : null}
+                    </div>
+                  </article>
+                  <article className="sub-panel">
+                    {(() => {
+                      const resource =
+                        revisionResources?.resources.find((item) => item.resourcePath === selectedResourcePath) || null;
+                      if (!resource) {
+                        return <div className="table-empty">选择左侧资源查看详情。</div>;
+                      }
+                      return (
+                        <div className="inspector-page-stack">
+                          <div className="validation-result">
+                            <div>resourcePath: {resource.resourcePath}</div>
+                            <div>resourceType: {resource.resourceType}</div>
+                            <div>contentStorage: {storageLabel(resource.contentStorage)}</div>
+                            <div>mimeType: {resource.mimeType || '-'}</div>
+                            <div>loadStage: {resource.loadStage || '-'}</div>
+                            <div>storagePath: {resource.storagePath || '-'}</div>
+                            <div>updatedAt: {formatDateTime(resource.updatedAt)}</div>
+                          </div>
+                          <div className="validation-result">
+                            <div>title: {resource.title || '-'}</div>
+                            <div>summary: {resource.summary || '-'}</div>
+                            <div>storageLocator: {resource.storageLocatorJson ? JSON.stringify(resource.storageLocatorJson) : '-'}</div>
+                          </div>
+                          <pre className="code-block">
+                            {resource.contentMarkdown || (resource.contentStorage === 'object_storage' ? '该存储桶文件当前无可预览文本内容' : '暂无正文')}
+                          </pre>
+                        </div>
+                      );
+                    })()}
+                  </article>
+                </div>
+              ) : null}
+
+              {detailTab === 'rendered' ? (
+                <div className="inspector-page-stack">
+                  <section className="inspector-stat-grid">
+                    <article className="inspector-stat-card">
+                      <span className="inspector-stat-label">Revision</span>
+                      <strong>{renderedRevision ? `rev.${renderedRevision.revisionNumber}` : '-'}</strong>
+                      <span className="session-meta">{selectedRevisionId || '未选择 revision'}</span>
+                    </article>
+                    <article className="inspector-stat-card">
+                      <span className="inspector-stat-label">Signature</span>
+                      <strong>{renderedRevision?.signature?.slice(0, 12) || '-'}</strong>
+                      <span className="session-meta">rendered skill markdown</span>
+                    </article>
+                    <article className="inspector-stat-card">
+                      <span className="inspector-stat-label">Resources</span>
+                      <strong>{revisionResources?.resourceSummary.totalCount ?? 0}</strong>
+                      <span className="session-meta">数据库与存储桶统一挂在当前 revision</span>
+                    </article>
+                  </section>
+                  <pre className="code-block">{renderedRevision?.renderedMarkdown || '选择 revision 后显示渲染结果'}</pre>
+                </div>
+              ) : null}
+
+              {detailTab === 'validation' ? (
+                <div className="detail-grid modal-grid">
+                  <article className="sub-panel">
+                    <p className="kpi-title">Sandbox 验证</p>
+                    <div className="validation-box">
+                      <label className="form-field">
+                        <span>目标 sessionId</span>
+                        <input
+                          className="control-input"
+                          placeholder="输入已有 task sessionId"
+                          value={validationSessionId}
+                          onChange={(event) => setValidationSessionId(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={handleValidate}
+                        disabled={busy || !selectedSkillId || !selectedRevisionId || !validationSessionId.trim()}
+                      >
+                        同步到 sandbox 并验证
+                      </button>
+                      {validationResult ? (
+                        <div className="validation-result">
+                          <div>skillPath: {validationResult.skillPath || '-'}</div>
+                          <div>signature: {validationResult.signature}</div>
+                          <div>restartTriggered: {String(validationResult.restartTriggered)}</div>
+                          <div>syncedAt: {formatDateTime(validationResult.syncedAt)}</div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </article>
+                  <article className="sub-panel">
+                    <p className="kpi-title">复合资源清单</p>
+                    <div className="revision-list">
+                      {revisionResources?.resources.map((item) => (
+                        <div key={item.id} className="revision-item active">
+                          <span>{item.resourcePath}</span>
+                          <span>{storageLabel(item.contentStorage)}</span>
+                          <span>{formatBytes(item.contentMarkdown?.length)}</span>
+                        </div>
+                      ))}
+                      {!revisionResources?.resources.length ? <div className="table-empty">暂无资源</div> : null}
+                    </div>
+                  </article>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </article>
-      </section>
+        </div>
+      ) : null}
       {importDialogOpen && importPreview ? (
         <div
           style={{

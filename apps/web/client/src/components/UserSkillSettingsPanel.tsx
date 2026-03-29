@@ -330,8 +330,16 @@ export function UserSkillSettingsPanel({ onError }: Props) {
           </p>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="space-y-3">
+        <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
+          <div className="space-y-3 xl:sticky xl:top-0">
+            <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">我的自定义 skills</Label>
+                <p className="text-xs text-muted-foreground">
+                  左侧维护已有 skills，右侧专注编辑当前 skill。宽度不足时自动切回单列，避免表单被挤压。
+                </p>
+              </div>
+            </div>
             {(settings?.customSkills || []).map((skill) => (
               <div key={skill.id} className="rounded-2xl border border-border/60 bg-background/80 p-4">
                 <div className="flex items-start justify-between gap-3">
@@ -374,9 +382,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
             ) : null}
           </div>
 
-          <div className="space-y-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+          <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/20 p-5 md:p-6">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="space-y-1">
                 <Label className="text-sm font-medium">
                   {editingCustomSkillId ? "编辑自定义 skill" : "新建自定义 skill"}
                 </Label>
@@ -391,51 +399,60 @@ export function UserSkillSettingsPanel({ onError }: Props) {
               ) : null}
             </div>
 
-            <div className="grid gap-4">
-              <div className="space-y-2">
-                <Label className="text-sm">Slug</Label>
-                <Input
-                  value={form.slug}
-                  onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
-                  placeholder="my-custom-skill"
-                  className="rounded-xl"
-                  disabled={Boolean(editingCustomSkillId)}
-                />
+            <div className="grid gap-5">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  <Label className="text-sm">Slug</Label>
+                  <Input
+                    value={form.slug}
+                    onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
+                    placeholder="my-custom-skill"
+                    className="rounded-xl"
+                    disabled={Boolean(editingCustomSkillId)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">名称</Label>
+                  <Input
+                    value={form.name}
+                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                    placeholder="我的自定义 skill"
+                    className="rounded-xl"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  <Label className="text-sm">分类</Label>
+                  <Input
+                    value={form.category}
+                    onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}
+                    placeholder="general"
+                    className="rounded-xl"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">描述</Label>
+                  <Input
+                    value={form.description}
+                    onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                    placeholder="说明这个 skill 解决什么问题"
+                    className="rounded-xl"
+                  />
+                </div>
               </div>
               <div className="space-y-2">
-                <Label className="text-sm">名称</Label>
-                <Input
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="我的自定义 skill"
-                  className="rounded-xl"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm">分类</Label>
-                <Input
-                  value={form.category}
-                  onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}
-                  placeholder="general"
-                  className="rounded-xl"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm">描述</Label>
-                <Input
-                  value={form.description}
-                  onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                  placeholder="说明这个 skill 解决什么问题"
-                  className="rounded-xl"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-sm">Skill 正文</Label>
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-sm">Skill 正文</Label>
+                  <span className="text-xs text-muted-foreground">
+                    作为主入口说明直接参与 skill 激活
+                  </span>
+                </div>
                 <Textarea
                   value={form.bodyMarkdown}
                   onChange={(event) => setForm((prev) => ({ ...prev, bodyMarkdown: event.target.value }))}
-                  rows={14}
-                  className="rounded-xl font-mono text-xs"
+                  rows={16}
+                  className="min-h-[280px] rounded-xl font-mono text-xs"
                 />
               </div>
               <div className="grid gap-4 rounded-2xl border border-border/60 bg-background/70 p-4">
@@ -450,7 +467,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                     新增文档
                   </Button>
                 </div>
-                <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+                <div className="grid gap-4 2xl:grid-cols-[260px_minmax(0,1fr)]">
                   <div className="space-y-2">
                     {form.documents.length === 0 ? (
                       <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
@@ -474,7 +491,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                       ))
                     )}
                   </div>
-                  <div className="space-y-3">
+                  <div className="min-w-0 space-y-3">
                     {selectedDocument ? (
                       <>
                         <div className="grid gap-3 md:grid-cols-2">
@@ -532,8 +549,8 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                             onChange={(event) =>
                               updateDocument(selectedDocumentIndex, { bodyMarkdown: event.target.value })
                             }
-                            rows={10}
-                            className="rounded-xl font-mono text-xs"
+                            rows={12}
+                            className="min-h-[240px] rounded-xl font-mono text-xs"
                           />
                         </div>
                         <div className="flex justify-end">
@@ -555,7 +572,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <Button
                   type="button"
                   className="rounded-xl"

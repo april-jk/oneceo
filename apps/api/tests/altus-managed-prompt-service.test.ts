@@ -73,3 +73,16 @@ test('managed prompt enforces multi-phase XLSX collaboration and formula-first Q
   assert.match(prompt, /plan the workbook before writing cells/i);
   assert.match(prompt, /enforce this XLSX QA gate before complete_task/i);
 });
+
+test('managed prompt instructs direct multimodal image analysis instead of OCR-first fallback', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-image-test',
+    sessionTitle: 'image analysis contract',
+    workspaceRoot: '/workspace/session-image-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /analyze the image directly from the multimodal message input first/i);
+  assert.match(prompt, /do not start with shell file probes, OCR libraries, Pillow, or other local image-processing tools/i);
+  assert.match(prompt, /do not ask the user to describe an uploaded image/i);
+});

@@ -38,6 +38,35 @@ type StreamedToolCallState = {
   };
 };
 
+function sanitizeMessagesForModel(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (!Array.isArray(message.content)) {
+      return message;
+    }
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (part?.type !== 'image_url') {
+          return part;
+        }
+        return {
+          type: 'image_url' as const,
+          image_url: {
+            url: part.image_url.url,
+          },
+        };
+      }),
+    };
+  });
+}
+
+function hasVisionInput(messages: ChatMessage[]) {
+  return messages.some((message) => {
+    if (!Array.isArray(message.content)) return false;
+    return message.content.some((part) => part?.type === 'image_url' && Boolean(part.image_url?.url));
+  });
+}
+
 export class AltusRunCoordinator {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
@@ -46,9 +75,18 @@ export class AltusRunCoordinator {
     private readonly deliverableService: TaskSessionDeliverableService = taskSessionDeliverableService
   ) {}
 
-  private getModelName() {
+  private getModelName(messages: ChatMessage[], fallbackModel?: string | null) {
+    const needsVision = hasVisionInput(messages);
+    if (needsVision) {
+      return (
+        asText(process.env.ALTUS_MANAGED_VISION_MODEL) ||
+        asText(process.env.AGENT_OPENAI_VISION_MODEL) ||
+        'qwen3-vl-plus'
+      );
+    }
     return (
       asText(process.env.ALTUS_MANAGED_MODEL) ||
+      asText(fallbackModel) ||
       asText(process.env.AGENT_OPENAI_MODEL) ||
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
@@ -194,6 +232,7 @@ export class AltusRunCoordinator {
     messages: ChatMessage[];
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    fallbackModel?: string | null;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
     const response = await fetch(baseUrl, {
@@ -202,8 +241,8 @@ export class AltusRunCoordinator {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.getModelName(),
-        messages: input.messages,
+        model: this.getModelName(input.messages, input.fallbackModel),
+        messages: sanitizeMessagesForModel(input.messages),
         tools: buildManagedToolDefinitions(),
         tool_choice: 'auto',
         temperature: 0.2,
@@ -241,6 +280,7 @@ export class AltusRunCoordinator {
     messages: ChatMessage[];
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    fallbackModel?: string | null;
   }) {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
     let lastError: unknown = null;
@@ -464,10 +504,13 @@ export class AltusRunCoordinator {
         content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
       });
 
+      await this.setupService.refreshInlineImageUrls(messages);
+
       const toolProgressLengths = new Map<string, number>();
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
+        fallbackModel: state.input.model,
         onToolCallDelta: async (toolCall) => {
           const toolName = asText(toolCall?.function?.name);
           const toolCallId = asText(toolCall?.id);

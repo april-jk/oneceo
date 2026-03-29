@@ -6,9 +6,31 @@ import { sandboxSecurityConfig } from '../config/sandbox-security';
 import { archiveSandboxWorkspace, isArchiveStorageConfigured } from './sandbox-archive-service';
 import { setSandboxMetadata } from './sandbox-activity-service';
 
+const SANDBOX_BLOCKED_ENV_PATTERNS = [
+  /^R2_/i,
+  /^CF_/i,
+  /^CLOUDFLARE_/i,
+  /^AWS_ACCESS_KEY_ID$/i,
+  /^AWS_SECRET_ACCESS_KEY$/i,
+  /^AWS_SESSION_TOKEN$/i,
+];
+
 function isE2bEnvironment(metadata: Record<string, unknown> | null | undefined): boolean {
   if (!metadata) return false;
   return String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
+}
+
+export function sanitizeSandboxEnvs(envs?: Record<string, string>): Record<string, string> | undefined {
+  if (!envs) return undefined;
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(envs)) {
+    if (!key) continue;
+    if (SANDBOX_BLOCKED_ENV_PATTERNS.some((pattern) => pattern.test(key))) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
 }
 
 export class SandboxEnvironmentService {
@@ -35,10 +57,11 @@ export class SandboxEnvironmentService {
   }) {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
     const selectedTemplate = (input.templateOverride || e2bConfig.template).trim() || e2bConfig.template;
+    const sanitizedEnvs = sanitizeSandboxEnvs(input.envs);
     const sandbox = await e2bConnector.createSandbox({
       template: selectedTemplate,
       metadata: input.metadata || {},
-      envs: input.envs,
+      envs: sanitizedEnvs,
       timeoutMs: e2bConfig.timeoutMs,
       allowInternetAccess: e2bConfig.allowInternetAccess,
       allowPublicTraffic: e2bConfig.allowPublicTraffic,

@@ -73,3 +73,65 @@ test('submit uploads attachments, persists context metadata, and starts managed 
     /# Hello attachment/
   );
 });
+
+test('submit uploads image attachments to managed image bucket and persists external object keys', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  mock.method(e2bConnector, 'writeFile', async () => undefined);
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+  const imageObjectService = {
+    buildObjectKey: mock.fn(() => 'managed-images/session-1/msg-1/1710000000-screenshot.png'),
+    uploadImage: mock.fn(async () => undefined),
+  };
+
+  const service = new AltusManagedInputService(
+    setupService as any,
+    runService as any,
+    touchMock as any,
+    imageObjectService as any
+  );
+  await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '看看这个图讲了什么',
+    messageKey: 'msg-1',
+    files: [
+      {
+        name: 'screenshot.png',
+        mimeType: 'image/png',
+        size: 9,
+        buffer: Buffer.from('png-bytes'),
+      },
+    ],
+  });
+
+  assert.equal(imageObjectService.buildObjectKey.mock.callCount(), 1);
+  assert.equal(imageObjectService.uploadImage.mock.callCount(), 1);
+
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.equal(startRunCall?.arguments[2]?.messageKey, 'msg-1');
+  assert.equal(
+    startRunCall?.arguments[2]?.metadata?.attachments?.[0]?.externalObjectKey,
+    'managed-images/session-1/msg-1/1710000000-screenshot.png'
+  );
+});

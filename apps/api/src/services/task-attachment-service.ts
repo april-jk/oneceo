@@ -145,6 +145,7 @@ export type TaskAttachmentRecord = {
   size: number;
   mimeType?: string;
   uploadedAt: string;
+  externalObjectKey?: string;
 };
 
 export type TaskAttachmentContextRecord = {

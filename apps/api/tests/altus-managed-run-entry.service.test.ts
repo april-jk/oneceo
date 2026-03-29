@@ -81,7 +81,46 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   const summary = await service.startRun('session-1', 'user-1', {
     content: '帮我开发 2048 小游戏',
     messageKey: 'msg-1',
-    metadata: { source: 'chat' },
+    metadata: {
+      source: 'chat',
+      managedSkillCatalog: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-1',
+          revisionId: 'rev-1',
+          slug: 'office-ppt',
+          name: 'PPT 办公',
+          description: '创建专业演示文稿',
+          category: 'office',
+          revisionNumber: 2,
+          resourceSummary: {
+            totalCount: 2,
+            referenceCount: 1,
+            templateCount: 1,
+            paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          },
+        },
+      ],
+      managedSkillContext: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-1',
+          revisionId: 'rev-1',
+          slug: 'office-ppt',
+          name: 'PPT 办公',
+          description: '创建专业演示文稿',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: {
+            totalCount: 2,
+            referenceCount: 1,
+            templateCount: 1,
+            paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          },
+        },
+      ],
+    },
   });
 
   assert.equal(summary?.id, 'run-1');
@@ -110,6 +149,10 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   assert.equal(capturedState?.input.sessionId, 'session-1');
   assert.equal(capturedState?.input.sessionTitle, 'Build game');
   assert.deepEqual(capturedState?.input.connectors, [{ connectorKey: 'github', authStatus: 'authorized' }]);
+  assert.equal(capturedState?.input.skillCatalog?.length, 1);
+  assert.equal(capturedState?.input.skills?.length, 1);
+  assert.equal(capturedState?.input.skillCatalog?.[0]?.slug, 'office-ppt');
+  assert.equal(capturedState?.input.skills?.[0]?.resourceSummary?.totalCount, 2);
   assert.ok(capturedAbortController instanceof AbortController);
 });
 

@@ -659,6 +659,42 @@ PY`;
     });
   }
 
+  async loadSkillResource(
+    sessionId: string,
+    input?: {
+      taskSessionId?: string | null;
+      skill: {
+        sourceType: 'platform' | 'custom';
+        skillId: string;
+        revisionId: string;
+        slug: string;
+        name: string;
+        description: string;
+        category: string;
+        renderedMarkdown: string;
+        revisionNumber: number | null;
+        resourceSummary?: {
+          totalCount: number;
+          referenceCount: number;
+          templateCount: number;
+          paths: string[];
+        } | null;
+      };
+      resourcePath: string;
+    }
+  ) {
+    auditOsacAction('LOAD_SKILL_RESOURCE', { sessionId });
+    if (!input?.skill || !input?.resourcePath) {
+      throw new Error('缺少 skill 或 resourcePath');
+    }
+    return sandboxSkillSyncService.syncResolvedSkillResource({
+      taskSessionId: input.taskSessionId || null,
+      orchestratorSessionId: sessionId,
+      skill: input.skill,
+      resourcePath: input.resourcePath,
+    });
+  }
+
   async addMcpServer(
     sessionId: string,
     input?: { serverName: string; serverConfig: Record<string, unknown>; overwrite?: boolean }

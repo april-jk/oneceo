@@ -54,4 +54,33 @@ export class SkillManagementService {
   validateRevision(skillId: string, revisionId: string, sessionId: string) {
     return this.oneceoApi.validateSkillRevision(skillId, revisionId, sessionId);
   }
+
+  previewFolderImport(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+  }) {
+    return this.oneceoApi.previewSkillFolderImport(input);
+  }
+
+  importFolder(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.oneceoApi.importSkillFolder(input);
+  }
+
+  createFolderImportJob(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.oneceoApi.createSkillFolderImportJob(input);
+  }
+
+  getFolderImportJob(jobId: string) {
+    return this.oneceoApi.getSkillFolderImportJob(jobId);
+  }
 }

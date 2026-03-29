@@ -23,5 +23,32 @@
 - 继续补齐 skills 前台闭环：让加号菜单在每次打开时重新读取当前用户可用 skills，并在 `Skills 管理` 发生变更后主动刷新，修复“设置已更新但菜单未同步”的问题
 - 打通跨页面传递：首页、AI Agent 落地页、新任务弹窗现在都会连同已选 skills 一起进入正式任务创建链路，不再只携带真实文件
 - 修正 Altus managed 的真实使用链路：当前轮 resolved skills 现在既会同步到 sandbox 的 `SKILL.md`，也会同源注入 Altus managed system prompt，避免只写入 sandbox 但 managed agent 自身未消费 skill 的分叉
+- 在当前主线重新收敛方向，新增一份基于 `suna` 思路的“简单渐进式 skills”文档，明确本阶段先做 metadata catalog、minimal prompt index、按需同步 `SKILL.md` 和单文件 resources，不推进完整保密大方案
+- 开始落地“简单渐进式 skills”：新增 `platform_skill_revision_resources`，让平台 skill catalog 返回 `resourceSummary`，并为 `office-ppt / office-docx / office-xlsx` 补入轻量 reference/template seed
+- Altus managed 已改为 `managedSkillCatalog + managedSkillContext` 双层注入：系统提示先放 skill metadata 索引，用户实际选择的 skill 才注入正文，同时新增 `load_skill_resource` 工具按需把单个 markdown resource 写入 sandbox skill 目录
+- 前台 `AttachmentPicker` 与 `Skills 管理` 已显示 skill 资源摘要，便于确认当前 skill 是否带 reference/template；文档 `12_Suna思路_简单渐进式Skills方案.md` 也补充了 oneceo 当前实现代码落点
+- 补齐渐进式 skills 定向测试：新增 `platform-skill-service.test.ts`、`altus-managed-tool-runtime.test.ts`、`sandbox-skill-sync-service.test.ts`，并扩展 `altus-managed-input-service.test.ts`、`altus-managed-prompt-service.test.ts`、`altus-managed-run-entry.service.test.ts`、`altus-run-coordinator.test.ts`
+- 定向测试已通过 24 项，覆盖 skill catalog/resourceSummary、managed minimal skill index、`managedSkillCatalog + managedSkillContext` 注入、`load_skill_resource` 调用约束、sandbox 单文件资源写入
+- 按“数据库分层渐进式”新方向补充独立方案文档：不再把 Claude Code skills 直接映射成真实目录源数据，而是拆成 revision discovery、activation entry、resource index、resource body、resource chunk、resource link 多张表，由 runtime 按阶段组装
+- 继续沿 `14` 拆出四份候选实施文档：`15_Altus数据库分层渐进式Skills使用方案.md`、`16_管理后台数据库分层渐进式Skills添加方案.md`、`17_管理后台数据库分层渐进式Skills文件夹导入方案.md`、`18_前台用户数据库分层渐进式Skills文件夹导入方案.md`
 - 同步更新 Playwright 菜单测试与 managed smoke 脚本，使其改用新 skill 引用协议，不再上传 skill markdown 附件
 - 验证结果：`apps/web` 与 `apps/admin_management` 已通过 TypeScript 检查；`apps/api` 仍存在仓库原有的历史 type-check 报错，但本次新增的用户态/平台化 skill 改动未新增新的独立报错
+- 新增数据库分层渐进式第一批代码：补齐 `platform_skill_revision_entries / resource_indexes / resource_bodies / resource_chunks / resource_links` 的 schema/migrate 与 DAO 同步写入逻辑；新增 `platform-skill-import-service`、后台和用户态文件夹导入预览路由，以及管理后台/前台设置页的“导入技能文件夹”入口；定向测试 `platform-skill-import-service.test.ts` 已通过，`apps/web`、`apps/admin_management` 类型检查和 `git diff --check` 均通过
+- 继续完成第二批闭环：`platform-skill-service` 现在优先读取分层 `entry/index/body/chunk`，Altus 与 sandbox 资源读取链路随之切到分层表优先；新增后台真实导入接口 `/api/internal/skills/import/folder`，支持导入新 skill 或导入为已有 skill 的新 revision；前台用户侧新增自定义 skill 文件夹导入创建接口；新增/补强 `platform-skill-service.test.ts` 与 `platform-skill-import-service.test.ts`，并回归 `altus-managed-tool-runtime.test.ts`、`sandbox-skill-sync-service.test.ts`，共 9 项定向测试通过
+- 按四条关键流程补齐自动化验证：管理端添加 skill、管理端导入为新 revision、用户态添加自定义 skill、用户态解析并使用 skill 都已有定向测试覆盖；本轮运行 `platform-skill-service / platform-skill-import-service / user-skill-service / altus-managed-input-service / altus-managed-tool-runtime / sandbox-skill-sync-service` 共 15 项测试全部通过，同时 `apps/admin_management` 与 `apps/web` 的 TypeScript 检查继续通过
+- 修复目录导入过滤错误：此前前端只允许 `.md/.json/.yaml` 等少数文本文件进入导入链路，导致 `scripts/*.py/*.js/*.sh`、`design/*` 这类渐进式资源在浏览器端就被丢弃；现已改为“默认接收文本型文件，只排除明显二进制/构建产物”，并补充复合存储候选文档 `19_复合存储渐进式Skills方案.md`，明确数据库与对象存储的分工
+- 更新复合存储候选文档：明确数据库中必须同时存 resource_path / storage_path / storage_locator_json / materialize_path，用于精准定位 skill 文件、真实存储位置与 sandbox 落点
+- 重写 15/16/17/18 候选文档到复合存储口径：细化 Altus 使用方式、管理态添加流程、管理后台文件夹导入流程、用户态添加与使用流程，并补齐代码参照位置
+- 收紧复合存储候选方案：用户态取消文件夹导入，仅保留平台内文档编辑器；管理端导入预览改为树状弹窗并逐文件显示数据库/存储桶分流与处理状态；系统级与用户态 skill 固定到稳定根目录，避免 Altus 运行时临时查找路径
+
+- 继续完善 skills：固定 sandbox skill 根目录为 platform/user 双路径；移除用户态文件夹导入，改为纯数据库型正文+渐进式 markdown 文档编辑；管理端导入改为树状弹窗展示数据库/存储桶分流与处理状态。
+- 验证：pnpm --dir apps/web check、pnpm --dir apps/admin_management type-check、API 定向测试 8 项、git diff --check 均通过。
+- 后续：继续补对象存储落地与管理端文件级处理进度联动。
+
+- 补完 skills 对象存储链路：平台导入时脚本类资源上传到 R2，数据库保存 contentStorage/storagePath/storageLocatorJson，运行时按 locator 从 R2 下载并同步到 sandbox。
+- 验证：platform-skill-service 等 API 定向测试共 14 项通过；apps/web 与 apps/admin_management 类型检查通过；git diff --check 通过。
+- 后续：继续把管理端导入弹窗的处理中状态接到真实逐文件上传进度。
+
+- 管理端 skills 导入改为真实后台任务：新增 folder import job 创建/查询接口，前端弹窗轮询 job 状态并按文件逐步刷新 pending/success/failed。
+- 验证：pnpm --dir apps/admin_management type-check、API 导入相关测试 8 项、git diff --check 通过。
+- 后续：如需更细粒度，可继续把 processing 单独显示为转圈态并在对象存储上传阶段展示百分比。

@@ -22,6 +22,11 @@ import { SkillManagementService } from './services/skill-management-service';
 import { errorMiddleware, fail } from './utils/http';
 
 const app = express();
+const jsonBodyLimitMbRaw = Number(process.env.ADMIN_JSON_BODY_LIMIT_MB || 16);
+const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
+  ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
+  : 16;
+const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
 
 const auditService = new AuditService();
 const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
@@ -37,7 +42,7 @@ app.use(
     origin: config.corsOrigin,
   })
 );
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: jsonBodyLimit }));
 
 app.use((req, res, next) => {
   const startedAt = Date.now();

@@ -161,6 +161,15 @@ router.post('/settings/skills/custom', express.json({ limit: '1mb' }), async (re
       description: req.body?.description,
       category: req.body?.category,
       bodyMarkdown: req.body?.bodyMarkdown,
+      documents: Array.isArray(req.body?.documents)
+        ? req.body.documents.map((item: any) => ({
+            documentKey: item?.documentKey,
+            documentPath: item?.documentPath,
+            title: item?.title,
+            summary: item?.summary,
+            bodyMarkdown: item?.bodyMarkdown,
+          }))
+        : [],
     });
     return res.status(201).json({ success: true, data });
   } catch (error: any) {
@@ -180,6 +189,15 @@ router.put('/settings/skills/custom/:customSkillId', express.json({ limit: '1mb'
       description: req.body?.description,
       category: req.body?.category,
       bodyMarkdown: req.body?.bodyMarkdown,
+      documents: Array.isArray(req.body?.documents)
+        ? req.body.documents.map((item: any) => ({
+            documentKey: item?.documentKey,
+            documentPath: item?.documentPath,
+            title: item?.title,
+            summary: item?.summary,
+            bodyMarkdown: item?.bodyMarkdown,
+          }))
+        : undefined,
     });
     return res.json({ success: true, data });
   } catch (error: any) {

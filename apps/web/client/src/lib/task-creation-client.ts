@@ -107,6 +107,12 @@ export type TaskCreationPlatformSkill = {
   description: string;
   category: string;
   revisionNumber: number | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
 };
 
 export type TaskCreationUserCustomSkill = {
@@ -117,6 +123,22 @@ export type TaskCreationUserCustomSkill = {
   category: string;
   status: "active" | "archived";
   bodyMarkdown?: string;
+  documents?: Array<{
+    id: string;
+    documentKey: string;
+    documentPath: string;
+    title: string;
+    summary: string;
+    bodyMarkdown: string;
+    sortOrder: number;
+    updatedAt: string;
+  }>;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
   updatedAt: string;
 };
 
@@ -449,6 +471,13 @@ export async function createTaskCreationCustomSkill(input: {
   description?: string;
   category?: string;
   bodyMarkdown: string;
+  documents?: Array<{
+    documentKey?: string;
+    documentPath: string;
+    title?: string;
+    summary?: string;
+    bodyMarkdown: string;
+  }>;
 }): Promise<TaskCreationUserCustomSkill> {
   const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/custom`, {
     method: "POST",
@@ -474,6 +503,13 @@ export async function updateTaskCreationCustomSkill(
     description?: string;
     category?: string;
     bodyMarkdown?: string;
+    documents?: Array<{
+      documentKey?: string;
+      documentPath: string;
+      title?: string;
+      summary?: string;
+      bodyMarkdown: string;
+    }>;
   }
 ): Promise<TaskCreationUserCustomSkill> {
   const response = await fetch(

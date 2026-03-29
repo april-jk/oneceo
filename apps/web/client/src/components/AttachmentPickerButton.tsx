@@ -74,6 +74,14 @@ function getProviderLabel(provider: RemoteAttachmentProvider): string {
   return CLOUD_PROVIDER_ITEMS.find((item) => item.provider === provider)?.label || provider;
 }
 
+function formatSkillResourceSummary(skill: TaskCreationPlatformSkill): string {
+  const summary = skill.resourceSummary;
+  if (!summary || summary.totalCount <= 0) {
+    return "无额外资源";
+  }
+  return `${summary.referenceCount} 个参考 + ${summary.templateCount} 个模板`;
+}
+
 export default function AttachmentPickerButton({
   onSelectFiles,
   onSelectSkills,
@@ -283,7 +291,8 @@ export default function AttachmentPickerButton({
                       <div className="flex min-w-0 flex-1 flex-col items-start">
                         <span className="text-sm font-medium">{item.name}</span>
                         <span className="text-xs text-muted-foreground">
-                          {item.sourceType === "custom" ? "自定义" : "平台模板"} · {item.description}
+                          {item.sourceType === "custom" ? "自定义" : "平台模板"} · {item.description} ·{" "}
+                          {formatSkillResourceSummary(item)}
                         </span>
                       </div>
                     </DropdownMenuItem>

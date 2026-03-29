@@ -16,6 +16,7 @@ type DesiredSkill = {
   slug: string;
   renderedMarkdown: string;
   source: 'platform' | 'custom';
+  ownerUserId?: string | null;
   revisionId?: string | null;
   skillId?: string | null;
 };
@@ -24,6 +25,7 @@ type TrackedSkill = {
   slug: string;
   path: string;
   source: 'platform' | 'custom';
+  ownerUserId?: string | null;
   revisionId?: string | null;
   skillId?: string | null;
   signature: string;
@@ -40,6 +42,8 @@ type SyncResult = {
 };
 
 const OPENCODE_SKILLS_ROOT = '/home/user/.config/opencode/skills';
+const OPENCODE_PLATFORM_SKILLS_ROOT = `${OPENCODE_SKILLS_ROOT}/platform`;
+const OPENCODE_USER_SKILLS_ROOT = `${OPENCODE_SKILLS_ROOT}/user`;
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -67,16 +71,70 @@ function assertSlug(value: string) {
   return normalized;
 }
 
-function buildSkillPath(slug: string) {
-  return `${OPENCODE_SKILLS_ROOT}/${slug}/SKILL.md`;
+function normalizeUserPathSegment(value: string) {
+  const normalized = asText(value).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+  if (!normalized) {
+    throw new Error('skill userId 非法');
+  }
+  return normalized.slice(0, 128);
+}
+
+function buildSkillDirectory(input: { slug: string; source: 'platform' | 'custom'; ownerUserId?: string | null }) {
+  const slug = assertSlug(input.slug);
+  if (input.source === 'platform') {
+    return `${OPENCODE_PLATFORM_SKILLS_ROOT}/${slug}`;
+  }
+  return `${OPENCODE_USER_SKILLS_ROOT}/${normalizeUserPathSegment(asText(input.ownerUserId))}/${slug}`;
+}
+
+function buildSkillPath(input: { slug: string; source: 'platform' | 'custom'; ownerUserId?: string | null }) {
+  return `${buildSkillDirectory(input)}/SKILL.md`;
+}
+
+function normalizeResourcePath(value: unknown) {
+  const normalized = asText(value).replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) {
+    throw new Error('skill resource_path 非法');
+  }
+  return normalized;
+}
+
+function buildResourcePath(input: {
+  slug: string;
+  source: 'platform' | 'custom';
+  ownerUserId?: string | null;
+  resourcePath: string;
+}) {
+  return `${buildSkillDirectory(input)}/${normalizeResourcePath(input.resourcePath)}`;
+}
+
+function buildSkillIdentityKey(input: {
+  slug: string;
+  source: 'platform' | 'custom';
+  ownerUserId?: string | null;
+}) {
+  return `${input.source}:${input.source === 'custom' ? normalizeUserPathSegment(asText(input.ownerUserId)) : 'platform'}:${assertSlug(input.slug)}`;
+}
+
+function buildTrackedSkillDirectory(item: TrackedSkill) {
+  const skillPath = asText(item.path);
+  if (skillPath.endsWith('/SKILL.md')) {
+    return skillPath.slice(0, -'/SKILL.md'.length);
+  }
+  return buildSkillDirectory(item);
 }
 
 function buildTrackedSkill(input: DesiredSkill): TrackedSkill {
   const slug = assertSlug(input.slug);
   return {
     slug,
-    path: buildSkillPath(slug),
+    path: buildSkillPath({
+      slug,
+      source: input.source,
+      ownerUserId: input.ownerUserId || null,
+    }),
     source: input.source,
+    ownerUserId: input.ownerUserId || null,
     revisionId: input.revisionId || null,
     skillId: input.skillId || null,
     signature: computeSkillSignature(input.renderedMarkdown),
@@ -84,11 +142,13 @@ function buildTrackedSkill(input: DesiredSkill): TrackedSkill {
 }
 
 function computeAggregateSignature(items: TrackedSkill[]) {
-  const ordered = [...items].sort((left, right) => left.slug.localeCompare(right.slug));
+  const ordered = [...items].sort((left, right) => left.path.localeCompare(right.path));
   const payload = JSON.stringify(
     ordered.map((item) => ({
       slug: item.slug,
+      path: item.path,
       source: item.source,
+      ownerUserId: item.ownerUserId || null,
       revisionId: item.revisionId || null,
       skillId: item.skillId || null,
       signature: item.signature,
@@ -110,8 +170,15 @@ function readTrackedSkills(metadataJson: unknown): { signature: string | null; i
     if (!signature) continue;
     items.push({
       slug,
-      path: asText(record.path) || buildSkillPath(slug),
+      path:
+        asText(record.path) ||
+        buildSkillPath({
+          slug,
+          source: asText(record.source) === 'custom' ? 'custom' : 'platform',
+          ownerUserId: asText(record.ownerUserId) || null,
+        }),
       source: asText(record.source) === 'custom' ? 'custom' : 'platform',
+      ownerUserId: asText(record.ownerUserId) || null,
       revisionId: asText(record.revisionId) || null,
       skillId: asText(record.skillId) || null,
       signature,
@@ -238,43 +305,42 @@ export class SandboxSkillSyncService {
 
     await e2bConnector.runCommand(
       context.orchestratorSessionId,
-      `mkdir -p ${shellEscape(OPENCODE_SKILLS_ROOT)}`,
+      `mkdir -p ${shellEscape(OPENCODE_PLATFORM_SKILLS_ROOT)} ${shellEscape(OPENCODE_USER_SKILLS_ROOT)}`,
       { timeoutMs: 15_000 }
     );
 
-    const desiredBySlug = new Map<string, DesiredSkill>();
+    const desiredByKey = new Map<string, DesiredSkill>();
     for (const item of input.desiredSkills) {
-      desiredBySlug.set(assertSlug(item.slug), item);
+      desiredByKey.set(buildSkillIdentityKey(item), item);
     }
-    const currentBySlug = new Map<string, TrackedSkill>();
+    const currentByKey = new Map<string, TrackedSkill>();
     for (const item of current.items) {
-      currentBySlug.set(item.slug, item);
+      currentByKey.set(buildSkillIdentityKey(item), item);
     }
 
     for (const currentItem of current.items) {
-      if (desiredBySlug.has(currentItem.slug)) continue;
+      if (desiredByKey.has(buildSkillIdentityKey(currentItem))) continue;
       await e2bConnector.runCommand(
         context.orchestratorSessionId,
-        `rm -rf ${shellEscape(`${OPENCODE_SKILLS_ROOT}/${currentItem.slug}`)}`,
+        `rm -rf ${shellEscape(buildTrackedSkillDirectory(currentItem))}`,
         { timeoutMs: 15_000 }
       );
     }
 
     for (const desired of input.desiredSkills) {
-      const slug = assertSlug(desired.slug);
       const nextTracked = buildTrackedSkill(desired);
-      const existing = currentBySlug.get(slug);
+      const existing = currentByKey.get(buildSkillIdentityKey(desired));
       if (existing && existing.signature === nextTracked.signature) {
         continue;
       }
       await e2bConnector.runCommand(
         context.orchestratorSessionId,
-        `mkdir -p ${shellEscape(`${OPENCODE_SKILLS_ROOT}/${slug}`)}`,
+        `mkdir -p ${shellEscape(buildTrackedSkillDirectory(nextTracked))}`,
         { timeoutMs: 15_000 }
       );
       await e2bConnector.writeFile(
         context.orchestratorSessionId,
-        buildSkillPath(slug),
+        nextTracked.path,
         Buffer.from(desired.renderedMarkdown, 'utf8')
       );
     }
@@ -336,6 +402,7 @@ export class SandboxSkillSyncService {
         slug: item.slug,
         renderedMarkdown: item.renderedMarkdown,
         source: item.sourceType,
+        ownerUserId: item.userId || null,
         revisionId: item.revisionId,
         skillId: item.skillId,
       })),
@@ -346,6 +413,67 @@ export class SandboxSkillSyncService {
         ...item,
         skillPath: item.path,
       })),
+    };
+  }
+
+  async syncResolvedSkillResource(input: {
+    taskSessionId?: string | null;
+    orchestratorSessionId?: string | null;
+    skill: ResolvedUserSkillSelection;
+    resourcePath: string;
+  }) {
+    const normalizedResourcePath = normalizeResourcePath(input.resourcePath);
+    const context = await this.resolveSandboxContext({
+      taskSessionId: input.taskSessionId || null,
+      orchestratorSessionId: input.orchestratorSessionId || null,
+    });
+    const resolvedResource =
+      input.skill.sourceType === 'platform'
+        ? await platformSkillService.getRevisionResource(
+            input.skill.skillId,
+            input.skill.revisionId,
+            normalizedResourcePath
+          )
+        : {
+            resource: {
+              resourcePath: normalizedResourcePath,
+              resourceType: 'reference',
+              contentMarkdown: (
+                await userSkillService.getCustomSkillDocument(
+                  asText(input.skill.userId),
+                  input.skill.skillId,
+                  normalizedResourcePath
+                )
+              ).bodyMarkdown,
+            },
+          };
+    const absolutePath = buildResourcePath({
+      slug: input.skill.slug,
+      source: input.skill.sourceType,
+      ownerUserId: input.skill.userId || null,
+      resourcePath: normalizedResourcePath,
+    });
+    const parentDir = absolutePath.slice(0, absolutePath.lastIndexOf('/'));
+    await e2bConnector.runCommand(
+      context.orchestratorSessionId,
+      `mkdir -p ${shellEscape(parentDir)}`,
+      { timeoutMs: 15_000 }
+    );
+    await e2bConnector.writeFile(
+      context.orchestratorSessionId,
+      absolutePath,
+      Buffer.from(resolvedResource.resource.contentMarkdown, 'utf8')
+    );
+    await touchSandbox(context.orchestratorSessionId, 'skill_resource_sync');
+    return {
+      taskSessionId: context.taskSessionId,
+      orchestratorSessionId: context.orchestratorSessionId,
+      skillId: input.skill.skillId,
+      revisionId: input.skill.revisionId,
+      slug: input.skill.slug,
+      resourcePath: normalizedResourcePath,
+      skillResourcePath: absolutePath,
+      resourceType: resolvedResource.resource.resourceType,
     };
   }
 
@@ -389,7 +517,9 @@ export class SandboxSkillSyncService {
   }) {
     const context = await this.resolveSandboxContext(input);
     const current = readTrackedSkills(context.binding?.metadataJson);
-    const currentItems = current.items.filter((item) => item.slug !== assertSlug(input.skillName));
+    const currentItems = current.items.filter(
+      (item) => !(item.source === 'custom' && item.slug === assertSlug(input.skillName))
+    );
     const renderedMarkdown = platformSkillService.renderSkillMarkdown({
       slug: input.skillName,
       description: '',
@@ -399,11 +529,15 @@ export class SandboxSkillSyncService {
       slug: item.slug,
       renderedMarkdown: '',
       source: item.source,
+      ownerUserId: item.ownerUserId || null,
       revisionId: item.revisionId,
       skillId: item.skillId,
     }));
     for (const item of desiredSkills) {
-      const raw = await e2bConnector.readFile(context.orchestratorSessionId, buildSkillPath(item.slug)).catch(() => null);
+      const raw = await e2bConnector.readFile(
+        context.orchestratorSessionId,
+        buildSkillPath({ slug: item.slug, source: item.source, ownerUserId: item.ownerUserId || null })
+      ).catch(() => null);
       item.renderedMarkdown = raw ? Buffer.from(raw).toString('utf8') : '';
     }
     desiredSkills.push({
@@ -425,15 +559,21 @@ export class SandboxSkillSyncService {
   }) {
     const context = await this.resolveSandboxContext(input);
     const current = readTrackedSkills(context.binding?.metadataJson);
-    const remaining = current.items.filter((item) => item.slug !== assertSlug(input.skillName));
+    const remaining = current.items.filter(
+      (item) => !(item.source === 'custom' && item.slug === assertSlug(input.skillName))
+    );
     const desiredSkills: DesiredSkill[] = [];
     for (const item of remaining) {
-      const raw = await e2bConnector.readFile(context.orchestratorSessionId, buildSkillPath(item.slug)).catch(() => null);
+      const raw = await e2bConnector.readFile(
+        context.orchestratorSessionId,
+        buildSkillPath({ slug: item.slug, source: item.source, ownerUserId: item.ownerUserId || null })
+      ).catch(() => null);
       if (!raw) continue;
       desiredSkills.push({
         slug: item.slug,
         renderedMarkdown: Buffer.from(raw).toString('utf8'),
         source: item.source,
+        ownerUserId: item.ownerUserId || null,
         revisionId: item.revisionId,
         skillId: item.skillId,
       });

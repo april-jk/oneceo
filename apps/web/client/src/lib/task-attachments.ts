@@ -292,6 +292,7 @@ export function partitionPendingAttachments(current: PendingAttachment[]): {
         description: item.description,
         category: item.category,
         revisionNumber: item.revisionNumber,
+        resourceSummary: item.resourceSummary,
       });
       continue;
     }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -77,6 +78,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingCustomSkillId, setEditingCustomSkillId] = useState("");
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const loadSettings = async () => {
     setLoading(true);
@@ -161,12 +163,18 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       })),
     });
     setSelectedDocumentIndex(0);
+    setEditorOpen(true);
   };
 
   const resetForm = () => {
     setEditingCustomSkillId("");
     setForm(EMPTY_FORM);
     setSelectedDocumentIndex(0);
+  };
+
+  const startCreateCustomSkill = () => {
+    resetForm();
+    setEditorOpen(true);
   };
 
   const handleSaveCustomSkill = async () => {
@@ -195,6 +203,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
         await createTaskCreationCustomSkill(payload);
       }
       resetForm();
+      setEditorOpen(false);
       await loadSettings();
       notifyTaskCreationSkillsUpdated();
     } catch (error) {
@@ -323,277 +332,281 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       </section>
 
       <section className="space-y-4">
-        <div>
-          <Label className="text-sm font-medium">自定义 skills</Label>
-          <p className="text-sm text-muted-foreground">
-            这里维护你自己的纯数据库型技能。主正文会直接进入 skill 入口，渐进式文档会以 markdown 资源方式存储，按需在运行时加载。
-          </p>
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <Label className="text-sm font-medium">自定义 skills</Label>
+            <p className="text-sm text-muted-foreground">
+              这里维护你自己的纯数据库型技能。主正文会直接进入 skill 入口，渐进式文档会以 markdown 资源方式存储，按需在运行时加载。
+            </p>
+          </div>
+          <Button type="button" className="rounded-xl" onClick={startCreateCustomSkill}>
+            新增 skills
+          </Button>
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
-          <div className="space-y-3 xl:sticky xl:top-0">
-            <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
-              <div className="space-y-1">
-                <Label className="text-sm font-medium">我的自定义 skills</Label>
-                <p className="text-xs text-muted-foreground">
-                  左侧维护已有 skills，右侧专注编辑当前 skill。宽度不足时自动切回单列，避免表单被挤压。
-                </p>
-              </div>
-            </div>
-            {(settings?.customSkills || []).map((skill) => (
-              <div key={skill.id} className="rounded-2xl border border-border/60 bg-background/80 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-foreground">{skill.name}</span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {skill.status}
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{skill.description || "暂无描述"}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {skill.slug} · {formatDateTime(skill.updatedAt)}
-                    </p>
+        <div className="space-y-3">
+          {(settings?.customSkills || []).map((skill) => (
+            <div key={skill.id} className="rounded-2xl border border-border/60 bg-background/80 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-foreground">{skill.name}</span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                      {skill.status}
+                    </span>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-xl"
-                      onClick={() => startEditCustomSkill(skill)}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-xl"
-                      disabled={busyKey === `custom:status:${skill.id}`}
-                      onClick={() => void handleToggleCustomStatus(skill)}
-                    >
-                      {skill.status === "archived" ? "启用" : "归档"}
-                    </Button>
-                  </div>
+                  <p className="text-sm text-muted-foreground">{skill.description || "暂无描述"}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {skill.slug} · {formatDateTime(skill.updatedAt)}
+                  </p>
                 </div>
-              </div>
-            ))}
-            {!settings?.customSkills.length ? (
-              <p className="text-sm text-muted-foreground">还没有自定义 skill。</p>
-            ) : null}
-          </div>
-
-          <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/20 p-5 md:p-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div className="space-y-1">
-                <Label className="text-sm font-medium">
-                  {editingCustomSkillId ? "编辑自定义 skill" : "新建自定义 skill"}
-                </Label>
-                <p className="text-sm text-muted-foreground">
-                  用户态只支持纯数据库型 skills。文档相对路径会固定恢复到用户 skill 根目录下。
-                </p>
-              </div>
-              {editingCustomSkillId ? (
-                <Button type="button" variant="outline" className="rounded-xl" onClick={resetForm}>
-                  新建模式
-                </Button>
-              ) : null}
-            </div>
-
-            <div className="grid gap-5">
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                <div className="space-y-2">
-                  <Label className="text-sm">Slug</Label>
-                  <Input
-                    value={form.slug}
-                    onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
-                    placeholder="my-custom-skill"
+                <div className="flex flex-col gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
                     className="rounded-xl"
-                    disabled={Boolean(editingCustomSkillId)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-sm">名称</Label>
-                  <Input
-                    value={form.name}
-                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                    placeholder="我的自定义 skill"
+                    onClick={() => startEditCustomSkill(skill)}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
                     className="rounded-xl"
-                  />
-                </div>
-              </div>
-              <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-                <div className="space-y-2">
-                  <Label className="text-sm">分类</Label>
-                  <Input
-                    value={form.category}
-                    onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}
-                    placeholder="general"
-                    className="rounded-xl"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-sm">描述</Label>
-                  <Input
-                    value={form.description}
-                    onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                    placeholder="说明这个 skill 解决什么问题"
-                    className="rounded-xl"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="text-sm">Skill 正文</Label>
-                  <span className="text-xs text-muted-foreground">
-                    作为主入口说明直接参与 skill 激活
-                  </span>
-                </div>
-                <Textarea
-                  value={form.bodyMarkdown}
-                  onChange={(event) => setForm((prev) => ({ ...prev, bodyMarkdown: event.target.value }))}
-                  rows={16}
-                  className="min-h-[280px] rounded-xl font-mono text-xs"
-                />
-              </div>
-              <div className="grid gap-4 rounded-2xl border border-border/60 bg-background/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <Label className="text-sm font-medium">渐进式文档</Label>
-                    <p className="text-xs text-muted-foreground">
-                      用于补充设计说明、约束、例子等 markdown 文档。仅支持文本型数据库资源。
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" className="rounded-xl" onClick={addDocument}>
-                    新增文档
+                    disabled={busyKey === `custom:status:${skill.id}`}
+                    onClick={() => void handleToggleCustomStatus(skill)}
+                  >
+                    {skill.status === "archived" ? "启用" : "归档"}
                   </Button>
                 </div>
-                <div className="grid gap-4 2xl:grid-cols-[260px_minmax(0,1fr)]">
-                  <div className="space-y-2">
-                    {form.documents.length === 0 ? (
-                      <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
-                        还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类纯 markdown 文档。
-                      </div>
-                    ) : (
-                      form.documents.map((item, index) => (
-                        <button
-                          key={`${item.documentKey || "doc"}:${index}`}
-                          type="button"
-                          className={`w-full rounded-xl border px-3 py-3 text-left ${
-                            selectedDocumentIndex === index
-                              ? "border-primary bg-primary/5"
-                              : "border-border/60 bg-background"
-                          }`}
-                          onClick={() => setSelectedDocumentIndex(index)}
-                        >
-                          <div className="text-sm font-medium">{item.title || item.documentPath || `文档 ${index + 1}`}</div>
-                          <div className="text-xs text-muted-foreground">{item.documentPath || "未设置路径"}</div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                  <div className="min-w-0 space-y-3">
-                    {selectedDocument ? (
-                      <>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label className="text-sm">文档路径</Label>
-                            <Input
-                              value={selectedDocument.documentPath}
-                              onChange={(event) =>
-                                updateDocument(selectedDocumentIndex, { documentPath: event.target.value })
-                              }
-                              placeholder="references/overview.md"
-                              className="rounded-xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-sm">文档 Key</Label>
-                            <Input
-                              value={selectedDocument.documentKey}
-                              onChange={(event) =>
-                                updateDocument(selectedDocumentIndex, { documentKey: event.target.value })
-                              }
-                              placeholder="overview"
-                              className="rounded-xl"
-                            />
-                          </div>
-                        </div>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-2">
-                            <Label className="text-sm">标题</Label>
-                            <Input
-                              value={selectedDocument.title}
-                              onChange={(event) =>
-                                updateDocument(selectedDocumentIndex, { title: event.target.value })
-                              }
-                              placeholder="总体说明"
-                              className="rounded-xl"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-sm">摘要</Label>
-                            <Input
-                              value={selectedDocument.summary}
-                              onChange={(event) =>
-                                updateDocument(selectedDocumentIndex, { summary: event.target.value })
-                              }
-                              placeholder="告诉模型这份文档适合什么时候读"
-                              className="rounded-xl"
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-sm">Markdown 文档</Label>
-                          <Textarea
-                            value={selectedDocument.bodyMarkdown}
-                            onChange={(event) =>
-                              updateDocument(selectedDocumentIndex, { bodyMarkdown: event.target.value })
-                            }
-                            rows={12}
-                            className="min-h-[240px] rounded-xl font-mono text-xs"
-                          />
-                        </div>
-                        <div className="flex justify-end">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="rounded-xl"
-                            onClick={() => removeDocument(selectedDocumentIndex)}
-                          >
-                            删除当前文档
-                          </Button>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
-                        选择左侧文档进行编辑，或先新增一份渐进式文档。
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button
-                  type="button"
-                  className="rounded-xl"
-                  disabled={
-                    !normalizeSlug(form.slug || form.name) ||
-                    !asText(form.name) ||
-                    !asText(form.bodyMarkdown) ||
-                    busyKey === "custom:create" ||
-                    busyKey === `custom:update:${editingCustomSkillId}`
-                  }
-                  onClick={() => void handleSaveCustomSkill()}
-                >
-                  {editingCustomSkillId ? "保存修改" : "创建 skill"}
-                </Button>
-                <Button type="button" variant="outline" className="rounded-xl" onClick={() => void loadSettings()}>
-                  刷新
-                </Button>
               </div>
             </div>
-          </div>
+          ))}
+          {!settings?.customSkills.length ? (
+            <p className="text-sm text-muted-foreground">还没有自定义 skill。</p>
+          ) : null}
         </div>
+
+        <Dialog
+          open={editorOpen}
+          onOpenChange={(open) => {
+            setEditorOpen(open);
+            if (!open) resetForm();
+          }}
+        >
+          <DialogContent className="flex h-[min(760px,calc(100vh-48px))] w-[min(921px,calc(100vw-32px))] max-w-[921px] flex-col rounded-3xl p-0 gap-0 overflow-hidden md:w-[min(973px,calc(100vw-32px))] md:max-w-[973px]">
+            <DialogHeader className="border-b border-border/60 px-6 py-5 text-left">
+              <DialogTitle className="text-lg text-foreground">
+                {editingCustomSkillId ? "编辑自定义 skill" : "新建自定义 skill"}
+              </DialogTitle>
+              <DialogDescription className="text-sm text-muted-foreground">
+                用户态只支持纯数据库型 skills。文档相对路径会固定恢复到用户 skill 根目录下。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
+              <div className="grid h-full gap-5 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-start">
+                <div className="space-y-4 overflow-y-auto pr-1 lg:h-full lg:pr-2">
+                  <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <Label className="text-sm">Slug</Label>
+                        <Input
+                          value={form.slug}
+                          onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
+                          placeholder="my-custom-skill"
+                          className="rounded-xl"
+                          disabled={Boolean(editingCustomSkillId)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">名称</Label>
+                        <Input
+                          value={form.name}
+                          onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                          placeholder="我的自定义 skill"
+                          className="rounded-xl"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">分类</Label>
+                        <Input
+                          value={form.category}
+                          onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}
+                          placeholder="general"
+                          className="rounded-xl"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-sm">描述</Label>
+                        <Input
+                          value={form.description}
+                          onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                          placeholder="说明这个 skill 解决什么问题"
+                          className="rounded-xl"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">渐进式文档</Label>
+                        <p className="text-xs text-muted-foreground">
+                          选择左侧文档后在右侧编辑正文。
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" className="rounded-xl" onClick={addDocument}>
+                        新增文档
+                      </Button>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {form.documents.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
+                          还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类纯 markdown 文档。
+                        </div>
+                      ) : (
+                        form.documents.map((item, index) => (
+                          <button
+                            key={`${item.documentKey || "doc"}:${index}`}
+                            type="button"
+                            className={`w-full rounded-xl border px-3 py-3 text-left ${
+                              selectedDocumentIndex === index
+                                ? "border-primary bg-primary/5"
+                                : "border-border/60 bg-background"
+                            }`}
+                            onClick={() => setSelectedDocumentIndex(index)}
+                          >
+                            <div className="text-sm font-medium">{item.title || item.documentPath || `文档 ${index + 1}`}</div>
+                            <div className="text-xs text-muted-foreground">{item.documentPath || "未设置路径"}</div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-5 overflow-y-auto pr-1 lg:h-full lg:pr-2">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <Label className="text-sm">Skill 正文</Label>
+                      <span className="text-xs text-muted-foreground">
+                        作为主入口说明直接参与 skill 激活
+                      </span>
+                    </div>
+                    <Textarea
+                      value={form.bodyMarkdown}
+                      onChange={(event) => setForm((prev) => ({ ...prev, bodyMarkdown: event.target.value }))}
+                      rows={16}
+                      className="min-h-[280px] rounded-xl font-mono text-xs"
+                    />
+                  </div>
+
+                  <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+                    <div className="space-y-3">
+                      {selectedDocument ? (
+                        <>
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label className="text-sm">文档路径</Label>
+                              <Input
+                                value={selectedDocument.documentPath}
+                                onChange={(event) =>
+                                  updateDocument(selectedDocumentIndex, { documentPath: event.target.value })
+                                }
+                                placeholder="references/overview.md"
+                                className="rounded-xl"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-sm">文档 Key</Label>
+                              <Input
+                                value={selectedDocument.documentKey}
+                                onChange={(event) =>
+                                  updateDocument(selectedDocumentIndex, { documentKey: event.target.value })
+                                }
+                                placeholder="overview"
+                                className="rounded-xl"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label className="text-sm">标题</Label>
+                              <Input
+                                value={selectedDocument.title}
+                                onChange={(event) =>
+                                  updateDocument(selectedDocumentIndex, { title: event.target.value })
+                                }
+                                placeholder="总体说明"
+                                className="rounded-xl"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-sm">摘要</Label>
+                              <Input
+                                value={selectedDocument.summary}
+                                onChange={(event) =>
+                                  updateDocument(selectedDocumentIndex, { summary: event.target.value })
+                                }
+                                placeholder="告诉模型这份文档适合什么时候读"
+                                className="rounded-xl"
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-sm">Markdown 文档</Label>
+                            <Textarea
+                              value={selectedDocument.bodyMarkdown}
+                              onChange={(event) =>
+                                updateDocument(selectedDocumentIndex, { bodyMarkdown: event.target.value })
+                              }
+                              rows={12}
+                              className="min-h-[240px] rounded-xl font-mono text-xs"
+                            />
+                          </div>
+                          <div className="flex justify-end">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="rounded-xl"
+                              onClick={() => removeDocument(selectedDocumentIndex)}
+                            >
+                              删除当前文档
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
+                          选择左侧文档进行编辑，或先新增一份渐进式文档。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                  <Button
+                    type="button"
+                    className="rounded-xl"
+                    disabled={
+                      !normalizeSlug(form.slug || form.name) ||
+                      !asText(form.name) ||
+                      !asText(form.bodyMarkdown) ||
+                      busyKey === "custom:create" ||
+                      busyKey === `custom:update:${editingCustomSkillId}`
+                    }
+                    onClick={() => void handleSaveCustomSkill()}
+                  >
+                    {editingCustomSkillId ? "保存修改" : "创建 skill"}
+                  </Button>
+                  <Button type="button" variant="outline" className="rounded-xl" onClick={resetForm}>
+                    重置
+                  </Button>
+                </div>
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <div className="rounded-2xl border border-border/60 bg-background/80 p-4 text-sm text-muted-foreground">
           当前已启用平台模板 {enabledPlatformIds.size} 个，自定义 active skills{" "}

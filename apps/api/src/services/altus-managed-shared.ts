@@ -1,6 +1,19 @@
+export type ChatMessageContentPart =
+  | {
+      type: 'text';
+      text: string;
+    }
+  | {
+      type: 'image_url';
+      image_url: {
+        url: string;
+      };
+      _managedObjectKey?: string;
+    };
+
 export type ChatMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string;
+  content?: string | ChatMessageContentPart[];
   tool_call_id?: string;
   name?: string;
   tool_calls?: Array<{

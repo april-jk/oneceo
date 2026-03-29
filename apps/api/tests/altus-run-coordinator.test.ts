@@ -59,6 +59,7 @@ test('execute completes after tool round and final assistant response', async ()
         { role: 'user', content: input },
       ];
     }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
     }),
@@ -210,6 +211,7 @@ test('execute does not complete on plain assistant text and continues until comp
       { role: 'system', content: systemPrompt },
       { role: 'user', content: input },
     ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
     }),
@@ -337,6 +339,7 @@ test('execute requests clarification and transitions to waiting_user', async () 
       { role: 'system', content: systemPrompt },
       { role: 'user', content: input },
     ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
     }),
@@ -449,6 +452,7 @@ test('execute converts plain assistant clarification into waiting_user', async (
       { role: 'system', content: systemPrompt },
       { role: 'user', content: input },
     ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
     }),
@@ -544,6 +548,7 @@ test('execute retries transient upstream timeout before completing', async () =>
       { role: 'system', content: systemPrompt },
       { role: 'user', content: input },
     ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async () => {}),
   };
 
@@ -652,6 +657,7 @@ test('execute consumes streamed tool_call chunks and emits tool_call_progress', 
       { role: 'system', content: systemPrompt },
       { role: 'user', content: input },
     ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
     persistTimelineMessage: mock.fn(async () => {}),
   };
 
@@ -767,4 +773,100 @@ test('execute consumes streamed tool_call chunks and emits tool_call_progress', 
         entry.eventType === 'tool_call_started' && entry.payload.toolCallId === 'tool-stream-1'
     )
   );
+});
+
+test('execute switches to vision model when conversation contains image blocks', async () => {
+  const originalVisionModel = process.env.ALTUS_MANAGED_VISION_MODEL;
+  process.env.ALTUS_MANAGED_VISION_MODEL = 'qwen3-vl-plus';
+  try {
+    const state = createState('run-coordinator-vision', 'session-coordinator-vision');
+
+    const setupService = {
+      ensureSandbox: mock.fn(async () => ({
+        sandboxId: 'sandbox-7',
+        workspaceRoot: '/workspace/session-coordinator-vision',
+        reused: false,
+      })),
+      buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: input },
+            { type: 'image_url', image_url: { url: 'https://example.com/signed-image.png' } },
+          ],
+        },
+      ]),
+      refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+      persistTimelineMessage: mock.fn(async () => {}),
+    };
+
+    const eventWriter = {
+      appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _eventType: string, payload: Record<string, unknown>) => ({
+        sequence: 1,
+        payload,
+      })),
+    };
+
+    const lifecycleService = {
+      markRunning: mock.fn(async () => {}),
+      markWaitingUser: mock.fn(async () => {}),
+      markCompleted: mock.fn(async () => {}),
+      markFailed: mock.fn(async () => {}),
+      markStopped: mock.fn(async () => {}),
+    };
+
+    let seenPayload: any = null;
+    global.fetch = mock.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenPayload = init?.body ? JSON.parse(String(init.body)) : null;
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-complete-vision-1',
+                    type: 'function',
+                    function: {
+                      name: 'complete_task',
+                      arguments: JSON.stringify({
+                        summary: '已直接使用视觉模型分析图片。',
+                        verification: ['请求体模型已切换到视觉模型'],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as typeof fetch;
+
+    mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+      type: 'complete' as const,
+      summary: '已直接使用视觉模型分析图片。',
+      verification: ['请求体模型已切换到视觉模型'],
+    }));
+
+    const coordinator = new AltusRunCoordinator(
+      setupService as any,
+      eventWriter as any,
+      lifecycleService as any
+    );
+
+    await coordinator.execute(state, new AbortController());
+
+    assert.equal(seenPayload?.model, 'qwen3-vl-plus');
+    assert.equal(seenPayload?.messages?.[1]?.content?.[1]?.type, 'image_url');
+  } finally {
+    if (originalVisionModel === undefined) {
+      delete process.env.ALTUS_MANAGED_VISION_MODEL;
+    } else {
+      process.env.ALTUS_MANAGED_VISION_MODEL = originalVisionModel;
+    }
+  }
 });

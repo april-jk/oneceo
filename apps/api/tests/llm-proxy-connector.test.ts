@@ -253,6 +253,48 @@ test('toAnthropicRequest maps explicit tool_choice and marks tool_result errors'
   ]);
 });
 
+test('toAnthropicRequest preserves multimodal user images as anthropic image blocks', () => {
+  const payload = toAnthropicRequest({
+    model: 'claude-sonnet-4-6',
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '看看这个图讲了什么',
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: 'https://images.example.com/managed-images/session-1/msg-1/screenshot.png?token=abc',
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(payload.messages, [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: '看看这个图讲了什么',
+        },
+        {
+          type: 'image',
+          source: {
+            type: 'url',
+            url: 'https://images.example.com/managed-images/session-1/msg-1/screenshot.png?token=abc',
+          },
+        },
+      ],
+    },
+  ]);
+});
+
 test('transformAnthropicStreamEvent maps text and tool streaming events to OpenAI chunks', () => {
   const state = {
     id: 'chatcmpl_stream_1',

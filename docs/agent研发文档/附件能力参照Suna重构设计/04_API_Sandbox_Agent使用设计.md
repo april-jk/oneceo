@@ -149,6 +149,25 @@
 - 文件名
 - 文件大小
 
+同时在：
+
+- `apps/api/src/services/altus-managed-setup-service.ts`
+
+新增消息级多模态装配逻辑，参照：
+
+- `referance/suna/backend/core/agents/runner/setup_manager.py`
+
+规则是：
+
+1. 文本附件继续走 `attachmentContext -> system prompt`。
+2. 图片附件不进入 `attachmentContext` 文本注入。
+3. 图片附件在组装 `ChatMessage[]` 时，按对应 `user_input/user_response` 消息追加 `image_url` block。
+4. 服务端先把图片上传到“图片外链专用 R2 桶”，并在消息 metadata 中持久化 object key。
+5. `image_url.url` 由服务端在调用前基于 object key 生成短时签名 `GET` URL。
+6. 如果一个 managed run 内会多次调用模型，则每次调用前都刷新图片签名 URL。
+7. 图片签名与 R2 访问只允许在 API 进程内完成，`R2_MANAGED_IMAGE_*`、`R2_*`、`CF_*`、`CLOUDFLARE_*` 这类密钥不得注入 sandbox 环境。
+8. 运行时发现消息中包含图片块时，managed run 必须切换到视觉模型；不能继续沿用纯文本模型并依赖 `file`、OCR、Pillow 等工具做首选解析。
+
 ### 5.3 注入数据来源
 
 Prompt assembly 不直接依赖请求期内存对象。
@@ -156,12 +175,19 @@ Prompt assembly 不直接依赖请求期内存对象。
 统一数据来源：
 
 - 最新相关 `user_input` 消息的 `metadata.attachmentContext`
+- 对应消息的 `metadata.attachments`
+- 对应图片附件的 `metadata.attachments[].externalObjectKey`
 
 这样在以下场景下仍可稳定获取附件上下文：
 
 - run 重试
 - SSE 断开后恢复
 - 会话刷新后重新启动新一轮 managed run
+
+存储约束：
+
+- `taskCreationSessionDAO` 在写入 `conversation_messages` 和重建 `task_session_recent_messages` 时，不能裁掉 `attachments / attachmentContext / attachmentContextIncluded / originalInput / question / options / runId`
+- 否则首轮消息刷新后虽然正文仍保留 `[Attached: ...]`，但图片附件对应的 `externalObjectKey` 会丢失，后续 run 只能退回到 shell/OCR 路径
 
 ### 5.4 注入规则
 
@@ -179,13 +205,78 @@ Prompt assembly 不直接依赖请求期内存对象。
 - 图片二进制
 - 大型二进制文件
 
-### 5.5 Agent 使用规范
+图片类不走 system prompt 注入，而是走消息级多模态输入。
+
+### 5.5 图片类消息装配规则
+
+对历史中的每条 `user_input/user_response`：
+
+1. 读取消息文本内容。
+2. 读取 `metadata.attachments` 中的图片附件记录。
+3. 过滤为模型兼容图片格式：`png/jpeg/gif/webp`。
+4. 使用 `metadata.attachments[].externalObjectKey` 生成短时签名 URL。
+5. 组装为：
+
+```ts
+{
+  role: 'user',
+  content: [
+    { type: 'text', text: '...' },
+    { type: 'image_url', image_url: { url: 'https://...signed...' } }
+  ]
+}
+```
+
+7. 同一轮中图片块跟随原始用户消息，不额外拆成新的 timeline message。
+8. 如果 R2 对象不存在、签名失败或格式不兼容，则跳过该图片块，但不影响文本消息本身进入模型。
+
+### 5.6 R2 图片外链服务设计
+
+建议新增独立服务：
+
+- `apps/api/src/services/managed-image-object-service.ts`
+
+职责：
+
+1. 使用专用图片桶 client 上传图片对象。
+2. 生成 session/message 级 object key。
+3. 为 object key 生成短时签名下载 URL。
+4. 校验 object key 只能落在图片桶的允许前缀。
+5. 不允许访问归档桶中的任何对象。
+
+### 5.7 存储桶与凭证隔离
+
+必须采用双桶双凭证，而不是“同桶不同前缀”：
+
+1. 归档桶：
+   - 继续用于 workspace/state archive
+   - 环境变量沿用 `R2_*`
+2. 图片外链桶：
+   - 专用于 LLM 可访问图片对象
+   - 新增环境变量：
+     - `R2_MANAGED_IMAGE_BUCKET_NAME`
+     - `R2_MANAGED_IMAGE_ACCOUNT_ID`
+     - `R2_MANAGED_IMAGE_ACCESS_KEY_ID`
+     - `R2_MANAGED_IMAGE_SECRET_ACCESS_KEY`
+     - `R2_MANAGED_IMAGE_ENDPOINT`（可选）
+     - `R2_MANAGED_IMAGE_SIGNED_URL_TTL_SECONDS`
+
+安全要求：
+
+1. 图片桶 AK/SK 仅有该桶权限。
+2. 归档桶 AK/SK 不具备图片桶权限。
+3. sandbox 创建入口必须过滤 Cloudflare / R2 / AWS 存储凭证，防止未来其他链路误把存储密钥透传到 E2B。
+3. 图片桶默认私有，外部访问仅通过签名 URL。
+4. 任何“根据 key 生成签名 URL”的接口都必须只接受图片桶 key，不接受归档 key。
+
+### 5.8 Agent 使用规范
 
 在 managed mode 中，附件应视为工作区输入资产：
 
 1. Agent 可以直接读取 `uploads/...`
 2. Agent 可以根据 PromptManager 的 file context 先理解文本概要
-3. 若需精确内容，再主动读具体文件
+3. 对图片附件，模型在首轮已经直接看到视觉输入，不应再默认向用户索要“请描述一下图片”
+4. 若需精确内容，再主动读具体文件
 
 ## 6. 结构化数据设计
 

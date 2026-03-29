@@ -24,12 +24,19 @@ const REQUIRED_TABLES = [
   'task_session_connector_snapshots',
   'platform_skills',
   'platform_skill_revisions',
+  'platform_skill_revision_resources',
+  'platform_skill_revision_entries',
+  'platform_skill_revision_resource_indexes',
+  'platform_skill_revision_resource_bodies',
+  'platform_skill_revision_resource_chunks',
+  'platform_skill_revision_resource_links',
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
   'user_codex_runtime_configs',
   'user_platform_skill_bindings',
   'user_custom_skills',
+  'user_custom_skill_documents',
   'task_session_connector_bindings',
   'connector_auth_requests',
 ] as const;
@@ -55,11 +62,44 @@ const REQUIRED_COLUMNS = [
   ['platform_skill_revisions', 'skill_id'],
   ['platform_skill_revisions', 'revision_number'],
   ['platform_skill_revisions', 'body_markdown'],
+  ['platform_skill_revision_resources', 'revision_id'],
+  ['platform_skill_revision_resources', 'resource_path'],
+  ['platform_skill_revision_resources', 'content_markdown'],
+  ['platform_skill_revision_entries', 'revision_id'],
+  ['platform_skill_revision_entries', 'body_markdown'],
+  ['platform_skill_revision_resource_indexes', 'revision_id'],
+  ['platform_skill_revision_resource_indexes', 'resource_key'],
+  ['platform_skill_revision_resource_indexes', 'resource_path'],
+  ['platform_skill_revision_resource_indexes', 'resource_kind'],
+  ['platform_skill_revision_resource_indexes', 'title'],
+  ['platform_skill_revision_resource_indexes', 'summary'],
+  ['platform_skill_revision_resource_indexes', 'content_storage'],
+  ['platform_skill_revision_resource_indexes', 'mime_type'],
+  ['platform_skill_revision_resource_indexes', 'storage_path'],
+  ['platform_skill_revision_resource_indexes', 'storage_locator_json'],
+  ['platform_skill_revision_resource_indexes', 'load_stage'],
+  ['platform_skill_revision_resource_indexes', 'sort_order'],
+  ['platform_skill_revision_resource_bodies', 'resource_index_id'],
+  ['platform_skill_revision_resource_bodies', 'content_format'],
+  ['platform_skill_revision_resource_bodies', 'content_mode'],
+  ['platform_skill_revision_resource_bodies', 'content_size'],
+  ['platform_skill_revision_resource_chunks', 'resource_body_id'],
+  ['platform_skill_revision_resource_chunks', 'chunk_index'],
+  ['platform_skill_revision_resource_chunks', 'chunk_role'],
+  ['platform_skill_revision_resource_chunks', 'content_text'],
+  ['platform_skill_revision_resource_links', 'revision_id'],
+  ['platform_skill_revision_resource_links', 'from_type'],
+  ['platform_skill_revision_resource_links', 'from_id'],
+  ['platform_skill_revision_resource_links', 'to_resource_index_id'],
   ['user_platform_skill_bindings', 'user_id'],
   ['user_platform_skill_bindings', 'platform_skill_id'],
   ['user_custom_skills', 'user_id'],
   ['user_custom_skills', 'slug'],
   ['user_custom_skills', 'body_markdown'],
+  ['user_custom_skill_documents', 'custom_skill_id'],
+  ['user_custom_skill_documents', 'document_key'],
+  ['user_custom_skill_documents', 'document_path'],
+  ['user_custom_skill_documents', 'body_markdown'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -74,8 +114,14 @@ const REQUIRED_INDEXES = [
   'idx_task_session_connector_bindings_session_connector',
   'idx_platform_skills_slug',
   'idx_platform_skill_revisions_skill_revision',
+  'idx_platform_skill_revision_resources_revision_path',
+  'idx_platform_skill_revision_entries_revision_id',
+  'idx_platform_skill_resource_indexes_revision_key',
+  'idx_platform_skill_resource_bodies_resource_index_id',
+  'idx_platform_skill_resource_chunks_body_chunk',
   'idx_user_platform_skill_bindings_user_skill',
   'idx_user_custom_skills_user_slug',
+  'idx_user_custom_skill_documents_skill_key',
 ] as const;
 
 /**
@@ -372,6 +418,77 @@ CREATE TABLE IF NOT EXISTS platform_skill_revisions (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  resource_path TEXT NOT NULL,
+  resource_type TEXT NOT NULL DEFAULT 'reference',
+  content_markdown TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  entry_name TEXT NOT NULL,
+  entry_description TEXT NOT NULL DEFAULT '',
+  allowed_tools_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  body_markdown TEXT NOT NULL,
+  render_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_indexes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  resource_key TEXT NOT NULL,
+  resource_path TEXT NOT NULL,
+  resource_kind TEXT NOT NULL DEFAULT 'reference',
+  title TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  content_storage TEXT NOT NULL DEFAULT 'database',
+  mime_type TEXT NOT NULL DEFAULT 'text/markdown',
+  storage_path TEXT,
+  storage_locator_json JSONB,
+  load_stage TEXT NOT NULL DEFAULT 'on_demand',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_bodies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_index_id UUID NOT NULL REFERENCES platform_skill_revision_resource_indexes(id) ON DELETE CASCADE,
+  content_format TEXT NOT NULL DEFAULT 'markdown',
+  content_mode TEXT NOT NULL DEFAULT 'inline',
+  full_text_hash TEXT,
+  content_size INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_chunks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_body_id UUID NOT NULL REFERENCES platform_skill_revision_resource_bodies(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  chunk_role TEXT NOT NULL DEFAULT 'body',
+  chunk_summary TEXT NOT NULL DEFAULT '',
+  content_text TEXT NOT NULL,
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  from_type TEXT NOT NULL,
+  from_id UUID NOT NULL,
+  to_resource_index_id UUID NOT NULL REFERENCES platform_skill_revision_resource_indexes(id) ON DELETE CASCADE,
+  link_type TEXT NOT NULL DEFAULT 'suggested',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS user_platform_skill_bindings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
@@ -390,6 +507,19 @@ CREATE TABLE IF NOT EXISTS user_custom_skills (
   category TEXT NOT NULL DEFAULT 'general',
   status TEXT NOT NULL DEFAULT 'active',
   body_markdown TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_custom_skill_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  custom_skill_id UUID NOT NULL REFERENCES user_custom_skills(id) ON DELETE CASCADE,
+  document_key TEXT NOT NULL,
+  document_path TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  body_markdown TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -502,6 +632,36 @@ CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_skill_created_at
   ON platform_skill_revisions(skill_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_published_at
   ON platform_skill_revisions(published_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revision_resources_revision_path
+  ON platform_skill_revision_resources(revision_id, resource_path);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revision_resources_revision_id
+  ON platform_skill_revision_resources(revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revision_entries_revision_id
+  ON platform_skill_revision_entries(revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_key
+  ON platform_skill_revision_resource_indexes(revision_id, resource_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_path
+  ON platform_skill_revision_resource_indexes(revision_id, resource_path);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_sort
+  ON platform_skill_revision_resource_indexes(revision_id, sort_order);
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS content_storage TEXT NOT NULL DEFAULT 'database';
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT 'text/markdown';
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS storage_path TEXT;
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS storage_locator_json JSONB;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_bodies_resource_index_id
+  ON platform_skill_revision_resource_bodies(resource_index_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_chunks_body_chunk
+  ON platform_skill_revision_resource_chunks(resource_body_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_chunks_body_role
+  ON platform_skill_revision_resource_chunks(resource_body_id, chunk_role);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_links_revision_from
+  ON platform_skill_revision_resource_links(revision_id, from_type, from_id);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_links_revision_to
+  ON platform_skill_revision_resource_links(revision_id, to_resource_index_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_skill
   ON user_platform_skill_bindings(user_id, platform_skill_id);
 CREATE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_id
@@ -514,6 +674,12 @@ CREATE INDEX IF NOT EXISTS idx_user_custom_skills_user_status
   ON user_custom_skills(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skills_updated_at
   ON user_custom_skills(updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_key
+  ON user_custom_skill_documents(custom_skill_id, document_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
+  ON user_custom_skill_documents(custom_skill_id, document_path);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
+  ON user_custom_skill_documents(custom_skill_id, sort_order);
 ${connectorTablesSQL}
 `;
 
@@ -825,6 +991,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;
       DROP TABLE IF EXISTS user_custom_skills CASCADE;
       DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
       DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;

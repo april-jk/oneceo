@@ -353,6 +353,69 @@ export interface SkillValidationResult {
   syncedAt: string;
 }
 
+export interface SkillImportPreview {
+  rootFolderName: string;
+  slug: string;
+  name: string;
+  discoveryDescription: string;
+  activationSummary: string;
+  entry: {
+    entryName: string;
+    entryDescription: string;
+    bodyMarkdown: string;
+  };
+  files: Array<{
+    relativePath: string;
+    nodeType: 'file';
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending';
+    sizeBytes: number;
+  }>;
+  resources: Array<{
+    resourceKey: string;
+    resourcePath: string;
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    title: string;
+    summary: string;
+    contentFormat: 'markdown' | 'text' | 'json';
+    contentMode: 'inline' | 'chunked';
+    fullTextHash: string;
+    contentSize: number;
+    chunks: Array<{
+      chunkIndex: number;
+      chunkRole: 'summary' | 'body';
+      chunkSummary: string;
+      contentText: string;
+      tokenEstimate: number;
+    }>;
+  }>;
+  warnings: string[];
+}
+
+export interface SkillImportResult {
+  mode: 'create' | 'revision';
+  preview: SkillImportPreview;
+  skill: SkillDetail;
+  revision: SkillRevision;
+}
+
+export interface SkillImportJob {
+  jobId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  preview: SkillImportPreview;
+  files: Array<{
+    relativePath: string;
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending' | 'processing' | 'success' | 'failed';
+    error?: string | null;
+  }>;
+  result?: SkillImportResult | null;
+  error?: string | null;
+}
+
 export interface ConversationTraceEvent {
   id: string;
   timestamp?: string;

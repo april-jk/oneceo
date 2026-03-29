@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type {
   SkillDetail,
+  SkillImportPreview,
   SkillRenderedRevision,
   SkillRevision,
   SkillSummary,
@@ -15,6 +16,13 @@ type EditorState = {
   category: string;
   bodyMarkdown: string;
 };
+
+type ImportedFolderPayload = {
+  rootFolderName?: string;
+  files: Array<{ relativePath: string; content: string }>;
+};
+
+type ImportFileStatus = 'pending' | 'success' | 'failed';
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
@@ -39,6 +47,29 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
+async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativePath: string; content: string }>> {
+  const files = Array.from(fileList);
+  const binaryExtensionPattern =
+    /\.(png|jpe?g|gif|webp|bmp|ico|svg|pdf|zip|gz|tgz|tar|7z|rar|woff2?|ttf|otf|eot|mp3|mp4|mov|avi|mkv|webm|exe|dll|so|dylib|bin|class|pyc|pyo|jar|lock)$/i;
+  const ignoredPathPattern = /(^|\/)\.(ds_store|gitkeep)$/i;
+  const acceptedFiles = files.filter((file) => {
+    const relativePath = String((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+    if (!relativePath) return false;
+    if (ignoredPathPattern.test(relativePath)) return false;
+    return !binaryExtensionPattern.test(relativePath);
+  });
+
+  return Promise.all(
+    acceptedFiles.map(async (file) => ({
+      relativePath: String((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).replace(
+        /^[^/]+\//,
+        ''
+      ),
+      content: await file.text(),
+    }))
+  );
+}
+
 type Props = {
   onError: (message: string | null) => void;
 };
@@ -60,6 +91,22 @@ export function SkillManagementSection({ onError }: Props) {
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const [isCreating, setIsCreating] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState<SkillImportPreview | null>(null);
+  const [importPayload, setImportPayload] = useState<ImportedFolderPayload | null>(null);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importFileStatuses, setImportFileStatuses] = useState<Record<string, ImportFileStatus>>({});
+  const [importJobId, setImportJobId] = useState<string | null>(null);
+  const [importJobStatus, setImportJobStatus] = useState<'pending' | 'running' | 'completed' | 'failed' | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const resetImportState = useCallback(() => {
+    setImportPreview(null);
+    setImportPayload(null);
+    setImportDialogOpen(false);
+    setImportFileStatuses({});
+    setImportJobId(null);
+    setImportJobStatus(null);
+  }, []);
 
   const categoryOptions = useMemo(() => {
     const categories = new Set<string>();
@@ -137,6 +184,50 @@ export function SkillManagementSection({ onError }: Props) {
         onError(error instanceof Error ? error.message : '技能渲染内容加载失败');
       });
   }, [selectedRevisionId, selectedSkillId, onError]);
+
+  useEffect(() => {
+    if (!importDialogOpen || !importJobId) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      void api
+        .getSkillFolderImportJob(importJobId)
+        .then(async (job) => {
+          if (stopped) return;
+          setImportJobStatus(job.status);
+          setImportFileStatuses(
+            Object.fromEntries(
+              job.files.map((item) => [
+                item.relativePath,
+                item.processingState === 'processing' ? 'pending' : item.processingState,
+              ])
+            )
+          );
+          if (job.status === 'completed' && job.result) {
+            setImportPreview(job.result.preview);
+            setIsCreating(false);
+            await loadSkills();
+            setSelectedSkillId(job.result.skill.id);
+            onError(null);
+          }
+          if (job.status === 'failed') {
+            onError(job.error || '导入技能文件夹失败');
+          }
+          if (job.status === 'completed' || job.status === 'failed') {
+            window.clearInterval(timer);
+          }
+        })
+        .catch((error) => {
+          if (stopped) return;
+          window.clearInterval(timer);
+          onError(error instanceof Error ? error.message : '导入任务状态获取失败');
+        });
+    }, 500);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [importDialogOpen, importJobId, loadSkills, onError]);
 
   const handleCreate = async () => {
     setBusy(true);
@@ -231,10 +322,67 @@ export function SkillManagementSection({ onError }: Props) {
                 setRevisions([]);
                 setSelectedRevisionId(null);
                 setRenderedRevision(null);
+                resetImportState();
                 setEditor(EMPTY_EDITOR);
               }}
             >
               新建技能
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              multiple
+              // @ts-expect-error non-standard browser directory picker.
+              webkitdirectory="true"
+              style={{ display: 'none' }}
+              onChange={(event) => {
+                const files = event.currentTarget.files;
+                if (!files?.length) return;
+                setBusy(true);
+                void readDirectoryFiles(files)
+                  .then((items) => {
+                    const payload = {
+                      rootFolderName: String(
+                        (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath || ''
+                      ).split('/')[0],
+                      files: items,
+                    };
+                    setImportPayload(payload);
+                    return api.previewSkillFolderImport(payload);
+                  })
+                  .then((preview) => {
+                    setImportPreview(preview);
+                    setImportDialogOpen(true);
+                    setImportFileStatuses(
+                      Object.fromEntries(preview.files.map((item) => [item.relativePath, item.processingState]))
+                    );
+                    setIsCreating(true);
+                    setSelectedSkillId(null);
+                    setDetail(null);
+                    setRevisions([]);
+                    setSelectedRevisionId(null);
+                    setRenderedRevision(null);
+                    setEditor({
+                      slug: preview.slug,
+                      name: preview.name,
+                      description: preview.discoveryDescription,
+                      category: 'general',
+                      bodyMarkdown: preview.entry.bodyMarkdown,
+                    });
+                    onError(null);
+                  })
+                  .catch((error) => {
+                    setImportPayload(null);
+                    onError(error instanceof Error ? error.message : '技能文件夹导入预览失败');
+                  })
+                  .finally(() => {
+                    setBusy(false);
+                    event.currentTarget.value = '';
+                  });
+              }}
+            />
+            <button type="button" className="ghost-btn" onClick={() => importInputRef.current?.click()} disabled={busy}>
+              导入技能文件夹
             </button>
             <button type="button" className="primary-btn" onClick={() => void loadSkills()} disabled={busy}>
               刷新技能
@@ -458,6 +606,150 @@ export function SkillManagementSection({ onError }: Props) {
           </div>
         </article>
       </section>
+      {importDialogOpen && importPreview ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 24,
+            zIndex: 40,
+          }}
+        >
+          <div
+            className="panel fade-in"
+            style={{
+              width: 'min(1080px, 100%)',
+              maxHeight: '86vh',
+              overflow: 'auto',
+            }}
+          >
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Import Preview</p>
+                <h2>技能文件夹导入</h2>
+                <p className="subtitle">
+                  入口正文会进入数据库，脚本等运行型资源后续按存储策略处理。当前目录共 {importPreview.files.length} 个待处理文件。
+                </p>
+              </div>
+              <div className="section-actions">
+                <button type="button" className="ghost-btn" onClick={resetImportState} disabled={busy}>
+                  关闭
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  disabled={busy || !importPayload || importJobStatus === 'running'}
+                  onClick={() => {
+                    if (!importPayload) return;
+                    setBusy(true);
+                    setImportFileStatuses(
+                      Object.fromEntries(importPreview.files.map((item) => [item.relativePath, 'pending']))
+                    );
+                    void api
+                      .createSkillFolderImportJob({
+                        ...importPayload,
+                        createdBy: 'admin_management',
+                        ...(isCreating ? {} : selectedSkillId ? { skillId: selectedSkillId } : {}),
+                      })
+                      .then((job) => {
+                        setImportJobId(job.jobId);
+                        setImportJobStatus(job.status);
+                        setImportPreview(job.preview);
+                        setImportFileStatuses(
+                          Object.fromEntries(
+                            job.files.map((item) => [
+                              item.relativePath,
+                              item.processingState === 'processing' ? 'pending' : item.processingState,
+                            ])
+                          )
+                        );
+                        onError(null);
+                      })
+                      .catch((error) => {
+                        setImportJobStatus('failed');
+                        setImportFileStatuses(Object.fromEntries(importPreview.files.map((item) => [item.relativePath, 'failed'])));
+                        onError(error instanceof Error ? error.message : '导入技能文件夹失败');
+                      })
+                      .finally(() => {
+                        setBusy(false);
+                      });
+                  }}
+                >
+                  {importJobStatus === 'running' ? '导入处理中...' : isCreating ? '导入并创建 skill' : '导入为新 revision'}
+                </button>
+              </div>
+            </div>
+
+            <div className="skill-secondary-grid">
+              <article className="panel fade-in">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">File Tree</p>
+                    <h2>待处理文件</h2>
+                  </div>
+                </div>
+                <div className="revision-list">
+                  <div className="revision-item active" style={{ display: 'grid', gap: 8 }}>
+                    <strong>{importPreview.rootFolderName || importPreview.slug}</strong>
+                  </div>
+                  {importPreview.files.map((file) => {
+                    const depth = Math.max(1, file.relativePath.split('/').length);
+                    const status = importFileStatuses[file.relativePath] || file.processingState;
+                    const statusLabel =
+                      status === 'success' ? '成功' : status === 'failed' ? '失败' : '处理中';
+                    const statusColor =
+                      status === 'success' ? '#16a34a' : status === 'failed' ? '#dc2626' : '#64748b';
+                    return (
+                      <div
+                        key={file.relativePath}
+                        className="revision-item"
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'minmax(0,1fr) auto auto',
+                          gap: 12,
+                          alignItems: 'center',
+                          paddingLeft: depth * 14,
+                        }}
+                      >
+                        <span>{file.relativePath}</span>
+                        <span className="cell-subtle">
+                          {'->'} {file.storageTarget === 'database' ? '数据库' : '存储桶'}
+                        </span>
+                        <span style={{ color: statusColor, fontWeight: 600 }}>
+                          {status === 'pending' ? '◌' : status === 'success' ? '●' : '●'} {statusLabel}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </article>
+
+              <article className="panel fade-in">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Activation</p>
+                    <h2>入口与告警</h2>
+                  </div>
+                </div>
+                <div className="validation-box">
+                  <div>jobStatus: {importJobStatus || 'idle'}</div>
+                  <div>slug: {importPreview.slug}</div>
+                  <div>name: {importPreview.name}</div>
+                  <div>entry: {importPreview.entry.entryName}</div>
+                  <div>summary: {importPreview.activationSummary || '-'}</div>
+                  <pre className="code-block">{importPreview.entry.bodyMarkdown}</pre>
+                  {importPreview.warnings.length ? (
+                    <pre className="code-block">{importPreview.warnings.join('\n')}</pre>
+                  ) : null}
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

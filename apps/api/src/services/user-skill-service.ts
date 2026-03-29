@@ -1,5 +1,5 @@
 import { taskCreationSessionDAO, userSkillDAO } from '../db/dao';
-import { platformSkillService } from './platform-skill-service';
+import { platformSkillService, type PlatformSkillResourceSummary } from './platform-skill-service';
 
 export type TaskCreationSkillReference = {
   sourceType: 'platform' | 'custom';
@@ -10,10 +10,23 @@ export type TaskCreationSkillReference = {
   description: string;
   category: string;
   revisionNumber: number | null;
+  resourceSummary?: PlatformSkillResourceSummary | null;
+};
+
+export type UserCustomSkillDocumentReference = {
+  id: string;
+  documentKey: string;
+  documentPath: string;
+  title: string;
+  summary: string;
+  bodyMarkdown: string;
+  sortOrder: number;
+  updatedAt: string;
 };
 
 export type ResolvedUserSkillSelection = {
   sourceType: 'platform' | 'custom';
+  userId?: string | null;
   skillId: string;
   revisionId: string;
   slug: string;
@@ -22,6 +35,7 @@ export type ResolvedUserSkillSelection = {
   category: string;
   renderedMarkdown: string;
   revisionNumber: number | null;
+  resourceSummary?: PlatformSkillResourceSummary | null;
 };
 
 function asText(value: unknown) {
@@ -43,6 +57,45 @@ function assertSlug(value: string) {
 
 function assertStatus(value: unknown): 'active' | 'archived' {
   return asText(value) === 'archived' ? 'archived' : 'active';
+}
+
+function summarizeText(value: string, limit = 120) {
+  const compact = asText(value).replace(/\s+/g, ' ');
+  if (!compact) return '';
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit)}...`;
+}
+
+function normalizeDocumentPath(value: string) {
+  const normalized = asText(value).replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) {
+    throw new Error('custom skill document_path 非法');
+  }
+  return normalized;
+}
+
+function normalizeDocumentKey(value: string, fallback: string) {
+  const base = asText(value) || fallback;
+  return base
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function summarizeCustomDocuments(
+  documents: Array<{ documentPath: string }>
+): PlatformSkillResourceSummary | null {
+  if (documents.length === 0) return null;
+  const paths = documents
+    .map((item) => normalizeDocumentPath(item.documentPath))
+    .sort((left, right) => left.localeCompare(right));
+  return {
+    totalCount: documents.length,
+    referenceCount: documents.length,
+    templateCount: 0,
+    paths,
+  };
 }
 
 export class UserSkillService {
@@ -68,6 +121,25 @@ export class UserSkillService {
       this.ensureDefaultPlatformBindings(userId),
       userSkillDAO.listCustomSkills(userId),
     ]);
+    const customDocumentsBySkillId = new Map<string, UserCustomSkillDocumentReference[]>();
+    await Promise.all(
+      customSkills.map(async (item) => {
+        const documents = await userSkillDAO.listCustomSkillDocuments(userId, item.id);
+        customDocumentsBySkillId.set(
+          item.id,
+          documents.map((document) => ({
+            id: document.id,
+            documentKey: document.documentKey,
+            documentPath: document.documentPath,
+            title: document.title,
+            summary: document.summary,
+            bodyMarkdown: document.bodyMarkdown,
+            sortOrder: Number(document.sortOrder || 0),
+            updatedAt: document.updatedAt instanceof Date ? document.updatedAt.toISOString() : String(document.updatedAt),
+          }))
+        );
+      })
+    );
 
     const bindingMap = new Map(bindings.map((item) => [item.platformSkillId, item]));
     return {
@@ -83,16 +155,19 @@ export class UserSkillService {
         category: item.category,
         status: assertStatus(item.status),
         bodyMarkdown: item.bodyMarkdown,
+        documents: customDocumentsBySkillId.get(item.id) || [],
+        resourceSummary: summarizeCustomDocuments(customDocumentsBySkillId.get(item.id) || []),
         updatedAt: item.updatedAt instanceof Date ? item.updatedAt.toISOString() : String(item.updatedAt),
       })),
-      availableSkills: this.toAvailableSkills(platformCatalog, bindings, customSkills),
+      availableSkills: this.toAvailableSkills(platformCatalog, bindings, customSkills, customDocumentsBySkillId),
     };
   }
 
   private toAvailableSkills(
     platformCatalog: Awaited<ReturnType<typeof platformSkillService.listPublicSkills>>,
     bindings: Awaited<ReturnType<typeof userSkillDAO.listPlatformBindings>>,
-    customSkills: Awaited<ReturnType<typeof userSkillDAO.listCustomSkills>>
+    customSkills: Awaited<ReturnType<typeof userSkillDAO.listCustomSkills>>,
+    customDocumentsBySkillId: Map<string, UserCustomSkillDocumentReference[]>
   ): TaskCreationSkillReference[] {
     const enabledPlatformIds = new Set(
       bindings.filter((item) => item.enabled).map((item) => item.platformSkillId)
@@ -108,6 +183,7 @@ export class UserSkillService {
         description: item.description,
         category: item.category,
         revisionNumber: item.revisionNumber,
+        resourceSummary: item.resourceSummary,
       }));
 
     const customRefs: TaskCreationSkillReference[] = customSkills
@@ -121,6 +197,7 @@ export class UserSkillService {
         description: item.description,
         category: item.category,
         revisionNumber: 1,
+        resourceSummary: summarizeCustomDocuments(customDocumentsBySkillId.get(item.id) || []),
       }));
 
     return [...platformRefs, ...customRefs].sort((left, right) => left.name.localeCompare(right.name));
@@ -154,13 +231,20 @@ export class UserSkillService {
     description?: string;
     category?: string;
     bodyMarkdown: string;
+    documents?: Array<{
+      documentKey?: string;
+      documentPath: string;
+      title?: string;
+      summary?: string;
+      bodyMarkdown: string;
+    }>;
   }) {
     const slug = assertSlug(input.slug);
     const existing = await userSkillDAO.getCustomSkillBySlug(userId, slug);
     if (existing) {
       throw new Error('自定义 skill slug 已存在');
     }
-    return userSkillDAO.createCustomSkill({
+    const created = await userSkillDAO.createCustomSkill({
       userId,
       slug,
       name: asText(input.name) || slug,
@@ -169,6 +253,21 @@ export class UserSkillService {
       status: 'active',
       bodyMarkdown: asText(input.bodyMarkdown),
     });
+    if (Array.isArray(input.documents) && input.documents.length > 0) {
+      await userSkillDAO.replaceCustomSkillDocuments(
+        userId,
+        created.id,
+        input.documents.map((document, index) => ({
+          documentKey: normalizeDocumentKey(document.documentKey || document.documentPath, `doc-${index + 1}`),
+          documentPath: normalizeDocumentPath(document.documentPath),
+          title: asText(document.title) || normalizeDocumentPath(document.documentPath).split('/').pop() || `文档 ${index + 1}`,
+          summary: asText(document.summary) || summarizeText(asText(document.bodyMarkdown)),
+          bodyMarkdown: asText(document.bodyMarkdown),
+          sortOrder: index,
+        }))
+      );
+    }
+    return created;
   }
 
   async updateCustomSkill(userId: string, customSkillId: string, input: {
@@ -176,17 +275,39 @@ export class UserSkillService {
     description?: string;
     category?: string;
     bodyMarkdown?: string;
+    documents?: Array<{
+      documentKey?: string;
+      documentPath: string;
+      title?: string;
+      summary?: string;
+      bodyMarkdown: string;
+    }>;
   }) {
     const existing = await userSkillDAO.getCustomSkill(userId, customSkillId);
     if (!existing) {
       throw new Error('自定义 skill 不存在');
     }
-    return userSkillDAO.updateCustomSkill(userId, customSkillId, {
+    const updated = await userSkillDAO.updateCustomSkill(userId, customSkillId, {
       name: asText(input.name) || existing.name,
       description: input.description !== undefined ? asText(input.description) : existing.description,
       category: input.category !== undefined ? asText(input.category) || 'general' : existing.category,
       bodyMarkdown: input.bodyMarkdown !== undefined ? asText(input.bodyMarkdown) : existing.bodyMarkdown,
     });
+    if (Array.isArray(input.documents)) {
+      await userSkillDAO.replaceCustomSkillDocuments(
+        userId,
+        customSkillId,
+        input.documents.map((document, index) => ({
+          documentKey: normalizeDocumentKey(document.documentKey || document.documentPath, `doc-${index + 1}`),
+          documentPath: normalizeDocumentPath(document.documentPath),
+          title: asText(document.title) || normalizeDocumentPath(document.documentPath).split('/').pop() || `文档 ${index + 1}`,
+          summary: asText(document.summary) || summarizeText(asText(document.bodyMarkdown)),
+          bodyMarkdown: asText(document.bodyMarkdown),
+          sortOrder: index,
+        }))
+      );
+    }
+    return updated;
   }
 
   async archiveCustomSkill(userId: string, customSkillId: string) {
@@ -207,6 +328,18 @@ export class UserSkillService {
     return userSkillDAO.updateCustomSkill(userId, customSkillId, {
       status: 'active',
     });
+  }
+
+  async getCustomSkillDocument(userId: string, customSkillId: string, documentPath: string) {
+    const skill = await userSkillDAO.getCustomSkill(userId, customSkillId);
+    if (!skill || assertStatus(skill.status) !== 'active') {
+      throw new Error('自定义 skill 不存在');
+    }
+    const document = await userSkillDAO.getCustomSkillDocumentByPath(userId, customSkillId, normalizeDocumentPath(documentPath));
+    if (!document) {
+      throw new Error('自定义 skill 文档不存在');
+    }
+    return document;
   }
 
   async resolveSelectionsForSession(taskSessionId: string, value: unknown) {
@@ -234,6 +367,7 @@ export class UserSkillService {
         }
         results.push({
           sourceType,
+          userId,
           skillId: customSkill.id,
           revisionId: customSkill.id,
           slug: customSkill.slug,
@@ -246,6 +380,7 @@ export class UserSkillService {
             bodyMarkdown: customSkill.bodyMarkdown,
           }),
           revisionNumber: 1,
+          resourceSummary: summarizeCustomDocuments(await userSkillDAO.listCustomSkillDocuments(userId, customSkill.id)),
         });
         continue;
       }
@@ -260,6 +395,7 @@ export class UserSkillService {
       }
       results.push({
         sourceType,
+        userId,
         skillId: current.skill.id,
         revisionId: current.revision.id,
         slug: current.revision.slugSnapshot,
@@ -268,6 +404,7 @@ export class UserSkillService {
         category: current.skill.category,
         renderedMarkdown: current.renderedMarkdown,
         revisionNumber: current.revision.revisionNumber,
+        resourceSummary: current.resourceSummary,
       });
     }
 

@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
-import type { ManagedCompletionAttachment } from './altus-managed-shared';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import type { ManagedCompletionAttachment, ManagedSkillContext } from './altus-managed-shared';
 
 type ManagedToolResult =
   | { type: 'result'; content: string }
@@ -58,8 +59,10 @@ export class AltusManagedToolRuntime {
 
   constructor(
     private readonly input: {
+      sessionId: string;
       sandboxId: string;
       workspaceRoot: string;
+      activeSkills: ManagedSkillContext[];
     }
   ) {}
 
@@ -329,6 +332,38 @@ export class AltusManagedToolRuntime {
             rawContent: this.compactSearchContent(item.rawContent, 2200),
             images: this.compactImageList(item.images, 6),
           })),
+        }),
+      };
+    }
+
+    if (toolName === 'load_skill_resource') {
+      const skillId = asText(rawArgs.skillId);
+      const revisionId = asText(rawArgs.revisionId);
+      const resourcePath = asText(rawArgs.resourcePath);
+      if (!skillId || !revisionId || !resourcePath) {
+        throw new Error('load_skill_resource_missing_arguments');
+      }
+      const activeSkill = this.input.activeSkills.find(
+        (item) => item.skillId === skillId && item.revisionId === revisionId
+      );
+      if (!activeSkill) {
+        throw new Error('load_skill_resource_skill_not_active');
+      }
+      const result = await sandboxSkillSyncService.syncResolvedSkillResource({
+        taskSessionId: this.input.sessionId,
+        orchestratorSessionId: this.input.sandboxId,
+        skill: activeSkill,
+        resourcePath,
+      });
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          skillId: result.skillId,
+          revisionId: result.revisionId,
+          slug: result.slug,
+          resourcePath: result.resourcePath,
+          resourceType: result.resourceType,
+          skillResourcePath: result.skillResourcePath,
         }),
       };
     }

@@ -1,14 +1,94 @@
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
+import type { SkillImportPreview } from '../../services/platform-skill-import-service';
 import {
   platformSkills,
   platformSkillRevisions,
+  platformSkillRevisionResources,
+  platformSkillRevisionEntries,
+  platformSkillRevisionResourceIndexes,
+  platformSkillRevisionResourceBodies,
+  platformSkillRevisionResourceChunks,
+  platformSkillRevisionResourceLinks,
   type NewPlatformSkill,
   type NewPlatformSkillRevision,
+  type NewPlatformSkillRevisionResource,
+  type NewPlatformSkillRevisionEntry,
+  type NewPlatformSkillRevisionResourceIndex,
+  type NewPlatformSkillRevisionResourceBody,
+  type NewPlatformSkillRevisionResourceChunk,
+  type NewPlatformSkillRevisionResourceLink,
 } from '../schema';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function summarizeText(value: string, limit = 120) {
+  const compact = asText(value).replace(/\s+/g, ' ');
+  if (!compact) return '';
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit)}...`;
+}
+
+function normalizeResourceKey(value: string) {
+  return asText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function tokenEstimate(value: string) {
+  return Math.max(1, Math.ceil(value.length / 4));
+}
+
+function splitContentChunks(content: string) {
+  const normalized = String(content ?? '').trim();
+  if (!normalized) {
+    return [
+      {
+        chunkIndex: 0,
+        chunkRole: 'body',
+        chunkSummary: '',
+        contentText: '',
+        tokenEstimate: 1,
+      },
+    ] as Array<Omit<NewPlatformSkillRevisionResourceChunk, 'id' | 'resourceBodyId' | 'createdAt'>>;
+  }
+  if (normalized.length <= 2400) {
+    return [
+      {
+        chunkIndex: 0,
+        chunkRole: 'body',
+        chunkSummary: summarizeText(normalized),
+        contentText: normalized,
+        tokenEstimate: tokenEstimate(normalized),
+      },
+    ] as Array<Omit<NewPlatformSkillRevisionResourceChunk, 'id' | 'resourceBodyId' | 'createdAt'>>;
+  }
+  const chunks: Array<Omit<NewPlatformSkillRevisionResourceChunk, 'id' | 'resourceBodyId' | 'createdAt'>> = [
+    {
+      chunkIndex: 0,
+      chunkRole: 'summary',
+      chunkSummary: summarizeText(normalized),
+      contentText: normalized.slice(0, 600),
+      tokenEstimate: tokenEstimate(normalized.slice(0, 600)),
+    },
+  ];
+  let chunkIndex = 1;
+  for (let offset = 0; offset < normalized.length; offset += 2400) {
+    const slice = normalized.slice(offset, offset + 2400);
+    chunks.push({
+      chunkIndex,
+      chunkRole: 'body',
+      chunkSummary: summarizeText(slice),
+      contentText: slice,
+      tokenEstimate: tokenEstimate(slice),
+    });
+    chunkIndex += 1;
+  }
+  return chunks;
 }
 
 export class PlatformSkillDAO {
@@ -107,9 +187,197 @@ export class PlatformSkillDAO {
       .orderBy(desc(platformSkillRevisions.revisionNumber), desc(platformSkillRevisions.createdAt));
   }
 
+  async listRevisionResources(revisionId: string) {
+    return db
+      .select()
+      .from(platformSkillRevisionResources)
+      .where(eq(platformSkillRevisionResources.revisionId, revisionId))
+      .orderBy(asc(platformSkillRevisionResources.resourcePath));
+  }
+
+  async getRevisionResource(revisionId: string, resourcePath: string) {
+    const [row] = await db
+      .select()
+      .from(platformSkillRevisionResources)
+      .where(
+        and(
+          eq(platformSkillRevisionResources.revisionId, revisionId),
+          eq(platformSkillRevisionResources.resourcePath, resourcePath)
+        )
+      )
+      .limit(1);
+    return row || null;
+  }
+
+  private async replaceRevisionResourcesTx(
+    tx: any,
+    revisionId: string,
+    resources: Array<Omit<NewPlatformSkillRevisionResource, 'id' | 'revisionId' | 'createdAt'>>
+  ) {
+    await tx
+      .delete(platformSkillRevisionResources)
+      .where(eq(platformSkillRevisionResources.revisionId, revisionId));
+
+    if (resources.length === 0) {
+      return [];
+    }
+
+    return tx
+      .insert(platformSkillRevisionResources)
+      .values(
+        resources.map((item) => ({
+          revisionId,
+          resourcePath: asText(item.resourcePath),
+          resourceType: asText(item.resourceType) || 'reference',
+          contentMarkdown: asText(item.contentMarkdown),
+        }))
+      )
+      .returning();
+  }
+
+  private async replaceRevisionLayeredContentTx(
+    tx: any,
+    revision: { id: string; nameSnapshot: string; descriptionSnapshot: string; bodyMarkdown: string },
+    resources: Array<Omit<NewPlatformSkillRevisionResource, 'id' | 'revisionId' | 'createdAt'>>,
+    layeredImport?: SkillImportPreview | null
+  ) {
+    await tx.delete(platformSkillRevisionEntries).where(eq(platformSkillRevisionEntries.revisionId, revision.id));
+    await tx
+      .delete(platformSkillRevisionResourceLinks)
+      .where(eq(platformSkillRevisionResourceLinks.revisionId, revision.id));
+    await tx
+      .delete(platformSkillRevisionResourceIndexes)
+      .where(eq(platformSkillRevisionResourceIndexes.revisionId, revision.id));
+
+    const [entry] = await tx
+      .insert(platformSkillRevisionEntries)
+      .values({
+        revisionId: revision.id,
+        entryName: layeredImport?.entry.entryName || revision.nameSnapshot,
+        entryDescription: layeredImport?.entry.entryDescription || revision.descriptionSnapshot,
+        bodyMarkdown: layeredImport?.entry.bodyMarkdown || revision.bodyMarkdown,
+        allowedToolsJson: [],
+        renderVersion: 1,
+        updatedAt: new Date(),
+      } satisfies Omit<NewPlatformSkillRevisionEntry, 'id' | 'createdAt'>)
+      .returning();
+
+    const layeredResources = layeredImport?.resources || [];
+    const resourcesForLayeredWrite = layeredResources.length
+      ? layeredResources.map((resource, index) => ({
+          sortOrder: index,
+          resourceKey: resource.resourceKey,
+          resourcePath: resource.resourcePath,
+          resourceKind: resource.resourceKind,
+          contentStorage: resource.contentStorage || 'database',
+          mimeType: resource.mimeType || 'text/markdown',
+          storagePath: resource.storagePath || null,
+          storageLocatorJson: resource.storageLocatorJson || null,
+          title: resource.title,
+          summary: resource.summary,
+          contentFormat: resource.contentFormat,
+          contentMode: resource.contentMode,
+          fullTextHash: resource.fullTextHash,
+          contentSize: resource.contentSize,
+          chunks: resource.chunks.map((chunk) => ({
+            chunkIndex: chunk.chunkIndex,
+            chunkRole: chunk.chunkRole,
+            chunkSummary: chunk.chunkSummary,
+            contentText: chunk.contentText,
+            tokenEstimate: chunk.tokenEstimate,
+          })),
+        }))
+      : resources.map((resource, index) => ({
+          sortOrder: index,
+          resourceKey: normalizeResourceKey(
+            `${resource.resourceType}_${index + 1}_${asText(resource.resourcePath).split('/').pop() || 'resource'}`
+          ),
+          resourcePath: asText(resource.resourcePath),
+          resourceKind: asText(resource.resourceType) || 'reference',
+          contentStorage: 'database' as const,
+          mimeType: 'text/markdown' as const,
+          storagePath: null,
+          storageLocatorJson: null,
+          title: asText(resource.resourcePath).split('/').pop() || asText(resource.resourcePath),
+          summary: summarizeText(asText(resource.contentMarkdown)),
+          contentFormat: 'markdown' as const,
+          contentMode: asText(resource.contentMarkdown).length > 2400 ? ('chunked' as const) : ('inline' as const),
+          fullTextHash: null,
+          contentSize: Buffer.byteLength(asText(resource.contentMarkdown), 'utf8'),
+          chunks: splitContentChunks(asText(resource.contentMarkdown)),
+        }));
+
+    if (!resourcesForLayeredWrite.length) {
+      return { entry, resourceIndexes: [] };
+    }
+
+    const resourceIndexes = [];
+    for (const resource of resourcesForLayeredWrite) {
+      const [resourceIndex] = await tx
+        .insert(platformSkillRevisionResourceIndexes)
+        .values({
+          revisionId: revision.id,
+          resourceKey: normalizeResourceKey(resource.resourceKey),
+          resourcePath: asText(resource.resourcePath),
+          resourceKind: asText(resource.resourceKind) || 'reference',
+          contentStorage: resource.contentStorage,
+          mimeType: resource.mimeType,
+          storagePath: resource.storagePath,
+          storageLocatorJson: resource.storageLocatorJson,
+          title: asText(resource.title),
+          summary: asText(resource.summary),
+          loadStage: 'on_demand',
+          sortOrder: resource.sortOrder,
+          updatedAt: new Date(),
+        } satisfies Omit<NewPlatformSkillRevisionResourceIndex, 'id' | 'createdAt'>)
+        .returning();
+
+      if (resource.contentStorage === 'database') {
+        const [resourceBody] = await tx
+          .insert(platformSkillRevisionResourceBodies)
+          .values({
+            resourceIndexId: resourceIndex.id,
+            contentFormat: resource.contentFormat,
+            contentMode: resource.contentMode,
+            fullTextHash: resource.fullTextHash,
+            contentSize: resource.contentSize,
+            updatedAt: new Date(),
+          } satisfies Omit<NewPlatformSkillRevisionResourceBody, 'id' | 'createdAt'>)
+          .returning();
+
+        if (resource.chunks.length) {
+          await tx.insert(platformSkillRevisionResourceChunks).values(
+            resource.chunks.map((chunk) => ({
+              resourceBodyId: resourceBody.id,
+              chunkIndex: chunk.chunkIndex,
+              chunkRole: chunk.chunkRole,
+              chunkSummary: chunk.chunkSummary,
+              contentText: chunk.contentText,
+              tokenEstimate: chunk.tokenEstimate,
+            }))
+          );
+        }
+      }
+
+      await tx.insert(platformSkillRevisionResourceLinks).values({
+        revisionId: revision.id,
+        fromType: 'entry',
+        fromId: entry.id,
+        toResourceIndexId: resourceIndex.id,
+        linkType: 'suggested',
+      } satisfies Omit<NewPlatformSkillRevisionResourceLink, 'id' | 'createdAt'>);
+
+      resourceIndexes.push(resourceIndex);
+    }
+
+    return { entry, resourceIndexes };
+  }
+
   async createSkillWithRevision(input: {
     skill: Omit<NewPlatformSkill, 'publishedRevisionId' | 'createdAt' | 'updatedAt'>;
     revision: Omit<NewPlatformSkillRevision, 'skillId' | 'revisionNumber' | 'publishedAt' | 'createdAt'>;
+    resources?: Array<Omit<NewPlatformSkillRevisionResource, 'id' | 'revisionId' | 'createdAt'>>;
+    layeredImport?: SkillImportPreview | null;
   }) {
     return db.transaction(async (tx) => {
       const [skill] = await tx
@@ -131,6 +399,14 @@ export class PlatformSkillDAO {
         })
         .returning();
 
+      const resources = await this.replaceRevisionResourcesTx(tx, revision.id, Array.isArray(input.resources) ? input.resources : []);
+      await this.replaceRevisionLayeredContentTx(
+        tx,
+        revision,
+        Array.isArray(input.resources) ? input.resources : [],
+        input.layeredImport || null
+      );
+
       const [updatedSkill] = await tx
         .update(platformSkills)
         .set({
@@ -143,6 +419,7 @@ export class PlatformSkillDAO {
       return {
         skill: updatedSkill,
         revision,
+        resources,
       };
     });
   }
@@ -155,6 +432,8 @@ export class PlatformSkillDAO {
       category: string;
       bodyMarkdown: string;
       createdBy?: string | null;
+      resources?: Array<Omit<NewPlatformSkillRevisionResource, 'id' | 'revisionId' | 'createdAt'>>;
+      layeredImport?: SkillImportPreview | null;
     }
   ) {
     return db.transaction(async (tx) => {
@@ -190,6 +469,18 @@ export class PlatformSkillDAO {
         })
         .returning();
 
+      const resources = await this.replaceRevisionResourcesTx(
+        tx,
+        revision.id,
+        Array.isArray(input.resources) ? input.resources : []
+      );
+      await this.replaceRevisionLayeredContentTx(
+        tx,
+        revision,
+        Array.isArray(input.resources) ? input.resources : [],
+        input.layeredImport || null
+      );
+
       const [updatedSkill] = await tx
         .update(platformSkills)
         .set({
@@ -205,6 +496,7 @@ export class PlatformSkillDAO {
       return {
         skill: updatedSkill,
         revision,
+        resources,
       };
     });
   }
@@ -219,6 +511,40 @@ export class PlatformSkillDAO {
       .where(eq(platformSkills.id, skillId))
       .returning();
     return row || null;
+  }
+
+  async getRevisionEntry(revisionId: string) {
+    const [row] = await db
+      .select()
+      .from(platformSkillRevisionEntries)
+      .where(eq(platformSkillRevisionEntries.revisionId, revisionId))
+      .limit(1);
+    return row || null;
+  }
+
+  async listRevisionResourceIndexes(revisionId: string) {
+    return db
+      .select()
+      .from(platformSkillRevisionResourceIndexes)
+      .where(eq(platformSkillRevisionResourceIndexes.revisionId, revisionId))
+      .orderBy(asc(platformSkillRevisionResourceIndexes.sortOrder), asc(platformSkillRevisionResourceIndexes.resourcePath));
+  }
+
+  async getRevisionResourceBody(resourceIndexId: string) {
+    const [row] = await db
+      .select()
+      .from(platformSkillRevisionResourceBodies)
+      .where(eq(platformSkillRevisionResourceBodies.resourceIndexId, resourceIndexId))
+      .limit(1);
+    return row || null;
+  }
+
+  async listRevisionResourceChunks(resourceBodyId: string) {
+    return db
+      .select()
+      .from(platformSkillRevisionResourceChunks)
+      .where(eq(platformSkillRevisionResourceChunks.resourceBodyId, resourceBodyId))
+      .orderBy(asc(platformSkillRevisionResourceChunks.chunkIndex));
   }
 }
 

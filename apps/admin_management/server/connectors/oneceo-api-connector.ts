@@ -126,6 +126,69 @@ export type AdminSkillValidationResult = {
   syncedAt: string;
 };
 
+export type AdminSkillImportPreview = {
+  rootFolderName: string;
+  slug: string;
+  name: string;
+  discoveryDescription: string;
+  activationSummary: string;
+  entry: {
+    entryName: string;
+    entryDescription: string;
+    bodyMarkdown: string;
+  };
+  files: Array<{
+    relativePath: string;
+    nodeType: 'file';
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending';
+    sizeBytes: number;
+  }>;
+  resources: Array<{
+    resourceKey: string;
+    resourcePath: string;
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    title: string;
+    summary: string;
+    contentFormat: 'markdown' | 'text' | 'json';
+    contentMode: 'inline' | 'chunked';
+    fullTextHash: string;
+    contentSize: number;
+    chunks: Array<{
+      chunkIndex: number;
+      chunkRole: 'summary' | 'body';
+      chunkSummary: string;
+      contentText: string;
+      tokenEstimate: number;
+    }>;
+  }>;
+  warnings: string[];
+};
+
+export type AdminSkillImportResult = {
+  mode: 'create' | 'revision';
+  preview: AdminSkillImportPreview;
+  skill: AdminSkillDetail;
+  revision: AdminSkillRevision;
+};
+
+export type AdminSkillImportJob = {
+  jobId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  preview: AdminSkillImportPreview;
+  files: Array<{
+    relativePath: string;
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending' | 'processing' | 'success' | 'failed';
+    error?: string | null;
+  }>;
+  result?: AdminSkillImportResult | null;
+  error?: string | null;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -395,6 +458,44 @@ export class OneceoApiConnector {
         body: { sessionId },
       }
     );
+  }
+
+  previewSkillFolderImport(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+  }) {
+    return this.request<AdminSkillImportPreview>('/api/internal/skills/import/folder-preview', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  importSkillFolder(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.request<AdminSkillImportResult>('/api/internal/skills/import/folder', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  createSkillFolderImportJob(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.request<AdminSkillImportJob>('/api/internal/skills/import/folder-jobs', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  getSkillFolderImportJob(jobId: string) {
+    return this.request<AdminSkillImportJob>(`/api/internal/skills/import/folder-jobs/${encodeURIComponent(jobId)}`);
   }
 }
 

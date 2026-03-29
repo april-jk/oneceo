@@ -5,6 +5,7 @@ import { altusManagedStreamService } from './altus-managed-stream-service';
 import {
   asText,
   isManagedRunTerminalStatus,
+  readManagedSkillCatalog,
   readManagedSkillContext,
   type ManagedRunStartInput,
 } from './altus-managed-shared';
@@ -94,6 +95,7 @@ export class AltusManagedRunEntryService {
       userInput: content,
       sessionTitle: sessionMemory?.title || null,
       connectors: connectorSnapshot.statuses,
+      skillCatalog: readManagedSkillCatalog(input.metadata?.managedSkillCatalog),
       skills: readManagedSkillContext(input.metadata?.managedSkillContext),
     });
     const abortController = new AbortController();
@@ -136,6 +138,7 @@ export class AltusManagedRunEntryService {
       userInput: '',
       sessionTitle: null,
       connectors: [],
+      skillCatalog: [],
       skills: [],
     });
     state.markStopped(reason || 'user_interrupt');

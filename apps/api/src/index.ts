@@ -62,6 +62,11 @@ const llmProxyBodyLimitMb = Number.isFinite(llmProxyBodyLimitMbRaw)
   ? Math.min(128, Math.max(1, Math.floor(llmProxyBodyLimitMbRaw)))
   : 64;
 const llmProxyBodyLimit = `${llmProxyBodyLimitMb}mb`;
+const jsonBodyLimitMbRaw = Number(process.env.API_JSON_BODY_LIMIT_MB || 16);
+const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
+  ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
+  : 16;
+const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -76,7 +81,7 @@ const io = new Server(httpServer, {
 app.use(cors());
 // LLM proxy uses raw body for streaming compatibility
 app.use('/api/llm-proxy', express.raw({ type: '*/*', limit: llmProxyBodyLimit }));
-app.use(express.json());
+app.use(express.json({ limit: jsonBodyLimit }));
 
 // 请求日志
 app.use((req, res, next) => {

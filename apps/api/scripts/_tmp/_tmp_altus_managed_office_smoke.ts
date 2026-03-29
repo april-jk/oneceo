@@ -1,6 +1,5 @@
 import '../../src/config/env.ts';
 import { e2bConnector } from '../../src/connectors/e2b-connector';
-import { SKILL_ATTACHMENT_TEMPLATES } from '../../../web/client/src/lib/skill-attachment-templates.ts';
 
 const API_BASE = `http://127.0.0.1:${process.env.PORT || '4000'}`;
 const USER_ID = `codex-office-smoke-${Date.now()}`;
@@ -63,11 +62,6 @@ async function main() {
     );
   }
 
-  const template = SKILL_ATTACHMENT_TEMPLATES.find((item) => item.id === skillId);
-  if (!template) {
-    throw new Error(`skill_template_missing:${skillId}`);
-  }
-
   let sessionId = '';
   let runtimeSandboxId = '';
   try {
@@ -90,18 +84,20 @@ async function main() {
       throw new Error('session_id_missing');
     }
 
-    await ensureOk(
-      await fetch(`${API_BASE}/api/task-creation/sessions/${encodeURIComponent(sessionId)}/attachments`, {
-        method: 'POST',
-        headers: headers({
-          'Content-Type': 'text/markdown; charset=utf-8',
-          'X-Attachment-Name': encodeURIComponent(attachmentName),
-          'X-Attachment-Size': String(Buffer.byteLength(template.content, 'utf-8')),
-        }),
-        body: Buffer.from(template.content, 'utf-8'),
+    const skillsResp = await ensureOk(
+      await fetch(`${API_BASE}/api/task-creation/skills`, {
+        headers: headers(),
       }),
-      'upload_attachment'
+      'list_skills'
     );
+    const skillsPayload = (await skillsResp.json()) as any;
+    const skills = Array.isArray(skillsPayload?.data) ? skillsPayload.data : [];
+    const selectedSkill = skills.find(
+      (item: any) => asText(item?.slug) === skillId || asText(item?.skillId) === skillId
+    );
+    if (!selectedSkill?.skillId || !selectedSkill?.revisionId) {
+      throw new Error(`platform_skill_missing:${skillId}`);
+    }
 
     const runResp = await ensureOk(
       await fetch(`${API_BASE}/api/altus-managed/sessions/${encodeURIComponent(sessionId)}/runs`, {
@@ -112,6 +108,19 @@ async function main() {
         body: JSON.stringify({
           content: prompt,
           messageKey: `codex:office-smoke:${skillId}:${Date.now()}`,
+          metadata: {
+            skills: [
+              {
+                skillId: selectedSkill.skillId,
+                revisionId: selectedSkill.revisionId,
+                slug: selectedSkill.slug,
+                name: selectedSkill.name,
+                description: selectedSkill.description,
+                category: selectedSkill.category,
+                revisionNumber: selectedSkill.revisionNumber,
+              },
+            ],
+          },
         }),
       }),
       'start_run'

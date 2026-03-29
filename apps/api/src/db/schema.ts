@@ -232,6 +232,53 @@ export const taskSessionConnectorSnapshots = pgTable(
   })
 );
 
+export const platformSkills = pgTable(
+  'platform_skills',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    category: text('category').notNull().default('general'),
+    status: text('status').notNull().default('active'),
+    publishedRevisionId: uuid('published_revision_id'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    slugUnique: uniqueIndex('idx_platform_skills_slug').on(table.slug),
+    statusIdx: index('idx_platform_skills_status').on(table.status),
+    publishedRevisionIdx: index('idx_platform_skills_published_revision_id').on(table.publishedRevisionId),
+  })
+);
+
+export const platformSkillRevisions = pgTable(
+  'platform_skill_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    skillId: uuid('skill_id')
+      .notNull()
+      .references(() => platformSkills.id, { onDelete: 'cascade' }),
+    revisionNumber: integer('revision_number').notNull(),
+    slugSnapshot: text('slug_snapshot').notNull(),
+    nameSnapshot: text('name_snapshot').notNull(),
+    descriptionSnapshot: text('description_snapshot').notNull().default(''),
+    categorySnapshot: text('category_snapshot').notNull().default('general'),
+    bodyMarkdown: text('body_markdown').notNull(),
+    publishedAt: timestamp('published_at'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    skillRevisionUnique: uniqueIndex('idx_platform_skill_revisions_skill_revision').on(
+      table.skillId,
+      table.revisionNumber
+    ),
+    skillCreatedIdx: index('idx_platform_skill_revisions_skill_created_at').on(table.skillId, table.createdAt),
+    publishedAtIdx: index('idx_platform_skill_revisions_published_at').on(table.publishedAt),
+  })
+);
+
 /**
  * 意图识别结果表
  * 
@@ -391,6 +438,49 @@ export const userCodexRuntimeConfigs = pgTable(
   })
 );
 
+export const userPlatformSkillBindings = pgTable(
+  'user_platform_skill_bindings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    platformSkillId: uuid('platform_skill_id')
+      .notNull()
+      .references(() => platformSkills.id, { onDelete: 'cascade' }),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userSkillUnique: uniqueIndex('idx_user_platform_skill_bindings_user_skill').on(
+      table.userId,
+      table.platformSkillId
+    ),
+    userIdx: index('idx_user_platform_skill_bindings_user_id').on(table.userId),
+    platformSkillIdx: index('idx_user_platform_skill_bindings_platform_skill_id').on(table.platformSkillId),
+  })
+);
+
+export const userCustomSkills = pgTable(
+  'user_custom_skills',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    slug: text('slug').notNull(),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    category: text('category').notNull().default('general'),
+    status: text('status').notNull().default('active'),
+    bodyMarkdown: text('body_markdown').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userSlugUnique: uniqueIndex('idx_user_custom_skills_user_slug').on(table.userId, table.slug),
+    userStatusIdx: index('idx_user_custom_skills_user_status').on(table.userId, table.status),
+    updatedAtIdx: index('idx_user_custom_skills_updated_at').on(table.updatedAt),
+  })
+);
+
 export const taskSessionConnectorBindings = pgTable(
   'task_session_connector_bindings',
   {
@@ -466,6 +556,10 @@ export type TaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$infer
 export type NewTaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferInsert;
 export type TaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferSelect;
 export type NewTaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferInsert;
+export type PlatformSkill = typeof platformSkills.$inferSelect;
+export type NewPlatformSkill = typeof platformSkills.$inferInsert;
+export type PlatformSkillRevision = typeof platformSkillRevisions.$inferSelect;
+export type NewPlatformSkillRevision = typeof platformSkillRevisions.$inferInsert;
 
 export type IntentRecognitionResult = typeof intentRecognitionResults.$inferSelect;
 export type NewIntentRecognitionResult = typeof intentRecognitionResults.$inferInsert;
@@ -489,6 +583,10 @@ export type NewUserConnectorProfile = typeof userConnectorProfiles.$inferInsert;
 
 export type UserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferSelect;
 export type NewUserCodexRuntimeConfig = typeof userCodexRuntimeConfigs.$inferInsert;
+export type UserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferSelect;
+export type NewUserPlatformSkillBinding = typeof userPlatformSkillBindings.$inferInsert;
+export type UserCustomSkill = typeof userCustomSkills.$inferSelect;
+export type NewUserCustomSkill = typeof userCustomSkills.$inferInsert;
 
 export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
 export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;

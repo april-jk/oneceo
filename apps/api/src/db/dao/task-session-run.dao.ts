@@ -215,6 +215,24 @@ export class TaskSessionRunDAO {
     return binding || null;
   }
 
+  async updateSandboxBindingMetadata(
+    sessionId: string,
+    metadataJson: Record<string, unknown>,
+    options?: { status?: string }
+  ) {
+    const [binding] = await db
+      .update(taskSessionSandboxBindings)
+      .set({
+        metadataJson,
+        ...(options?.status ? { status: options.status } : {}),
+        updatedAt: new Date(),
+        lastActiveAt: new Date(),
+      })
+      .where(eq(taskSessionSandboxBindings.sessionId, sessionId))
+      .returning();
+    return binding || null;
+  }
+
   async createConnectorSnapshot(input: {
     sessionId: string;
     snapshotJson: Record<string, unknown>;

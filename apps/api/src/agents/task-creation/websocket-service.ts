@@ -912,6 +912,7 @@ export class TaskCreationWebSocketService {
         orchestratorSessionId: orchestratorSessionId || undefined,
         workspacePath: workspacePath || undefined,
         clientMessageKey,
+        metadata: (message.metadata as Record<string, unknown>) || undefined,
       });
 
       // 直通模式下给前端一个“已接收”回执，并同步当前 opencodeSessionId，

@@ -15,6 +15,8 @@ import {
 } from './task-attachment-service';
 import { asText, pickObject } from './altus-managed-shared';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { userSkillService } from './user-skill-service';
 
 type SubmitManagedInput = {
   sessionId?: string;
@@ -59,6 +61,15 @@ export class AltusManagedInputService {
     }
 
     const sandbox = await this.setupService.ensureSandbox(sessionId);
+    const resolvedSkills = await userSkillService.resolveSelectionsForSession(
+      sessionId,
+      pickObject(input.metadata).skills
+    );
+    await sandboxSkillSyncService.syncResolvedSkills({
+      taskSessionId: sessionId,
+      orchestratorSessionId: sandbox.sandboxId,
+      skills: resolvedSkills,
+    });
     let attachments =
       normalizedUploads.length > 0
         ? await this.uploadAttachments(sandbox.sandboxId, sandbox.workspaceRoot, normalizedUploads)
@@ -70,6 +81,7 @@ export class AltusManagedInputService {
       attachments.length > 0 ? buildAttachmentContextRecords(attachments, normalizedUploads) : [];
     const metadata = {
       ...pickObject(input.metadata),
+      ...(resolvedSkills.length > 0 ? { managedSkillContext: resolvedSkills } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(attachmentContext.length > 0 ? { attachmentContext } : {}),
     };

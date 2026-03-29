@@ -292,11 +292,9 @@ function mergeUploadedAttachments(
   for (const item of [...base, ...incoming]) {
     const key = [
       item.attachmentKind || 'uploaded_file',
-      item.templateId || '',
       item.path || '',
       item.name || '',
       String(item.size || 0),
-      item.inlineContent || '',
     ].join(':');
     merged.set(key, item);
   }

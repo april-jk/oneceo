@@ -1,3 +1,8 @@
+import type {
+  TaskCreationPlatformSkill,
+  TaskCreationUploadedAttachment,
+} from "@/lib/task-creation-client";
+
 export const MAX_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 export const DEFAULT_ATTACHMENT_PROMPT =
@@ -57,37 +62,23 @@ export const ATTACHMENT_ACCEPT = [
   ".htm",
 ].join(",");
 
-export type PendingAttachment = {
+export type PendingUploadedAttachment = {
+  kind: "file";
   id: string;
   name: string;
   size: number;
   type: string;
   file: File;
-  attachmentKind?: "uploaded_file" | "inline_skill";
-  inlineContent?: string;
-  templateId?: string;
 };
 
-export type UploadedTaskAttachment = {
-  name: string;
-  path: string;
-  size: number;
-  mimeType?: string;
-  uploadedAt?: string;
-  attachmentKind?: "uploaded_file" | "inline_skill";
-  inlineContent?: string;
-  templateId?: string;
+export type PendingPlatformSkill = TaskCreationPlatformSkill & {
+  kind: "skill";
+  id: string;
 };
 
-type SkillAttachmentFileMeta = {
-  templateId: string;
-  templateName: string;
-  content: string;
-};
+export type PendingAttachment = PendingUploadedAttachment | PendingPlatformSkill;
 
-const SKILL_ATTACHMENT_META_KEY = "__oneceoSkillAttachmentMeta";
-
-let pendingDraftFiles: File[] = [];
+let pendingDraftAttachments: PendingAttachment[] = [];
 
 const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
   "txt",
@@ -168,25 +159,11 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
 const ALLOWED_ATTACHMENT_MIME_PREFIXES = ["text/", "image/"];
 
 function buildAttachmentId(file: File) {
-  return `${file.name}:${file.size}:${file.lastModified}`;
+  return `file:${file.name}:${file.size}:${file.lastModified}`;
 }
 
-function readSkillAttachmentFileMeta(file: File): SkillAttachmentFileMeta | null {
-  const raw = (file as File & {
-    [SKILL_ATTACHMENT_META_KEY]?: SkillAttachmentFileMeta;
-  })[SKILL_ATTACHMENT_META_KEY];
-  if (!raw || typeof raw !== "object") return null;
-  const templateId =
-    typeof raw.templateId === "string" ? raw.templateId.trim() : "";
-  const templateName =
-    typeof raw.templateName === "string" ? raw.templateName.trim() : "";
-  const content = typeof raw.content === "string" ? raw.content : "";
-  if (!templateId || !templateName || !content) return null;
-  return {
-    templateId,
-    templateName,
-    content,
-  };
+function buildSkillId(skill: TaskCreationPlatformSkill) {
+  return `skill:${skill.skillId}:${skill.revisionId}`;
 }
 
 function getAttachmentExtension(filename: string): string {
@@ -195,24 +172,6 @@ function getAttachmentExtension(filename: string): string {
   const dotIndex = base.lastIndexOf(".");
   if (dotIndex < 0) return "";
   return base.slice(dotIndex + 1);
-}
-
-export function tagSkillAttachmentFile(
-  file: File,
-  input: {
-    templateId: string;
-    templateName: string;
-    content: string;
-  }
-): File {
-  (file as File & {
-    [SKILL_ATTACHMENT_META_KEY]?: SkillAttachmentFileMeta;
-  })[SKILL_ATTACHMENT_META_KEY] = {
-    templateId: input.templateId.trim(),
-    templateName: input.templateName.trim(),
-    content: input.content,
-  };
-  return file;
 }
 
 export function isSupportedAttachmentFile(
@@ -256,7 +215,11 @@ export function mergePendingAttachments(
 ): { attachments: PendingAttachment[]; rejected: string[] } {
   const next = [...current];
   const rejected: string[] = [];
-  const existing = new Set(current.map((item) => item.id));
+  const existing = new Set(
+    current
+      .filter((item): item is PendingUploadedAttachment => item.kind === "file")
+      .map((item) => item.id)
+  );
 
   for (const file of incoming) {
     const id = buildAttachmentId(file);
@@ -269,20 +232,17 @@ export function mergePendingAttachments(
       rejected.push(`${file.name} 超过 10 MB 限制`);
       continue;
     }
-    if (next.length >= MAX_ATTACHMENT_COUNT) {
+    if (next.filter((item) => item.kind === "file").length >= MAX_ATTACHMENT_COUNT) {
       rejected.push(`最多只能添加 ${MAX_ATTACHMENT_COUNT} 个附件`);
       break;
     }
-    const skillMeta = readSkillAttachmentFileMeta(file);
     next.push({
+      kind: "file",
       id,
       name: file.name,
       size: file.size,
       type: file.type || "application/octet-stream",
       file,
-      attachmentKind: skillMeta ? "inline_skill" : "uploaded_file",
-      inlineContent: skillMeta?.content,
-      templateId: skillMeta?.templateId,
     });
     existing.add(id);
   }
@@ -290,23 +250,48 @@ export function mergePendingAttachments(
   return { attachments: next, rejected };
 }
 
+export function mergePendingPlatformSkills(
+  current: PendingAttachment[],
+  incoming: TaskCreationPlatformSkill[]
+): PendingAttachment[] {
+  const merged = [...current];
+  const existing = new Set(
+    current
+      .filter((item): item is PendingPlatformSkill => item.kind === "skill")
+      .map((item) => item.id)
+  );
+
+  for (const skill of incoming) {
+    const id = buildSkillId(skill);
+    if (existing.has(id)) continue;
+    merged.push({
+      kind: "skill",
+      id,
+      ...skill,
+    });
+    existing.add(id);
+  }
+
+  return merged;
+}
+
 export function partitionPendingAttachments(current: PendingAttachment[]): {
-  uploadableAttachments: PendingAttachment[];
-  inlinePromptAttachments: UploadedTaskAttachment[];
+  uploadableAttachments: PendingUploadedAttachment[];
+  selectedSkills: TaskCreationPlatformSkill[];
 } {
-  const uploadableAttachments: PendingAttachment[] = [];
-  const inlinePromptAttachments: UploadedTaskAttachment[] = [];
+  const uploadableAttachments: PendingUploadedAttachment[] = [];
+  const selectedSkills: TaskCreationPlatformSkill[] = [];
 
   for (const item of current) {
-    if (item.attachmentKind === "inline_skill" && item.inlineContent) {
-      inlinePromptAttachments.push({
+    if (item.kind === "skill") {
+      selectedSkills.push({
+        skillId: item.skillId,
+        revisionId: item.revisionId,
+        slug: item.slug,
         name: item.name,
-        path: `inline-skill:${item.templateId || item.id}`,
-        size: item.size,
-        mimeType: item.type || "text/markdown",
-        attachmentKind: "inline_skill",
-        inlineContent: item.inlineContent,
-        templateId: item.templateId,
+        description: item.description,
+        category: item.category,
+        revisionNumber: item.revisionNumber,
       });
       continue;
     }
@@ -315,51 +300,30 @@ export function partitionPendingAttachments(current: PendingAttachment[]): {
 
   return {
     uploadableAttachments,
-    inlinePromptAttachments,
+    selectedSkills,
   };
 }
 
 export function appendAttachmentsToPrompt(
   text: string,
-  attachments: UploadedTaskAttachment[]
+  attachments: TaskCreationUploadedAttachment[]
 ): string {
   if (!attachments.length) return text;
 
-  const sections = [text];
-  const workspaceAttachments = attachments.filter((item) => !item.inlineContent);
-  const inlineSkillAttachments = attachments.filter((item) => item.inlineContent);
-
-  if (workspaceAttachments.length > 0) {
-    const lines = workspaceAttachments.map(
-      (item) => `- ${item.path}${item.name ? ` (${item.name})` : ""}`
-    );
-    sections.push(
-      `已添加以下附件，可直接在工作区中访问：\n${lines.join("\n")}`
-    );
-  }
-
-  if (inlineSkillAttachments.length > 0) {
-    const blocks = inlineSkillAttachments.map((item) => {
-      const title = item.name || item.templateId || "Skill Brief";
-      return [`### ${title}`, item.inlineContent || ""].join("\n\n");
-    });
-    sections.push(
-      [
-        "以下 skill 说明已经直接附加到当前消息，请直接遵循这些说明执行，不要再尝试从工作区或 `.attachments` 中读取这些 skill 文件：",
-        ...blocks,
-      ].join("\n\n")
-    );
-  }
-
-  return sections.filter(Boolean).join("\n\n");
+  const lines = attachments.map(
+    (item) => `- ${item.path}${item.name ? ` (${item.name})` : ""}`
+  );
+  return [text, `已添加以下附件，可直接在工作区中访问：\n${lines.join("\n")}`]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-export function stashPendingDraftAttachments(files: File[]) {
-  pendingDraftFiles = [...files];
+export function stashPendingDraftAttachments(attachments: PendingAttachment[]) {
+  pendingDraftAttachments = [...attachments];
 }
 
-export function consumePendingDraftAttachments(): File[] {
-  const result = [...pendingDraftFiles];
-  pendingDraftFiles = [];
+export function consumePendingDraftAttachments(): PendingAttachment[] {
+  const result = [...pendingDraftAttachments];
+  pendingDraftAttachments = [];
   return result;
 }

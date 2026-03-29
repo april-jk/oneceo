@@ -1,7 +1,6 @@
 import '../../src/config/env.ts';
 import { writeFile } from 'node:fs/promises';
 import { e2bConnector } from '../../src/connectors/e2b-connector';
-import { SKILL_ATTACHMENT_TEMPLATES } from '../../../web/client/src/lib/skill-attachment-templates.ts';
 
 const API_BASE = `http://127.0.0.1:${process.env.PORT || '4000'}`;
 const USER_ID = `codex-ppt-visual-smoke-${Date.now()}`;
@@ -81,23 +80,18 @@ async function main() {
       throw new Error('session_id_missing');
     }
 
-    const pptSkill = SKILL_ATTACHMENT_TEMPLATES.find((item) => item.id === 'office-ppt');
-    if (!pptSkill) {
+    const skillsResp = await ensureOk(
+      await fetch(`${API_BASE}/api/task-creation/skills`, {
+        headers: headers(),
+      }),
+      'list_skills'
+    );
+    const skillsPayload = (await skillsResp.json()) as any;
+    const skills = Array.isArray(skillsPayload?.data) ? skillsPayload.data : [];
+    const pptSkill = skills.find((item: any) => asText(item?.slug) === 'office-ppt');
+    if (!pptSkill?.skillId || !pptSkill?.revisionId) {
       throw new Error('office_ppt_skill_missing');
     }
-
-    await ensureOk(
-      await fetch(`${API_BASE}/api/task-creation/sessions/${encodeURIComponent(sessionId)}/attachments`, {
-        method: 'POST',
-        headers: headers({
-          'Content-Type': 'text/markdown; charset=utf-8',
-          'X-Attachment-Name': encodeURIComponent('skill-office-ppt.md'),
-          'X-Attachment-Size': String(Buffer.byteLength(pptSkill.content, 'utf-8')),
-        }),
-        body: Buffer.from(pptSkill.content, 'utf-8'),
-      }),
-      'upload_attachment'
-    );
 
     const runResp = await ensureOk(
       await fetch(`${API_BASE}/api/altus-managed/sessions/${encodeURIComponent(sessionId)}/runs`, {
@@ -108,6 +102,19 @@ async function main() {
         body: JSON.stringify({
           content: PROMPT,
           messageKey: `codex:ppt-visual:${Date.now()}`,
+          metadata: {
+            skills: [
+              {
+                skillId: pptSkill.skillId,
+                revisionId: pptSkill.revisionId,
+                slug: pptSkill.slug,
+                name: pptSkill.name,
+                description: pptSkill.description,
+                category: pptSkill.category,
+                revisionNumber: pptSkill.revisionNumber,
+              },
+            ],
+          },
         }),
       }),
       'start_run'

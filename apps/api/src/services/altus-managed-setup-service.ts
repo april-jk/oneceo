@@ -10,8 +10,13 @@ import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
-import { asText, pickObject, type ChatMessage } from './altus-managed-shared';
+import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
+import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
+
+const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const INLINE_IMAGE_MAX_COUNT = 4;
 
 function normalizeHistoryRole(role: unknown): 'system' | 'user' | 'assistant' | null {
   const normalized = asText(role).toLowerCase();
@@ -73,7 +78,47 @@ function collectAttachmentContextPrompt(history: Array<{ metadata?: unknown }>):
   return buildAttachmentContextPrompt(contexts.slice(-6));
 }
 
+function normalizeAttachmentRecord(raw: unknown) {
+  const record = pickObject(raw);
+  const path = asText(record.path);
+  const mimeType = asText(record.mimeType).toLowerCase();
+  if (!path || !mimeType) return null;
+  return {
+    name: asText(record.name) || path.split('/').pop() || 'attachment',
+    path,
+    mimeType,
+    size: typeof record.size === 'number' && Number.isFinite(record.size) ? record.size : 0,
+    externalObjectKey: asText(record.externalObjectKey),
+  };
+}
+
+function isInlineImageAttachment(raw: unknown) {
+  const record = normalizeAttachmentRecord(raw);
+  if (!record) return null;
+  if (!INLINE_IMAGE_MIME_TYPES.has(record.mimeType)) return null;
+  if (record.size > INLINE_IMAGE_MAX_BYTES) return null;
+  if (record.path.startsWith('/') || record.path.includes('..')) return null;
+  if (!record.externalObjectKey) return null;
+  return record;
+}
+
+function extractMessageTextContent(content: ChatMessage['content']) {
+  if (typeof content === 'string') {
+    return asText(content);
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .map((item) => (item?.type === 'text' ? asText(item.text) : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
 export class AltusManagedSetupService {
+  constructor(private readonly imageObjectService: ManagedImageObjectService = managedImageObjectService) {}
+
   private async reuseKnownSandbox(sessionId: string, sandboxId: string, workspaceRoot: string) {
     const normalizedSandboxId = asText(sandboxId);
     if (!normalizedSandboxId) {
@@ -104,6 +149,50 @@ export class AltusManagedSetupService {
       await sandboxExecutionEnvironmentDAO.updateStatus(normalizedSandboxId, 'closed', null).catch(() => null);
       return null;
     }
+  }
+
+  private async buildInlineImageBlocks(input: {
+    metadata?: unknown;
+    cache: Map<string, ChatMessageContentPart>;
+  }): Promise<ChatMessageContentPart[]> {
+    const metadata = pickObject(input.metadata);
+    const rawAttachments = Array.isArray(metadata.attachments) ? metadata.attachments : [];
+    const attachments = rawAttachments
+      .map((item) => isInlineImageAttachment(item))
+      .filter(Boolean)
+      .slice(0, INLINE_IMAGE_MAX_COUNT) as Array<{
+        name: string;
+        path: string;
+        mimeType: string;
+        size: number;
+        externalObjectKey: string;
+      }>;
+
+    const results: ChatMessageContentPart[] = [];
+    for (const attachment of attachments) {
+      const cached = input.cache.get(attachment.externalObjectKey);
+      if (cached) {
+        results.push(cached);
+        continue;
+      }
+
+      try {
+        const signedUrl = await this.imageObjectService.getSignedDownloadUrl(attachment.externalObjectKey);
+        const block: ChatMessageContentPart = {
+          type: 'image_url',
+          image_url: {
+            url: signedUrl,
+          },
+          _managedObjectKey: attachment.externalObjectKey,
+        };
+        input.cache.set(attachment.externalObjectKey, block);
+        results.push(block);
+      } catch {
+        continue;
+      }
+    }
+
+    return results;
   }
 
   async ensureSessionOwnership(sessionId: string, userId: string) {
@@ -282,16 +371,57 @@ export class AltusManagedSetupService {
   ): Promise<ChatMessage[]> {
     const history = await taskCreationSessionDAO.getMessages(sessionId);
     const attachmentContextPrompt = collectAttachmentContextPrompt(history);
-    const relevant = history
+    const inlineImageCache = new Map<string, ChatMessageContentPart>();
+    const relevantHistory = history
       .filter((item) => isHistoryMessageRelevant({ role: item.role, messageType: item.messageType }))
-      .slice(-24)
-      .map((item) => ({
-        role: normalizeHistoryRole(item.role)!,
-        content: asText(item.content),
-      }));
+      .slice(-24);
+    const relevant: ChatMessage[] = [];
+
+    for (const item of relevantHistory) {
+      const role = normalizeHistoryRole(item.role);
+      if (!role) continue;
+      const textContent = asText(item.content);
+      if (role !== 'user') {
+        if (!textContent) continue;
+        relevant.push({
+          role,
+          content: textContent,
+        });
+        continue;
+      }
+
+      const imageBlocks = await this.buildInlineImageBlocks({
+        metadata: item.metadata,
+        cache: inlineImageCache,
+      });
+      if (!textContent && imageBlocks.length === 0) {
+        continue;
+      }
+      if (imageBlocks.length === 0) {
+        relevant.push({
+          role,
+          content: textContent,
+        });
+        continue;
+      }
+
+      const content: ChatMessageContentPart[] = [];
+      if (textContent) {
+        content.push({
+          type: 'text',
+          text: textContent,
+        });
+      }
+      content.push(...imageBlocks);
+      relevant.push({
+        role,
+        content,
+      });
+    }
+
     const latestHistory = relevant[relevant.length - 1];
     const shouldAppendCurrentInput =
-      latestHistory?.role !== 'user' || asText(latestHistory.content) !== asText(currentInput);
+      latestHistory?.role !== 'user' || extractMessageTextContent(latestHistory.content) !== asText(currentInput);
 
     return [
       {
@@ -316,6 +446,19 @@ export class AltusManagedSetupService {
           ]
         : []),
     ];
+  }
+
+  async refreshInlineImageUrls(messages: ChatMessage[]): Promise<ChatMessage[]> {
+    for (const message of messages) {
+      if (!Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (part?.type !== 'image_url') continue;
+        const objectKey = asText(part._managedObjectKey);
+        if (!objectKey) continue;
+        part.image_url.url = await this.imageObjectService.getSignedDownloadUrl(objectKey);
+      }
+    }
+    return messages;
   }
 }
 

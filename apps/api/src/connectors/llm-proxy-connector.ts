@@ -17,7 +17,12 @@ type OpenAiChatCompletionRequest = {
   model?: string;
   messages?: Array<{
     role?: string;
-    content?: unknown;
+    content?:
+      | string
+      | Array<
+          | { type?: 'text'; text?: string }
+          | { type?: 'image_url' | 'input_image'; image_url?: { url?: string } }
+        >;
     name?: string;
     tool_call_id?: string;
     tool_calls?: Array<{
@@ -52,6 +57,19 @@ type AnthropicMessageRequest = {
       | string
       | Array<
           | { type: 'text'; text: string }
+          | {
+              type: 'image';
+              source:
+                | {
+                    type: 'base64';
+                    media_type: string;
+                    data: string;
+                  }
+                | {
+                    type: 'url';
+                    url: string;
+                  };
+            }
           | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
           | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
         >;
@@ -298,6 +316,81 @@ function extractTextContent(content: unknown): string {
     .join('\n');
 }
 
+function normalizeImageSource(url: string) {
+  const normalized = url.trim();
+  if (!normalized) return null;
+  const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(normalized);
+  if (match) {
+    const mediaType = String(match[1] || '').trim().toLowerCase();
+    const data = String(match[2] || '').replace(/\s+/g, '');
+    if (!mediaType || !data) return null;
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mediaType)) {
+      return null;
+    }
+    return {
+      type: 'base64' as const,
+      media_type: mediaType,
+      data,
+    };
+  }
+  if (/^https?:\/\//i.test(normalized)) {
+    return {
+      type: 'url' as const,
+      url: normalized,
+    };
+  }
+  return null;
+}
+
+function normalizeAnthropicUserContent(
+  content: NonNullable<OpenAiChatCompletionRequest['messages']>[number]['content']
+): AnthropicMessageRequest['messages'][number]['content'] | null {
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return text ? text : null;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+
+  const parts: Array<
+    | { type: 'text'; text: string }
+    | {
+        type: 'image';
+        source:
+          | { type: 'base64'; media_type: string; data: string }
+          | { type: 'url'; url: string };
+      }
+  > = [];
+
+  for (const item of content) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) {
+      parts.push({
+        type: 'text',
+        text: item.text.trim(),
+      });
+      continue;
+    }
+    if ((item.type === 'image_url' || item.type === 'input_image') && typeof item.image_url?.url === 'string') {
+      const source = normalizeImageSource(item.image_url.url);
+      if (!source) continue;
+      parts.push({
+        type: 'image',
+        source,
+      });
+    }
+  }
+
+  if (parts.length === 0) return null;
+  if (parts.length === 1 && parts[0].type === 'text') {
+    return parts[0].text;
+  }
+  return parts;
+}
+
 function tryParseJsonObject(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value);
@@ -435,10 +528,20 @@ export function toAnthropicRequest(payload: OpenAiChatCompletionRequest): Anthro
       continue;
     }
 
-    if (!text) continue;
+    if (message.role === 'assistant') {
+      if (!text) continue;
+      normalizedMessages.push({
+        role: 'assistant',
+        content: text,
+      });
+      continue;
+    }
+
+    const normalizedUserContent = normalizeAnthropicUserContent(message.content);
+    if (!normalizedUserContent) continue;
     normalizedMessages.push({
-      role: message.role,
-      content: text,
+      role: 'user',
+      content: normalizedUserContent,
     });
   }
 

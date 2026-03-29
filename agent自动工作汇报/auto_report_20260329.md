@@ -10,3 +10,18 @@
 - 定位图片理解失败根因：managed 仍使用纯文本模型 `qwen3-max`，已改为“消息含图片时自动切换视觉模型 `qwen3-vl-plus`”，并补充提示词禁止优先走 OCR/本地图像工具
 - 继续追查后确认真正阻塞点在消息持久化：`taskCreationSessionDAO` 之前会在存储白名单和 recent message 压缩阶段裁掉 `attachments / attachmentContext`，导致刷新或新一轮 run 时无法从历史消息重建图片块
 - 已修复 DAO 元数据白名单与 recent message 压缩字段，并用真实 DAO 写入验证确认 `conversation_messages` 与 `task_session_recent_messages` 都会保留图片 `externalObjectKey`
+- 完成“skills 平台化热加载”设计文档：对照 `suna` 的平台注册/运行时加载模式，明确 oneceo 需改为“后台管理 skill + 前端传 skill 引用 + sandbox 内按 OpenCode skill 规范热加载”的整体方案
+- 补充“技能管理后台”设计文档：对照 `suna` 管理页结构，明确 oneceo 采用独立 `技能管理` section，并拆分列表、revision 预览与 sandbox 验证三类后台能力
+- 开始落地 skills 平台化：新增 `platform_skills / platform_skill_revisions` 数据表、DAO、seed 与 `platform-skill-service`，把 skill 从前端硬编码模板迁移为 API 驱动的平台注册能力
+- 补齐后端主链路：managed/direct/OSAC 三条链路都已接入 `sandbox-skill-sync-service`，会在 run/输入前把选中 revision 同步到 sandbox 的 OpenCode skills 目录，并在签名变化时重启 `opencode serve`
+- 新增内部 skill 管理 API：`/api/internal/skills` 支持后台列表、详情、创建、更新、archive/activate、revision 渲染与 sandbox 验证
+- 完成前端改造：删除 `skill-attachment-templates.ts` 和 `inline_skill` 伪附件方案，改为从 `/api/task-creation/skills` 拉取可用 skills，消息只传 `metadata.skills` 引用
+- 完成管理后台改造：新增 `技能管理` section，支持筛选、skill 编辑、revision 预览和基于真实 sync-service 的 sandbox 验证
+- 补强管理后台入口：在侧边栏品牌区下方增加显式 `平台 Skills` 快捷入口，避免技能管理入口淹没在普通运维导航中
+- 完成用户态 skill 管理：新增 `user_platform_skill_bindings / user_custom_skills` 模型与业务接口，支持用户引用平台全局模板、创建自定义 skill，并让 `/api/task-creation/skills` 只返回该用户已配置可用的 skill 集
+- 完成前台设置页改造：`设置` 弹窗侧边栏新增 `Skills 管理` 分区，可直接启用/停用平台模板、维护自定义 skills
+- 继续补齐 skills 前台闭环：让加号菜单在每次打开时重新读取当前用户可用 skills，并在 `Skills 管理` 发生变更后主动刷新，修复“设置已更新但菜单未同步”的问题
+- 打通跨页面传递：首页、AI Agent 落地页、新任务弹窗现在都会连同已选 skills 一起进入正式任务创建链路，不再只携带真实文件
+- 修正 Altus managed 的真实使用链路：当前轮 resolved skills 现在既会同步到 sandbox 的 `SKILL.md`，也会同源注入 Altus managed system prompt，避免只写入 sandbox 但 managed agent 自身未消费 skill 的分叉
+- 同步更新 Playwright 菜单测试与 managed smoke 脚本，使其改用新 skill 引用协议，不再上传 skill markdown 附件
+- 验证结果：`apps/web` 与 `apps/admin_management` 已通过 TypeScript 检查；`apps/api` 仍存在仓库原有的历史 type-check 报错，但本次新增的用户态/平台化 skill 改动未新增新的独立报错

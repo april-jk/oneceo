@@ -258,6 +258,157 @@ a {
     radial-gradient(circle at top right, rgba(15, 143, 119, 0.06), transparent 24%);
 }
 
+.skill-toolbar,
+.skill-layout,
+.skill-secondary-grid,
+.skill-form-grid,
+.section-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.skill-toolbar {
+  grid-template-columns: minmax(0, 1.8fr) 180px 180px auto;
+  margin-top: 18px;
+}
+
+.skill-layout {
+  grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.2fr);
+  margin-top: 18px;
+  align-items: start;
+}
+
+.skill-secondary-grid {
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+}
+
+.skill-list,
+.skill-editor-card,
+.validation-box {
+  display: grid;
+  gap: 14px;
+}
+
+.skill-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.skill-table th,
+.skill-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.skill-table tbody tr {
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.skill-table tbody tr:hover,
+.skill-table tbody tr.selected {
+  background: rgba(15, 143, 119, 0.06);
+}
+
+.table-empty,
+.cell-subtle {
+  color: var(--text-soft);
+}
+
+.editor-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.skill-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-field {
+  display: grid;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 0.92rem;
+}
+
+.field-span-2 {
+  grid-column: 1 / -1;
+}
+
+.control-input,
+.control-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+}
+
+.control-textarea {
+  min-height: 220px;
+  resize: vertical;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.9rem;
+}
+
+.revision-list {
+  display: grid;
+  gap: 10px;
+}
+
+.revision-item {
+  display: grid;
+  grid-template-columns: 92px 100px 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.85);
+  text-align: left;
+}
+
+.revision-item.active {
+  border-color: rgba(15, 143, 119, 0.28);
+  background: rgba(15, 143, 119, 0.08);
+}
+
+.code-block {
+  margin: 0;
+  padding: 14px;
+  min-height: 320px;
+  overflow: auto;
+  border-radius: 16px;
+  background: #102132;
+  color: #d8e4ef;
+  font-family: 'Fira Code', monospace;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.validation-result {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(15, 143, 119, 0.08);
+  border: 1px solid rgba(15, 143, 119, 0.16);
+  color: var(--text);
+}
+
+@media (max-width: 1180px) {
+  .skill-toolbar,
+  .skill-layout,
+  .skill-secondary-grid,
+  .skill-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .header-main {
   display: grid;
   gap: 8px;

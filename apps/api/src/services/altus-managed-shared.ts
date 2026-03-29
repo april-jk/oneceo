@@ -32,6 +32,18 @@ export type ManagedRunStartInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type ManagedSkillContext = {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  renderedMarkdown: string;
+  revisionNumber: number | null;
+};
+
 export type ManagedRunSummary = {
   id: string;
   sessionId: string;
@@ -339,4 +351,35 @@ export function buildManagedToolDefinitions() {
       },
     },
   ];
+}
+
+export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {
+  if (!Array.isArray(value)) return [];
+  const results: ManagedSkillContext[] = [];
+  for (const item of value) {
+    const record = pickObject(item);
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    const slug = asText(record.slug);
+    const name = asText(record.name);
+    const renderedMarkdown = asText(record.renderedMarkdown);
+    if (!skillId || !revisionId || !slug || !name || !renderedMarkdown) {
+      continue;
+    }
+    results.push({
+      sourceType: asText(record.sourceType) === 'custom' ? 'custom' : 'platform',
+      skillId,
+      revisionId,
+      slug,
+      name,
+      description: asText(record.description),
+      category: asText(record.category) || 'general',
+      renderedMarkdown,
+      revisionNumber:
+        typeof record.revisionNumber === 'number' && Number.isFinite(record.revisionNumber)
+          ? record.revisionNumber
+          : null,
+    });
+  }
+  return results;
 }

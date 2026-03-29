@@ -71,6 +71,61 @@ export type OsacMessageRecord = {
   payload?: Record<string, unknown>;
 };
 
+export type AdminSkillSummary = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  publishedRevisionNumber: number | null;
+  publishedAt: string | null;
+  updatedAt: string;
+};
+
+export type AdminSkillDetail = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  latestBodyMarkdown: string;
+  renderedSkillMarkdown: string | null;
+  updatedAt: string;
+};
+
+export type AdminSkillRevision = {
+  id: string;
+  revisionNumber: number;
+  createdAt: string;
+  createdBy?: string | null;
+  publishedAt?: string | null;
+  isPublished: boolean;
+};
+
+export type AdminSkillRenderedRevision = {
+  skillId: string;
+  revisionId: string;
+  revisionNumber: number;
+  slug: string;
+  renderedMarkdown: string;
+  signature: string;
+};
+
+export type AdminSkillValidationResult = {
+  sessionId: string;
+  skillId: string;
+  revisionId: string;
+  slug: string | null;
+  skillPath: string | null;
+  signature: string;
+  restartTriggered: boolean;
+  syncedAt: string;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -116,6 +171,9 @@ export class OneceoApiConnector {
             method,
             headers: {
               'content-type': 'application/json',
+              ...(config.oneceoInternalToken
+                ? { 'x-oneceo-internal-token': config.oneceoInternalToken }
+                : {}),
             },
             body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
           },
@@ -261,6 +319,81 @@ export class OneceoApiConnector {
   listOsacMessages(sessionId: string, limit = 200) {
     return this.request<OsacMessageRecord[]>(
       `/api/sandbox/osac/${encodeURIComponent(sessionId)}/messages?limit=${Math.max(1, Math.min(limit, 500))}`
+    );
+  }
+
+  listSkills(query?: { query?: string; status?: string; category?: string }) {
+    const params = new URLSearchParams();
+    if (query?.query) params.set('query', query.query);
+    if (query?.status) params.set('status', query.status);
+    if (query?.category) params.set('category', query.category);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<AdminSkillSummary[]>(`/api/internal/skills${suffix}`);
+  }
+
+  getSkill(skillId: string) {
+    return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}`);
+  }
+
+  createSkill(input: {
+    slug: string;
+    name: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown: string;
+    createdBy?: string;
+  }) {
+    return this.request<AdminSkillDetail>('/api/internal/skills', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  updateSkill(
+    skillId: string,
+    input: {
+      name?: string;
+      description?: string;
+      category?: string;
+      bodyMarkdown?: string;
+      createdBy?: string;
+    }
+  ) {
+    return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}`, {
+      method: 'PUT',
+      body: input,
+    });
+  }
+
+  archiveSkill(skillId: string) {
+    return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  activateSkill(skillId: string) {
+    return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}/activate`, {
+      method: 'POST',
+    });
+  }
+
+  listSkillRevisions(skillId: string) {
+    return this.request<AdminSkillRevision[]>(`/api/internal/skills/${encodeURIComponent(skillId)}/revisions`);
+  }
+
+  getRenderedSkillRevision(skillId: string, revisionId: string) {
+    return this.request<AdminSkillRenderedRevision>(
+      `/api/internal/skills/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/rendered`
+    );
+  }
+
+  validateSkillRevision(skillId: string, revisionId: string, sessionId: string) {
+    return this.request<AdminSkillValidationResult>(
+      `/api/internal/skills/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: { sessionId },
+      }
     );
   }
 }

@@ -1,3 +1,4 @@
+import type { ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
 
 function asText(value: unknown): string {
@@ -297,6 +298,31 @@ export class AltusManagedPromptService {
       '- complete_task.attachments must be a real JSON array of attachment objects. Never wrap the attachments array as a string.',
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',
       '- Do not emit hidden chain-of-thought or internal planning text.',
+    ].join('\n');
+  }
+
+  buildSkillContextPrompt(skills: ManagedSkillContext[]) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    const sections = skills.map((skill) => {
+      const header = [
+        `## ${skill.name}`,
+        `- source: ${skill.sourceType}`,
+        `- slug: ${skill.slug}`,
+        `- revision: ${skill.revisionNumber ?? '-'}`,
+      ].join('\n');
+      return `${header}\n\n${skill.renderedMarkdown}`;
+    });
+
+    return [
+      '# Active skills',
+      '- The user explicitly selected these skills for the current run.',
+      '- These skills are already synced into the sandbox and must be followed when relevant.',
+      '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
+      '',
+      ...sections,
     ].join('\n');
   }
 }

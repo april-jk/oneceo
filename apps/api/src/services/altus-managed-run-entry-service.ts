@@ -5,6 +5,7 @@ import { altusManagedStreamService } from './altus-managed-stream-service';
 import {
   asText,
   isManagedRunTerminalStatus,
+  readManagedSkillContext,
   type ManagedRunStartInput,
 } from './altus-managed-shared';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
@@ -93,6 +94,7 @@ export class AltusManagedRunEntryService {
       userInput: content,
       sessionTitle: sessionMemory?.title || null,
       connectors: connectorSnapshot.statuses,
+      skills: readManagedSkillContext(input.metadata?.managedSkillContext),
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);
@@ -134,6 +136,7 @@ export class AltusManagedRunEntryService {
       userInput: '',
       sessionTitle: null,
       connectors: [],
+      skills: [],
     });
     state.markStopped(reason || 'user_interrupt');
     await this.lifecycleService.markStopped(state, reason || 'user_interrupt');

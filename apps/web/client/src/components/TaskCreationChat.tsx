@@ -16,20 +16,22 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AttachmentChipList from "@/components/AttachmentChipList";
-import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
+import {
+  uploadTaskCreationAttachment,
+  type TaskCreationUploadedAttachment as UploadedTaskAttachment,
+} from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   DEFAULT_ATTACHMENT_PROMPT,
-  mergePendingAttachments,
   partitionPendingAttachments,
-  type UploadedTaskAttachment,
+  type PendingAttachment,
 } from "@/lib/task-attachments";
 import { toast } from "sonner";
 
 interface TaskCreationChatProps {
   onPlanGenerated?: (plan: any) => void;
   initialInput?: string;
-  initialAttachments?: File[];
+  initialAttachments?: PendingAttachment[];
 }
 
 function getMessageAttachments(
@@ -99,10 +101,8 @@ export default function TaskCreationChat({
     hasSentInitialInputRef.current = true;
     void (async () => {
       const altusMode = readAltusMode();
-      const merged = mergePendingAttachments([], initialAttachments);
-      merged.rejected.forEach((item) => toast.error(item));
-      const { uploadableAttachments, inlinePromptAttachments } =
-        partitionPendingAttachments(merged.attachments);
+      const { uploadableAttachments, selectedSkills } =
+        partitionPendingAttachments(initialAttachments);
       let targetSessionId = (sessionId || "").trim() || undefined;
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
@@ -117,14 +117,12 @@ export default function TaskCreationChat({
 
       if (altusMode === "managed") {
         await sendChatInput(
-          appendAttachmentsToPrompt(baseText, inlinePromptAttachments),
+          baseText,
           {
             sessionId: targetSessionId,
             metadata: hasAttachments
               ? {
-                  ...(inlinePromptAttachments.length
-                    ? { attachments: inlinePromptAttachments }
-                    : {}),
+                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                   originalInput: text || "已添加附件",
                 }
               : undefined,
@@ -132,17 +130,14 @@ export default function TaskCreationChat({
           },
         );
       } else {
-        const promptAttachments = [
-          ...uploadedAttachments,
-          ...inlinePromptAttachments,
-        ];
         await sendChatInput(
-          appendAttachmentsToPrompt(baseText, promptAttachments),
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: targetSessionId,
-            metadata: promptAttachments.length
+            metadata: uploadedAttachments.length || selectedSkills.length
               ? {
-                  attachments: promptAttachments,
+                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
+                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                   originalInput: text || "已添加附件",
                 }
               : undefined,

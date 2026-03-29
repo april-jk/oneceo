@@ -38,9 +38,12 @@ export function buildGithubDefinition(): ConnectorDefinition {
   const oauth = resolveGithubOauthProvider();
   return {
     key: 'github',
+    category: 'app',
     name: 'GitHub',
     description: '在平台外部保存 GitHub 授权态，并在 sandbox 内按会话挂载仓库工具。',
     icon: 'github',
+    featured: true,
+    sortOrder: 10,
     authMode: oauth ? 'oauth' : 'token',
     available: true,
     configFields: [

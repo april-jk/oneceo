@@ -20,6 +20,8 @@ import { uploadTaskCreationAttachment } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   DEFAULT_ATTACHMENT_PROMPT,
+  mergePendingAttachments,
+  partitionPendingAttachments,
   type UploadedTaskAttachment,
 } from "@/lib/task-attachments";
 import { toast } from "sonner";
@@ -43,6 +45,15 @@ function getMessageAttachments(
       typeof item.size === "number"
     );
   });
+}
+
+function readAltusMode(): "sandbox" | "managed" {
+  if (typeof window === "undefined") return "sandbox";
+  try {
+    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
+  } catch {
+    return "sandbox";
+  }
 }
 
 export default function TaskCreationChat({
@@ -87,30 +98,57 @@ export default function TaskCreationChat({
 
     hasSentInitialInputRef.current = true;
     void (async () => {
+      const altusMode = readAltusMode();
+      const merged = mergePendingAttachments([], initialAttachments);
+      merged.rejected.forEach((item) => toast.error(item));
+      const { uploadableAttachments, inlinePromptAttachments } =
+        partitionPendingAttachments(merged.attachments);
       let targetSessionId = (sessionId || "").trim() || undefined;
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
-      if (hasAttachments) {
+      if (altusMode !== "managed" && uploadableAttachments.length > 0) {
         targetSessionId = await ensureSession(text || "已添加附件");
         uploadedAttachments = await Promise.all(
-          initialAttachments.map((file) =>
-            uploadTaskCreationAttachment(targetSessionId!, file),
+          uploadableAttachments.map((item) =>
+            uploadTaskCreationAttachment(targetSessionId!, item.file),
           ),
         );
       }
 
-      await sendChatInput(
-        appendAttachmentsToPrompt(baseText, uploadedAttachments),
-        {
-          sessionId: targetSessionId,
-          metadata: uploadedAttachments.length
-            ? {
-                attachments: uploadedAttachments,
-                originalInput: text || "已添加附件",
-              }
-            : undefined,
-        },
-      );
+      if (altusMode === "managed") {
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, inlinePromptAttachments),
+          {
+            sessionId: targetSessionId,
+            metadata: hasAttachments
+              ? {
+                  ...(inlinePromptAttachments.length
+                    ? { attachments: inlinePromptAttachments }
+                    : {}),
+                  originalInput: text || "已添加附件",
+                }
+              : undefined,
+            files: uploadableAttachments.map((item) => item.file),
+          },
+        );
+      } else {
+        const promptAttachments = [
+          ...uploadedAttachments,
+          ...inlinePromptAttachments,
+        ];
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, promptAttachments),
+          {
+            sessionId: targetSessionId,
+            metadata: promptAttachments.length
+              ? {
+                  attachments: promptAttachments,
+                  originalInput: text || "已添加附件",
+                }
+              : undefined,
+          },
+        );
+      }
     })().catch((error) => {
       console.error("任务创建附件发送失败:", error);
       toast.error(error instanceof Error ? error.message : "附件发送失败");

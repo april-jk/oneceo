@@ -72,6 +72,7 @@ export class TaskCreationSessionDAO {
 
     for (const key of [
       'messageKey',
+      'runId',
       'timestamp',
       'sessionEventSeq',
       'timelineCursor',
@@ -103,6 +104,12 @@ export class TaskCreationSessionDAO {
       'targetPath',
       'approvalText',
       'approvalOptions',
+      'attachments',
+      'attachmentContext',
+      'attachmentContextIncluded',
+      'originalInput',
+      'question',
+      'options',
       'codexRestoreStatus',
       'codexRestoreAt',
       'codexRestoreSourceKey',
@@ -430,6 +437,7 @@ export class TaskCreationSessionDAO {
       set metadata = jsonb_strip_nulls(
         jsonb_build_object(
           'messageKey', metadata->>'messageKey',
+          'runId', metadata->>'runId',
           'timestamp', metadata->'timestamp',
           'sessionEventSeq', metadata->'sessionEventSeq',
           'timelineCursor', metadata->'timelineCursor',
@@ -441,6 +449,12 @@ export class TaskCreationSessionDAO {
           'stage', metadata->>'stage',
           'tone', metadata->>'tone',
           'streamKey', metadata->>'streamKey',
+          'attachments', metadata->'attachments',
+          'attachmentContext', metadata->'attachmentContext',
+          'attachmentContextIncluded', metadata->'attachmentContextIncluded',
+          'originalInput', metadata->>'originalInput',
+          'question', metadata->>'question',
+          'options', metadata->'options',
           'partId', coalesce(
             metadata->>'partId',
             metadata#>>'{event,properties,part,id}',

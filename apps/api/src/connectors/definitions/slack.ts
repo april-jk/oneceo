@@ -39,9 +39,12 @@ export function buildSlackDefinition(): ConnectorDefinition {
   const remoteUrl = asText(process.env.SLACK_MCP_REMOTE_URL);
   return {
     key: 'slack',
+    category: 'app',
     name: 'Slack',
     description: '在平台外部完成 Slack 配置，runtime 只将已授权 profile 投影到 sandbox 内使用。',
     icon: 'slack',
+    featured: true,
+    sortOrder: 30,
     authMode: oauth ? 'oauth' : 'token',
     available: Boolean(remoteUrl),
     availabilityReason: remoteUrl ? undefined : '部署环境未配置 Slack MCP remote URL',

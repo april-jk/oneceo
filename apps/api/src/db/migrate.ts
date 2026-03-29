@@ -5,7 +5,60 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { db, ensureDatabaseConnection } from '../config/database';
+import { db, databasePool, ensureDatabaseConnection } from '../config/database';
+
+type SchemaReadinessReport = {
+  ready: boolean;
+  missing: string[];
+};
+
+const REQUIRED_TABLES = [
+  'task_creation_sessions',
+  'conversation_messages',
+  'task_session_recent_messages',
+  'task_session_workspace_cache',
+  'task_session_runs',
+  'task_session_run_events',
+  'task_session_deliverable_artifacts',
+  'task_session_sandbox_bindings',
+  'task_session_connector_snapshots',
+  'sandbox_execution_environments',
+  'user_connector_accounts',
+  'user_connector_profiles',
+  'user_codex_runtime_configs',
+  'task_session_connector_bindings',
+  'connector_auth_requests',
+] as const;
+
+const REQUIRED_COLUMNS = [
+  ['conversation_messages', 'message_key'],
+  ['conversation_messages', 'timeline_cursor'],
+  ['conversation_messages', 'runtime_generation'],
+  ['conversation_messages', 'updated_at'],
+  ['task_session_recent_messages', 'message_id'],
+  ['task_session_recent_messages', 'message_key'],
+  ['task_session_recent_messages', 'timeline_cursor'],
+  ['task_session_recent_messages', 'runtime_generation'],
+  ['task_session_recent_messages', 'updated_at'],
+  ['task_session_connector_bindings', 'profile_id'],
+  ['task_session_connector_bindings', 'enabled_tools'],
+  ['task_session_connector_bindings', 'session_config_json'],
+  ['task_session_connector_bindings', 'definition_snapshot_json'],
+  ['connector_auth_requests', 'profile_id'],
+  ['connector_auth_requests', 'profile_draft_json'],
+] as const;
+
+const REQUIRED_INDEXES = [
+  'idx_conversation_messages_session_message_key',
+  'idx_conversation_messages_session_timeline',
+  'idx_task_session_recent_messages_session_message_key',
+  'idx_task_session_recent_messages_session_timeline',
+  'idx_task_session_workspace_cache_session_unique',
+  'idx_task_session_run_events_run_sequence',
+  'idx_task_session_deliverable_artifacts_storage_key',
+  'idx_task_session_sandbox_bindings_session_id',
+  'idx_task_session_connector_bindings_session_connector',
+] as const;
 
 /**
  * 创建数据库表的 SQL 语句
@@ -372,6 +425,29 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
 ${connectorTablesSQL}
 `;
 
+const deliverableTablesSQL = `
+CREATE TABLE IF NOT EXISTS task_session_deliverable_artifacts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  run_id UUID NOT NULL REFERENCES task_session_runs(id) ON DELETE CASCADE,
+  sandbox_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_run_created_at
+  ON task_session_deliverable_artifacts(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_session_created_at
+  ON task_session_deliverable_artifacts(session_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_storage_key
+  ON task_session_deliverable_artifacts(storage_key);
+`;
+
 const backfillMessageStorageSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
 
@@ -525,6 +601,70 @@ CREATE INDEX IF NOT EXISTS idx_task_session_workspace_cache_updated_at
   ON task_session_workspace_cache(updated_at);
 `;
 
+export async function inspectDatabaseSchemaReadiness(): Promise<SchemaReadinessReport> {
+  await ensureDatabaseConnection({ retries: 3, delayMs: 500 });
+
+  const [tableResult, columnResult, indexResult] = await Promise.all([
+    databasePool.query<{ table_name: string }>(
+      `
+        select table_name
+        from information_schema.tables
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+      `,
+      [REQUIRED_TABLES]
+    ),
+    databasePool.query<{ table_name: string; column_name: string }>(
+      `
+        select table_name, column_name
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = any($1::text[])
+      `,
+      [Array.from(new Set(REQUIRED_COLUMNS.map(([tableName]) => tableName)))]
+    ),
+    databasePool.query<{ indexname: string }>(
+      `
+        select indexname
+        from pg_indexes
+        where schemaname = 'public'
+          and indexname = any($1::text[])
+      `,
+      [REQUIRED_INDEXES]
+    ),
+  ]);
+
+  const existingTables = new Set(tableResult.rows.map((row) => row.table_name));
+  const existingColumns = new Set(
+    columnResult.rows.map((row) => `${row.table_name}.${row.column_name}`)
+  );
+  const existingIndexes = new Set(indexResult.rows.map((row) => row.indexname));
+  const missing: string[] = [];
+
+  for (const tableName of REQUIRED_TABLES) {
+    if (!existingTables.has(tableName)) {
+      missing.push(`table:${tableName}`);
+    }
+  }
+
+  for (const [tableName, columnName] of REQUIRED_COLUMNS) {
+    if (!existingColumns.has(`${tableName}.${columnName}`)) {
+      missing.push(`column:${tableName}.${columnName}`);
+    }
+  }
+
+  for (const indexName of REQUIRED_INDEXES) {
+    if (!existingIndexes.has(indexName)) {
+      missing.push(`index:${indexName}`);
+    }
+  }
+
+  return {
+    ready: missing.length === 0,
+    missing,
+  };
+}
+
 /**
  * 运行数据库迁移
  */
@@ -535,6 +675,7 @@ export async function runMigration() {
     
     // 执行创建表的 SQL
     await db.execute(sql.raw(createTablesSQL));
+    await db.execute(sql.raw(deliverableTablesSQL));
     await db.execute(sql.raw(backfillMessageStorageSQL));
     
     console.log('✅ 数据库迁移完成！');
@@ -543,6 +684,7 @@ export async function runMigration() {
     console.log('  - conversation_messages');
     console.log('  - task_session_recent_messages');
     console.log('  - task_session_workspace_cache');
+    console.log('  - task_session_deliverable_artifacts');
     console.log('  - intent_recognition_results');
     console.log('  - task_descriptions');
     console.log('  - execution_plans');
@@ -587,6 +729,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS conversation_messages CASCADE;
       DROP TABLE IF EXISTS task_session_recent_messages CASCADE;
       DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
+      DROP TABLE IF EXISTS task_session_deliverable_artifacts CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;

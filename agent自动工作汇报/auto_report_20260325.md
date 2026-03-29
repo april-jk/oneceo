@@ -55,3 +55,10 @@
   - 清理残留 watch 后重新执行 `npm run dev`
   - API 成功启动并监听 `4000`
   - `curl http://127.0.0.1:4000/health` 返回 `{"status":"ok",...}`
+
+## 新增工作记录：Altus 提示词增加任务等级与复杂任务 todo 约束
+
+- 按用户要求修改了 `apps/api/src/services/altus-managed-prompt-service.ts`，在 managed system prompt 中新增任务等级判断规则，要求模型先区分 `simple / normal / complex`。
+- 对 `complex` 任务新增硬性约束：必须先形成详细 step-by-step todo，再按顺序逐步执行和验证，不能直接跳到最终实现。
+- `complex` 的判断条件已写入 prompt，包括多文件、多子系统、长调试链路、依赖不清、分阶段验证、迁移/运行时/基础设施变更等。
+- 新增单测 `apps/api/tests/altus-managed-prompt-service.test.ts`，锁住这组 prompt 规则，避免后续回退。

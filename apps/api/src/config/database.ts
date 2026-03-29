@@ -182,6 +182,7 @@ const databaseManager = getDatabaseManager();
  * 共享 Drizzle ORM 实例（单例）
  */
 export const db = databaseManager.db;
+export const databasePool = databaseManager.pool;
 
 /**
  * 获取连接池状态（用于诊断）

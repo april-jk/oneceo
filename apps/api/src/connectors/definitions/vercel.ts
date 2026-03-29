@@ -8,9 +8,12 @@ export function buildVercelDefinition(): ConnectorDefinition {
   const remoteUrl = asText(process.env.VERCEL_MCP_REMOTE_URL);
   return {
     key: 'vercel',
+    category: 'app',
     name: 'Vercel',
     description: '在平台外部管理 Vercel token / team 上下文，并在 sandbox 内按 profile 使用。',
     icon: 'vercel',
+    isNew: true,
+    sortOrder: 60,
     authMode: 'token',
     available: Boolean(remoteUrl),
     availabilityReason: remoteUrl ? undefined : '部署环境未配置 Vercel MCP remote URL',

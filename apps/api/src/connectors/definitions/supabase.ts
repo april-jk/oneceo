@@ -3,9 +3,13 @@ import type { ConnectorDefinition } from './types';
 export function buildSupabaseDefinition(): ConnectorDefinition {
   return {
     key: 'supabase',
+    category: 'app',
     name: 'Supabase',
     description: '独立的 Supabase 连接器，在平台外部保存 project/token 配置，并在 sandbox 内通过 MCP 使用。',
     icon: 'supabase',
+    isNew: true,
+    featured: true,
+    sortOrder: 40,
     authMode: 'token',
     available: true,
     configFields: [

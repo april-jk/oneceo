@@ -10,11 +10,17 @@ export type ConnectorKey =
   | "vercel"
   | "postgres";
 
+export type ConnectorCategory = "app" | "custom_api" | "custom_mcp";
+
 export type ConnectorCatalogItem = {
   key: ConnectorKey;
+  category: ConnectorCategory;
   name: string;
   description: string;
   icon: string;
+  featured?: boolean;
+  isNew?: boolean;
+  sortOrder?: number;
   authMode: string;
   available: boolean;
   availabilityReason?: string;

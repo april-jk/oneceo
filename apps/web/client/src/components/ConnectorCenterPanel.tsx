@@ -1,39 +1,33 @@
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowUpRight,
+  Check,
   CheckCircle2,
   ChevronRight,
-  Cloud,
-  Database,
-  Figma,
-  Github,
-  Link2,
   Loader2,
-  NotepadText,
   Plus,
-  Plug,
   ShieldCheck,
-  Slack,
-  Star,
+  Sparkles,
+  Trash2,
   Unplug,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
@@ -42,55 +36,41 @@ import {
   clearConnectorProfileAuth,
   completeConnectorProfileOauth,
   createConnectorProfile,
+  deleteConnectorProfile,
   getMyConnectorProfiles,
   setDefaultConnectorProfile,
   startConnectorProfileOauth,
   updateConnectorProfile,
   type ConnectorCatalogItem,
+  type ConnectorCategory,
   type ConnectorKey,
   type ConnectorProfile,
 } from "@/lib/connectors-client";
+import {
+  connectorStatusText,
+  connectorStatusTone,
+  formatConnectorStatus,
+  resolveConnectorIcon,
+} from "@/lib/connector-ui";
+import { cn } from "@/lib/utils";
 
 type ConnectorCenterPanelProps = {
   targetSessionId?: string | null;
   highlightedConnector?: ConnectorKey | null;
 };
 
+type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
-const iconMap = {
-  github: Github,
-  slack: Slack,
-  notion: NotepadText,
-  supabase: Database,
-  figma: Figma,
-  vercel: Cloud,
-  postgres: Database,
-} as const;
-
 const NEW_PROFILE_ID = "__new__";
+const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; label: string }> = [
+  { key: "app", label: "应用" },
+  { key: "custom_api", label: "自定义 API" },
+  { key: "custom_mcp", label: "自定义 MCP" },
+];
 
-function formatStatus(value: string | null | undefined) {
-  if (!value) return "unknown";
-  return value.replaceAll("_", " ");
-}
-
-function statusTone(value: string) {
-  switch (value) {
-    case "authorized":
-    case "connected":
-      return "default";
-    case "needs_auth":
-    case "not_configured":
-    case "connecting":
-      return "secondary";
-    case "error":
-    case "failed":
-    case "unavailable":
-      return "destructive";
-    default:
-      return "outline";
-  }
+function asText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function editorKey(connectorKey: ConnectorKey, profileId: string | null) {
@@ -198,7 +178,7 @@ function buildFormValues(
   item: ConnectorCatalogItem,
   profile: ConnectorProfile | undefined,
   previousValues?: ConnectorFormValues
-): ConnectorFormValues {
+) {
   const next: ConnectorFormValues = {};
   for (const field of item.configFields) {
     next[field.key] = getFieldValue(profile, field.key, previousValues?.[field.key]);
@@ -238,6 +218,48 @@ function buildSavePayload(item: ConnectorCatalogItem, form: ConnectorFormValues)
   };
 }
 
+function getDirectoryStatus(
+  item: ConnectorCatalogItem,
+  connectorProfiles: ConnectorProfile[]
+) {
+  if (!item.available) {
+    return "unavailable";
+  }
+  if (connectorProfiles.some((profile) => profile.authStatus === "authorized")) {
+    return "authorized";
+  }
+  if (connectorProfiles.length > 0) {
+    return connectorProfiles.some((profile) => profile.authStatus === "needs_auth")
+      ? "needs_auth"
+      : connectorProfiles[0]?.authStatus || "not_configured";
+  }
+  return "not_configured";
+}
+
+function renderEmptyTab(tab: ConnectorCenterTab) {
+  const isApi = tab === "custom_api";
+  return (
+    <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
+      <div className="rounded-2xl border border-border/70 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
+        后续实现位
+      </div>
+      <h4 className="mt-5 text-lg font-semibold text-foreground">
+        {isApi ? "自定义 API" : "自定义 MCP"} 入口已预留
+      </h4>
+      <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+        本轮先统一应用连接器目录、profile 规范和会话挂载边界。
+        {isApi
+          ? " 自定义 API 的 schema 导入与运行时装配将在下一阶段补齐。"
+          : " 自定义 MCP 的创建表单和运行时装配将在下一阶段补齐。"}
+      </p>
+      <Button disabled className="mt-6 rounded-xl">
+        <Plus className="mr-2 h-4 w-4" />
+        {isApi ? "创建自定义 API" : "创建自定义 MCP"}
+      </Button>
+    </div>
+  );
+}
+
 export function ConnectorCenterPanel({
   targetSessionId,
   highlightedConnector,
@@ -254,7 +276,10 @@ export function ConnectorCenterPanel({
 
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<ConnectorKey | null>(
+  const [activeTab, setActiveTab] = useState<ConnectorCenterTab>("app");
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const [detailKey, setDetailKey] = useState<ConnectorKey | null>(
     effectiveHighlightedConnector || null
   );
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
@@ -263,10 +288,6 @@ export function ConnectorCenterPanel({
     Partial<Record<ConnectorKey, string | null>>
   >({});
   const [formState, setFormState] = useState<Record<string, ConnectorFormValues>>({});
-  const [advancedEditorState, setAdvancedEditorState] = useState<
-    Record<string, boolean>
-  >({});
-  const [githubDetailsState, setGithubDetailsState] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     setLoading(true);
@@ -315,9 +336,9 @@ export function ConnectorCenterPanel({
   }, []);
 
   useEffect(() => {
-    if (effectiveHighlightedConnector) {
-      setSelectedKey(effectiveHighlightedConnector);
-    }
+    if (!effectiveHighlightedConnector) return;
+    setActiveTab("app");
+    setDetailKey(effectiveHighlightedConnector);
   }, [effectiveHighlightedConnector]);
 
   useEffect(() => {
@@ -329,12 +350,6 @@ export function ConnectorCenterPanel({
   }, [effectiveHighlightedConnector, effectiveHighlightedProfileId]);
 
   useEffect(() => {
-    if (!selectedKey) return;
-    if (catalog.some((item) => item.key === selectedKey)) return;
-    setSelectedKey(null);
-  }, [catalog, selectedKey]);
-
-  useEffect(() => {
     const code = params.get("code");
     const state = params.get("state");
     const connector = params.get("connector") as ConnectorKey | null;
@@ -344,8 +359,9 @@ export function ConnectorCenterPanel({
     if (callbackHandled.current) return;
     callbackHandled.current = true;
 
+    setActiveTab("app");
+    setDetailKey(connector);
     setActionKey(`oauth:${connector}`);
-    setSelectedKey(connector);
     setSelectedProfileIds((prev) => ({
       ...prev,
       [connector]: profileId,
@@ -376,8 +392,7 @@ export function ConnectorCenterPanel({
               profileId: completedProfileId,
             });
           } catch (error) {
-            attachError =
-              error instanceof Error ? error : new Error("连接器挂载失败");
+            attachError = error instanceof Error ? error : new Error("连接器挂载失败");
           }
         }
 
@@ -403,28 +418,64 @@ export function ConnectorCenterPanel({
     })();
   }, [effectiveTargetSessionId, location, params, search]);
 
-  const profilesByConnector = useMemo(
-    () => groupProfilesByConnector(profiles),
-    [profiles]
+  const profilesByConnector = useMemo(() => groupProfilesByConnector(profiles), [profiles]);
+
+  const appCatalog = useMemo(
+    () =>
+      catalog
+        .filter((item) => item.category === "app")
+        .sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0)),
+    [catalog]
   );
 
-  const getEditorValues = (connectorKey: ConnectorKey, profileId: string | null) =>
-    formState[editorKey(connectorKey, profileId)] || {};
-
-  const ensureProfileDraft = (item: ConnectorCatalogItem, profileId: string | null) => {
-    setFormState((prev) => {
-      const key = editorKey(item.key, profileId);
-      if (prev[key]) return prev;
-      return {
-        ...prev,
-        [key]: buildFormValues(
-          item,
-          (profilesByConnector[item.key] || []).find((profile) => profile.profileId === profileId),
-          prev[key]
-        ),
-      };
+  const filteredAppCatalog = useMemo(() => {
+    const keyword = deferredQuery.trim().toLowerCase();
+    if (!keyword) return appCatalog;
+    return appCatalog.filter((item) => {
+      const haystack = [item.name, item.description, item.key].join(" ").toLowerCase();
+      return haystack.includes(keyword);
     });
-  };
+  }, [appCatalog, deferredQuery]);
+
+  const featuredCatalog = useMemo(
+    () => filteredAppCatalog.filter((item) => item.featured),
+    [filteredAppCatalog]
+  );
+
+  const detailItem = useMemo(
+    () => appCatalog.find((item) => item.key === detailKey) || null,
+    [appCatalog, detailKey]
+  );
+
+  const detailConnectorProfiles = detailItem ? profilesByConnector[detailItem.key] || [] : [];
+  const selectedDetailProfileId =
+    detailItem === null
+      ? null
+      : resolvePreferredProfileId(
+          detailConnectorProfiles,
+          selectedProfileIds[detailItem.key]
+        );
+  const selectedDetailProfile =
+    detailItem && selectedDetailProfileId
+      ? detailConnectorProfiles.find((profile) => profile.profileId === selectedDetailProfileId) ||
+        null
+      : null;
+  const activeEditorProfileId =
+    selectedDetailProfileId === NEW_PROFILE_ID ? null : selectedDetailProfileId;
+  const activeEditorForm =
+    detailItem && activeEditorProfileId !== undefined
+      ? formState[editorKey(detailItem.key, activeEditorProfileId)] || {}
+      : {};
+
+  useEffect(() => {
+    if (!detailItem) return;
+    const key = editorKey(detailItem.key, activeEditorProfileId);
+    if (formState[key]) return;
+    setFormState((prev) => ({
+      ...prev,
+      [key]: buildFormValues(detailItem, selectedDetailProfile || undefined, prev[key]),
+    }));
+  }, [activeEditorProfileId, detailItem, formState, selectedDetailProfile]);
 
   const handleFieldChange = (
     connectorKey: ConnectorKey,
@@ -443,12 +494,12 @@ export function ConnectorCenterPanel({
 
   const persistProfile = async (
     item: ConnectorCatalogItem,
-    selectedProfileId: string | null
+    profileId: string | null
   ) => {
     const connectorProfiles = profilesByConnector[item.key] || [];
     const currentProfile =
-      connectorProfiles.find((profile) => profile.profileId === selectedProfileId) || null;
-    const payload = buildSavePayload(item, getEditorValues(item.key, selectedProfileId));
+      connectorProfiles.find((profile) => profile.profileId === profileId) || null;
+    const payload = buildSavePayload(item, formState[editorKey(item.key, profileId)] || {});
     const requiresExplicitProfileName = item.key !== "github";
 
     if (requiresExplicitProfileName && !payload.profileName) {
@@ -458,36 +509,33 @@ export function ConnectorCenterPanel({
     const hasExistingSecret = Boolean(currentProfile?.secretSummary);
     const hasNewCredential = Object.keys(payload.credentials).length > 0;
     if (!hasExistingSecret && !hasNewCredential && !item.oauth?.supported) {
-      throw new Error("请先粘贴 token、secret 或必需凭证");
+      throw new Error("请先填写必需凭证");
     }
 
-    return selectedProfileId
-      ? updateConnectorProfile(selectedProfileId, payload)
+    return profileId
+      ? updateConnectorProfile(profileId, payload)
       : createConnectorProfile(item.key, payload);
   };
 
-  const handleSave = async (item: ConnectorCatalogItem) => {
-    const selectedProfileId =
-      selectedProfileIds[item.key] === NEW_PROFILE_ID
-        ? null
-        : (selectedProfileIds[item.key] ?? null);
-    setActionKey(`save:${item.key}`);
+  const handleSave = async () => {
+    if (!detailItem) return;
+    const profileId = activeEditorProfileId;
+    setActionKey(`save:${detailItem.key}`);
     try {
-      const saved = await persistProfile(item, selectedProfileId);
+      const saved = await persistProfile(detailItem, profileId);
       setSelectedProfileIds((prev) => ({
         ...prev,
-        [item.key]: saved.profileId,
+        [detailItem.key]: saved.profileId,
       }));
 
       let attachError: Error | null = null;
       if (effectiveTargetSessionId && saved.authStatus === "authorized") {
         try {
-          await attachSessionConnector(effectiveTargetSessionId, item.key, {
+          await attachSessionConnector(effectiveTargetSessionId, detailItem.key, {
             profileId: saved.profileId,
           });
         } catch (error) {
-          attachError =
-            error instanceof Error ? error : new Error("连接器挂载失败");
+          attachError = error instanceof Error ? error : new Error("连接器挂载失败");
         }
       }
 
@@ -497,8 +545,6 @@ export function ConnectorCenterPanel({
         toast.error(`profile 已保存，但挂载失败：${attachError.message}`);
       } else if (effectiveTargetSessionId && saved.authStatus === "authorized") {
         toast.success("profile 已保存，并挂载到目标会话");
-      } else if (item.oauth?.supported && saved.authStatus !== "authorized") {
-        toast.success("profile 已保存，下一步可以直接发起 OAuth 授权");
       } else {
         toast.success("profile 已保存");
       }
@@ -509,23 +555,21 @@ export function ConnectorCenterPanel({
     }
   };
 
-  const handleOAuth = async (item: ConnectorCatalogItem) => {
-    const selectedProfileId =
-      selectedProfileIds[item.key] === NEW_PROFILE_ID
-        ? null
-        : (selectedProfileIds[item.key] ?? null);
-    setActionKey(`oauth:${item.key}`);
+  const handleOAuth = async () => {
+    if (!detailItem) return;
+    const profileId = activeEditorProfileId;
+    setActionKey(`oauth:${detailItem.key}`);
     try {
-      const profile = await persistProfile(item, selectedProfileId);
+      const profile = await persistProfile(detailItem, profileId);
       setSelectedProfileIds((prev) => ({
         ...prev,
-        [item.key]: profile.profileId,
+        [detailItem.key]: profile.profileId,
       }));
 
       const redirectUri = buildConnectorRedirectUri(
         location,
         search,
-        item.key,
+        detailItem.key,
         profile.profileId,
         effectiveTargetSessionId
       );
@@ -535,28 +579,16 @@ export function ConnectorCenterPanel({
       });
       window.location.href = authUrl;
     } catch (error) {
-      setActionKey(null);
       toast.error(error instanceof Error ? error.message : "OAuth start failed");
-    }
-  };
-
-  const handleDisconnect = async (profile: ConnectorProfile) => {
-    setActionKey(`disconnect:${profile.profileId}`);
-    try {
-      await clearConnectorProfileAuth(profile.profileId);
-      toast.success("连接器授权已清除");
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Disconnect failed");
-    } finally {
       setActionKey(null);
     }
   };
 
-  const handleSetDefault = async (profile: ConnectorProfile) => {
-    setActionKey(`default:${profile.profileId}`);
+  const handleSetDefault = async () => {
+    if (!selectedDetailProfile) return;
+    setActionKey(`default:${selectedDetailProfile.profileId}`);
     try {
-      await setDefaultConnectorProfile(profile.profileId);
+      await setDefaultConnectorProfile(selectedDetailProfile.profileId);
       toast.success("默认 profile 已更新");
       await load();
     } catch (error) {
@@ -566,898 +598,549 @@ export function ConnectorCenterPanel({
     }
   };
 
-  const cards = useMemo(
-    () =>
-      catalog.map((item) => {
-        const connectorProfiles = profilesByConnector[item.key] || [];
-        const selectedProfileId = resolvePreferredProfileId(
-          connectorProfiles,
-          selectedProfileIds[item.key]
-        );
-        const selectedProfile =
-          connectorProfiles.find((profile) => profile.profileId === selectedProfileId) || null;
-        const defaultProfile =
-          connectorProfiles.find((profile) => profile.isDefault) || connectorProfiles[0] || null;
+  const handleDisconnect = async () => {
+    if (!selectedDetailProfile) return;
+    setActionKey(`disconnect:${selectedDetailProfile.profileId}`);
+    try {
+      await clearConnectorProfileAuth(selectedDetailProfile.profileId);
+      toast.success("连接器授权已清除");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Disconnect failed");
+    } finally {
+      setActionKey(null);
+    }
+  };
 
-        return {
-          item,
-          connectorProfiles,
-          selectedProfileId,
-          selectedProfile,
-          defaultProfile,
-          form: getEditorValues(
-            item.key,
-            selectedProfileId === NEW_PROFILE_ID ? null : selectedProfileId
-          ),
-        };
-      }),
-    [catalog, formState, profilesByConnector, selectedProfileIds]
-  );
-
-  const selectedCard = cards.find(({ item }) => item.key === selectedKey) || null;
+  const handleDelete = async () => {
+    if (!selectedDetailProfile || !detailItem) return;
+    setActionKey(`delete:${selectedDetailProfile.profileId}`);
+    try {
+      await deleteConnectorProfile(selectedDetailProfile.profileId);
+      setSelectedProfileIds((prev) => ({
+        ...prev,
+        [detailItem.key]: null,
+      }));
+      toast.success("profile 已删除");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Delete profile failed");
+    } finally {
+      setActionKey(null);
+    }
+  };
 
   const renderTargetBanner = () =>
     effectiveTargetSessionId ? (
-      <div className="mx-6 mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      <div className="mx-6 mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
         <div className="flex items-center gap-2 font-medium">
           <ShieldCheck className="h-4 w-4" />
-          当前正在为目标会话选择可挂载 profile
+          当前正在为目标会话准备连接器 profile
         </div>
         <p className="mt-1 text-emerald-700">Session ID: {effectiveTargetSessionId}</p>
       </div>
     ) : null;
 
-  const openSuggestedConnector = () => {
-    const preferred =
-      cards.find(
-        ({ item, defaultProfile }) =>
-          item.available && defaultProfile?.authStatus !== "authorized"
-      ) ||
-      cards.find(({ item }) => item.available) ||
-      cards[0];
-    if (preferred) {
-      setSelectedKey(preferred.item.key);
+  const renderDirectory = () => {
+    if (activeTab !== "app") {
+      return renderEmptyTab(activeTab);
     }
+
+    const renderCard = (item: ConnectorCatalogItem) => {
+      const Icon = resolveConnectorIcon(item.icon);
+      const connectorProfiles = profilesByConnector[item.key] || [];
+      const status = getDirectoryStatus(item, connectorProfiles);
+      const connected = status === "authorized";
+      const pending = status === "needs_auth";
+
+      return (
+        <button
+          key={`${item.key}-${item.featured ? "featured" : "list"}`}
+          type="button"
+          onClick={() => {
+            setDetailKey(item.key);
+            setActiveTab("app");
+          }}
+          className="group flex min-h-[88px] w-full items-center gap-3 rounded-2xl border border-border/70 bg-card px-4 py-3 text-left transition hover:border-foreground/15 hover:bg-muted/35"
+        >
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-background">
+            <Icon className="h-5 w-5 text-foreground/80" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+              {item.isNew ? (
+                <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                  新
+                </span>
+              ) : null}
+              {pending ? (
+                <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                  待授权
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+              {item.description}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {connected ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : null}
+            {!item.available ? (
+              <Badge variant="destructive" className="hidden sm:inline-flex">
+                不可用
+              </Badge>
+            ) : null}
+            <ChevronRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5" />
+          </div>
+        </button>
+      );
+    };
+
+    return (
+      <ScrollArea className="h-full">
+        <div className="space-y-6 px-6 pb-6">
+          {featuredCatalog.length > 0 ? (
+            <section className="space-y-3">
+              <div className="text-sm text-muted-foreground">推荐</div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {featuredCatalog.map((item) => renderCard(item))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="space-y-3">
+            <div className="text-sm text-muted-foreground">应用</div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {filteredAppCatalog.map((item) => renderCard(item))}
+            </div>
+            {!loading && filteredAppCatalog.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
+                没有找到匹配的连接器
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </ScrollArea>
+    );
+  };
+
+  const renderDetail = () => {
+    if (!detailItem) return null;
+
+    const Icon = resolveConnectorIcon(detailItem.icon);
+    const guide = CONNECTOR_GUIDES[detailItem.key];
+    const statusText = connectorStatusText({
+      available: detailItem.available,
+      authStatus: selectedDetailProfile?.authStatus,
+    });
+    const profileCount = detailConnectorProfiles.length;
+    const busy = Boolean(actionKey);
+    const actionBusy =
+      actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
+
+    return (
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border/70 px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <Button
+              variant="ghost"
+              className="rounded-xl px-3 text-muted-foreground hover:text-foreground"
+              onClick={() => setDetailKey(null)}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              返回目录
+            </Button>
+            <Badge variant={connectorStatusTone(statusText)}>{formatConnectorStatus(statusText)}</Badge>
+          </div>
+        </div>
+
+        <ScrollArea className="h-full">
+          <div className="px-6 pb-6 pt-5">
+            {renderTargetBanner()}
+
+            <div className="rounded-[24px] border border-border/70 bg-card p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
+                    <Icon className="h-7 w-7 text-foreground/85" />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xl font-semibold text-foreground">{detailItem.name}</h3>
+                      {detailItem.isNew ? (
+                        <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                          新
+                        </span>
+                      ) : null}
+                      {detailItem.featured ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                          <Sparkles className="h-3 w-3" />
+                          推荐
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+                      {detailItem.description}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{profileCount} 个 profile</Badge>
+                      {selectedDetailProfile?.isDefault ? (
+                        <Badge variant="secondary">默认 profile</Badge>
+                      ) : null}
+                      {selectedDetailProfile?.secretSummary ? (
+                        <Badge variant="outline">{selectedDetailProfile.secretSummary}</Badge>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                {guide?.quickLinks?.length ? (
+                  <div className="flex flex-wrap gap-2 lg:max-w-[320px] lg:justify-end">
+                    {guide.quickLinks.slice(0, 2).map((link) => (
+                      <a
+                        key={link.href}
+                        href={link.href}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-xl border border-border/70 px-3 py-2 text-xs text-muted-foreground transition hover:border-foreground/15 hover:text-foreground"
+                      >
+                        {link.label}
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_320px]">
+              <div className="space-y-6">
+                <section className="rounded-[24px] border border-border/70 bg-card p-5">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-foreground">Profile</div>
+                      <p className="text-sm text-muted-foreground">
+                        设置页只负责创建、编辑和授权 profile；会话页只选择并挂载它。
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      onClick={() => {
+                        setSelectedProfileIds((prev) => ({
+                          ...prev,
+                          [detailItem.key]: NEW_PROFILE_ID,
+                        }));
+                        setFormState((prev) => ({
+                          ...prev,
+                          [editorKey(detailItem.key, null)]: buildFormValues(
+                            detailItem,
+                            undefined,
+                            prev[editorKey(detailItem.key, null)]
+                          ),
+                        }));
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      新建 profile
+                    </Button>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                        当前编辑
+                      </Label>
+                      <Select
+                        value={selectedDetailProfileId || NEW_PROFILE_ID}
+                        onValueChange={(value) => {
+                          setSelectedProfileIds((prev) => ({
+                            ...prev,
+                            [detailItem.key]: value,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="rounded-xl">
+                          <SelectValue placeholder="选择一个 profile" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {detailConnectorProfiles.map((profile) => (
+                            <SelectItem key={profile.profileId} value={profile.profileId}>
+                              {profile.profileName}
+                              {profile.isDefault ? " · 默认" : ""}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={NEW_PROFILE_ID}>创建新 profile</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {selectedDetailProfile ? (
+                      <div className="flex flex-wrap gap-2">
+                        {!selectedDetailProfile.isDefault ? (
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={busy}
+                            onClick={() => void handleSetDefault()}
+                          >
+                            {actionKey === `default:${selectedDetailProfile.profileId}` ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Check className="mr-2 h-4 w-4" />
+                            )}
+                            设为默认
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="outline"
+                          className="rounded-xl"
+                          disabled={busy || !selectedDetailProfile.secretSummary}
+                          onClick={() => void handleDisconnect()}
+                        >
+                          {actionKey === `disconnect:${selectedDetailProfile.profileId}` ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Unplug className="mr-2 h-4 w-4" />
+                          )}
+                          清除授权
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="rounded-xl text-destructive hover:text-destructive"
+                          disabled={busy}
+                          onClick={() => void handleDelete()}
+                        >
+                          {actionKey === `delete:${selectedDetailProfile.profileId}` ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-2 h-4 w-4" />
+                          )}
+                          删除
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {selectedDetailProfile?.lastError ? (
+                    <div className="mt-4 flex items-start gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{selectedDetailProfile.lastError}</span>
+                    </div>
+                  ) : null}
+
+                  {!detailItem.available && detailItem.availabilityReason ? (
+                    <div className="mt-4 flex items-start gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{detailItem.availabilityReason}</span>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    {detailItem.configFields.map((field) => (
+                      <div
+                        key={field.key}
+                        className={cn("space-y-2", field.type === "textarea" ? "md:col-span-2" : "")}
+                      >
+                        <Label
+                          htmlFor={`${detailItem.key}-${field.key}`}
+                          className="text-sm text-foreground"
+                        >
+                          {field.label}
+                          {field.required ? " *" : ""}
+                        </Label>
+                        {field.type === "textarea" ? (
+                          <Textarea
+                            id={`${detailItem.key}-${field.key}`}
+                            value={activeEditorForm[field.key] || ""}
+                            placeholder={field.placeholder}
+                            className="min-h-[104px] rounded-2xl"
+                            onChange={(event) =>
+                              handleFieldChange(
+                                detailItem.key,
+                                activeEditorProfileId,
+                                field.key,
+                                event.target.value
+                              )
+                            }
+                          />
+                        ) : (
+                          <Input
+                            id={`${detailItem.key}-${field.key}`}
+                            type={field.type === "password" ? "password" : "text"}
+                            value={activeEditorForm[field.key] || ""}
+                            placeholder={field.placeholder}
+                            className="rounded-2xl"
+                            onChange={(event) =>
+                              handleFieldChange(
+                                detailItem.key,
+                                activeEditorProfileId,
+                                field.key,
+                                event.target.value
+                              )
+                            }
+                          />
+                        )}
+                        {field.description ? (
+                          <p className="text-xs leading-5 text-muted-foreground">
+                            {field.description}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Button
+                      className="rounded-xl"
+                      disabled={busy || !detailItem.available}
+                      onClick={() => void handleSave()}
+                    >
+                      {actionKey === `save:${detailItem.key}` ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="mr-2 h-4 w-4" />
+                      )}
+                      保存 profile
+                    </Button>
+                    {detailItem.oauth?.supported ? (
+                      <Button
+                        variant="outline"
+                        className="rounded-xl"
+                        disabled={busy || !detailItem.available}
+                        onClick={() => void handleOAuth()}
+                      >
+                        {actionKey === `oauth:${detailItem.key}` ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <ArrowUpRight className="mr-2 h-4 w-4" />
+                        )}
+                        {selectedDetailProfile?.authStatus === "authorized" ? "重新授权" : "发起 OAuth"}
+                      </Button>
+                    ) : null}
+                    {effectiveTargetSessionId && selectedDetailProfile?.authStatus === "authorized" ? (
+                      <Badge variant="secondary" className="rounded-xl px-3 py-2 text-xs">
+                        保存后将自动挂载到目标会话
+                      </Badge>
+                    ) : null}
+                    {actionBusy ? (
+                      <Badge variant="outline" className="rounded-xl px-3 py-2 text-xs">
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        正在处理
+                      </Badge>
+                    ) : null}
+                  </div>
+                </section>
+              </div>
+
+              <aside className="space-y-6">
+                {guide ? (
+                  <section className="rounded-[24px] border border-border/70 bg-card p-5">
+                    <div className="text-sm font-medium text-foreground">配置指引</div>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{guide.intro}</p>
+
+                    {guide.steps.length > 0 ? (
+                      <>
+                        <Separator className="my-4" />
+                        <div className="space-y-3">
+                          {guide.steps.map((step, index) => (
+                            <div key={`${detailItem.key}-step-${index}`} className="flex gap-3">
+                              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">
+                                {index + 1}
+                              </div>
+                              <p className="text-sm leading-6 text-muted-foreground">{step}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+
+                    {guide.tips?.length ? (
+                      <>
+                        <Separator className="my-4" />
+                        <div className="space-y-2">
+                          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+                            Tips
+                          </div>
+                          {guide.tips.map((tip, index) => (
+                            <p key={`${detailItem.key}-tip-${index}`} className="text-sm leading-6 text-muted-foreground">
+                              {tip}
+                            </p>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                <section className="rounded-[24px] border border-border/70 bg-card p-5">
+                  <div className="text-sm font-medium text-foreground">使用边界</div>
+                  <div className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p>设置页只保存 profile 和授权状态，不处理会话挂载。</p>
+                    <p>会话页只会选择 profile 并 attach，不会再弹出 token 表单。</p>
+                    <p>sandbox runtime 只消费已经物化后的连接器配置。</p>
+                  </div>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </ScrollArea>
+      </div>
+    );
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-border/70 bg-card">
-      <div className="hidden items-center gap-1 border-b border-border/70 px-6 py-5 md:flex">
-        <div className="flex flex-col">
-          <h3 className="text-[18px] font-medium leading-7 text-foreground">连接器中心</h3>
-          <p className="text-sm text-muted-foreground">
-            在平台外部管理连接器 profile，并将已授权能力投影到 sandbox 内会话
-          </p>
+    <div className="flex h-full flex-col overflow-hidden bg-card">
+      <div className="border-b border-border/70 px-6 py-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold leading-6 text-foreground">连接器</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              设置页管理 profile 和授权，会话页只负责选择并挂载。
+            </p>
+          </div>
+          {loading ? <Loader2 className="mt-1 h-4 w-4 animate-spin text-muted-foreground" /> : null}
         </div>
       </div>
 
-      {renderTargetBanner()}
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col px-6">
-          {cards.map(({ item, defaultProfile, connectorProfiles }) => {
-            const Icon = iconMap[item.icon as keyof typeof iconMap] || Link2;
-            const isAuthorized = defaultProfile?.authStatus === "authorized";
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setSelectedKey(item.key)}
-                className="flex w-full items-center gap-3 overflow-hidden border-b border-border/70 px-0 py-4 text-left transition hover:bg-muted/30"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-background">
-                  <Icon className="h-5 w-5 text-foreground/80" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {item.name}
-                    </div>
-                    {isAuthorized ? (
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                    ) : null}
-                  </div>
-                  <div className="truncate text-xs leading-5 text-muted-foreground">
-                    {item.description}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-3">
-                  <div className="hidden text-right sm:block">
-                    <div className="text-xs font-medium text-foreground">
-                      {defaultProfile?.profileName || "No profile"}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {connectorProfiles.length} profiles
-                    </div>
-                  </div>
-                  <Badge
-                    variant={statusTone(
-                      defaultProfile?.authStatus ||
-                        (item.available ? "not_configured" : "unavailable")
-                    )}
-                  >
-                    {formatStatus(
-                      defaultProfile?.authStatus ||
-                        (item.available ? "not_configured" : "unavailable")
-                    )}
-                  </Badge>
-                  <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                </div>
-              </button>
-            );
-          })}
-
-          {!loading && cards.length === 0 ? (
-            <div className="py-10 text-sm text-muted-foreground">暂无可用连接器</div>
-          ) : null}
-        </div>
-      </ScrollArea>
-
-      <div className="border-t border-border/70 px-6 py-4">
-        <Button
-          variant="outline"
-          className="rounded-xl"
-          onClick={openSuggestedConnector}
-          disabled={loading || cards.length === 0}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          添加或管理连接器
-        </Button>
-      </div>
-
-      <Dialog open={Boolean(selectedCard)} onOpenChange={(open) => !open && setSelectedKey(null)}>
-        {selectedCard ? (() => {
-          const { item, connectorProfiles, selectedProfileId, selectedProfile, form } =
-            selectedCard;
-          const Icon = iconMap[item.icon as keyof typeof iconMap] || Link2;
-          const guide = CONNECTOR_GUIDES[item.key];
-          const isNewProfile = selectedProfileId === NEW_PROFILE_ID || !selectedProfile;
-          const editorStateKey = editorKey(
-            item.key,
-            selectedProfileId === NEW_PROFILE_ID ? null : selectedProfileId
-          );
-          const isGithub = item.key === "github";
-          const showGithubAdvanced = Boolean(advancedEditorState[editorStateKey]);
-          const showGithubDetails = Boolean(githubDetailsState[editorStateKey]);
-          const githubOauthEnabled = Boolean(item.oauth?.supported);
-          const busy =
-            actionKey === `save:${item.key}` ||
-            actionKey === `oauth:${item.key}` ||
-            actionKey === `disconnect:${selectedProfile?.profileId}` ||
-            actionKey === `default:${selectedProfile?.profileId}` ||
-            actionKey === `attach:${selectedProfile?.profileId}`;
-          const supportsManual = item.configFields.length > 0;
-          const visibleConfigFields = item.configFields.filter((field) => {
-            if (!isGithub) return true;
-            if (showGithubAdvanced) return true;
-            return field.key === "accessToken";
-          });
-          const showManualSection =
-            supportsManual && (!isGithub || showGithubAdvanced || !item.oauth?.supported);
-          const showManualSaveAction =
-            supportsManual && (!isGithub || showGithubAdvanced || !item.oauth?.supported);
-          const isAuthorized = selectedProfile?.authStatus === "authorized";
-
-          return (
-            <DialogContent
-              className={
-                isGithub
-                  ? "max-h-[95vh] w-[500px] max-w-[95vw] overflow-hidden rounded-[28px] border border-border/70 p-0"
-                  : "max-h-[82vh] max-w-5xl overflow-hidden rounded-[28px] border border-border/70 p-0"
-              }
-              showCloseButton={!isGithub}
-            >
-              {isGithub ? (
-                <>
-                  <DialogTitle className="sr-only">{item.name}</DialogTitle>
-                  <DialogDescription className="sr-only">
-                    {item.description}
-                  </DialogDescription>
-
-                  <div className="flex items-center justify-end px-6 py-5">
-                    <DialogClose className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted/60 hover:text-foreground">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
-                      >
-                        <path d="M18 6 6 18" />
-                        <path d="m6 6 12 12" />
-                      </svg>
-                      <span className="sr-only">Close</span>
-                    </DialogClose>
-                  </div>
-
-                  <ScrollArea className="max-h-[calc(95vh-72px)]">
-                    <div className="px-6 pb-6 pt-0">
-                      <div className="mx-auto flex w-full max-w-[600px] flex-col items-center gap-6 text-center">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-border/70 bg-background">
-                          <Icon className="h-10 w-10 text-foreground" />
-                        </div>
-
-                        <div className="space-y-2">
-                          <h3 className="text-[22px] font-semibold leading-7 text-foreground">
-                            {isAuthorized ? "GitHub 已连接" : "GitHub"}
-                          </h3>
-                          <p className="text-sm leading-6 text-muted-foreground">
-                            {isAuthorized
-                              ? "你的 GitHub 授权已经就绪，返回后即可直接在会话里使用。"
-                              : "在 OneCEO 中直接访问、搜索并组织代码仓库，跟踪问题、审查拉取请求，并自动化工作流程。"}
-                          </p>
-                        </div>
-
-                        <div className="flex w-full flex-col items-center gap-3">
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            <Button
-                              className="h-10 min-w-[96px] rounded-xl px-4"
-                              disabled={Boolean(actionKey) || !item.available}
-                              onClick={() => {
-                                if (githubOauthEnabled) {
-                                  void handleOAuth(item);
-                                  return;
-                                }
-                                setGithubDetailsState((prev) => ({
-                                  ...prev,
-                                  [editorStateKey]: true,
-                                }));
-                                toast.error("当前环境未配置 GitHub OAuth，请先补充服务端 OAuth 配置");
-                              }}
-                            >
-                              {actionKey === `oauth:${item.key}` ? (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              ) : (
-                                <Plus className="mr-2 h-4 w-4" />
-                              )}
-                              {githubOauthEnabled
-                                ? isAuthorized
-                                  ? "重新连接"
-                                  : "连接"
-                                : "连接"}
-                            </Button>
-
-                            {selectedProfile ? (
-                              <Button
-                                variant="outline"
-                                className="h-10 rounded-xl px-4"
-                                disabled={Boolean(actionKey)}
-                                onClick={() => void handleDisconnect(selectedProfile)}
-                              >
-                                {actionKey === `disconnect:${selectedProfile.profileId}` ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Unplug className="mr-2 h-4 w-4" />
-                                )}
-                                断开连接
-                              </Button>
-                            ) : null}
-                          </div>
-
-                          {!githubOauthEnabled ? (
-                            <p className="text-xs leading-5 text-destructive">
-                              GitHub OAuth 当前未配置，按钮暂时不能跳转授权。
-                            </p>
-                          ) : null}
-                        </div>
-
-                        {item.availabilityReason ? (
-                          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-left text-sm text-destructive">
-                            {item.availabilityReason}
-                          </div>
-                        ) : null}
-
-                        {selectedProfile?.lastError ? (
-                          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-left text-sm text-destructive">
-                            {selectedProfile.lastError}
-                          </div>
-                        ) : null}
-
-                        <div className="w-full rounded-2xl border border-border/70 bg-muted/20 px-4 py-4 text-left">
-                          <div className="space-y-3 text-sm">
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-muted-foreground">状态</span>
-                              <Badge
-                                variant={statusTone(
-                                  selectedProfile?.authStatus ||
-                                    (item.available ? "not_configured" : "unavailable")
-                                )}
-                              >
-                                {formatStatus(
-                                  selectedProfile?.authStatus ||
-                                    (item.available ? "not_configured" : "unavailable")
-                                )}
-                              </Badge>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-muted-foreground">连接方式</span>
-                              <span className="font-medium text-foreground">
-                                {githubOauthEnabled ? "GitHub OAuth" : "Personal Access Token"}
-                              </span>
-                            </div>
-
-                            {selectedProfile?.displayName ? (
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-muted-foreground">授权账户</span>
-                                <span className="font-medium text-foreground">
-                                  {selectedProfile.displayName}
-                                </span>
-                              </div>
-                            ) : null}
-                          </div>
-
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            {effectiveTargetSessionId &&
-                            selectedProfile &&
-                            selectedProfile.authStatus === "authorized" ? (
-                              <Button
-                                variant="secondary"
-                                className="rounded-xl"
-                                disabled={Boolean(actionKey)}
-                                onClick={async () => {
-                                  setActionKey(`attach:${selectedProfile.profileId}`);
-                                  try {
-                                    await attachSessionConnector(
-                                      effectiveTargetSessionId,
-                                      item.key,
-                                      {
-                                        profileId: selectedProfile.profileId,
-                                      }
-                                    );
-                                    toast.success("已挂载到目标会话");
-                                  } catch (error) {
-                                    toast.error(
-                                      error instanceof Error
-                                        ? error.message
-                                        : "Attach connector failed"
-                                    );
-                                  } finally {
-                                    setActionKey(null);
-                                  }
-                                }}
-                              >
-                                <Plug className="mr-2 h-4 w-4" />
-                                挂载到当前会话
-                              </Button>
-                            ) : null}
-
-                          </div>
-                        </div>
-
-                        <div className="w-full">
-                          <button
-                            type="button"
-                            className="mx-auto flex items-center gap-1 text-[13px] text-muted-foreground transition hover:text-foreground"
-                            onClick={() =>
-                              setGithubDetailsState((prev) => ({
-                                ...prev,
-                                [editorStateKey]: !prev[editorStateKey],
-                              }))
-                            }
-                          >
-                            <span>{showGithubDetails ? "隐藏详情" : "显示详情"}</span>
-                            <ChevronRight
-                              className={`h-4 w-4 transition-transform ${
-                                showGithubDetails ? "rotate-90" : ""
-                              }`}
-                            />
-                          </button>
-                        </div>
-
-                        {showGithubDetails ? (
-                          <div className="w-full rounded-2xl border border-border/70 bg-background px-4 py-4 text-left">
-                            <div className="space-y-4">
-                              {!githubOauthEnabled ? (
-                                <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                                  服务端缺少 `GITHUB_CONNECTOR_CLIENT_ID` 和
-                                  `GITHUB_CONNECTOR_CLIENT_SECRET`，因此当前不能跳转 GitHub OAuth。
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  </ScrollArea>
-                </>
-              ) : (
-                <>
-                  <DialogHeader className="border-b border-border/70 px-6 py-5 text-left">
-                    <div className="flex items-start gap-4">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
-                        <Icon className="h-5 w-5 text-foreground" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <DialogTitle className="text-xl font-semibold text-foreground">
-                            {item.name}
-                          </DialogTitle>
-                          <Badge
-                            variant={statusTone(
-                              selectedProfile?.authStatus ||
-                                (item.available ? "not_configured" : "unavailable")
-                            )}
-                          >
-                            {formatStatus(
-                              selectedProfile?.authStatus ||
-                                (item.available ? "not_configured" : "unavailable")
-                            )}
-                          </Badge>
-                        </div>
-                        <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
-                          {item.description}
-                        </DialogDescription>
-                      </div>
-                    </div>
-                  </DialogHeader>
-
-              <ScrollArea className="max-h-[calc(82vh-96px)]">
-                <div className="space-y-5 px-6 py-5">
-                  <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-                    <div className="space-y-4">
-                      <div className="rounded-3xl border border-border/70 bg-background px-4 py-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-medium text-foreground">Profiles</p>
-                            <p className="text-xs leading-5 text-muted-foreground">
-                              外部配置可复用档案，sandbox 只使用你挂载进去的 profile。
-                            </p>
-                          </div>
-                          <Badge variant="outline">{connectorProfiles.length}</Badge>
-                        </div>
-
-                        <div className="mt-3 space-y-2">
-                          {connectorProfiles.map((profile) => {
-                            const active = profile.profileId === selectedProfileId;
-                            return (
-                              <button
-                                key={profile.profileId}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedProfileIds((prev) => ({
-                                    ...prev,
-                                    [item.key]: profile.profileId,
-                                  }));
-                                  ensureProfileDraft(item, profile.profileId);
-                                }}
-                                className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                                  active
-                                    ? "border-foreground/70 bg-muted/60"
-                                    : "border-border/70 hover:bg-muted/30"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="truncate text-sm font-medium text-foreground">
-                                    {profile.profileName}
-                                  </div>
-                                  {profile.isDefault ? (
-                                    <Star className="h-4 w-4 shrink-0 text-amber-500" />
-                                  ) : null}
-                                </div>
-                                <div className="mt-1 truncate text-xs text-muted-foreground">
-                                  {profile.displayName ||
-                                    profile.secretSummary ||
-                                    "未设置 display name"}
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  <Badge variant={statusTone(profile.authStatus)}>
-                                    {formatStatus(profile.authStatus)}
-                                  </Badge>
-                                </div>
-                              </button>
-                            );
-                          })}
-
-                          <Button
-                            variant="outline"
-                            className="w-full rounded-2xl"
-                            onClick={() => {
-                              setSelectedProfileIds((prev) => ({
-                                ...prev,
-                                [item.key]: NEW_PROFILE_ID,
-                              }));
-                              ensureProfileDraft(item, null);
-                            }}
-                          >
-                            <Plus className="mr-2 h-4 w-4" />
-                            新建 Profile
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                        <div className="flex items-center justify-between gap-3">
-                          <span>配置位置</span>
-                          <span className="text-right text-foreground/80">Outside sandbox</span>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between gap-3">
-                          <span>运行位置</span>
-                          <span className="text-right text-foreground/80">Inside sandbox</span>
-                        </div>
-                        {selectedProfile?.lastAuthAt ? (
-                          <div className="mt-2 flex items-center justify-between gap-3">
-                            <span>最近授权</span>
-                            <span className="text-right text-foreground/80">
-                              {new Date(selectedProfile.lastAuthAt).toLocaleString()}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="space-y-5">
-                      <div className="rounded-3xl border border-border/70 bg-background px-4 py-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-medium text-foreground">快速开始</p>
-                            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                              {guide.intro}
-                            </p>
-                          </div>
-                          <Badge variant="outline">
-                            {item.oauth?.supported ? "OAuth + 手动配置" : "手动配置"}
-                          </Badge>
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {guide.quickLinks.map((link) => (
-                            <Button
-                              key={link.href}
-                              asChild
-                              variant="outline"
-                              size="sm"
-                              className="rounded-full"
-                            >
-                              <a
-                                href={link.href}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={link.description}
-                              >
-                                <ArrowUpRight className="h-4 w-4" />
-                                {link.label}
-                              </a>
-                            </Button>
-                          ))}
-                          {guide.exampleValue && guide.exampleLabel ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-full"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(guide.exampleValue || "");
-                                  toast.success("模板已复制到剪贴板");
-                                } catch {
-                                  toast.error("复制失败，请手动复制示例");
-                                }
-                              }}
-                            >
-                              <ShieldCheck className="h-4 w-4" />
-                              {guide.exampleLabel}
-                            </Button>
-                          ) : null}
-                        </div>
-
-                        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                          <div>
-                            <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                              How To Get It
-                            </p>
-                            <ol className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
-                              {guide.steps.map((step, index) => (
-                                <li key={step} className="flex gap-2">
-                                  <span className="font-medium text-foreground">{index + 1}.</span>
-                                  <span>{step}</span>
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
-
-                          {guide.tips?.length ? (
-                            <div>
-                              <p className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">
-                                Tips
-                              </p>
-                              <div className="mt-3 space-y-2 text-sm leading-6 text-muted-foreground">
-                                {guide.tips.map((tip) => (
-                                  <p key={tip}>• {tip}</p>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {isGithub ? (
-                        <div className="rounded-3xl border border-border/70 bg-background px-4 py-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium text-foreground">
-                                GitHub 推荐配置
-                              </p>
-                              <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                                直接连接 GitHub 账户即可使用，平台会自动创建默认 profile
-                                并回填账号名。当前版本仓库访问范围由 GitHub OAuth 或 PAT
-                                的权限决定，不在 oneceo 内重复做仓库白名单配置。
-                              </p>
-                            </div>
-                            <Badge variant="outline">最少输入</Badge>
-                          </div>
-
-                          <div className="mt-4 grid gap-3 md:grid-cols-2">
-                            <div className="rounded-2xl bg-muted/45 px-4 py-3">
-                              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                                1. 连接账户
-                              </div>
-                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                                推荐 OAuth，一键完成授权并自动生成默认 profile。
-                              </p>
-                            </div>
-                            <div className="rounded-2xl bg-muted/45 px-4 py-3">
-                              <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                                <ShieldCheck className="h-4 w-4 text-foreground/80" />
-                                2. 会话挂载
-                              </div>
-                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                                完成授权后，在会话里直接选择 profile 挂载即可，不需要再次配置。
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex flex-wrap gap-3">
-                            {item.oauth?.supported ? (
-                              <Button
-                                className="rounded-2xl"
-                                disabled={Boolean(actionKey) || !item.available}
-                                onClick={() => void handleOAuth(item)}
-                              >
-                                {actionKey === `oauth:${item.key}` ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                  <ArrowUpRight className="mr-2 h-4 w-4" />
-                                )}
-                                {isAuthorized ? "重新连接 GitHub" : "连接 GitHub 账户"}
-                              </Button>
-                            ) : null}
-
-                            <Button
-                              variant="outline"
-                              className="rounded-2xl"
-                              onClick={() =>
-                                setAdvancedEditorState((prev) => ({
-                                  ...prev,
-                                  [editorStateKey]: !prev[editorStateKey],
-                                }))
-                              }
-                            >
-                              {showGithubAdvanced ? "收起高级配置" : "使用 Personal Access Token"}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {item.availabilityReason ? (
-                        <div className="flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                          <span>{item.availabilityReason}</span>
-                        </div>
-                      ) : null}
-
-                      {selectedProfile?.lastError ? (
-                        <div className="flex gap-2 rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                          <span>{selectedProfile.lastError}</span>
-                        </div>
-                      ) : null}
-
-                      {showManualSection ? (
-                        <div className="space-y-3 rounded-3xl border border-border/70 bg-background px-4 py-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-sm font-medium text-foreground">
-                                {isGithub
-                                  ? "GitHub 手动凭证"
-                                  : isNewProfile
-                                    ? "创建 Profile"
-                                    : "编辑 Profile"}
-                              </p>
-                              <p className="text-sm text-muted-foreground">
-                                {isGithub
-                                  ? "只在需要使用 PAT 时填写，默认推荐 OAuth。profile 名称和显示名可留空，由平台自动生成。"
-                                  : "保存后的 profile 会复用到其他会话；会话里只做挂载，不在 sandbox 内录入凭证。"}
-                              </p>
-                            </div>
-                            {isAuthorized ? (
-                              <Badge variant="secondary">留空 secret 则保留当前凭证</Badge>
-                            ) : null}
-                          </div>
-
-                          {visibleConfigFields.map((field) => {
-                            const fieldDescription = [
-                              field.description,
-                              field.secret && isAuthorized
-                                ? "留空则保留当前已保存的 secret。"
-                                : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" ");
-
-                            const commonProps = {
-                              id: `${item.key}-${selectedProfileId || "new"}-${field.key}`,
-                              value: form[field.key] || "",
-                              onChange: (
-                                event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-                              ) =>
-                                handleFieldChange(
-                                  item.key,
-                                  selectedProfileId === NEW_PROFILE_ID
-                                    ? null
-                                    : selectedProfileId,
-                                  field.key,
-                                  event.target.value
-                                ),
-                              placeholder: field.placeholder,
-                            };
-
-                            return (
-                              <div key={field.key} className="space-y-2">
-                                <Label htmlFor={commonProps.id}>{field.label}</Label>
-                                {field.type === "textarea" ? (
-                                  <Textarea {...commonProps} className="min-h-28 rounded-2xl" />
-                                ) : (
-                                  <Input
-                                    {...commonProps}
-                                    className="h-11 rounded-2xl"
-                                    type={field.secret ? "password" : field.type}
-                                  />
-                                )}
-                                {fieldDescription ? (
-                                  <p className="text-xs leading-5 text-muted-foreground">
-                                    {fieldDescription}
-                                  </p>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : supportsManual ? (
-                        <div className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-                          OAuth 已启用，授权完成后平台会保存 profile，后续任意 session
-                          都可直接复用。
-                        </div>
-                      ) : null}
-
-                      <Separator />
-
-                      <div className="flex flex-wrap gap-3">
-                        {showManualSaveAction ? (
-                          <Button
-                            variant={item.oauth?.supported ? "secondary" : "default"}
-                            className="rounded-2xl"
-                            disabled={busy || !item.available}
-                            onClick={() => void handleSave(item)}
-                          >
-                            {actionKey === `save:${item.key}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <ShieldCheck className="mr-2 h-4 w-4" />
-                            )}
-                            {isGithub
-                              ? "保存 GitHub PAT"
-                              : isNewProfile
-                                ? "创建 Profile"
-                                : "保存 Profile"}
-                          </Button>
-                        ) : null}
-
-                        {item.oauth?.supported && !isGithub ? (
-                          <Button
-                            className="rounded-2xl"
-                            disabled={Boolean(actionKey) || !item.available}
-                            onClick={() => void handleOAuth(item)}
-                          >
-                            {actionKey === `oauth:${item.key}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <ArrowUpRight className="mr-2 h-4 w-4" />
-                            )}
-                            {isAuthorized ? "重新授权" : "发起 OAuth"}
-                          </Button>
-                        ) : null}
-
-                        {selectedProfile && !selectedProfile.isDefault ? (
-                          <Button
-                            variant="outline"
-                            className="rounded-2xl"
-                            disabled={Boolean(actionKey)}
-                            onClick={() => void handleSetDefault(selectedProfile)}
-                          >
-                            {actionKey === `default:${selectedProfile.profileId}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Star className="mr-2 h-4 w-4" />
-                            )}
-                            设为默认 Profile
-                          </Button>
-                        ) : null}
-
-                        {effectiveTargetSessionId &&
-                        selectedProfile &&
-                        selectedProfile.authStatus === "authorized" ? (
-                          <Button
-                            variant="secondary"
-                            className="rounded-2xl"
-                            disabled={Boolean(actionKey)}
-                            onClick={async () => {
-                              setActionKey(`attach:${selectedProfile.profileId}`);
-                              try {
-                                await attachSessionConnector(
-                                  effectiveTargetSessionId,
-                                  item.key,
-                                  {
-                                    profileId: selectedProfile.profileId,
-                                  }
-                                );
-                                toast.success("已挂载到目标会话");
-                              } catch (error) {
-                                toast.error(
-                                  error instanceof Error
-                                    ? error.message
-                                    : "Attach connector failed"
-                                );
-                              } finally {
-                                setActionKey(null);
-                              }
-                            }}
-                          >
-                            <Plug className="mr-2 h-4 w-4" />
-                            挂载到当前会话
-                          </Button>
-                        ) : null}
-
-                        {selectedProfile ? (
-                          <Button
-                            variant="outline"
-                            className="rounded-2xl"
-                            disabled={Boolean(actionKey)}
-                            onClick={() => void handleDisconnect(selectedProfile)}
-                          >
-                            {actionKey === `disconnect:${selectedProfile.profileId}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Unplug className="mr-2 h-4 w-4" />
-                            )}
-                            清除当前 Profile 授权
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </ScrollArea>
-                </>
-              )}
-            </DialogContent>
-          );
-        })() : null}
-      </Dialog>
-
-      {loading ? (
-        <div className="border-t border-border/70 px-6 py-3 text-sm text-muted-foreground">
+      <div className="border-b border-border/70 px-6 py-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            正在加载连接器配置
+            {CONNECTOR_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  setDetailKey(null);
+                }}
+                className={cn(
+                  "relative rounded-none px-2 py-3 text-sm font-medium text-muted-foreground transition hover:text-foreground",
+                  activeTab === tab.key && "text-foreground"
+                )}
+              >
+                {tab.label}
+                {activeTab === tab.key ? (
+                  <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-foreground" />
+                ) : null}
+              </button>
+            ))}
+          </div>
+          <div className="w-full sm:w-[220px]">
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索"
+              className="h-9 rounded-xl"
+            />
           </div>
         </div>
-      ) : null}
+      </div>
+
+      <div className="min-h-0 flex-1">
+        {detailItem && activeTab === "app" ? renderDetail() : renderDirectory()}
+      </div>
     </div>
   );
 }

@@ -62,6 +62,7 @@ import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
 } from "@/components/AltusArtifactPreviewCard";
+import TaskDeliverableCard from "@/components/TaskDeliverableCard";
 import AltusRunReplayDrawer, {
   type AltusReplayAction,
   type AltusReplayFile,
@@ -84,14 +85,17 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
+  deployTaskCreationSession,
   getWorkspaceRawFileUrl,
   uploadTaskCreationAttachment,
+  type TaskCreationDeliverableArtifact,
 } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
+  partitionPendingAttachments,
   type PendingAttachment,
   type UploadedTaskAttachment,
 } from "@/lib/task-attachments";
@@ -111,6 +115,15 @@ function escapeMessageKeySelector(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/["\\]/g, "\\$&");
+}
+
+function readAltusMode(): "sandbox" | "managed" {
+  if (typeof window === "undefined") return "sandbox";
+  try {
+    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
+  } catch {
+    return "sandbox";
+  }
 }
 
 function readPersistedScrollAnchor(
@@ -515,45 +528,79 @@ export default function Home() {
 
   async function submitPrompt(rawInput: string) {
     const trimmed = rawInput.trim();
-    const hasAttachments = attachments.length > 0;
+    const attachmentDrafts = [...attachments];
+    const hasAttachments = attachmentDrafts.length > 0;
     const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
     const baseText =
       trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!baseText) return;
+    const altusMode = readAltusMode();
+
+    if (hasAttachments) {
+      setAttachments([]);
+    }
 
     try {
+      const { uploadableAttachments, inlinePromptAttachments } =
+        partitionPendingAttachments(attachmentDrafts);
       let activeSessionId = (sessionId || "").trim();
-      if (hasAttachments && !activeSessionId) {
+      if (altusMode !== "managed" && uploadableAttachments.length > 0 && !activeSessionId) {
         activeSessionId = await ensureSession(displayText || "新建任务会话");
       }
 
       let uploadedAttachments: UploadedTaskAttachment[] = [];
-      if (hasAttachments) {
+      if (altusMode !== "managed" && uploadableAttachments.length > 0) {
         uploadedAttachments = await Promise.all(
-          attachments.map((item) =>
+          uploadableAttachments.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
           ),
         );
       }
 
       exitHistoryView();
-      await sendChatInput(
-        appendAttachmentsToPrompt(baseText, uploadedAttachments),
-        {
-          sessionId: activeSessionId || undefined,
-          metadata: uploadedAttachments.length
-            ? {
-                attachments: uploadedAttachments,
-                originalInput: displayText,
-              }
-            : undefined,
-        },
-      );
-
-      if (uploadedAttachments.length) {
-        setAttachments([]);
+      if (altusMode === "managed") {
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, inlinePromptAttachments),
+          {
+            sessionId: activeSessionId || undefined,
+            metadata: hasAttachments
+              ? {
+                  ...(inlinePromptAttachments.length
+                    ? { attachments: inlinePromptAttachments }
+                    : {}),
+                  originalInput: displayText,
+                }
+              : undefined,
+            files: uploadableAttachments.map((item) => item.file),
+          },
+        );
+      } else {
+        const promptAttachments = [
+          ...uploadedAttachments,
+          ...inlinePromptAttachments,
+        ];
+        await sendChatInput(
+          appendAttachmentsToPrompt(baseText, promptAttachments),
+          {
+            sessionId: activeSessionId || undefined,
+            metadata: promptAttachments.length
+              ? {
+                  attachments: promptAttachments,
+                  originalInput: displayText,
+                }
+              : undefined,
+          },
+        );
       }
     } catch (error) {
+      if (hasAttachments) {
+        setAttachments((current) =>
+          mergePendingAttachments(
+            current,
+            attachmentDrafts.map((item) => item.file),
+          ).attachments,
+        );
+      }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
   }
@@ -582,9 +629,72 @@ export default function Home() {
     setMessage("");
   };
 
+  async function submitQuestionAnswer(rawInput: string) {
+    const trimmed = rawInput.trim();
+    const attachmentDrafts = [...attachments];
+    const hasAttachments = attachmentDrafts.length > 0;
+    const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
+    const baseText =
+      trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+    if (!baseText) return;
+
+    const altusMode = readAltusMode();
+    const activeSessionId = (sessionId || "").trim() || undefined;
+
+    if (hasAttachments) {
+      setAttachments([]);
+    }
+
+    try {
+      let uploadedAttachments: UploadedTaskAttachment[] = [];
+      if (altusMode !== "managed" && hasAttachments && activeSessionId) {
+        uploadedAttachments = await Promise.all(
+          attachmentDrafts.map((item) =>
+            uploadTaskCreationAttachment(activeSessionId, item.file),
+          ),
+        );
+      }
+
+      exitHistoryView();
+      if (altusMode === "managed") {
+        await answerQuestion(baseText, {
+          sessionId: activeSessionId,
+          metadata: hasAttachments
+            ? {
+                originalInput: displayText,
+              }
+            : undefined,
+          files: hasAttachments ? attachmentDrafts.map((item) => item.file) : undefined,
+        });
+      } else {
+        await answerQuestion(
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
+          {
+            sessionId: activeSessionId,
+            metadata: uploadedAttachments.length
+              ? {
+                  attachments: uploadedAttachments,
+                  originalInput: displayText,
+                }
+              : undefined,
+          },
+        );
+      }
+    } catch (error) {
+      if (hasAttachments) {
+        setAttachments((current) =>
+          mergePendingAttachments(
+            current,
+            attachmentDrafts.map((item) => item.file),
+          ).attachments,
+        );
+      }
+      toast.error(error instanceof Error ? error.message : "附件发送失败");
+    }
+  }
+
   const handleAnswerQuestion = (answer: string) => {
-    exitHistoryView();
-    answerQuestion(answer);
+    void submitQuestionAnswer(answer);
   };
 
   const quickActions = [
@@ -683,6 +793,32 @@ export default function Home() {
     setPreviewWorkspacePath(normalizedPath);
     setPreviewTab("files");
     setPreviewOpen(true);
+  };
+
+  const deployFromArtifactCard = async (_path: string) => {
+    if (!sessionId) {
+      toast.error("缺少会话信息");
+      return;
+    }
+
+    try {
+      const result = await deployTaskCreationSession(sessionId);
+      setPreviewWorkspacePath(null);
+      setPreviewTab("deployment");
+      setPreviewOpen(true);
+
+      const deploymentUrl = result?.latestStaticUrl || result?.latestUrl || "";
+      if (deploymentUrl) {
+        toast.success(
+          `已触发部署：${deploymentUrl.replace(/^https?:\/\//, "")}`,
+        );
+      } else {
+        toast.success("已触发部署");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "触发部署失败");
+      throw error;
+    }
   };
 
   const showDesktopPreview = previewOpen && !isMobile;
@@ -876,6 +1012,7 @@ export default function Home() {
                   onOpenDiffPreview={openDiffPreview}
                   onOpenManagedReplay={openAltusReplay}
                   onOpenWorkspacePreview={openWorkspacePreview}
+                  onDeployArtifact={deployFromArtifactCard}
                 />
               ))}
             </AnimatePresence>
@@ -928,19 +1065,16 @@ export default function Home() {
                   rows={2}
                 />
 
-                {!currentQuestion ? (
-                  <AttachmentChipList
-                    attachments={attachments}
-                    onRemove={removeAttachment}
-                  />
-                ) : null}
+                <AttachmentChipList
+                  attachments={attachments}
+                  onRemove={removeAttachment}
+                />
 
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
                     <div className="flex items-center gap-1">
                       <AttachmentPickerButton
                         onSelectFiles={handleAttachmentSelect}
-                        disabled={Boolean(currentQuestion)}
                       />
 
                       <ConnectorDialog sessionId={sessionId} />
@@ -1032,7 +1166,7 @@ export default function Home() {
                             disabled={
                               isInterrupting ||
                               (currentQuestion
-                                ? !message.trim()
+                                ? !message.trim() && attachments.length === 0
                                 : showStopButton
                                   ? false
                                   : !message.trim() && attachments.length === 0)
@@ -1464,6 +1598,13 @@ export type ChatItem =
       messageKey?: string;
     }
   | {
+      kind: "managed_deliverable_card";
+      sessionId: string;
+      runId: string;
+      deliverables: TaskCreationDeliverableArtifact[];
+      messageKey?: string;
+    }
+  | {
       kind: "opencode_turn";
       userText: string;
       attachments?: UploadedTaskAttachment[];
@@ -1536,7 +1677,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
   const managedArtifactsByRun = new Map<string, AltusArtifactFile[]>();
-  const emittedManagedArtifactRuns = new Set<string>();
+  const emittedManagedCompletionRuns = new Set<string>();
 
   const getPartIdFromMetadata = (metadata: Record<string, unknown>): string => {
     const explicit = asText(metadata.partId);
@@ -1882,21 +2023,34 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           managedEventType === "run_completed" &&
           runId &&
           sessionIdForArtifact &&
-          !emittedManagedArtifactRuns.has(runId)
+          !emittedManagedCompletionRuns.has(runId)
         ) {
-          const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
-            (artifact) => artifact.previewType === "web",
-          );
-          if (artifacts.length > 0) {
+          const deliverables = extractManagedDeliverables(metadata);
+          if (deliverables.length > 0) {
             flushProgress();
             items.push({
-              kind: "managed_artifact_card",
+              kind: "managed_deliverable_card",
               sessionId: sessionIdForArtifact,
               runId,
-              artifacts,
-              messageKey: `managed:${runId}:artifact_card`,
+              deliverables,
+              messageKey: `managed:${runId}:deliverable_card`,
             });
-            emittedManagedArtifactRuns.add(runId);
+            emittedManagedCompletionRuns.add(runId);
+          } else {
+            const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
+              (artifact) => artifact.previewType === "web",
+            );
+            if (artifacts.length > 0) {
+              flushProgress();
+              items.push({
+                kind: "managed_artifact_card",
+                sessionId: sessionIdForArtifact,
+                runId,
+                artifacts,
+                messageKey: `managed:${runId}:artifact_card`,
+              });
+              emittedManagedCompletionRuns.add(runId);
+            }
           }
         }
       }
@@ -3119,6 +3273,7 @@ function MessageBubble({
   onOpenDiffPreview,
   onOpenManagedReplay,
   onOpenWorkspacePreview,
+  onDeployArtifact,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -3134,6 +3289,7 @@ function MessageBubble({
     },
   ) => void;
   onOpenWorkspacePreview?: (path: string) => void;
+  onDeployArtifact?: (path: string) => Promise<void> | void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -3303,6 +3459,18 @@ function MessageBubble({
           artifacts={item.artifacts}
           displayMode="web-preview"
           onOpenViewer={onOpenWorkspacePreview}
+          onDeployRequested={onDeployArtifact}
+        />
+      </div>
+    );
+  }
+
+  if (item.kind === "managed_deliverable_card") {
+    return (
+      <div data-message-key={item.messageKey}>
+        <TaskDeliverableCard
+          sessionId={item.sessionId}
+          deliverables={item.deliverables}
         />
       </div>
     );
@@ -4974,6 +5142,37 @@ function isManagedExecutionEvent(metadataRaw: unknown) {
     asText(metadata.executionMode).toLowerCase() === "managed" ||
     asText(metadata.executor).toLowerCase() === "altus"
   );
+}
+
+function extractManagedDeliverables(
+  metadataRaw: unknown,
+): TaskCreationDeliverableArtifact[] {
+  const metadata = toRecord(metadataRaw);
+  const raw = Array.isArray(metadata.deliverables) ? metadata.deliverables : [];
+  const unique = new Map<string, TaskCreationDeliverableArtifact>();
+  for (const item of raw) {
+    const record = toRecord(item);
+    const id = asText(record.id);
+    const name = asText(record.name);
+    if (!id || !name || unique.has(id)) continue;
+    const sizeValue =
+      typeof record.size === "number"
+        ? record.size
+        : typeof record.sizeBytes === "number"
+          ? record.sizeBytes
+          : Number(record.size || record.sizeBytes || 0);
+    unique.set(id, {
+      id,
+      runId: asText(record.runId) || asText(metadata.runId),
+      path: asText(record.path),
+      name,
+      mimeType: asText(record.mimeType) || "application/octet-stream",
+      size: Number.isFinite(sizeValue) ? sizeValue : 0,
+      createdAt: asText(record.createdAt) || undefined,
+      downloadPath: asText(record.downloadPath) || undefined,
+    });
+  }
+  return Array.from(unique.values());
 }
 
 function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {

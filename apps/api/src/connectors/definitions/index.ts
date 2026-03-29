@@ -28,7 +28,7 @@ export function buildConnectorDefinitions(): ConnectorDefinition[] {
     buildFigmaDefinition(),
     buildVercelDefinition(),
     buildPostgresDefinition(),
-  ];
+  ].sort((left, right) => (left.sortOrder || 0) - (right.sortOrder || 0));
 }
 
 export function resolveOauthProvider(connectorKey: ConnectorKey): ConnectorOauthProvider | undefined {

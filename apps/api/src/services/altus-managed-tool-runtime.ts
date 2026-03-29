@@ -1,10 +1,12 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
+import { tavilyConnector } from '../connectors/tavily-connector';
+import type { ManagedCompletionAttachment } from './altus-managed-shared';
 
 type ManagedToolResult =
   | { type: 'result'; content: string }
   | { type: 'ask_user'; question: string; options?: string[] }
-  | { type: 'complete'; summary: string; verification?: string[] };
+  | { type: 'complete'; summary: string; verification?: string[]; attachments?: ManagedCompletionAttachment[] };
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -14,6 +16,31 @@ function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(max, Math.floor(parsed));
+}
+
+function asPositiveNumber(value: unknown, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, parsed);
+}
+
+function asBoolean(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  const text = asText(value).toLowerCase();
+  if (!text) return false;
+  return ['1', 'true', 'yes', 'on'].includes(text);
+}
+
+function asStringArray(value: unknown, maxItems: number) {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  for (const item of value) {
+    const text = asText(item);
+    if (!text) continue;
+    result.push(text);
+    if (result.length >= maxItems) break;
+  }
+  return result;
 }
 
 function shellEscape(value: string): string {
@@ -66,6 +93,30 @@ export class AltusManagedToolRuntime {
     return relative && relative !== '' ? relative : '.';
   }
 
+  private parseCompletionAttachments(raw: unknown) {
+    if (!Array.isArray(raw)) return [];
+    const deduped = new Map<string, ManagedCompletionAttachment>();
+    for (const item of raw.slice(0, 8)) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const record = item as Record<string, unknown>;
+      const absolutePath = this.resolveWorkspacePath(record.path);
+      const relativePath = this.relativeForDisplay(absolutePath);
+      if (!relativePath || relativePath === '.') {
+        throw new Error('complete_task_attachment_path_invalid');
+      }
+      if (!deduped.has(relativePath)) {
+        const name = asText(record.name);
+        const mimeType = asText(record.mimeType);
+        deduped.set(relativePath, {
+          path: relativePath,
+          ...(name ? { name } : {}),
+          ...(mimeType ? { mimeType } : {}),
+        });
+      }
+    }
+    return Array.from(deduped.values());
+  }
+
   private async runShell(
     command: string,
     options?: { cwd?: string; timeoutMs?: number },
@@ -80,6 +131,17 @@ export class AltusManagedToolRuntime {
     });
     this.ensureNotAborted(signal);
     return result;
+  }
+
+  private compactSearchContent(value: string, limit = 1200) {
+    return truncate(asText(value), limit);
+  }
+
+  private compactImageList(value: Array<{ url: string; description?: string }>, maxItems = 6) {
+    return value.slice(0, maxItems).map((item) => ({
+      url: item.url,
+      ...(item.description ? { description: truncate(item.description, 220) } : {}),
+    }));
   }
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
@@ -198,6 +260,79 @@ export class AltusManagedToolRuntime {
       };
     }
 
+    if (toolName === 'web_search') {
+      const query = asText(rawArgs.query);
+      if (!query) {
+        throw new Error('web_search_missing_query');
+      }
+      const result = await tavilyConnector.search(
+        {
+          query,
+          topic: asText(rawArgs.topic),
+          maxResults: asPositiveInt(rawArgs.maxResults, 5, 8),
+          includeImages: asBoolean(rawArgs.includeImages),
+          searchDepth: asText(rawArgs.searchDepth),
+          includeDomains: asStringArray(rawArgs.includeDomains, 20),
+          excludeDomains: asStringArray(rawArgs.excludeDomains, 20),
+          timeRange: asText(rawArgs.timeRange),
+        },
+        signal
+      );
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          query: result.query,
+          topic: result.topic,
+          searchDepth: result.searchDepth,
+          requestId: result.requestId,
+          responseTime: result.responseTime,
+          images: this.compactImageList(result.images, 8),
+          results: result.results.map((item) => ({
+            title: item.title,
+            url: item.url,
+            ...(typeof item.score === 'number' ? { score: item.score } : {}),
+            ...(item.favicon ? { favicon: item.favicon } : {}),
+            content: this.compactSearchContent(item.content, 1000),
+            images: this.compactImageList(item.images, 4),
+          })),
+        }),
+      };
+    }
+
+    if (toolName === 'web_extract') {
+      const urls = asStringArray(rawArgs.urls, 8);
+      if (urls.length === 0) {
+        throw new Error('web_extract_missing_urls');
+      }
+      const result = await tavilyConnector.extract(
+        {
+          urls,
+          extractDepth: asText(rawArgs.extractDepth),
+          includeImages: asBoolean(rawArgs.includeImages),
+          format: asText(rawArgs.format),
+          timeoutSeconds: asPositiveNumber(rawArgs.timeoutSeconds, 15, 60),
+        },
+        signal
+      );
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          urls: result.urls,
+          extractDepth: result.extractDepth,
+          format: result.format,
+          requestId: result.requestId,
+          responseTime: result.responseTime,
+          failedResults: result.failedResults,
+          results: result.results.map((item) => ({
+            url: item.url,
+            ...(item.favicon ? { favicon: item.favicon } : {}),
+            rawContent: this.compactSearchContent(item.rawContent, 2200),
+            images: this.compactImageList(item.images, 6),
+          })),
+        }),
+      };
+    }
+
     if (toolName === 'ask_user') {
       const question = asText(rawArgs.question);
       if (!question) {
@@ -221,10 +356,12 @@ export class AltusManagedToolRuntime {
       const verification = Array.isArray(rawArgs.verification)
         ? rawArgs.verification.map((item) => asText(item)).filter(Boolean).slice(0, 8)
         : [];
+      const attachments = this.parseCompletionAttachments(rawArgs.attachments);
       return {
         type: 'complete',
         summary,
         verification: verification.length > 0 ? verification : undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
     }
 

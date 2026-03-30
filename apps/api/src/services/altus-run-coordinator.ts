@@ -3,7 +3,7 @@ import { AltusManagedToolRuntime } from './altus-managed-tool-runtime';
 import { altusManagedPromptService } from './altus-managed-prompt-service';
 import {
   asText,
-  buildManagedToolDefinitions,
+  buildManagedToolDefinitionsWithMcp,
   parseToolArguments,
   truncate,
   type ChatMessage,
@@ -231,6 +231,7 @@ export class AltusRunCoordinator {
   private async callModel(input: {
     messages: ChatMessage[];
     signal: AbortSignal;
+    mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
@@ -243,7 +244,9 @@ export class AltusRunCoordinator {
       body: JSON.stringify({
         model: this.getModelName(input.messages, input.fallbackModel),
         messages: sanitizeMessagesForModel(input.messages),
-        tools: buildManagedToolDefinitions(),
+        tools: buildManagedToolDefinitionsWithMcp({
+          mcpProviders: Array.isArray(input.mcpProviders) ? input.mcpProviders : [],
+        }),
         tool_choice: 'auto',
         temperature: 0.2,
         stream: true,
@@ -279,6 +282,7 @@ export class AltusRunCoordinator {
   private async callModelWithRetry(input: {
     messages: ChatMessage[];
     signal: AbortSignal;
+    mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
@@ -482,6 +486,7 @@ export class AltusRunCoordinator {
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
       activeSkills: state.input.skills,
+      mcpProviders: state.input.mcpProviders,
     });
     const systemPrompt = altusManagedPromptService.buildSystemPrompt({
       sessionId: state.input.sessionId,
@@ -515,6 +520,7 @@ export class AltusRunCoordinator {
       const assistant = await this.callModelWithRetry({
         messages,
         signal,
+        mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
         onToolCallDelta: async (toolCall) => {
           const toolName = asText(toolCall?.function?.name);

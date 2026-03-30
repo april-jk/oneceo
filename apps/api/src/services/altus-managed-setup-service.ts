@@ -4,8 +4,10 @@ import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
+  taskSessionConnectorBindingDAO,
 } from '../db/dao';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
+import { osacAgentService } from './osac-agent-service';
 import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
@@ -243,6 +245,62 @@ export class AltusManagedSetupService {
     return {
       snapshotId: snapshot.id,
       statuses,
+    };
+  }
+
+  async captureMcpToolSnapshot(sessionId: string) {
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      const live = await osacAgentService.listSessionMcpTools(orchestratorSessionId).catch(() => null);
+      const liveProviders = Array.isArray(live?.providers)
+        ? live.providers.map((item) => ({
+            connectorKey: null,
+            providerId: asText((item as Record<string, unknown>)?.providerId),
+            transport: asText((item as Record<string, unknown>)?.transport) || null,
+            envVersion:
+              typeof (item as Record<string, unknown>)?.envVersion === 'number'
+                ? ((item as Record<string, unknown>).envVersion as number)
+                : 0,
+            tools: Array.isArray((item as Record<string, unknown>)?.tools)
+              ? ((item as Record<string, unknown>).tools as unknown[])
+              : [],
+          }))
+        : [];
+      if (liveProviders.length > 0) {
+        const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+          sessionId,
+          snapshotJson: {
+            providers: liveProviders,
+            tools: liveProviders.flatMap((item) => (Array.isArray(item.tools) ? item.tools : [])),
+          },
+        });
+        return {
+          snapshotId: snapshot.id,
+          providers: liveProviders,
+        };
+      }
+    }
+    const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
+    const providers = bindings
+      .filter((item) => item.desiredState === 'attached' && asText(item.runtimeProviderId))
+      .map((item) => ({
+        connectorKey: item.connectorKey,
+        providerId: asText(item.runtimeProviderId),
+        transport: asText(item.runtimeTransport) || null,
+        envVersion: typeof item.runtimeEnvVersion === 'number' ? item.runtimeEnvVersion : 0,
+        tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
+      }));
+    const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+      sessionId,
+      snapshotJson: {
+        providers,
+        tools: providers.flatMap((item) => (Array.isArray(item.tools) ? item.tools : [])),
+      },
+    });
+    return {
+      snapshotId: snapshot.id,
+      providers,
     };
   }
 

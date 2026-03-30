@@ -1,0 +1,48 @@
+# 2026-03-30 自动工作汇报
+
+- 删除“Altus 自己托管 MCP runtime”的旧口径，改成以 `OSAC` 为沙箱内 MCP Runtime Host 的主方案。
+- 新增设计文档 `docs/agent研发文档/20260330_OSAC驱动Altus模式MCP运行时注册设计.md`，明确 `apps/api -> osac-agent-service -> OSAC MCP Control API -> Altus session tool assembly` 的主链路。
+- 新增协议文档 `docs/agent研发文档/20260330_OSAC_MCP控制协议设计.md`，把 Altus mode 下的控制指令从旧的 `ADD_MCP_SERVER / REMOVE_MCP_SERVER` 提升为 `REGISTER_MCP_PROVIDER / UPDATE_MCP_PROVIDER_ENV / ATTACH_MCP_PROVIDER_TO_SESSION / LIST_SESSION_MCP_TOOLS` 等 provider 生命周期协议。
+- 文档中明确 token/env 更新的正确语义：对于本地子进程型 MCP，OSAC 需要更新 provider 内存态 env，并在下一次调用前按需 restart provider，不能假设旧进程自动读取新环境。
+- 新增实施文档 `docs/agent研发文档/20260330_OSAC驱动Altus模式MCP实施文档.md`，按 `apps/api`、`OSAC`、`Altus managed` 三层拆出具体改动文件、数据字段、开发顺序与测试计划，明确第一阶段先打通 `local_stdio + REGISTER_MCP_PROVIDER + LIST_SESSION_MCP_TOOLS`。
+- 继续把实施文档拆成三份开发任务文档：`20260330_API侧_OSAC驱动Altus模式MCP开发任务文档.md`、`20260330_OSAC侧_Altus模式MCP开发任务文档.md`、`20260330_AltusManaged侧_MCP接入开发任务文档.md`，分别对应 API 控制面、OSAC provider runtime、Altus managed tool assembly 的实现边界。
+- 进入代码实现阶段后，已将上述 MCP 方案文档状态统一更新为 `[20260330-1027已采用]`。
+- `apps/api` 已新增 session 级 MCP tool snapshot / connector runtime event 表与运行态字段，`session-connector-service` 开始改为走 OSAC provider lifecycle，而不是 OpenCode `/mcp` 配置同步。
+- `osac-agent-service` 与 `osac-routes` 已新增 `REGISTER_MCP_PROVIDER / UPDATE_MCP_PROVIDER_ENV / ATTACH_MCP_PROVIDER_TO_SESSION / DETACH_MCP_PROVIDER_FROM_SESSION / REMOVE_MCP_PROVIDER / LIST_SESSION_MCP_TOOLS` 对应接口。
+- `OSAC_client` 已新增内存态 MCP provider registry 和 session attachment registry，并补齐协议结构、server handler 与 `SESSION_MCP_TOOLS_RESPONSE` 返回。
+- `OSAC_client/internal/mcp/mcp.go` 已从纯 registry 升级为真实 runtime：`local_stdio` 会实际 spawn 子进程并走 JSON-RPC，`remote_sse` 会建立 SSE 连接并通过 HTTP POST 发起 MCP request。
+- 新增 `CALL_SESSION_MCP_TOOL` 协议，Altus managed 现在可以通过 `osac-agent-service` 直接调用 session 级 MCP tool。
+- `Altus managed` 已把 MCP provider tools 注入到动态 tool definitions，并在 `AltusManagedToolRuntime` 内把 namespaced tool 名映射回 `providerId + toolName` 执行。
+- `captureMcpToolSnapshot` 现优先读取 OSAC 当前 session 的 live MCP tool 视图，而不是只依赖 binding 表缓存。
+- MCP/OSAC 联调验证：
+  - 重新执行 `pnpm test`，当前仓库全量单元测试通过，`apps/api` 为 `94/94` 通过。
+  - 本机没有可用本地 Postgres 测试库，`postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable` 直连返回 `ECONNREFUSED`；`docker` 也未安装，无法临时拉本地数据库容器。
+  - 本地起了一套最小 OSAC 调试实例：`OSAC_AUTH_TOKEN=local-test-token OSAC_LISTEN_ADDR=127.0.0.1:18080 OSAC_WS_REQUIRE_MAPPING=false go run ./cmd/osac`。
+  - 用真实 websocket 客户端直连 OSAC，完成一条真实 `local_stdio MCP` 链路验证：
+    - `REGISTER_MCP_PROVIDER`
+    - `ATTACH_MCP_PROVIDER_TO_SESSION`
+    - `CALL_SESSION_MCP_TOOL`
+    - `UPDATE_MCP_PROVIDER_ENV`
+    - 再次 `CALL_SESSION_MCP_TOOL`
+    - `LIST_SESSION_MCP_TOOLS`
+    - `DETACH_MCP_PROVIDER_FROM_SESSION`
+    - `REMOVE_MCP_PROVIDER`
+  - 验证结果：
+    - attach 后成功发现 2 个 tools：`echo_text`、`read_env`
+    - 第一次调用返回 `echo:hello:v1`
+    - `UPDATE_MCP_PROVIDER_ENV` 后 provider `envVersion=2`
+    - 第二次调用返回 `marker=v2`，说明运行时 env 更新和“下次调用前重启 provider”生效
+  - 当前仍缺一段真正的 `apps/api -> DB session/profile/binding -> OSAC` 写库联调，因为这台机器缺少可安全写入的测试数据库。
+  - 后续继续排查时发现真正可用的开发库在 [apps/.env](/Users/watson/codingProj/oneceo/apps/.env)，不是 `env.windows` 里的 Railway 串；前者可正常查询 `oneceo_dev`，后者用 `pg` 查询会返回 `unexpected emptyQuery`。
+  - 已完成一条真实 `apps/api -> DB profile/session/binding -> OSAC -> Postgres MCP` 联调：
+    - 临时创建独立 `userId / profileId / taskSessionId / orchestratorSessionId`
+    - `userConnectorService.createProfile(... postgres dsn ...)`
+    - `sessionConnectorService.attachConnector(...)`
+    - `osacAgentService.listSessionMcpTools(...)`
+    - `osacAgentService.callSessionMcpTool(... toolName='query', sql='select 1 as ok')`
+  - API 联调结果：
+    - binding 已成功写库，`runtimeStatus=connected`
+    - OSAC live provider 已发现真实 Postgres MCP tool：`query`
+    - tool call 返回 `[{\"ok\":1}]`
+    - runtime event 已落库：`provider_register_requested`、`provider_attached`
+    - 联调结束后已清理测试 binding / runtime event / sandbox env / profile / session 记录

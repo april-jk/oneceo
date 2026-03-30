@@ -17,6 +17,9 @@ function createState(runId: string, sessionId: string) {
     userInput: 'build feature',
     sessionTitle: 'Demo session',
     connectors: [],
+    mcpProviders: [],
+    skillCatalog: [],
+    skills: [],
   });
 }
 
@@ -59,6 +62,7 @@ test('markCompleted updates run status, session lifecycle, and completion event'
     {
       status: 'completed',
       content: 'managed run 已完成',
+      deliverables: [],
     },
   ]);
 });

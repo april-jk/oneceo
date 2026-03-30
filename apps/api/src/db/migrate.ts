@@ -53,6 +53,7 @@ const REQUIRED_COLUMNS = [
   ['task_session_recent_messages', 'timeline_cursor'],
   ['task_session_recent_messages', 'runtime_generation'],
   ['task_session_recent_messages', 'updated_at'],
+  ['task_session_runs', 'mcp_tool_snapshot_id'],
   ['task_session_connector_bindings', 'profile_id'],
   ['task_session_connector_bindings', 'enabled_tools'],
   ['task_session_connector_bindings', 'session_config_json'],
@@ -750,6 +751,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_storage
 
 const backfillMessageStorageSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
+ALTER TABLE IF EXISTS task_session_runs
+  ADD COLUMN IF NOT EXISTS mcp_tool_snapshot_id UUID;
 
 ALTER TABLE conversation_messages
   ADD COLUMN IF NOT EXISTS message_key TEXT,

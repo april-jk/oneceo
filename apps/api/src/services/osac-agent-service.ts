@@ -87,7 +87,10 @@ function asString(value: unknown): string {
 }
 
 function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknown>) {
-  const explicit = asString(metadata.opencodeWorkspaceRoot);
+  const explicit =
+    asString(metadata.workspaceRoot) ||
+    asString(metadata.altusWorkspaceRoot) ||
+    asString(metadata.opencodeWorkspaceRoot);
   if (explicit) return explicit;
   const taskSessionId = asString(metadata.taskSessionId);
   if (taskSessionId) return resolveOpencodeWorkspacePath(taskSessionId);
@@ -95,7 +98,10 @@ function resolveWorkspaceRoot(sessionId: string, metadata: Record<string, unknow
 }
 
 function resolveStateRoot(sessionId: string, metadata: Record<string, unknown>, workspaceRoot?: string) {
-  const explicit = asString(metadata.opencodeStateRoot);
+  const explicit =
+    asString(metadata.stateRoot) ||
+    asString(metadata.altusStateRoot) ||
+    asString(metadata.opencodeStateRoot);
   if (explicit) return explicit;
   const taskSessionId = asString(metadata.taskSessionId);
   if (taskSessionId) return resolveOpencodeStatePath(taskSessionId);

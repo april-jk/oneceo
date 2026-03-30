@@ -338,8 +338,11 @@ export class ConnectorRegistry {
         command: ['node', '-e', buildGithubStdioWrapperCommand()],
         environment: {
           GITHUB_PERSONAL_ACCESS_TOKEN: accessToken,
+          GITHUB_TOKEN: accessToken,
+          GH_TOKEN: accessToken,
           ONECEO_GITHUB_ALLOWED_REPOSITORIES: JSON.stringify(repositories),
           NPM_CONFIG_LOGLEVEL: 'silent',
+          NPM_CONFIG_YES: 'true',
         },
       };
     }

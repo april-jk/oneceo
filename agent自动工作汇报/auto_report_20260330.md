@@ -46,3 +46,58 @@
     - tool call 返回 `[{\"ok\":1}]`
     - runtime event 已落库：`provider_register_requested`、`provider_attached`
     - 联调结束后已清理测试 binding / runtime event / sandbox env / profile / session 记录
+- 会话配置 MCP 时出现 `未找到 OSAC 认证 Token（metadata.osacAuthToken）`：
+  - 根因是 session MCP attach 已经统一走 OSAC，但 `opencode` sandbox 启动链没有像 `codex` 一样稳定补齐 `osacEndpoint/osacAuthToken`。
+  - 已新增共享桥接服务 [sandbox-osac-bridge-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/sandbox-osac-bridge-service.ts)，统一封装 OSAC bridge 的启动、探活、复用。
+  - `sandbox-agent-provision-service.ts` 现已让 `opencode` 分支也执行 OSAC bridge 建立/复用，确保新启动会话带上 token。
+  - `ensureSandboxRuntimeMetadata()` 现已加入旧会话自愈：如果现有 metadata 缺 `osacEndpoint` 或 `osacAuthToken`，会在读取 runtime metadata 时自动补桥接并回写数据库。
+  - 验证：
+    - `node --import tsx` 成功加载这次改动涉及的三个 service 模块。
+    - `pnpm exec tsc --noEmit -p apps/api/tsconfig.json` 仍被仓库历史 TS 错误阻塞，但这次修改的文件未出现在报错列表中。
+    - `pnpm test` 在当前 Codex 沙箱里被 `tsx` 的 IPC pipe 权限限制拦截，失败原因为 `listen EPERM ... tsx-*.pipe`，不是本次业务改动报错。
+- Altus 模式下配置 connector 仍提示 `exit status 1`：
+  - 排查后确认 `task-creation-routes.ts` 中的 `ensureTaskSessionRuntime()` 在 Altus 会话复用现有 sandbox 时，仍沿用旧的 OpenCode 直连链路，执行 `syncOpencodeRuntimeConfig()` 和 OpenCode server ensure。
+  - 这与当前 Altus/OSAC 的 session MCP attach 主链路冲突，属于不应在 Altus attach 前触发的额外步骤，也会把 OpenCode 配置写入/重启失败暴露成前端的模糊 `exit status 1`。
+- OSAC 正式交付版本统一调整为 `1.1.3`：
+  - 新增交付文档 `OSAC_client/使用方式文档-交付v1.1.3.md`
+  - 平台默认引用已从旧的 `v1.1.2.fix17` 调整到 `v1.1.3`
+  - 交付说明中补齐了 `EXECUTOR_*` 与 MCP runtime host 能力
+- 继续排查 `exit status 1` 后，从 `connector-debug.log` 确认失败发生在 `ensureOsacBridge()` 第一步：
+  - `mkdir -p /opt/.altus/opencode ...` 直接失败
+  - 当前 Altus/opencode sandbox 的实际 workspace 已经是 `/home/user/opencode/workspaces/...`
+- 已修正 `sandbox-osac-bridge-service.ts` 的 remote base dir 解析：
+  - 当 workspaceRoot 落在 `/home/user/opencode/workspaces/...` 时，OSAC bridge 改为使用 `/home/user/opencode`
+  - 不再继续硬绑旧的 `/opt/.altus/opencode`
+- 继续按“Altus 已独立于 OpenCode”做主链路收口：
+  - `sandbox-agent-provision-service.ts` 新增 `executor=altus`
+  - Altus sandbox provision 只确保 OSAC bridge，不再触发 OpenCode server/bootstrap
+  - `task-creation-routes.ts` 在 Altus managed 会话下，runtime ensure 改为按 `altus` 处理
+  - `sandbox-runtime-metadata-service.ts` / `osac-agent-service.ts` 开始优先读取 `workspaceRoot/stateRoot/sandboxBaseUrl` 与 `altus*` 字段
+  - `file-memory-store.ts` 正式补齐 `runtime.workspaceRoot`
+  - 已修正为：Altus managed 会话在复用现有 runtime 时，跳过 OpenCode 配置热同步和 OpenCode server ensure，只保留 OSAC/provider lifecycle 所需链路。
+  - 设计文档已同步补充 Altus 与 Direct/OpenCode 的运行时职责边界。
+  - 验证：`node --import tsx` 成功加载 [task-creation-routes.ts](/Users/watson/codingProj/oneceo/apps/api/src/routes/task-creation-routes.ts)。
+- OSAC 交付版本更新：
+  - 重新基于当前 `OSAC_client` 源码构建了新的交付版本：
+    - `dist/osac-linux-amd64_v1.1.2.fix26`
+    - `dist/osac-linux-amd64_v1.1.2.fix26_debug`
+  - 新增交付说明文档：[使用方式文档-交付v1.1.2.fix26.md](/Users/watson/codingProj/oneceo/OSAC_client/使用方式文档-交付v1.1.2.fix26.md)。
+  - 当前 `apps/api` 的二进制扫描顺序会优先选到 `fix26`，因此重启 API 后 sandbox 下发的 OSAC 会切到新版本。
+- 修复启动时报 `Failed query: insert into "task_creation_sessions"`：
+  - 直接连开发库复现后确认真实原因是主键冲突：同一个 `sessionId` 被重复创建，报错 `duplicate key value violates unique constraint "task_creation_sessions_pkey"`。
+  - 已将 `TaskCreationSessionDAO.createSession()` 改为幂等创建：`ON CONFLICT DO NOTHING` 后回查现有记录，避免启动重入或并发创建把会话链路打断。
+  - 使用 `node --import tsx` 做了 DAO 级验证：同一 `sessionId` 连续调用两次 `createSession()`，两次都能返回同一条记录，不再抛冲突错误。
+- 修复 Altus 模式下普通对话卡在“智能体正在处理...”：
+  - 根因 1：`listSessionConnectors()` 在没有任何会话级 binding 时仍然强制做 runtime MCP 探测，直接把 connector 页和普通对话绑到 OSAC runtime。
+  - 根因 2：`captureConnectorSnapshot()` 会在 managed run 启动前隐式自动挂载 GitHub，普通对话被错误拖进 connector attach 链路。
+  - 根因 3：`ensureSandboxRuntimeMetadata()` 之前会在每次请求里重复重建 OSAC bridge，并且把 `/status` 探活放在主链路上，导致旧 sandbox 反复写入 OSAC 二进制，最终出现 `fetch failed`。
+  - 已修复：
+    - 无 binding 时，connector 列表不再探 runtime。
+    - managed run 启动前不再隐式自动挂 GitHub。
+    - 无已挂载 provider 时，不再为了 MCP snapshot 调 OSAC。
+    - OSAC bridge 改为“sandbox 创建/首次修复时写入一次”，已有二进制时直接复用，不再重复写入。
+    - OSAC readiness 改为后台 best-effort，不再阻塞 `ensureSandboxRuntimeMetadata()` 主链路；metadata 会先写回，后续直接复用。
+  - 回归：
+    - `GET /api/task-creation/sessions/:sessionId/connectors` 已从 `fetch failed` 恢复为正常返回。
+    - `POST /api/altus-managed/inputs` 已成功返回 run。
+    - 会话 `b9c5451a-3450-4c74-aff3-24f7005f2ebf` 已落库 `user_input` 与 `clarification_request`，run `a400783a-5e75-4d1a-a594-8780e62dff95` 状态为 `waiting_user`。

@@ -17,6 +17,7 @@ import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service
 import { githubConnectorRepositoryService } from './github-connector-repository-service';
 import { osacConnectionManager } from './osac-connection-manager';
 import type { OsacMessage } from '../clients/osac-client';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
 export type SessionConnectorConfig = {
   repositories?: string[];
@@ -475,12 +476,22 @@ export class SessionConnectorService {
   async listSessionConnectors(taskSessionId: string, userId: string): Promise<SessionConnectorStatus[]> {
     await connectorStorageBootstrap.ensureReady();
     await this.assertSessionOwnership(taskSessionId, userId);
-    const [accounts, profiles, bindings, runtime] = await Promise.all([
+    const [accounts, profiles, bindings] = await Promise.all([
       userConnectorService.listUserAccounts(userId),
       userConnectorService.listUserProfiles(userId),
       taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId),
-      this.resolveRuntimeContext(taskSessionId),
     ]);
+    const requiresRuntimeProbe = bindings.some((item) => {
+      const desiredState = asText(item.desiredState).toLowerCase();
+      const runtimeProviderId = asText(item.runtimeProviderId);
+      const runtimeStatus = asText(item.runtimeStatus).toLowerCase();
+      return (
+        desiredState === 'attached' ||
+        Boolean(runtimeProviderId) ||
+        ['connected', 'connecting', 'unknown'].includes(runtimeStatus)
+      );
+    });
+    const runtime = requiresRuntimeProbe ? await this.resolveRuntimeContext(taskSessionId) : null;
     const bindingMap = new Map(bindings.map((item) => [item.connectorKey, item]));
     const liveMap = await this.getRuntimeMcpMap(runtime);
     return connectorRegistry.listVisibleCatalog().map((item) => {
@@ -524,6 +535,15 @@ export class SessionConnectorService {
     orchestratorSessionId?: string
   ) {
     await connectorStorageBootstrap.ensureReady();
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_SERVICE_START]', {
+      taskSessionId,
+      userId,
+      connectorKey,
+      profileId,
+      enabledTools,
+      sessionConfigKeys: Object.keys(sessionConfig || {}),
+      orchestratorSessionId: asText(orchestratorSessionId) || null,
+    });
     await this.assertSessionOwnership(taskSessionId, userId);
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
     if (!catalogItem.available) {
@@ -570,6 +590,13 @@ export class SessionConnectorService {
     const providerId = providerIdFor(taskSessionId, connectorKey, profileId);
     const runtimeEnvVersion = Number(existingBinding?.runtimeEnvVersion || 0) + 1;
     const providerConfig = this.buildProviderTransport(connectorKey, profileMaterial, normalizedSessionConfig);
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_RUNTIME_READY]', {
+      taskSessionId,
+      connectorKey,
+      providerTransportType: providerConfig.transportName,
+      runtimeSessionId: runtime.orchestratorSessionId,
+      runtimeBaseUrl: runtime.baseUrl,
+    });
 
     const binding = await taskSessionConnectorBindingDAO.upsert({
       taskSessionId,
@@ -600,6 +627,13 @@ export class SessionConnectorService {
     });
 
     try {
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_REGISTER_PROVIDER]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+        runtimeSessionId: runtime.orchestratorSessionId,
+        transport: providerConfig.transportName,
+      });
       await this.requestRuntime(
         runtime,
         {
@@ -618,6 +652,11 @@ export class SessionConnectorService {
           return message.type === 'MCP_PROVIDER_STATUS' && asText(payload.providerId) === providerId;
         }
       );
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_REGISTERED]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+      });
       const attachReply = await this.requestRuntime(
         runtime,
         {
@@ -638,6 +677,12 @@ export class SessionConnectorService {
           );
         }
       );
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_ATTACHED_REPLY]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+        payload: this.asPayloadRecord(attachReply),
+      });
       const attachedProviders = this.normalizeSessionMcpProviders({
         ...attachReply,
         payload: {
@@ -662,6 +707,14 @@ export class SessionConnectorService {
         },
       });
     } catch (error) {
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_FAILED]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+        runtimeSessionId: runtime.orchestratorSessionId,
+        transport: providerConfig.transportName,
+        error: error instanceof Error ? error.message : String(error),
+      }, 'error');
       await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
         runtimeStatus: 'failed',
         runtimeProviderId: providerId,
@@ -683,6 +736,12 @@ export class SessionConnectorService {
 
     const live = await this.waitForRuntimeServer(runtime, providerId);
     if (!live) {
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_MISSING_AFTER_ATTACH]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+        runtimeSessionId: runtime.orchestratorSessionId,
+      }, 'error');
       await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
         runtimeStatus: 'failed',
         runtimeProviderId: providerId,
@@ -692,6 +751,14 @@ export class SessionConnectorService {
       });
       throw new Error('运行时未保留已挂载的 MCP provider');
     }
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_LIVE]', {
+      taskSessionId,
+      connectorKey,
+      providerId,
+      runtimeSessionId: runtime.orchestratorSessionId,
+      status: live.status,
+      tools: live.tools.map((item) => item.toolName),
+    });
 
     const statuses = await this.listSessionConnectors(taskSessionId, userId);
     const current = statuses.find((item) => item.connectorKey === connectorKey);

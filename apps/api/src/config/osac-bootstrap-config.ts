@@ -34,7 +34,7 @@ export const osacBootstrapConfig: OsacBootstrapConfig = {
   osacPathSuffix: process.env.OSAC_PATH_SUFFIX || '/ws',
   osacBinaryPath: resolvePath(
     process.env.OSAC_BINARY_PATH || '',
-    'others/osac-linux/osac-linux-amd64_v1.1.2.fix17'
+    'others/osac-linux/osac-linux-amd64_v1.1.3'
   ),
   opencodeBinaryPath: resolvePath(
     process.env.OPENCODE_BINARY_PATH || '',

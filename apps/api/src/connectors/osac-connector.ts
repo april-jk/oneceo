@@ -4,6 +4,7 @@ import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { OsacClient, type OsacMessage } from '../clients/osac-client';
 import { kvmConnector } from './kvm-connector';
+import { ensureSandboxRuntimeMetadata } from '../services/sandbox-runtime-metadata-service';
 import {
   buildSandboxPortProbeQuery,
   extractSandboxPortMappings,
@@ -150,6 +151,19 @@ function relayFallbackEnabled(): boolean {
 function isMappingStaleError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.includes('mapping_stale') || /mapping_stale/i.test(text);
+}
+
+function shouldRestartOsacBridge(error: unknown): boolean {
+  const text = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('osac websocket 握手失败: status=502') ||
+    text.includes('osac websocket 握手失败: status=503') ||
+    text.includes('osac websocket 连接超时') ||
+    text.includes('econnrefused') ||
+    text.includes('socket hang up') ||
+    text.includes('fetch failed')
+  );
 }
 
 async function issueRelayTcpTicket(sessionId: string): Promise<RelayTicketContext> {
@@ -729,6 +743,17 @@ export const osacConnector = {
               }
             }
           }
+        }
+      }
+
+      if (shouldRestartOsacBridge(lastError)) {
+        try {
+          await ensureSandboxRuntimeMetadata(sessionId, {
+            forceBridgeRestart: true,
+            forceBinaryRewrite: true,
+          });
+        } catch (restartError) {
+          lastError = restartError;
         }
       }
 

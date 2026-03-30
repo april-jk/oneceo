@@ -101,3 +101,22 @@
     - `GET /api/task-creation/sessions/:sessionId/connectors` 已从 `fetch failed` 恢复为正常返回。
     - `POST /api/altus-managed/inputs` 已成功返回 run。
     - 会话 `b9c5451a-3450-4c74-aff3-24f7005f2ebf` 已落库 `user_input` 与 `clarification_request`，run `a400783a-5e75-4d1a-a594-8780e62dff95` 状态为 `waiting_user`。
+- 修复 Altus 模式下 GitHub MCP `OSAC WebSocket 握手失败: status=502`：
+  - 直接进入 sandbox `i4jmqcuplcwvm1z4hry7e` 检查 `osac.log`，确认当前下发包在 Linux 内报错：
+    - `/home/user/opencode/osac: 1: ... not found`
+    - `Syntax error: "(" unexpected`
+  - 本地核对发现平台引用的 `OSAC_client/dist/osac-linux-amd64_v1.1.3` 实际是 `Mach-O 64-bit executable arm64`，属于错误平台产物被误命名为 Linux 包。
+  - 已重新构建真实 Linux 交付：
+    - `OSAC_client/dist/osac-linux-amd64_v1.1.3`
+    - `OSAC_client/dist/osac-linux-amd64_v1.1.3_debug`
+    - `file` 校验结果已变为 `ELF 64-bit LSB executable, x86-64`
+    - `PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ...` 已通过
+    - `PATH=/opt/homebrew/bin:$PATH go test ./...` 已通过
+  - 代码修复：
+    - `sandbox-osac-bridge-service.ts` 新增 Linux ELF + amd64 二进制校验，避免再次把 darwin 包投递进 sandbox。
+    - `sandbox-runtime-metadata-service.ts` 去掉 `baseUrl <- metadata.osacEndpoint` 的错误回退，并对被污染成 `wss://.../ws` 的 `baseUrl` 做自动纠正。
+    - `osac-connector.ts` 在握手 `502/503`、连接超时、`ECONNREFUSED` 等场景下，会触发一次强制 bridge 重建，并强制重写远端 OSAC 二进制；正常新 sandbox 仍保持“仅创建时写入一次”。
+  - 直接回归：
+    - 对会话 `b5bedf20-e5b3-4d4d-b2cb-00d6b356dc9e` 的 sandbox `i4jmqcuplcwvm1z4hry7e` 执行强制 bridge 重建后，`OSAC_BRIDGE_READY_WAIT_DONE` 返回 `status: 200`
+    - 直接调用 `sessionConnectorService.attachConnector(...)` 挂载 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 成功
+    - 结果为 `runtimeStatus=connected`，已发现 GitHub MCP tools，`lastError=null`

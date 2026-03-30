@@ -16,6 +16,24 @@ function shellEscape(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function assertLinuxAmd64Binary(buffer: Buffer, sourcePath: string) {
+  if (buffer.length < 20) {
+    throw new Error(`OSAC binary is too small: ${sourcePath}`);
+  }
+  const isElf =
+    buffer[0] === 0x7f &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0x4c &&
+    buffer[3] === 0x46;
+  if (!isElf) {
+    throw new Error(`OSAC binary is not a Linux ELF executable: ${sourcePath}`);
+  }
+  const machine = buffer.readUInt16LE(18);
+  if (machine !== 62) {
+    throw new Error(`OSAC binary is not linux/amd64 (e_machine=${machine}): ${sourcePath}`);
+  }
+}
+
 function resolveExecutorRemoteBaseDir(
   executor: SandboxOsacExecutor,
   workspaceRoot?: string | null
@@ -144,6 +162,7 @@ export async function ensureOsacBridge(
     workspaceRoot?: string | null;
     authToken?: string | null;
     codexPath?: string | null;
+    forceBinaryRewrite?: boolean;
   }
 ): Promise<{
   osacEndpoint: string;
@@ -157,9 +176,11 @@ export async function ensureOsacBridge(
     workspaceRoot: pickString(input.workspaceRoot) || null,
     hasAuthToken: Boolean(pickString(input.authToken)),
     hasCodexPath: Boolean(pickString(input.codexPath)),
+    forceBinaryRewrite: Boolean(input.forceBinaryRewrite),
   });
   const osacBinaryPath = await resolveLocalOsacBinaryPath();
   const osacBuffer = await fs.readFile(osacBinaryPath);
+  assertLinuxAmd64Binary(osacBuffer, osacBinaryPath);
   const remoteBaseDir = resolveExecutorRemoteBaseDir(input.executor, input.workspaceRoot);
   const remoteBinaryName = osacBootstrapConfig.osacBinaryName || 'osac';
   const remoteBinary = `${remoteBaseDir.replace(/\/+$/, '')}/${remoteBinaryName}`;
@@ -192,12 +213,15 @@ export async function ensureOsacBridge(
     throw error;
   }
   try {
-    const binaryProbe: any = await e2bConnector.runCommand(
-      sessionId,
-      `if [ -x ${shellEscape(remoteBinary)} ]; then echo EXISTS; else echo MISSING; fi`,
-      { timeoutMs: 10_000 }
-    );
-    const probeOutput = String(binaryProbe?.stdout || binaryProbe?.output || '').trim();
+    let probeOutput = 'MISSING';
+    if (!input.forceBinaryRewrite) {
+      const binaryProbe: any = await e2bConnector.runCommand(
+        sessionId,
+        `if [ -x ${shellEscape(remoteBinary)} ]; then echo EXISTS; else echo MISSING; fi`,
+        { timeoutMs: 10_000 }
+      );
+      probeOutput = String(binaryProbe?.stdout || binaryProbe?.output || '').trim();
+    }
     if (probeOutput !== 'EXISTS') {
       await e2bConnector.writeFile(sessionId, remoteBinary, osacBuffer);
     }
@@ -206,6 +230,7 @@ export async function ensureOsacBridge(
       remoteBinary,
       binaryBytes: osacBuffer.byteLength,
       reusedExistingBinary: probeOutput === 'EXISTS',
+      forceBinaryRewrite: Boolean(input.forceBinaryRewrite),
     });
   } catch (error) {
     writeConnectorDebugLog('[OSAC_BRIDGE_ENSURE_WRITE_BINARY_FAILED]', {

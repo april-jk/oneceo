@@ -789,6 +789,17 @@ GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
 3. `apps/web/client/src/components/ConnectorDialog.tsx`
 4. `apps/web/client/src/lib/connector-guides.ts`
 
+补充口径（2026-03-30）：
+
+1. 用户态 `设置 -> Connectors` 中，点击连接器卡片后不再在页内右侧展开详情。
+2. 详情改为独立 modal 展示。
+3. modal 内部统一使用单列布局，依次展示：
+   - 基本信息
+   - profile 选择与操作
+   - 凭证/配置表单
+   - 配置指引
+   - 使用边界
+
 新增目录：
 
 1. `apps/api/src/connectors/definitions/`

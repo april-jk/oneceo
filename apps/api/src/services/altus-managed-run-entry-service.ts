@@ -48,14 +48,17 @@ export class AltusManagedRunEntryService {
 
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
     const connectorSnapshot = await this.setupService.captureConnectorSnapshot(sessionId, userId);
+    const mcpToolSnapshot = await this.setupService.captureMcpToolSnapshot(sessionId);
     const run = await taskSessionRunDAO.createRun({
       sessionId,
       status: 'queued',
       mode: 'managed',
       model: this.getModelName(),
       connectorSnapshotId: connectorSnapshot.snapshotId,
+      mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       metadataJson: {
         trigger: 'user_input',
+        mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       },
     });
 
@@ -95,6 +98,7 @@ export class AltusManagedRunEntryService {
       userInput: content,
       sessionTitle: sessionMemory?.title || null,
       connectors: connectorSnapshot.statuses,
+      mcpProviders: mcpToolSnapshot.providers as any,
       skillCatalog: readManagedSkillCatalog(input.metadata?.managedSkillCatalog),
       skills: readManagedSkillContext(input.metadata?.managedSkillContext),
     });
@@ -138,6 +142,7 @@ export class AltusManagedRunEntryService {
       userInput: '',
       sessionTitle: null,
       connectors: [],
+      mcpProviders: [],
       skillCatalog: [],
       skills: [],
     });

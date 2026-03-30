@@ -2,16 +2,19 @@ import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
-import type { ManagedCompletionAttachment, ManagedSkillContext } from './altus-managed-shared';
+import { osacAgentService } from './osac-agent-service';
+import {
+  asText,
+  buildManagedMcpToolName,
+  type ManagedCompletionAttachment,
+  type ManagedMcpProvider,
+  type ManagedSkillContext,
+} from './altus-managed-shared';
 
 type ManagedToolResult =
   | { type: 'result'; content: string }
   | { type: 'ask_user'; question: string; options?: string[] }
   | { type: 'complete'; summary: string; verification?: string[]; attachments?: ManagedCompletionAttachment[] };
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
@@ -63,8 +66,24 @@ export class AltusManagedToolRuntime {
       sandboxId: string;
       workspaceRoot: string;
       activeSkills: ManagedSkillContext[];
+      mcpProviders: ManagedMcpProvider[];
     }
   ) {}
+
+  private buildMcpToolMap() {
+    const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
+    const entries = providers.flatMap((provider) =>
+      (Array.isArray(provider.tools) ? provider.tools : []).map((tool) => [
+        buildManagedMcpToolName(provider.providerId, tool.toolName),
+        {
+          providerId: provider.providerId,
+          toolName: tool.toolName,
+          displayName: tool.title || tool.toolName,
+        },
+      ])
+    );
+    return new Map(entries as Array<[string, { providerId: string; toolName: string; displayName: string }]>);
+  }
 
   private ensureNotAborted(signal?: AbortSignal) {
     if (signal?.aborted) {
@@ -149,6 +168,30 @@ export class AltusManagedToolRuntime {
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    const mcpTool = this.buildMcpToolMap().get(toolName);
+    if (mcpTool) {
+      const response = await osacAgentService.callSessionMcpTool(this.input.sandboxId, {
+        providerId: mcpTool.providerId,
+        toolName: mcpTool.toolName,
+        arguments: rawArgs,
+      });
+      this.ensureNotAborted(signal);
+      if (response.isError) {
+        throw new Error(
+          typeof response.result === 'string'
+            ? response.result
+            : JSON.stringify(response.result || { error: 'mcp_tool_failed' })
+        );
+      }
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          providerId: response.providerId,
+          toolName: response.toolName,
+          result: response.result,
+        }),
+      };
+    }
 
     if (toolName === 'shell_execute') {
       const command = asText(rawArgs.command);

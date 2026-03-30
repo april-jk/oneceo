@@ -41,3 +41,21 @@
 3. Anthropic 内建服务型工具映射
    - 现状：当前只支持 oneceo 自定义工具在 Anthropic/OpenAI-compatible 之间的协议转换
    - 后续需要补齐 `server_tool_use`、`web_search`、`code_execution` 等 Anthropic 内建服务型工具的映射与边界定义
+
+## 2026-03-30
+
+### 文档
+
+- 管理文档：
+  - [github_auth_logic_[20260330-1000已采用].md](docs/features/connectors/github_auth_logic_[20260330-1000已采用].md)
+
+### TODO 列表
+
+1. GitHub 授权极简流程重构
+   - 现状：当前 GitHub 授权流程与普通应用一样，需要手动创建 Profile。
+   - 后续需要根据设计文档重构 `ConnectorCenterPanel.tsx`，实现“一键连接”并自动创建默认 Profile。
+
+2. OAuth 回调静默挂载优化
+   - 现状：当前授权成功后仅提示保存成功。
+   - 后续需要优化回调逻辑，使其在特定场景下自动并静默地将 Profile 挂载到目标会话中。
+

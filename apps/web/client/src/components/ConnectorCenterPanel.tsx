@@ -2,7 +2,6 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
   AlertCircle,
-  ArrowLeft,
   ArrowUpRight,
   Check,
   CheckCircle2,
@@ -13,11 +12,19 @@ import {
   Sparkles,
   Trash2,
   Unplug,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -397,10 +404,13 @@ export function ConnectorCenterPanel({
         }
 
         window.history.replaceState(null, "", cleanupConnectorQuery(location, search));
+        
+        // OAuth回调完成后，优先选中刚授权的 Profile
         setSelectedProfileIds((prev) => ({
           ...prev,
           [connector]: completedProfileId,
         }));
+        
         await load();
 
         if (attachError) {
@@ -557,9 +567,29 @@ export function ConnectorCenterPanel({
 
   const handleOAuth = async () => {
     if (!detailItem) return;
-    const profileId = activeEditorProfileId;
+    
+    // 如果是 GitHub 且没有选中的 Profile，则自动使用/创建一个默认 Profile
+    let profileId = activeEditorProfileId;
+    if (detailItem.key === "github" && (!profileId || profileId === NEW_PROFILE_ID)) {
+      const defaultProfile = detailConnectorProfiles.find(p => p.profileName === "GitHub Default" || p.isDefault);
+      if (defaultProfile) {
+        profileId = defaultProfile.profileId;
+      } else {
+        profileId = NEW_PROFILE_ID;
+        // 自动设置 GitHub 的默认配置
+        setFormState((prev) => ({
+          ...prev,
+          [editorKey(detailItem.key, profileId)]: {
+            ...(prev[editorKey(detailItem.key, profileId)] || {}),
+            profileName: "GitHub Default",
+          },
+        }));
+      }
+    }
+
     setActionKey(`oauth:${detailItem.key}`);
     try {
+      // 针对自动创建的情况，这里 persistProfile 会自动使用上面的 formState
       const profile = await persistProfile(detailItem, profileId);
       setSelectedProfileIds((prev) => ({
         ...prev,
@@ -632,7 +662,7 @@ export function ConnectorCenterPanel({
 
   const renderTargetBanner = () =>
     effectiveTargetSessionId ? (
-      <div className="mx-6 mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
         <div className="flex items-center gap-2 font-medium">
           <ShieldCheck className="h-4 w-4" />
           当前正在为目标会话准备连接器 profile
@@ -725,7 +755,7 @@ export function ConnectorCenterPanel({
     );
   };
 
-  const renderDetail = () => {
+  const renderDetailModal = () => {
     if (!detailItem) return null;
 
     const Icon = resolveConnectorIcon(detailItem.icon);
@@ -740,370 +770,345 @@ export function ConnectorCenterPanel({
       actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
 
     return (
-      <div className="flex h-full flex-col">
-        <div className="border-b border-border/70 px-6 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <Button
-              variant="ghost"
-              className="rounded-xl px-3 text-muted-foreground hover:text-foreground"
-              onClick={() => setDetailKey(null)}
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回目录
-            </Button>
-            <Badge variant={connectorStatusTone(statusText)}>{formatConnectorStatus(statusText)}</Badge>
-          </div>
-        </div>
-
-        <ScrollArea className="h-full">
-          <div className="px-6 pb-6 pt-5">
-            {renderTargetBanner()}
-
-            <div className="rounded-[24px] border border-border/70 bg-card p-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-background">
-                    <Icon className="h-7 w-7 text-foreground/85" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-semibold text-foreground">{detailItem.name}</h3>
-                      {detailItem.isNew ? (
-                        <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                          新
-                        </span>
-                      ) : null}
-                      {detailItem.featured ? (
-                        <span className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                          <Sparkles className="h-3 w-3" />
-                          推荐
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                      {detailItem.description}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{profileCount} 个 profile</Badge>
-                      {selectedDetailProfile?.isDefault ? (
-                        <Badge variant="secondary">默认 profile</Badge>
-                      ) : null}
-                      {selectedDetailProfile?.secretSummary ? (
-                        <Badge variant="outline">{selectedDetailProfile.secretSummary}</Badge>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-
-                {guide?.quickLinks?.length ? (
-                  <div className="flex flex-wrap gap-2 lg:max-w-[320px] lg:justify-end">
-                    {guide.quickLinks.slice(0, 2).map((link) => (
-                      <a
-                        key={link.href}
-                        href={link.href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-xl border border-border/70 px-3 py-2 text-xs text-muted-foreground transition hover:border-foreground/15 hover:text-foreground"
-                      >
-                        {link.label}
-                        <ArrowUpRight className="h-3.5 w-3.5" />
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
+      <Dialog open={Boolean(detailItem)} onOpenChange={(open) => !open && setDetailKey(null)}>
+        <DialogContent showCloseButton={false} className="flex flex-col w-[min(880px,calc(100vw-32px))] max-w-[880px] h-[min(400px,calc(100vh-64px))] md:h-[min(440px,calc(100vh-64px))] gap-0 overflow-hidden rounded-[28px] border shadow-xl p-0">
+          <div className="flex flex-col items-start justify-start overflow-clip relative w-full h-full">
+            <div className="bg-muted/10 flex gap-6 items-center justify-start px-6 py-5 relative shrink-0 w-full border-b border-border/60">
+              <div className="basis-0 flex gap-6 grow items-center justify-end min-h-px min-w-px p-0 relative shrink-0">
+                <button 
+                  onClick={() => setDetailKey(null)}
+                  className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors active:opacity-80 text-foreground gap-[4px] text-[14px] leading-[18px] min-w-0 hover:opacity-80 bg-inherit h-max rounded-full p-0"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
             </div>
 
-            <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_320px]">
-              <div className="space-y-6">
-                <section className="rounded-[24px] border border-border/70 bg-card p-5">
-                  <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-foreground">Profile</div>
-                      <p className="text-sm text-muted-foreground">
-                        设置页只负责创建、编辑和授权 profile；会话页只选择并挂载它。
-                      </p>
+            <ScrollArea className="min-h-0 flex-1 w-full bg-background">
+              <div className="flex flex-col gap-[32px] items-center justify-center pb-3 pt-8 px-6 relative shrink-0 w-full">
+                <div className="flex flex-col gap-4 items-center justify-center max-w-[600px] p-0 relative shrink-0 w-full">
+                  <div className="bg-background flex items-center justify-center p-[8px] relative rounded-xl shrink-0 size-16 border border-border/60 shadow-sm">
+                    <Icon className="h-10 w-10 text-foreground/85" />
+                  </div>
+                  
+                  <div className="flex flex-col gap-2 items-start justify-center leading-[0] p-0 relative shrink-0 text-center w-full">
+                    <div className="flex gap-2 items-center justify-center font-semibold overflow-hidden relative shrink-0 text-foreground text-[20px] tracking-[-0.44px] w-full">
+                      <p className="leading-[26px] overflow-hidden text-ellipsis">{detailItem.name}</p>
+                      {detailItem.isNew ? (
+                        <span className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700 ml-2">新</span>
+                      ) : null}
                     </div>
-                    <Button
-                      variant="outline"
-                      className="rounded-xl"
-                      onClick={() => {
-                        setSelectedProfileIds((prev) => ({
-                          ...prev,
-                          [detailItem.key]: NEW_PROFILE_ID,
-                        }));
-                        setFormState((prev) => ({
-                          ...prev,
-                          [editorKey(detailItem.key, null)]: buildFormValues(
-                            detailItem,
-                            undefined,
-                            prev[editorKey(detailItem.key, null)]
-                          ),
-                        }));
-                      }}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      新建 profile
-                    </Button>
+                    <div className="font-normal relative shrink-0 text-muted-foreground tracking-[-0.154px] w-full">
+                      <p className="block text-[14px] leading-[20px]">{detailItem.description}</p>
+                    </div>
                   </div>
 
-                  <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className="space-y-2">
-                      <Label className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                        当前编辑
-                      </Label>
-                      <Select
-                        value={selectedDetailProfileId || NEW_PROFILE_ID}
-                        onValueChange={(value) => {
-                          setSelectedProfileIds((prev) => ({
-                            ...prev,
-                            [detailItem.key]: value,
-                          }));
-                        }}
-                      >
-                        <SelectTrigger className="rounded-xl">
-                          <SelectValue placeholder="选择一个 profile" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {detailConnectorProfiles.map((profile) => (
-                            <SelectItem key={profile.profileId} value={profile.profileId}>
-                              {profile.profileName}
-                              {profile.isDefault ? " · 默认" : ""}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value={NEW_PROFILE_ID}>创建新 profile</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {selectedDetailProfile ? (
-                      <div className="flex flex-wrap gap-2">
-                        {!selectedDetailProfile.isDefault ? (
-                          <Button
-                            variant="outline"
-                            className="rounded-xl"
-                            disabled={busy}
-                            onClick={() => void handleSetDefault()}
-                          >
-                            {actionKey === `default:${selectedDetailProfile.profileId}` ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Check className="mr-2 h-4 w-4" />
-                            )}
-                            设为默认
-                          </Button>
-                        ) : null}
+                  {selectedDetailProfile?.authStatus === "authorized" ? (
+                    <div className="flex flex-col items-center gap-4 w-full mt-2">
+                      <div className="flex items-center justify-center gap-[8px]">
+                        <div className="flex items-center gap-[4px]">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500 fill-emerald-500/20" />
+                          <span className="text-muted-foreground text-center text-sm">授权账户</span>
+                        </div>
+                        <div className="h-[1px] w-[16px] bg-muted-foreground/30"></div>
+                        <div className="flex items-center gap-[4px]">
+                          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground text-center text-sm">授权仓库</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2.5">
                         <Button
                           variant="outline"
-                          className="rounded-xl"
-                          disabled={busy || !selectedDetailProfile.secretSummary}
+                          className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm hover:bg-muted/50 font-medium text-foreground"
                           onClick={() => void handleDisconnect()}
+                          disabled={busy}
                         >
                           {actionKey === `disconnect:${selectedDetailProfile.profileId}` ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Unplug className="mr-2 h-4 w-4" />
-                          )}
-                          清除授权
+                          ) : null}
+                          取消授权
                         </Button>
                         <Button
-                          variant="outline"
-                          className="rounded-xl text-destructive hover:text-destructive"
-                          disabled={busy}
-                          onClick={() => void handleDelete()}
+                          className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+                          onClick={() => {
+                            if (detailItem.key === "github") {
+                              window.open("https://github.com/settings/installations", "_blank");
+                            } else {
+                              void handleOAuth();
+                            }
+                          }}
+                          disabled={busy || !detailItem.available}
                         >
-                          {actionKey === `delete:${selectedDetailProfile.profileId}` ? (
+                          {actionKey === `oauth:${detailItem.key}` ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="mr-2 h-4 w-4" />
-                          )}
-                          删除
+                          ) : null}
+                          配置
                         </Button>
                       </div>
-                    ) : null}
-                  </div>
-
-                  {selectedDetailProfile?.lastError ? (
-                    <div className="mt-4 flex items-start gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{selectedDetailProfile.lastError}</span>
                     </div>
-                  ) : null}
-
-                  {!detailItem.available && detailItem.availabilityReason ? (
-                    <div className="mt-4 flex items-start gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{detailItem.availabilityReason}</span>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
-                    {detailItem.configFields.map((field) => (
-                      <div
-                        key={field.key}
-                        className={cn("space-y-2", field.type === "textarea" ? "md:col-span-2" : "")}
-                      >
-                        <Label
-                          htmlFor={`${detailItem.key}-${field.key}`}
-                          className="text-sm text-foreground"
-                        >
-                          {field.label}
-                          {field.required ? " *" : ""}
-                        </Label>
-                        {field.type === "textarea" ? (
-                          <Textarea
-                            id={`${detailItem.key}-${field.key}`}
-                            value={activeEditorForm[field.key] || ""}
-                            placeholder={field.placeholder}
-                            className="min-h-[104px] rounded-2xl"
-                            onChange={(event) =>
-                              handleFieldChange(
-                                detailItem.key,
-                                activeEditorProfileId,
-                                field.key,
-                                event.target.value
-                              )
-                            }
-                          />
-                        ) : (
-                          <Input
-                            id={`${detailItem.key}-${field.key}`}
-                            type={field.type === "password" ? "password" : "text"}
-                            value={activeEditorForm[field.key] || ""}
-                            placeholder={field.placeholder}
-                            className="rounded-2xl"
-                            onChange={(event) =>
-                              handleFieldChange(
-                                detailItem.key,
-                                activeEditorProfileId,
-                                field.key,
-                                event.target.value
-                              )
-                            }
-                          />
-                        )}
-                        {field.description ? (
-                          <p className="text-xs leading-5 text-muted-foreground">
-                            {field.description}
-                          </p>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-3">
+                  ) : (
                     <Button
-                      className="rounded-xl"
+                      className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                      onClick={() => void handleOAuth()}
                       disabled={busy || !detailItem.available}
-                      onClick={() => void handleSave()}
                     >
-                      {actionKey === `save:${detailItem.key}` ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {actionKey === `oauth:${detailItem.key}` ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
-                        <Check className="mr-2 h-4 w-4" />
+                        <Plus className="h-4 w-4" />
                       )}
-                      保存 profile
+                      连接
                     </Button>
-                    {detailItem.oauth?.supported ? (
+                  )}
+                </div>
+
+                <button className="flex gap-1 items-center justify-center w-full mt-4 mb-3 text-muted-foreground hover:text-foreground transition-colors">
+                  <span className="text-[13px] leading-[18px] tracking-[-0.08px]">显示详情</span>
+                  <ChevronRight className="h-4 w-4 rotate-90" />
+                </button>
+
+                {renderTargetBanner()}
+
+                <div className="w-full max-w-[720px] space-y-8 mt-4">
+                
+                {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
+                {detailItem.key !== "github" ? (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-base font-medium text-foreground">Profile 配置</Label>
+                      <p className="text-sm text-muted-foreground">
+                        在这里完成 profile 选择、凭证编辑和授权更新。
+                      </p>
+                    </div>
+
+                    <div className="space-y-6">
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">选择 Profile</Label>
+                        <div className="flex flex-col gap-3">
+                          <Select
+                            value={selectedDetailProfileId || NEW_PROFILE_ID}
+                            onValueChange={(value) => {
+                              setSelectedProfileIds((prev) => ({
+                                ...prev,
+                                [detailItem.key]: value,
+                              }));
+                            }}
+                          >
+                            <SelectTrigger className="w-full rounded-xl bg-muted/20">
+                              <SelectValue placeholder="选择一个 profile" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-xl">
+                              {detailConnectorProfiles.map((profile) => (
+                                <SelectItem key={profile.profileId} value={profile.profileId} className="rounded-md">
+                                  {profile.profileName}
+                                  {profile.isDefault ? " · 默认" : ""}
+                                </SelectItem>
+                              ))}
+                              <SelectItem value={NEW_PROFILE_ID} className="rounded-md">创建新 profile</SelectItem>
+                            </SelectContent>
+                          </Select>
+
+                          <Button
+                            variant="outline"
+                            className="w-full sm:w-auto rounded-xl justify-center"
+                            onClick={() => {
+                              setSelectedProfileIds((prev) => ({
+                                ...prev,
+                                [detailItem.key]: NEW_PROFILE_ID,
+                              }));
+                              setFormState((prev) => ({
+                                ...prev,
+                                [editorKey(detailItem.key, null)]: buildFormValues(
+                                  detailItem,
+                                  undefined,
+                                  prev[editorKey(detailItem.key, null)]
+                                ),
+                              }));
+                            }}
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            新建 profile
+                          </Button>
+                        </div>
+                      </div>
+
+                      {selectedDetailProfile ? (
+                        <div className="space-y-3">
+                          <Label className="text-sm font-medium">Profile 操作</Label>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                            {!selectedDetailProfile.isDefault ? (
+                              <Button
+                                variant="outline"
+                                className="rounded-xl flex-1 sm:flex-none"
+                                disabled={busy}
+                                onClick={() => void handleSetDefault()}
+                              >
+                                {actionKey === `default:${selectedDetailProfile.profileId}` ? (
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Check className="mr-2 h-4 w-4" />
+                                )}
+                                设为默认
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="outline"
+                              className="rounded-xl flex-1 sm:flex-none"
+                              disabled={busy || !selectedDetailProfile.secretSummary}
+                              onClick={() => void handleDisconnect()}
+                            >
+                              {actionKey === `disconnect:${selectedDetailProfile.profileId}` ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <Unplug className="mr-2 h-4 w-4" />
+                              )}
+                              清除授权
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="rounded-xl flex-1 sm:flex-none text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/20"
+                              disabled={busy}
+                              onClick={() => void handleDelete()}
+                            >
+                              {actionKey === `delete:${selectedDetailProfile.profileId}` ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="mr-2 h-4 w-4" />
+                              )}
+                              删除
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {selectedDetailProfile?.lastError ? (
+                        <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
+                        </div>
+                      ) : null}
+
+                      {!detailItem.available && detailItem.availabilityReason ? (
+                        <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span className="leading-relaxed">{detailItem.availabilityReason}</span>
+                        </div>
+                      ) : null}
+
+                      <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/20 p-5">
+                        <div className="space-y-1">
+                          <Label className="text-sm font-medium">配置参数</Label>
+                          <p className="text-xs text-muted-foreground">填写此连接器所需的配置信息</p>
+                        </div>
+                        
+                        <div className="space-y-4">
+                          {detailItem.configFields.map((field) => (
+                            <div key={field.key} className="space-y-2">
+                              <Label
+                                htmlFor={`${detailItem.key}-${field.key}`}
+                                className="text-sm font-medium text-foreground"
+                              >
+                                {field.label}
+                                {field.required ? <span className="text-destructive ml-1">*</span> : ""}
+                              </Label>
+                              {field.type === "textarea" ? (
+                                <Textarea
+                                  id={`${detailItem.key}-${field.key}`}
+                                  value={activeEditorForm[field.key] || ""}
+                                  placeholder={field.placeholder}
+                                  className="min-h-[120px] rounded-xl bg-background"
+                                  onChange={(event) =>
+                                    handleFieldChange(
+                                      detailItem.key,
+                                      activeEditorProfileId,
+                                      field.key,
+                                      event.target.value
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <Input
+                                  id={`${detailItem.key}-${field.key}`}
+                                  type={field.type === "password" ? "password" : "text"}
+                                  value={activeEditorForm[field.key] || ""}
+                                  placeholder={field.placeholder}
+                                  className="rounded-xl bg-background"
+                                  onChange={(event) =>
+                                    handleFieldChange(
+                                      detailItem.key,
+                                      activeEditorProfileId,
+                                      field.key,
+                                      event.target.value
+                                    )
+                                  }
+                                />
+                              )}
+                          {field.description ? (
+                            <p className="text-xs text-muted-foreground">{field.description}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap">
                       <Button
-                        variant="outline"
-                        className="rounded-xl"
+                        className="rounded-xl w-full sm:w-auto"
                         disabled={busy || !detailItem.available}
-                        onClick={() => void handleOAuth()}
+                        onClick={() => void handleSave()}
                       >
-                        {actionKey === `oauth:${detailItem.key}` ? (
+                        {actionKey === `save:${detailItem.key}` ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         ) : (
-                          <ArrowUpRight className="mr-2 h-4 w-4" />
+                          <Check className="mr-2 h-4 w-4" />
                         )}
-                        {selectedDetailProfile?.authStatus === "authorized" ? "重新授权" : "发起 OAuth"}
+                        保存 profile
                       </Button>
-                    ) : null}
-                    {effectiveTargetSessionId && selectedDetailProfile?.authStatus === "authorized" ? (
-                      <Badge variant="secondary" className="rounded-xl px-3 py-2 text-xs">
-                        保存后将自动挂载到目标会话
-                      </Badge>
-                    ) : null}
-                    {actionBusy ? (
-                      <Badge variant="outline" className="rounded-xl px-3 py-2 text-xs">
-                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                        正在处理
-                      </Badge>
-                    ) : null}
+                      {detailItem.oauth?.supported ? (
+                        <Button
+                          variant="outline"
+                          className="rounded-xl w-full sm:w-auto bg-background"
+                          disabled={busy || !detailItem.available}
+                          onClick={() => void handleOAuth()}
+                        >
+                          {actionKey === `oauth:${detailItem.key}` ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <ArrowUpRight className="mr-2 h-4 w-4" />
+                          )}
+                          {selectedDetailProfile?.authStatus === "authorized" ? "重新授权" : "发起 OAuth"}
+                        </Button>
+                      ) : null}
+                      
+                      <div className="flex flex-col gap-2 w-full sm:w-auto">
+                        {effectiveTargetSessionId && selectedDetailProfile?.authStatus === "authorized" ? (
+                          <Badge variant="secondary" className="rounded-lg px-3 py-1.5 text-xs font-normal justify-center">
+                            保存后将自动挂载到目标会话
+                          </Badge>
+                        ) : null}
+                        {actionBusy ? (
+                          <Badge variant="outline" className="rounded-lg px-3 py-1.5 text-xs font-normal justify-center bg-background">
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            正在处理
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
-                </section>
+                </div>
+                </>
+              ) : null}
               </div>
-
-              <aside className="space-y-6">
-                {guide ? (
-                  <section className="rounded-[24px] border border-border/70 bg-card p-5">
-                    <div className="text-sm font-medium text-foreground">配置指引</div>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{guide.intro}</p>
-
-                    {guide.steps.length > 0 ? (
-                      <>
-                        <Separator className="my-4" />
-                        <div className="space-y-3">
-                          {guide.steps.map((step, index) => (
-                            <div key={`${detailItem.key}-step-${index}`} className="flex gap-3">
-                              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-foreground">
-                                {index + 1}
-                              </div>
-                              <p className="text-sm leading-6 text-muted-foreground">{step}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
-
-                    {guide.tips?.length ? (
-                      <>
-                        <Separator className="my-4" />
-                        <div className="space-y-2">
-                          <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                            Tips
-                          </div>
-                          {guide.tips.map((tip, index) => (
-                            <p key={`${detailItem.key}-tip-${index}`} className="text-sm leading-6 text-muted-foreground">
-                              {tip}
-                            </p>
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
-                  </section>
-                ) : null}
-
-                <section className="rounded-[24px] border border-border/70 bg-card p-5">
-                  <div className="text-sm font-medium text-foreground">使用边界</div>
-                  <div className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
-                    <p>设置页只保存 profile 和授权状态，不处理会话挂载。</p>
-                    <p>会话页只会选择 profile 并 attach，不会再弹出 token 表单。</p>
-                    <p>sandbox runtime 只消费已经物化后的连接器配置。</p>
-                  </div>
-                </section>
-              </aside>
             </div>
+            </ScrollArea>
           </div>
-        </ScrollArea>
-      </div>
+        </DialogContent>
+      </Dialog>
     );
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-card">
-      <div className="border-b border-border/70 px-6 py-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold leading-6 text-foreground">连接器</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              设置页管理 profile 和授权，会话页只负责选择并挂载。
-            </p>
-          </div>
-          {loading ? <Loader2 className="mt-1 h-4 w-4 animate-spin text-muted-foreground" /> : null}
-        </div>
-      </div>
-
+    <div className="flex h-full flex-col overflow-hidden bg-transparent">
       <div className="border-b border-border/70 px-6 py-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
@@ -1138,9 +1143,8 @@ export function ConnectorCenterPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1">
-        {detailItem && activeTab === "app" ? renderDetail() : renderDirectory()}
-      </div>
+      <div className="min-h-0 flex-1">{renderDirectory()}</div>
+      {activeTab === "app" ? renderDetailModal() : null}
     </div>
   );
 }

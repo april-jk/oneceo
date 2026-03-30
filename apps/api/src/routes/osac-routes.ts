@@ -167,6 +167,98 @@ router.delete('/:sessionId/mcp/:serverName', async (req, res) => {
   }
 });
 
+router.post('/:sessionId/mcp/providers', async (req, res) => {
+  try {
+    const { providerId, taskSessionId, connectorKey, providerLabel, transport, overwrite } = req.body || {};
+    if (!providerId || !transport) {
+      return res.status(400).json({ success: false, error: getPublicErrorMessage('缺少 providerId 或 transport') });
+    }
+    const result = await osacAgentService.registerMcpProvider(req.params.sessionId, {
+      providerId,
+      taskSessionId,
+      connectorKey,
+      providerLabel,
+      transport,
+      overwrite,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 注册 MCP provider 失败');
+  }
+});
+
+router.post('/:sessionId/mcp/providers/:providerId/env', async (req, res) => {
+  try {
+    const result = await osacAgentService.updateMcpProviderEnv(req.params.sessionId, {
+      providerId: req.params.providerId,
+      env: req.body?.env || {},
+      restartPolicy: req.body?.restartPolicy,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 更新 MCP provider 环境失败');
+  }
+});
+
+router.post('/:sessionId/mcp/providers/:providerId/attach', async (req, res) => {
+  try {
+    const result = await osacAgentService.attachMcpProviderToSession(req.params.sessionId, {
+      providerId: req.params.providerId,
+      taskSessionId: req.body?.taskSessionId,
+      enabledTools: Array.isArray(req.body?.enabledTools)
+        ? req.body.enabledTools.map((item: unknown) => String(item))
+        : [],
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 挂载 MCP provider 失败');
+  }
+});
+
+router.delete('/:sessionId/mcp/providers/:providerId/attach', async (req, res) => {
+  try {
+    const result = await osacAgentService.detachMcpProviderFromSession(req.params.sessionId, req.params.providerId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 卸载 MCP provider 失败');
+  }
+});
+
+router.delete('/:sessionId/mcp/providers/:providerId', async (req, res) => {
+  try {
+    const result = await osacAgentService.removeMcpProvider(req.params.sessionId, req.params.providerId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 删除 MCP provider 失败');
+  }
+});
+
+router.get('/:sessionId/mcp/tools', async (req, res) => {
+  try {
+    const result = await osacAgentService.listSessionMcpTools(req.params.sessionId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 获取 session MCP tools 失败');
+  }
+});
+
+router.post('/:sessionId/mcp/tools/call', async (req, res) => {
+  try {
+    const { providerId, toolName, arguments: callArguments } = req.body || {};
+    if (!providerId || !toolName) {
+      return res.status(400).json({ success: false, error: getPublicErrorMessage('缺少 providerId 或 toolName') });
+    }
+    const result = await osacAgentService.callSessionMcpTool(req.params.sessionId, {
+      providerId,
+      toolName,
+      arguments: callArguments || {},
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 调用 MCP tool 失败');
+  }
+});
+
 router.post('/:sessionId/update', async (req, res) => {
   try {
     const { updateType, version, downloadUrl, updateCommand } = req.body || {};

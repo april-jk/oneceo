@@ -129,6 +129,7 @@ export const taskSessionRuns = pgTable(
     stopReason: text('stop_reason'),
     sandboxBindingId: uuid('sandbox_binding_id'),
     connectorSnapshotId: uuid('connector_snapshot_id'),
+    mcpToolSnapshotId: uuid('mcp_tool_snapshot_id'),
     metadataJson: jsonb('metadata_json'),
     startedAt: timestamp('started_at'),
     completedAt: timestamp('completed_at'),
@@ -229,6 +230,43 @@ export const taskSessionConnectorSnapshots = pgTable(
   },
   (table) => ({
     sessionIdx: index('idx_task_session_connector_snapshots_session_id').on(table.sessionId),
+  })
+);
+
+export const taskSessionMcpToolSnapshots = pgTable(
+  'task_session_mcp_tool_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    snapshotJson: jsonb('snapshot_json').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index('idx_task_session_mcp_tool_snapshots_session_id').on(table.sessionId),
+  })
+);
+
+export const taskSessionConnectorRuntimeEvents = pgTable(
+  'task_session_connector_runtime_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => taskCreationSessions.id, { onDelete: 'cascade' }),
+    bindingId: uuid('binding_id')
+      .notNull()
+      .references(() => taskSessionConnectorBindings.id, { onDelete: 'cascade' }),
+    providerId: text('provider_id'),
+    eventType: text('event_type').notNull(),
+    payloadJson: jsonb('payload_json'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionIdx: index('idx_task_session_connector_runtime_events_session_id').on(table.sessionId),
+    bindingIdx: index('idx_task_session_connector_runtime_events_binding_id').on(table.bindingId),
+    providerIdx: index('idx_task_session_connector_runtime_events_provider_id').on(table.providerId),
   })
 );
 
@@ -669,6 +707,12 @@ export const taskSessionConnectorBindings = pgTable(
     runtimeStatus: text('runtime_status').notNull().default('unknown'),
     orchestratorSessionId: text('orchestrator_session_id'),
     serverName: text('server_name'),
+    runtimeProviderId: text('runtime_provider_id'),
+    runtimeEnvVersion: integer('runtime_env_version').notNull().default(0),
+    runtimeTransport: text('runtime_transport'),
+    runtimeAttachedToolsJson: jsonb('runtime_attached_tools_json'),
+    runtimeLastStartedAt: timestamp('runtime_last_started_at'),
+    runtimeLastStoppedAt: timestamp('runtime_last_stopped_at'),
     enabledTools: jsonb('enabled_tools'),
     sessionConfigJson: jsonb('session_config_json'),
     definitionSnapshotJson: jsonb('definition_snapshot_json'),
@@ -733,6 +777,10 @@ export type TaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$infer
 export type NewTaskSessionSandboxBinding = typeof taskSessionSandboxBindings.$inferInsert;
 export type TaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferSelect;
 export type NewTaskSessionConnectorSnapshot = typeof taskSessionConnectorSnapshots.$inferInsert;
+export type TaskSessionMcpToolSnapshot = typeof taskSessionMcpToolSnapshots.$inferSelect;
+export type NewTaskSessionMcpToolSnapshot = typeof taskSessionMcpToolSnapshots.$inferInsert;
+export type TaskSessionConnectorRuntimeEvent = typeof taskSessionConnectorRuntimeEvents.$inferSelect;
+export type NewTaskSessionConnectorRuntimeEvent = typeof taskSessionConnectorRuntimeEvents.$inferInsert;
 export type PlatformSkill = typeof platformSkills.$inferSelect;
 export type NewPlatformSkill = typeof platformSkills.$inferInsert;
 export type PlatformSkillRevision = typeof platformSkillRevisions.$inferSelect;

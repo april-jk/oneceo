@@ -52,6 +52,36 @@ type SandboxPromptDispatchResult = {
   rc: number;
 };
 
+type McpProviderTransport =
+  | {
+      type: 'local_stdio';
+      command: string[];
+      env?: Record<string, string>;
+    }
+  | {
+      type: 'remote_sse';
+      url: string;
+      headers?: Record<string, string>;
+      env?: Record<string, string>;
+    };
+
+type McpProviderTool = {
+  toolName: string;
+  title?: string | null;
+  description?: string | null;
+  inputSchema?: Record<string, unknown> | null;
+};
+
+type McpProviderStatusPayload = {
+  providerId?: string;
+  sessionId?: string;
+  status?: string;
+  transport?: string;
+  envVersion?: number;
+  tools?: McpProviderTool[];
+  errorMessage?: string;
+};
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -117,6 +147,38 @@ function normalizeExecutorName(value: unknown): ExecutorName {
 function asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
   const payload = message?.payload;
   return payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+}
+
+function normalizeMcpProviderStatus(message: OsacMessage): McpProviderStatusPayload {
+  const payload = asPayloadRecord(message);
+  const tools = Array.isArray(payload.tools)
+    ? payload.tools
+        .map((item) => {
+          const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+          if (!record) return null;
+          const toolName = asString(record.toolName || record.name);
+          if (!toolName) return null;
+          return {
+            toolName,
+            title: asString(record.title) || null,
+            description: asString(record.description) || null,
+            inputSchema:
+              record.inputSchema && typeof record.inputSchema === 'object'
+                ? (record.inputSchema as Record<string, unknown>)
+                : null,
+          };
+        })
+        .filter(Boolean)
+    : [];
+  return {
+    providerId: asString(payload.providerId) || undefined,
+    sessionId: asString(payload.sessionId) || undefined,
+    status: asString(payload.status) || undefined,
+    transport: asString(payload.transport) || undefined,
+    envVersion: typeof payload.envVersion === 'number' ? payload.envVersion : undefined,
+    tools: tools as McpProviderTool[],
+    errorMessage: asString(payload.errorMessage) || undefined,
+  };
 }
 
 function throwExecutorError(message: OsacMessage): never {
@@ -762,6 +824,241 @@ PY`;
     return {
       serverName,
       status: 'disconnected',
+    };
+  }
+
+  async registerMcpProvider(
+    sessionId: string,
+    input?: {
+      providerId: string;
+      taskSessionId?: string | null;
+      connectorKey?: string | null;
+      providerLabel?: string | null;
+      transport: McpProviderTransport;
+      overwrite?: boolean;
+    }
+  ) {
+    auditOsacAction('REGISTER_MCP_PROVIDER', { sessionId, providerId: input?.providerId });
+    if (!input?.providerId || !input.transport) {
+      throw new Error('缺少 providerId 或 transport');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'REGISTER_MCP_PROVIDER',
+        requestId: createOsacRequestId('register_mcp_provider'),
+        payload: {
+          providerId: input.providerId,
+          taskSessionId: input.taskSessionId || null,
+          connectorKey: input.connectorKey || null,
+          providerLabel: input.providerLabel || null,
+          transport: input.transport,
+          overwrite: input.overwrite === true,
+        },
+      },
+      (message) => {
+        const payload = asPayloadRecord(message);
+        return message.type === 'MCP_PROVIDER_STATUS' && asString(payload.providerId) === input.providerId;
+      }
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    return normalizeMcpProviderStatus(reply);
+  }
+
+  async updateMcpProviderEnv(
+    sessionId: string,
+    input?: {
+      providerId: string;
+      env: Record<string, string>;
+      restartPolicy?: 'before_next_call' | 'immediate';
+    }
+  ) {
+    auditOsacAction('UPDATE_MCP_PROVIDER_ENV', { sessionId, providerId: input?.providerId });
+    if (!input?.providerId || !input.env || typeof input.env !== 'object') {
+      throw new Error('缺少 providerId 或 env');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'UPDATE_MCP_PROVIDER_ENV',
+        requestId: createOsacRequestId('update_mcp_provider_env'),
+        payload: {
+          providerId: input.providerId,
+          env: input.env,
+          restartPolicy: input.restartPolicy || 'before_next_call',
+        },
+      },
+      (message) => {
+        const payload = asPayloadRecord(message);
+        return message.type === 'MCP_PROVIDER_STATUS' && asString(payload.providerId) === input.providerId;
+      }
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    return normalizeMcpProviderStatus(reply);
+  }
+
+  async attachMcpProviderToSession(
+    sessionId: string,
+    input?: {
+      providerId: string;
+      taskSessionId?: string | null;
+      enabledTools?: string[];
+    }
+  ) {
+    auditOsacAction('ATTACH_MCP_PROVIDER_TO_SESSION', { sessionId, providerId: input?.providerId });
+    if (!input?.providerId) {
+      throw new Error('缺少 providerId');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'ATTACH_MCP_PROVIDER_TO_SESSION',
+        requestId: createOsacRequestId('attach_mcp_provider'),
+        payload: {
+          sessionId,
+          providerId: input.providerId,
+          taskSessionId: input.taskSessionId || null,
+          enabledTools: Array.isArray(input.enabledTools) ? input.enabledTools : [],
+        },
+      },
+      (message) => {
+        const payload = asPayloadRecord(message);
+        return (
+          message.type === 'MCP_PROVIDER_STATUS' &&
+          asString(payload.providerId) === input.providerId &&
+          asString(payload.sessionId) === sessionId
+        );
+      }
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    return normalizeMcpProviderStatus(reply);
+  }
+
+  async detachMcpProviderFromSession(sessionId: string, providerId?: string) {
+    auditOsacAction('DETACH_MCP_PROVIDER_FROM_SESSION', { sessionId, providerId });
+    if (!providerId) {
+      throw new Error('缺少 providerId');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'DETACH_MCP_PROVIDER_FROM_SESSION',
+        requestId: createOsacRequestId('detach_mcp_provider'),
+        payload: {
+          sessionId,
+          providerId,
+        },
+      },
+      (message) => {
+        const payload = asPayloadRecord(message);
+        return (
+          message.type === 'MCP_PROVIDER_STATUS' &&
+          asString(payload.providerId) === providerId &&
+          asString(payload.sessionId) === sessionId
+        );
+      }
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    return normalizeMcpProviderStatus(reply);
+  }
+
+  async removeMcpProvider(sessionId: string, providerId?: string) {
+    auditOsacAction('REMOVE_MCP_PROVIDER', { sessionId, providerId });
+    if (!providerId) {
+      throw new Error('缺少 providerId');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'REMOVE_MCP_PROVIDER',
+        requestId: createOsacRequestId('remove_mcp_provider'),
+        payload: {
+          providerId,
+        },
+      },
+      (message) => {
+        const payload = asPayloadRecord(message);
+        return message.type === 'MCP_PROVIDER_STATUS' && asString(payload.providerId) === providerId;
+      }
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    return normalizeMcpProviderStatus(reply);
+  }
+
+  async listSessionMcpTools(sessionId: string) {
+    auditOsacAction('LIST_SESSION_MCP_TOOLS', { sessionId });
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'LIST_SESSION_MCP_TOOLS',
+        requestId: createOsacRequestId('list_session_mcp_tools'),
+        payload: {
+          sessionId,
+        },
+      },
+      (message) => message.type === 'SESSION_MCP_TOOLS_RESPONSE'
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      sessionId: asString(payload.sessionId) || sessionId,
+      providers: Array.isArray(payload.providers) ? payload.providers : [],
+      tools: Array.isArray(payload.tools) ? payload.tools : [],
+    };
+  }
+
+  async callSessionMcpTool(
+    sessionId: string,
+    input?: {
+      providerId: string;
+      toolName: string;
+      arguments?: Record<string, unknown>;
+    }
+  ) {
+    auditOsacAction('CALL_SESSION_MCP_TOOL', {
+      sessionId,
+      providerId: input?.providerId,
+      toolName: input?.toolName,
+    });
+    if (!input?.providerId || !input.toolName) {
+      throw new Error('缺少 providerId 或 toolName');
+    }
+    const reply = await osacConnectionManager.request(
+      sessionId,
+      {
+        type: 'CALL_SESSION_MCP_TOOL',
+        requestId: createOsacRequestId('call_session_mcp_tool'),
+        payload: {
+          sessionId,
+          providerId: input.providerId,
+          toolName: input.toolName,
+          arguments: input.arguments || {},
+        },
+      },
+      (message) => message.type === 'MCP_TOOL_CALL_RESPONSE' || message.type === 'ERROR'
+    );
+    if (reply.type === 'ERROR') {
+      throwExecutorError(reply);
+    }
+    const payload = asPayloadRecord(reply);
+    return {
+      sessionId: asString(payload.sessionId) || sessionId,
+      providerId: asString(payload.providerId) || input.providerId,
+      toolName: asString(payload.toolName) || input.toolName,
+      result: payload.result,
+      isError: payload.isError === true,
     };
   }
 

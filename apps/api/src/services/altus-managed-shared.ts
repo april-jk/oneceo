@@ -95,6 +95,22 @@ export type ManagedCompletionAttachment = {
   mimeType?: string;
 };
 
+export type ManagedMcpTool = {
+  providerId: string;
+  toolName: string;
+  title?: string | null;
+  description?: string | null;
+  inputSchema?: Record<string, unknown> | null;
+};
+
+export type ManagedMcpProvider = {
+  connectorKey?: string | null;
+  providerId: string;
+  transport?: string | null;
+  envVersion?: number;
+  tools: ManagedMcpTool[];
+};
+
 type JsonSchema =
   | {
       type: 'string' | 'number' | 'integer' | 'boolean';
@@ -393,6 +409,46 @@ export function buildManagedToolDefinitions() {
       },
     },
   ];
+}
+
+function sanitizeToolIdentifier(value: string) {
+  const normalized = asText(value)
+    .replace(/[^a-zA-Z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || 'tool';
+}
+
+export function buildManagedMcpToolName(providerId: string, toolName: string) {
+  return `mcp__${sanitizeToolIdentifier(providerId)}__${sanitizeToolIdentifier(toolName)}`.slice(0, 64);
+}
+
+export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: ManagedMcpProvider[] }) {
+  const baseTools = buildManagedToolDefinitions();
+  const providers = Array.isArray(input?.mcpProviders) ? input?.mcpProviders : [];
+  const dynamicTools = providers.flatMap((provider) =>
+    (Array.isArray(provider.tools) ? provider.tools : []).map((tool) => {
+      const parameters =
+        tool.inputSchema && typeof tool.inputSchema === 'object'
+          ? tool.inputSchema
+          : {
+              type: 'object',
+              properties: {},
+              additionalProperties: true,
+            };
+      return {
+        type: 'function',
+        function: {
+          name: buildManagedMcpToolName(provider.providerId, tool.toolName),
+          description:
+            asText(tool.description) ||
+            `${asText(provider.connectorKey) || 'mcp'} tool ${tool.toolName} from provider ${provider.providerId}.`,
+          parameters,
+        },
+      };
+    })
+  );
+  return [...baseTools, ...dynamicTools];
 }
 
 export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {

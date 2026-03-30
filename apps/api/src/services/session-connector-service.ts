@@ -536,14 +536,14 @@ export class SessionConnectorService {
     const normalizedSessionConfig = normalizeSessionConfig(connectorKey, sessionConfig);
     if (connectorKey === 'github') {
       const repositories = normalizedSessionConfig?.repositories || [];
-      if (repositories.length === 0) {
-        throw new Error('GitHub 会话授权至少需要选择一个仓库');
+      // 移除必须至少选择一个仓库的限制，允许先开启开关再选仓库
+      if (repositories.length > 0) {
+        await githubConnectorRepositoryService.assertRepositoriesAccessible(
+          userId,
+          profileId,
+          repositories
+        );
       }
-      await githubConnectorRepositoryService.assertRepositoriesAccessible(
-        userId,
-        profileId,
-        repositories
-      );
     }
     const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndConnectorKey(taskSessionId, connectorKey);
     if (profileMaterial.authStatus !== 'authorized') {

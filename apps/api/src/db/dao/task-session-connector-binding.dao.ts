@@ -33,12 +33,18 @@ export class TaskSessionConnectorBindingDAO {
         set: {
           profileId: data.profileId,
           desiredState: data.desiredState,
-          runtimeStatus: data.runtimeStatus,
-          orchestratorSessionId: data.orchestratorSessionId,
-          serverName: data.serverName,
-          enabledTools: data.enabledTools,
-          sessionConfigJson: data.sessionConfigJson,
-          definitionSnapshotJson: data.definitionSnapshotJson,
+        runtimeStatus: data.runtimeStatus,
+        orchestratorSessionId: data.orchestratorSessionId,
+        serverName: data.serverName,
+        runtimeProviderId: data.runtimeProviderId,
+        runtimeEnvVersion: data.runtimeEnvVersion,
+        runtimeTransport: data.runtimeTransport,
+        runtimeAttachedToolsJson: data.runtimeAttachedToolsJson,
+        runtimeLastStartedAt: data.runtimeLastStartedAt,
+        runtimeLastStoppedAt: data.runtimeLastStoppedAt,
+        enabledTools: data.enabledTools,
+        sessionConfigJson: data.sessionConfigJson,
+        definitionSnapshotJson: data.definitionSnapshotJson,
           lastUsedAt: data.lastUsedAt,
           lastError: data.lastError,
           updatedAt: new Date(),
@@ -57,6 +63,12 @@ export class TaskSessionConnectorBindingDAO {
       runtimeStatus?: string;
       orchestratorSessionId?: string | null;
       serverName?: string | null;
+      runtimeProviderId?: string | null;
+      runtimeEnvVersion?: number;
+      runtimeTransport?: string | null;
+      runtimeAttachedToolsJson?: unknown;
+      runtimeLastStartedAt?: Date | null;
+      runtimeLastStoppedAt?: Date | null;
       enabledTools?: unknown;
       sessionConfigJson?: unknown;
       definitionSnapshotJson?: unknown;
@@ -72,6 +84,12 @@ export class TaskSessionConnectorBindingDAO {
         runtimeStatus: patch.runtimeStatus,
         orchestratorSessionId: patch.orchestratorSessionId,
         serverName: patch.serverName,
+        runtimeProviderId: patch.runtimeProviderId,
+        runtimeEnvVersion: patch.runtimeEnvVersion,
+        runtimeTransport: patch.runtimeTransport,
+        runtimeAttachedToolsJson: patch.runtimeAttachedToolsJson as any,
+        runtimeLastStartedAt: patch.runtimeLastStartedAt,
+        runtimeLastStoppedAt: patch.runtimeLastStoppedAt,
         enabledTools: patch.enabledTools as any,
         sessionConfigJson: patch.sessionConfigJson as any,
         definitionSnapshotJson: patch.definitionSnapshotJson as any,

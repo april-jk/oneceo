@@ -22,6 +22,8 @@ const REQUIRED_TABLES = [
   'task_session_deliverable_artifacts',
   'task_session_sandbox_bindings',
   'task_session_connector_snapshots',
+  'task_session_mcp_tool_snapshots',
+  'task_session_connector_runtime_events',
   'platform_skills',
   'platform_skill_revisions',
   'platform_skill_revision_resources',
@@ -112,6 +114,8 @@ const REQUIRED_INDEXES = [
   'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
+  'idx_task_session_mcp_tool_snapshots_session_id',
+  'idx_task_session_connector_runtime_events_session_id',
   'idx_platform_skills_slug',
   'idx_platform_skill_revisions_skill_revision',
   'idx_platform_skill_revision_resources_revision_path',
@@ -181,6 +185,12 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   runtime_status TEXT NOT NULL DEFAULT 'unknown',
   orchestrator_session_id TEXT,
   server_name TEXT,
+  runtime_provider_id TEXT,
+  runtime_env_version INTEGER NOT NULL DEFAULT 0,
+  runtime_transport TEXT,
+  runtime_attached_tools_json JSONB,
+  runtime_last_started_at TIMESTAMP,
+  runtime_last_stopped_at TIMESTAMP,
   enabled_tools JSONB,
   session_config_json JSONB,
   definition_snapshot_json JSONB,
@@ -226,6 +236,12 @@ CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth
 
 ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_provider_id TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_env_version INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS runtime_transport TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_attached_tools_json JSONB,
+  ADD COLUMN IF NOT EXISTS runtime_last_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS runtime_last_stopped_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
   ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
@@ -351,6 +367,7 @@ CREATE TABLE IF NOT EXISTS task_session_runs (
   stop_reason TEXT,
   sandbox_binding_id UUID,
   connector_snapshot_id UUID,
+  mcp_tool_snapshot_id UUID,
   metadata_json JSONB,
   started_at TIMESTAMP,
   completed_at TIMESTAMP,
@@ -387,6 +404,23 @@ CREATE TABLE IF NOT EXISTS task_session_connector_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_mcp_tool_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_connector_runtime_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  binding_id UUID NOT NULL REFERENCES task_session_connector_bindings(id) ON DELETE CASCADE,
+  provider_id TEXT,
+  event_type TEXT NOT NULL,
+  payload_json JSONB,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -620,6 +654,14 @@ CREATE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_sandbox_id
   ON task_session_sandbox_bindings(sandbox_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
   ON task_session_connector_snapshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_snapshots_session_id
+  ON task_session_mcp_tool_snapshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_session_id
+  ON task_session_connector_runtime_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_binding_id
+  ON task_session_connector_runtime_events(binding_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_provider_id
+  ON task_session_connector_runtime_events(provider_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skills_slug
   ON platform_skills(slug);
 CREATE INDEX IF NOT EXISTS idx_platform_skills_status

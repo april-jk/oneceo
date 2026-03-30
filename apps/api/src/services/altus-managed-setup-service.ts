@@ -12,6 +12,7 @@ import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
+import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
@@ -227,7 +228,7 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
-    const statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
+    let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
       .map((item) => ({
@@ -249,6 +250,30 @@ export class AltusManagedSetupService {
   }
 
   async captureMcpToolSnapshot(sessionId: string) {
+    const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
+    const providers = bindings
+      .filter((item) => item.desiredState === 'attached' && asText(item.runtimeProviderId))
+      .map((item) => ({
+        connectorKey: item.connectorKey,
+        providerId: asText(item.runtimeProviderId),
+        transport: asText(item.runtimeTransport) || null,
+        envVersion: typeof item.runtimeEnvVersion === 'number' ? item.runtimeEnvVersion : 0,
+        tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
+      }));
+    if (providers.length === 0) {
+      const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+        sessionId,
+        snapshotJson: {
+          providers: [],
+          tools: [],
+        },
+      });
+      return {
+        snapshotId: snapshot.id,
+        providers: [],
+      };
+    }
+
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
@@ -281,16 +306,6 @@ export class AltusManagedSetupService {
         };
       }
     }
-    const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
-    const providers = bindings
-      .filter((item) => item.desiredState === 'attached' && asText(item.runtimeProviderId))
-      .map((item) => ({
-        connectorKey: item.connectorKey,
-        providerId: asText(item.runtimeProviderId),
-        transport: asText(item.runtimeTransport) || null,
-        envVersion: typeof item.runtimeEnvVersion === 'number' ? item.runtimeEnvVersion : 0,
-        tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
-      }));
     const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
       sessionId,
       snapshotJson: {
@@ -338,6 +353,9 @@ export class AltusManagedSetupService {
         taskSessionId: sessionId,
         taskTitle: sessionTitle || undefined,
         sandboxProvider: 'e2b',
+        sandboxExecutor: 'altus',
+        executor: 'altus',
+        workspaceRoot,
         opencodeWorkspaceRoot: workspaceRoot,
         altusMode: 'managed',
       },
@@ -360,7 +378,11 @@ export class AltusManagedSetupService {
     });
     await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
       orchestratorSessionId: opened.sessionId,
+      executor: 'altus',
     });
+    await ensureSandboxRuntimeMetadata(opened.sessionId, {
+      taskSessionId: sessionId,
+    }).catch(() => null);
     return {
       sandboxId: opened.sessionId,
       workspaceRoot,

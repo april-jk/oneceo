@@ -1,7 +1,7 @@
 # OSAC Codex / Executor 扩展设计与交付
 
 日期：2026-03-17  
-状态：已完成设计、编译与真实 E2B/Codex 联调验证
+状态：已完成设计、编译与真实 E2B/Codex 联调验证；当前正式交付版本已统一为 `v1.1.3`
 
 ## 1. 背景
 
@@ -82,7 +82,7 @@ oneceo 后续要支持 `sandbox + codex` 直通模式，但现有 OSAC 明显是
 
 ## 6. 编译与验证
 
-已执行：
+首轮已执行：
 
 ```bash
 cd OSAC_client
@@ -91,12 +91,28 @@ PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o d
 PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags debug -o dist/osac-linux-amd64_v1.1.2.fix24_debug ./cmd/osac
 ```
 
-产物：
+当时产物：
 
 - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24`
 - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24_debug`
 
 当前二进制大小约 `11M`。
+
+## 6.1 当前正式交付版本
+
+截至 2026-03-30，oneceo 平台侧对外统一引用的 OSAC 版本已提升为 `v1.1.3`。
+
+当前正式交付产物：
+
+- `OSAC_client/dist/osac-linux-amd64_v1.1.3`
+- `OSAC_client/dist/osac-linux-amd64_v1.1.3_debug`
+
+这版不仅包含本文描述的 `EXECUTOR_*` 扩展，也已经合并：
+
+1. Altus mode 的 OSAC bridge 自愈与统一 bootstrap
+2. session 级 MCP provider lifecycle
+3. `local_stdio` / `remote_sse` 两类 MCP runtime
+4. session tool list 查询与真实 tool call
 
 ## 7. 真实联调补充
 

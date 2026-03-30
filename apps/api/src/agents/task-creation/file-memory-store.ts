@@ -67,6 +67,7 @@ export interface FileSessionRecord {
     generation?: number;
     orchestratorSessionId?: string;
     executor?: 'opencode' | 'claudecode' | 'codex' | string;
+    workspaceRoot?: string;
     transport?: CodexTransportMode | string;
     executorSessionId?: string;
     opencodeSessionId?: string;
@@ -707,6 +708,7 @@ class TaskCreationFileMemoryStore {
       generation?: number;
       orchestratorSessionId?: string;
       executor?: 'opencode' | 'claudecode' | 'codex' | string;
+      workspaceRoot?: string;
       transport?: CodexTransportMode | string;
       executorSessionId?: string;
       opencodeSessionId?: string;
@@ -744,6 +746,14 @@ class TaskCreationFileMemoryStore {
         typeof current.transport === 'string' && current.transport.trim()
           ? current.transport.trim()
           : undefined;
+      const currentWorkspaceRoot =
+        typeof current.workspaceRoot === 'string' && current.workspaceRoot.trim()
+          ? current.workspaceRoot.trim()
+          : undefined;
+      const requestedWorkspaceRoot =
+        runtime.workspaceRoot !== undefined
+          ? String(runtime.workspaceRoot || '').trim() || undefined
+          : currentWorkspaceRoot;
       const requestedTransport =
         runtime.transport !== undefined
           ? String(runtime.transport || '').trim() || undefined
@@ -815,6 +825,7 @@ class TaskCreationFileMemoryStore {
         generation: nextGeneration || undefined,
         orchestratorSessionId: nextOrchestrator,
         executor: requestedExecutor,
+        workspaceRoot: requestedWorkspaceRoot,
         transport: requestedTransport,
         executorSessionId: nextExecutorSessionId,
         opencodeSessionId: nextOpencode,

@@ -40,6 +40,17 @@ function resolveOsacToken(metadata: Record<string, unknown>): string {
   );
 }
 
+function isHttpBaseUrl(value: string): boolean {
+  return value.startsWith('http://') || value.startsWith('https://');
+}
+
+function shouldDiscardRuntimeBaseUrl(baseUrl: string, osacEndpoint: string): boolean {
+  if (!baseUrl) return true;
+  if (!isHttpBaseUrl(baseUrl)) return true;
+  if (osacEndpoint && baseUrl === osacEndpoint) return true;
+  return false;
+}
+
 export type EnsuredSandboxRuntimeMetadata = {
   baseUrl: string;
   host: string | null;
@@ -52,11 +63,17 @@ export type EnsuredSandboxRuntimeMetadata = {
 
 export async function ensureSandboxRuntimeMetadata(
   orchestratorSessionId: string,
-  options?: { taskSessionId?: string | null }
+  options?: {
+    taskSessionId?: string | null;
+    forceBridgeRestart?: boolean;
+    forceBinaryRewrite?: boolean;
+  }
 ): Promise<EnsuredSandboxRuntimeMetadata | null> {
   writeConnectorDebugLog('[SANDBOX_RUNTIME_METADATA_START]', {
     orchestratorSessionId,
-    taskSessionId: asText(options?.taskSessionId) || null,
+      taskSessionId: asText(options?.taskSessionId) || null,
+      forceBridgeRestart: Boolean(options?.forceBridgeRestart),
+      forceBinaryRewrite: Boolean(options?.forceBinaryRewrite),
   });
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   if (!environment) return null;
@@ -83,7 +100,8 @@ export async function ensureSandboxRuntimeMetadata(
   const trafficAccessToken =
     asText(e2bMeta.trafficAccessToken) || asText(metadata.trafficAccessToken) || null;
 
-  let baseUrl = runtimeBaseUrl || asText(asObject(metadata.opencode).baseUrl) || asText(metadata.osacEndpoint);
+  const nestedOpencodeBaseUrl = asText(asObject(metadata.opencode).baseUrl);
+  let baseUrl = runtimeBaseUrl || nestedOpencodeBaseUrl;
   let host = runtimeHost || null;
   let osacEndpoint = asText(metadata.osacEndpoint);
   let osacHost = asText(metadata.osacHost);
@@ -92,13 +110,18 @@ export async function ensureSandboxRuntimeMetadata(
   let osacAuthToken = resolveOsacToken(metadata);
   let needsMetadataUpdate = false;
 
+  if (shouldDiscardRuntimeBaseUrl(baseUrl, osacEndpoint)) {
+    baseUrl = '';
+    needsMetadataUpdate = true;
+  }
+
   if (!baseUrl) {
     host = await e2bConnector.getSandboxHost(orchestratorSessionId, runtimePort);
     baseUrl = `https://${host}`;
     needsMetadataUpdate = true;
   }
 
-  if (!host && baseUrl) {
+  if (!host && isHttpBaseUrl(baseUrl)) {
     try {
       host = new URL(baseUrl).host;
       needsMetadataUpdate = true;
@@ -118,10 +141,12 @@ export async function ensureSandboxRuntimeMetadata(
   }
 
   if ((asText(metadata.sandboxProvider) || 'e2b') === 'e2b') {
-    const reusableBridge = await canReuseOsacBridge({
-      endpoint: osacEndpoint,
-      authToken: osacAuthToken,
-    });
+    const reusableBridge = options?.forceBridgeRestart
+      ? false
+      : await canReuseOsacBridge({
+          endpoint: osacEndpoint,
+          authToken: osacAuthToken,
+        });
     writeConnectorDebugLog('[SANDBOX_RUNTIME_METADATA_BRIDGE_CHECK]', {
       orchestratorSessionId,
       taskSessionId: boundTaskSessionId || null,
@@ -148,12 +173,14 @@ export async function ensureSandboxRuntimeMetadata(
         orchestratorSessionId,
         taskSessionId: boundTaskSessionId || null,
         executor: resolveExecutor(metadata),
+        forceBridgeRestart: Boolean(options?.forceBridgeRestart),
       });
       const bridge = await ensureOsacBridge(orchestratorSessionId, {
         executor: resolveExecutor(metadata),
         workspaceRoot,
         authToken: osacAuthToken || undefined,
         codexPath: asText(metadata.codexBinaryPath) || undefined,
+        forceBinaryRewrite: Boolean(options?.forceBinaryRewrite),
       });
       osacEndpoint = bridge.osacEndpoint;
       osacHost = bridge.osacHost;

@@ -17,6 +17,7 @@ import { asText, pickObject } from './altus-managed-shared';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { userSkillService } from './user-skill-service';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
 type SubmitManagedInput = {
   sessionId?: string;
@@ -54,22 +55,53 @@ export class AltusManagedInputService {
       throw new Error('消息内容不能为空');
     }
 
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_START]', {
+      sessionId,
+      userId,
+      messageKey: resolvedMessageKey,
+      hasContent: Boolean(content),
+      uploadCount: normalizedUploads.length,
+    });
     await this.setupService.ensureSessionOwnership(sessionId, userId);
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_OWNERSHIP_READY]', {
+      sessionId,
+      userId,
+    });
     const activeRun = await taskSessionRunDAO.findActiveRun(sessionId);
     if (activeRun) {
       throw new Error('当前会话已有运行中的 Altus managed run');
     }
 
     const sandbox = await this.setupService.ensureSandbox(sessionId);
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_SANDBOX_READY]', {
+      sessionId,
+      sandboxId: sandbox.sandboxId,
+      workspaceRoot: sandbox.workspaceRoot,
+      reused: sandbox.reused,
+    });
     const availableSkills = await userSkillService.listAvailableSkills(userId);
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_AVAILABLE_SKILLS_READY]', {
+      sessionId,
+      userId,
+      availableSkillCount: availableSkills.length,
+    });
     const resolvedSkills = await userSkillService.resolveSelectionsForSession(
       sessionId,
       pickObject(input.metadata).skills
     );
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_RESOLVED_SKILLS_READY]', {
+      sessionId,
+      resolvedSkillCount: resolvedSkills.length,
+    });
     await sandboxSkillSyncService.syncResolvedSkills({
       taskSessionId: sessionId,
       orchestratorSessionId: sandbox.sandboxId,
       skills: resolvedSkills,
+    });
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_SKILL_SYNC_READY]', {
+      sessionId,
+      orchestratorSessionId: sandbox.sandboxId,
+      resolvedSkillCount: resolvedSkills.length,
     });
     let attachments =
       normalizedUploads.length > 0
@@ -88,10 +120,21 @@ export class AltusManagedInputService {
       ...(attachmentContext.length > 0 ? { attachmentContext } : {}),
     };
     const finalContent = appendAttachmentReferencesToContent(content, attachments);
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_START_RUN]', {
+      sessionId,
+      messageKey: resolvedMessageKey,
+      attachmentCount: attachments.length,
+      metadataKeys: Object.keys(metadata),
+    });
     const run = await this.runService.startRun(sessionId, userId, {
       content: finalContent,
       messageKey: resolvedMessageKey,
       metadata,
+    });
+    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_RUN_READY]', {
+      sessionId,
+      runId: run.id || run.runId || null,
+      runStatus: run.status || null,
     });
 
     return {

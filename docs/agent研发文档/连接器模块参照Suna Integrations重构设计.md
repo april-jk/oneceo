@@ -799,6 +799,8 @@ GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
    - 凭证/配置表单
    - 配置指引
    - 使用边界
+4. `Altus mode` 的 session 级 connector attach 统一走 `OSAC` provider lifecycle，不再依赖 OpenCode `/mcp` 配置热同步。
+5. 复用中的 Altus sandbox 在挂载 session connector 时，不应额外触发 `syncOpencodeRuntimeConfig()` 或 OpenCode server 重启。
 
 新增目录：
 

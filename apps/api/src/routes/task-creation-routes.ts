@@ -13,6 +13,7 @@ import {
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
 import { getPublicErrorMessage } from '../utils/error-response';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   deriveSessionDriver,
   taskCreationFileMemoryStore,
@@ -992,12 +993,21 @@ async function syncTaskSessionSandboxBinding(
   });
 }
 
-function resolveRuntimeExecutor(session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime'>): 'opencode' | 'codex' {
+function resolveRuntimeExecutor(
+  session: Pick<FileSessionRecord, 'driver' | 'executor' | 'runtime' | 'mode'>
+): 'opencode' | 'codex' | 'altus' {
+  if (isAltusManagedSession(session)) {
+    return 'altus';
+  }
   const preferred =
     asText(session.runtime?.executor) ||
     asText(session.executor) ||
     asText(session.driver);
   return preferred === 'codex' ? 'codex' : 'opencode';
+}
+
+function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver'>): boolean {
+  return asText(session.mode) === 'altus' || asText(session.driver) === 'altus';
 }
 
 async function ensureTaskSessionRuntime(sessionId: string) {
@@ -1007,20 +1017,43 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   }
 
   const executor = resolveRuntimeExecutor(session);
-  const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+  const altusManaged = isAltusManagedSession(session);
+  const workspaceRoot =
+    asText(session.runtime?.workspaceRoot) ||
+    resolveOpencodeWorkspacePath(sessionId);
   const orchestratorSessionId = asText(session.runtime?.orchestratorSessionId);
+  writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_START]', {
+    taskSessionId: sessionId,
+    executor,
+    altusManaged,
+    mode: asText(session.mode),
+    driver: asText(session.driver),
+    orchestratorSessionId: orchestratorSessionId || null,
+  });
   if (orchestratorSessionId) {
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
     if (environment?.status === 'ready') {
       try {
         if (executor === 'opencode') {
-          await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
-            orchestratorSessionId,
-            taskSessionId: sessionId,
-          });
-          await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
-            workspacePath: workspaceRoot || undefined,
-          });
+          if (!altusManaged) {
+            writeConnectorDebugLog('[CONNECTOR_RUNTIME_REUSE_SYNC_OPENCODE]', {
+              taskSessionId: sessionId,
+              orchestratorSessionId,
+              altusManaged,
+            });
+            await sandboxAgentProvisionService.syncOpencodeRuntimeConfig({
+              orchestratorSessionId,
+              taskSessionId: sessionId,
+            });
+            await osacAgentService.ensureOpencodeServer(orchestratorSessionId, {
+              workspacePath: workspaceRoot || undefined,
+            });
+          } else {
+            writeConnectorDebugLog('[CONNECTOR_RUNTIME_REUSE_SKIP_OPENCODE_SYNC]', {
+              taskSessionId: sessionId,
+              orchestratorSessionId,
+            });
+          }
         } else {
           await sandboxAgentProvisionService.provisionWithLock({
             executor,
@@ -1028,18 +1061,33 @@ async function ensureTaskSessionRuntime(sessionId: string) {
               taskSessionId: sessionId,
               taskTitle: session.title,
               executor,
+              altusMode: altusManaged ? 'managed' : undefined,
             },
           });
         }
         await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
+        writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSED]', {
+          taskSessionId: sessionId,
+          orchestratorSessionId,
+          executor,
+          altusManaged,
+          runtimeStatus: runtimeStatus?.status || 'ready',
+        });
         return {
           orchestratorSessionId,
           status: runtimeStatus?.status || 'ready',
           reused: true,
         };
       } catch (error) {
+        writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSE_FAILED]', {
+          taskSessionId: sessionId,
+          orchestratorSessionId,
+          executor,
+          altusManaged,
+          error: error instanceof Error ? error.message : String(error),
+        }, 'error');
         if (!isSandboxNotFoundError(error)) {
           throw error;
         }
@@ -1054,12 +1102,14 @@ async function ensureTaskSessionRuntime(sessionId: string) {
       taskSessionId: sessionId,
       taskTitle: session.title,
       executor,
+      altusMode: altusManaged ? 'managed' : undefined,
     },
   });
 
   await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
     orchestratorSessionId: provision.sessionId,
     executor,
+    workspaceRoot,
     executorSessionId: executor === 'codex' ? session.runtime?.executorSessionId || undefined : '',
     opencodeSessionId: executor === 'opencode' ? '' : undefined,
     previousExecutorSessionId:
@@ -1070,6 +1120,13 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   await touchSandbox(provision.sessionId, 'runtime_start_new');
 
   const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
+  writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_PROVISIONED]', {
+    taskSessionId: sessionId,
+    orchestratorSessionId: provision.sessionId,
+    executor,
+    altusManaged,
+    runtimeStatus: runtimeStatus?.status || provision.status || 'ready',
+  });
 
   return {
     orchestratorSessionId: provision.sessionId,
@@ -3541,6 +3598,14 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       req.body?.sessionConfig && typeof req.body.sessionConfig === 'object' && !Array.isArray(req.body.sessionConfig)
         ? (req.body.sessionConfig as Record<string, unknown>)
         : {};
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_START]', {
+      taskSessionId: sessionId,
+      connectorKey,
+      profileId,
+      enabledTools,
+      sessionConfigKeys: Object.keys(sessionConfig),
+      userId: currentUser.userId,
+    });
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const runtime = await ensureTaskSessionRuntime(sessionId);
     if (!profileId) {
@@ -3564,6 +3629,11 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     });
   } catch (error: any) {
     const message = error?.message || '挂载连接器失败';
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_FAILED]', {
+      taskSessionId: req.params.sessionId,
+      connectorKey: req.params.connectorKey,
+      error: message,
+    }, 'error');
     const normalized = String(message).toLowerCase();
     const status =
       normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')

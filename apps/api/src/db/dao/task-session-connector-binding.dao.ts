@@ -17,6 +17,13 @@ export class TaskSessionConnectorBindingDAO {
       .where(eq(taskSessionConnectorBindings.profileId, profileId));
   }
 
+  async listByConnectorKey(connectorKey: string) {
+    return db
+      .select()
+      .from(taskSessionConnectorBindings)
+      .where(eq(taskSessionConnectorBindings.connectorKey, connectorKey));
+  }
+
   async getByTaskSessionAndConnectorKey(taskSessionId: string, connectorKey: string) {
     const [row] = await db
       .select()

@@ -40,6 +40,9 @@ const REQUIRED_TABLES = [
   'user_custom_skills',
   'user_custom_skill_documents',
   'task_session_connector_bindings',
+  'connector_guide_policies',
+  'connector_guide_revisions',
+  'task_session_connector_guides',
   'task_session_mcp_recovery_jobs',
   'connector_auth_requests',
 ] as const;
@@ -121,6 +124,17 @@ const REQUIRED_COLUMNS = [
   ['user_custom_skill_documents', 'document_key'],
   ['user_custom_skill_documents', 'document_path'],
   ['user_custom_skill_documents', 'body_markdown'],
+  ['connector_guide_policies', 'connector_key'],
+  ['connector_guide_policies', 'published_revision_id'],
+  ['connector_guide_revisions', 'policy_id'],
+  ['connector_guide_revisions', 'version_number'],
+  ['connector_guide_revisions', 'server_instructions_markdown'],
+  ['connector_guide_revisions', 'guide_reminder_markdown'],
+  ['connector_guide_revisions', 'blocking_rules_markdown'],
+  ['task_session_connector_guides', 'task_session_id'],
+  ['task_session_connector_guides', 'connector_key'],
+  ['task_session_connector_guides', 'policy_id'],
+  ['task_session_connector_guides', 'revision_id'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -146,6 +160,9 @@ const REQUIRED_INDEXES = [
   'idx_user_platform_skill_bindings_user_skill',
   'idx_user_custom_skills_user_slug',
   'idx_user_custom_skill_documents_skill_key',
+  'idx_connector_guide_policies_connector_key',
+  'idx_connector_guide_revisions_policy_version',
+  'idx_task_session_connector_guides_session_connector',
 ] as const;
 
 /**
@@ -223,6 +240,42 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS connector_guide_policies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  connector_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  trigger_mode TEXT NOT NULL DEFAULT 'on_attach',
+  description TEXT NOT NULL DEFAULT '',
+  published_revision_id UUID,
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS connector_guide_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  policy_id UUID NOT NULL REFERENCES connector_guide_policies(id) ON DELETE CASCADE,
+  version_number INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  server_instructions_markdown TEXT NOT NULL DEFAULT '',
+  guide_reminder_markdown TEXT NOT NULL DEFAULT '',
+  blocking_rules_markdown TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  published_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS task_session_connector_guides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  policy_id UUID NOT NULL REFERENCES connector_guide_policies(id) ON DELETE CASCADE,
+  revision_id UUID NOT NULL REFERENCES connector_guide_revisions(id) ON DELETE CASCADE,
+  trigger_mode TEXT NOT NULL,
+  resolved_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS task_session_mcp_recovery_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_session_id TEXT NOT NULL,
@@ -271,6 +324,22 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
   ON task_session_connector_bindings(task_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_session_id
   ON task_session_connector_bindings(orchestrator_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_guide_policies_connector_key
+  ON connector_guide_policies(connector_key);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_policies_status
+  ON connector_guide_policies(status);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_policies_published_revision_id
+  ON connector_guide_policies(published_revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_guide_revisions_policy_version
+  ON connector_guide_revisions(policy_id, version_number);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_revisions_policy_id
+  ON connector_guide_revisions(policy_id);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_revisions_status
+  ON connector_guide_revisions(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_guides_session_connector
+  ON task_session_connector_guides(task_session_id, connector_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_guides_task_session_id
+  ON task_session_connector_guides(task_session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_recovery_key
   ON task_session_mcp_recovery_jobs(recovery_key);
 CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_session_status
@@ -296,6 +365,36 @@ ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
   ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+ALTER TABLE IF EXISTS connector_guide_policies
+  ADD COLUMN IF NOT EXISTS connector_key TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft',
+  ADD COLUMN IF NOT EXISTS trigger_mode TEXT NOT NULL DEFAULT 'on_attach',
+  ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS published_revision_id UUID,
+  ADD COLUMN IF NOT EXISTS created_by TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS connector_guide_revisions
+  ADD COLUMN IF NOT EXISTS policy_id UUID,
+  ADD COLUMN IF NOT EXISTS version_number INTEGER,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft',
+  ADD COLUMN IF NOT EXISTS server_instructions_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS guide_reminder_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS blocking_rules_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS created_by TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS published_at TIMESTAMP;
+
+ALTER TABLE IF EXISTS task_session_connector_guides
+  ADD COLUMN IF NOT EXISTS task_session_id TEXT,
+  ADD COLUMN IF NOT EXISTS connector_key TEXT,
+  ADD COLUMN IF NOT EXISTS policy_id UUID,
+  ADD COLUMN IF NOT EXISTS revision_id UUID,
+  ADD COLUMN IF NOT EXISTS trigger_mode TEXT,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP NOT NULL DEFAULT NOW();
 
 ALTER TABLE IF EXISTS task_session_mcp_recovery_jobs
   ADD COLUMN IF NOT EXISTS recovery_key TEXT,
@@ -1058,6 +1157,9 @@ export async function runMigration() {
     console.log('  - sandbox_execution_environments');
     console.log('  - user_connector_accounts');
     console.log('  - task_session_connector_bindings');
+    console.log('  - connector_guide_policies');
+    console.log('  - connector_guide_revisions');
+    console.log('  - task_session_connector_guides');
     console.log('  - connector_auth_requests');
     console.log('  - user_codex_runtime_configs');
     
@@ -1097,6 +1199,9 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
       DROP TABLE IF EXISTS task_session_deliverable_artifacts CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
+      DROP TABLE IF EXISTS task_session_connector_guides CASCADE;
+      DROP TABLE IF EXISTS connector_guide_revisions CASCADE;
+      DROP TABLE IF EXISTS connector_guide_policies CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
       DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;

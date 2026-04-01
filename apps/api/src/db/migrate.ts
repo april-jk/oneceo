@@ -45,6 +45,8 @@ const REQUIRED_TABLES = [
   'task_session_connector_guides',
   'task_session_mcp_recovery_jobs',
   'connector_auth_requests',
+  'platform_runtime_artifact_releases',
+  'platform_runtime_artifact_channels',
 ] as const;
 
 const REQUIRED_COLUMNS = [
@@ -135,6 +137,26 @@ const REQUIRED_COLUMNS = [
   ['task_session_connector_guides', 'connector_key'],
   ['task_session_connector_guides', 'policy_id'],
   ['task_session_connector_guides', 'revision_id'],
+  ['platform_runtime_artifact_releases', 'artifact_type'],
+  ['platform_runtime_artifact_releases', 'platform'],
+  ['platform_runtime_artifact_releases', 'arch'],
+  ['platform_runtime_artifact_releases', 'version'],
+  ['platform_runtime_artifact_releases', 'channel'],
+  ['platform_runtime_artifact_releases', 'status'],
+  ['platform_runtime_artifact_releases', 'bucket'],
+  ['platform_runtime_artifact_releases', 'object_key'],
+  ['platform_runtime_artifact_releases', 'manifest_key'],
+  ['platform_runtime_artifact_releases', 'sha256'],
+  ['platform_runtime_artifact_releases', 'size_bytes'],
+  ['platform_runtime_artifact_releases', 'release_notes'],
+  ['platform_runtime_artifact_releases', 'uploaded_by'],
+  ['platform_runtime_artifact_releases', 'uploaded_at'],
+  ['platform_runtime_artifact_releases', 'metadata_json'],
+  ['platform_runtime_artifact_channels', 'artifact_type'],
+  ['platform_runtime_artifact_channels', 'platform'],
+  ['platform_runtime_artifact_channels', 'arch'],
+  ['platform_runtime_artifact_channels', 'channel'],
+  ['platform_runtime_artifact_channels', 'published_release_id'],
 ] as const;
 
 const REQUIRED_INDEXES = [
@@ -163,6 +185,8 @@ const REQUIRED_INDEXES = [
   'idx_connector_guide_policies_connector_key',
   'idx_connector_guide_revisions_policy_version',
   'idx_task_session_connector_guides_session_connector',
+  'idx_platform_runtime_artifacts_type_version',
+  'idx_platform_runtime_artifact_channels_unique',
 ] as const;
 
 /**
@@ -310,6 +334,43 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
   completed_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS platform_runtime_artifact_releases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_type TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  arch TEXT NOT NULL,
+  version TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'stable',
+  status TEXT NOT NULL DEFAULT 'uploaded',
+  bucket TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  manifest_key TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  release_notes TEXT NOT NULL DEFAULT '',
+  source_commit TEXT,
+  uploaded_by TEXT,
+  published_by TEXT,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  published_at TIMESTAMP,
+  archived_at TIMESTAMP,
+  metadata_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_runtime_artifact_channels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_type TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  arch TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  published_release_id UUID NOT NULL REFERENCES platform_runtime_artifact_releases(id) ON DELETE CASCADE,
+  updated_by TEXT,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_profile
@@ -350,6 +411,18 @@ CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_next_retry_at
   ON task_session_mcp_recovery_jobs(next_retry_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_type_version
+  ON platform_runtime_artifact_releases(artifact_type, platform, arch, version);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_channel
+  ON platform_runtime_artifact_releases(artifact_type, platform, arch, channel);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_status
+  ON platform_runtime_artifact_releases(status);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_uploaded_at
+  ON platform_runtime_artifact_releases(uploaded_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifact_channels_unique
+  ON platform_runtime_artifact_channels(artifact_type, platform, arch, channel);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifact_channels_published_release_id
+  ON platform_runtime_artifact_channels(published_release_id);
 
 ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
@@ -1162,6 +1235,8 @@ export async function runMigration() {
     console.log('  - task_session_connector_guides');
     console.log('  - connector_auth_requests');
     console.log('  - user_codex_runtime_configs');
+    console.log('  - platform_runtime_artifact_releases');
+    console.log('  - platform_runtime_artifact_channels');
     
     return true;
   } catch (error) {
@@ -1204,6 +1279,8 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS connector_guide_policies CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS platform_runtime_artifact_channels CASCADE;
+      DROP TABLE IF EXISTS platform_runtime_artifact_releases CASCADE;
       DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;
       DROP TABLE IF EXISTS user_custom_skills CASCADE;
       DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;

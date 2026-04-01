@@ -16,3 +16,4 @@ export * from './task-session-run.dao';
 export * from './task-session-deliverable-artifact.dao';
 export * from './platform-skill.dao';
 export * from './connector-guide.dao';
+export * from './platform-runtime-artifact.dao';

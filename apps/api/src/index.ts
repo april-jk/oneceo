@@ -13,6 +13,7 @@ import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
+import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -134,6 +135,7 @@ app.use('/api/llm-proxy', llmProxyRoutes);
 app.use('/api/connectors', connectorRoutes);
 app.use('/api/internal', internalSkillRoutes);
 app.use('/api/internal', internalConnectorGuideRoutes);
+app.use('/api/internal', internalRuntimeArtifactRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {

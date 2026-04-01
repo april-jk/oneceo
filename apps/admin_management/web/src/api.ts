@@ -9,6 +9,9 @@ import type {
   ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
+  OsacRelease,
+  OsacReleaseDetailResponse,
+  OsacReleaseListResponse,
   SkillDetail,
   SkillImportJob,
   SkillImportResult,
@@ -457,6 +460,43 @@ export const api = {
         body: JSON.stringify({}),
       }
     ),
+  listOsacReleases: (query?: { status?: string; channel?: string; query?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.channel) params.set('channel', query.channel);
+    if (query?.query) params.set('query', query.query);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<OsacReleaseListResponse>(`/api/osac-releases${suffix}`);
+  },
+  getOsacRelease: (releaseId: string) =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}`),
+  uploadOsacRelease: (payload: {
+    version: string;
+    fileBase64: string;
+    releaseNotes?: string;
+    sourceCommit?: string;
+    uploadedBy?: string;
+    channel?: string;
+  }) =>
+    request<OsacRelease>('/api/osac-releases', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  validateOsacRelease: (releaseId: string) =>
+    request<OsacRelease>(`/api/osac-releases/${encodeURIComponent(releaseId)}/validate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  publishOsacRelease: (releaseId: string, publishedBy = 'admin_management') =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ publishedBy }),
+    }),
+  rollbackOsacRelease: (releaseId: string, publishedBy = 'admin_management') =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ publishedBy }),
+    }),
   deleteVmFile: (vmId: string, query: { targetPath: string; recursive?: boolean; ignoreMissing?: boolean; sessionId?: string }) => {
     const params = new URLSearchParams();
     params.set('targetPath', query.targetPath);

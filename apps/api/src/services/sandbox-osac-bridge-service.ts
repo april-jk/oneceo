@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
 
 export type SandboxOsacExecutor = 'opencode' | 'codex' | 'claudecode' | 'altus';
 
@@ -14,24 +13,6 @@ function pickString(value: unknown): string | null {
 
 function shellEscape(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-function assertLinuxAmd64Binary(buffer: Buffer, sourcePath: string) {
-  if (buffer.length < 20) {
-    throw new Error(`OSAC binary is too small: ${sourcePath}`);
-  }
-  const isElf =
-    buffer[0] === 0x7f &&
-    buffer[1] === 0x45 &&
-    buffer[2] === 0x4c &&
-    buffer[3] === 0x46;
-  if (!isElf) {
-    throw new Error(`OSAC binary is not a Linux ELF executable: ${sourcePath}`);
-  }
-  const machine = buffer.readUInt16LE(18);
-  if (machine !== 62) {
-    throw new Error(`OSAC binary is not linux/amd64 (e_machine=${machine}): ${sourcePath}`);
-  }
 }
 
 function resolveExecutorRemoteBaseDir(
@@ -87,57 +68,6 @@ function resolveExecutorRemoteBaseDir(
   return '/home/user/.altus/opencode';
 }
 
-async function fileExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveLocalOsacBinaryPath(): Promise<string> {
-  const candidates = [osacBootstrapConfig.osacBinaryPath];
-  const localDistDirs = [
-    path.resolve(process.cwd(), 'OSAC_client/dist'),
-    path.resolve(process.cwd(), '../OSAC_client/dist'),
-    path.resolve(process.cwd(), '../../OSAC_client/dist'),
-  ];
-  for (const localDistDir of localDistDirs) {
-    try {
-      const entries = await fs.readdir(localDistDir);
-      const matched = entries
-        .filter((entry) => /^osac-linux-amd64/.test(entry))
-        .sort((left, right) => {
-          const leftDebug = left.endsWith('_debug');
-          const rightDebug = right.endsWith('_debug');
-          const leftBase = leftDebug ? left.slice(0, -6) : left;
-          const rightBase = rightDebug ? right.slice(0, -6) : right;
-          if (leftBase !== rightBase) {
-            return rightBase.localeCompare(leftBase);
-          }
-          if (leftDebug === rightDebug) return right.localeCompare(left);
-          return leftDebug ? 1 : -1;
-        });
-      for (const entry of matched) {
-        candidates.push(path.join(localDistDir, entry));
-      }
-    } catch {
-      // ignore local dist scan failures for this directory
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
-    if (await fileExists(resolved)) {
-      return resolved;
-    }
-  }
-
-  throw new Error(`OSAC binary not found; checked ${candidates.filter(Boolean).join(', ')}`);
-}
-
 async function resolveE2bPublicHost(sessionId: string, port: number): Promise<string> {
   const attempts = Math.max(3, Number(process.env.E2B_PUBLIC_HOST_ATTEMPTS || 12));
   const delayMs = Math.max(250, Number(process.env.E2B_PUBLIC_HOST_DELAY_MS || 1000));
@@ -178,9 +108,7 @@ export async function ensureOsacBridge(
     hasCodexPath: Boolean(pickString(input.codexPath)),
     forceBinaryRewrite: Boolean(input.forceBinaryRewrite),
   });
-  const osacBinaryPath = await resolveLocalOsacBinaryPath();
-  const osacBuffer = await fs.readFile(osacBinaryPath);
-  assertLinuxAmd64Binary(osacBuffer, osacBinaryPath);
+  const downloadSpec = await platformRuntimeArtifactService.getPublishedOsacDownloadSpec();
   const remoteBaseDir = resolveExecutorRemoteBaseDir(input.executor, input.workspaceRoot);
   const remoteBinaryName = osacBootstrapConfig.osacBinaryName || 'osac';
   const remoteBinary = `${remoteBaseDir.replace(/\/+$/, '')}/${remoteBinaryName}`;
@@ -201,6 +129,8 @@ export async function ensureOsacBridge(
       remoteBaseDir,
       osacLogDir,
       osacTmpDir,
+      osacVersion: downloadSpec.version,
+      objectKey: downloadSpec.objectKey,
     });
   } catch (error) {
     writeConnectorDebugLog('[OSAC_BRIDGE_ENSURE_MKDIR_FAILED]', {
@@ -217,26 +147,69 @@ export async function ensureOsacBridge(
     if (!input.forceBinaryRewrite) {
       const binaryProbe: any = await e2bConnector.runCommand(
         sessionId,
-        `if [ -x ${shellEscape(remoteBinary)} ]; then echo EXISTS; else echo MISSING; fi`,
+        `if [ -x ${shellEscape(remoteBinary)} ] && command -v sha256sum >/dev/null 2>&1; then
+  current_sha=$(sha256sum ${shellEscape(remoteBinary)} | awk '{print $1}' | tr -d '\\r' || true)
+  if [ "$current_sha" = ${shellEscape(downloadSpec.sha256)} ]; then
+    echo EXISTS_MATCH
+  else
+    echo EXISTS_MISMATCH
+  fi
+else
+  echo MISSING
+fi`,
         { timeoutMs: 10_000 }
       );
       probeOutput = String(binaryProbe?.stdout || binaryProbe?.output || '').trim();
     }
-    if (probeOutput !== 'EXISTS') {
-      await e2bConnector.writeFile(sessionId, remoteBinary, osacBuffer);
+    if (probeOutput !== 'EXISTS_MATCH') {
+      const downloadCommand = `
+set -euo pipefail
+target=${shellEscape(remoteBinary)}
+tmp_file=${shellEscape(`${remoteBinary}.download.tmp`)}
+expected_sha=${shellEscape(downloadSpec.sha256)}
+download_url=${shellEscape(downloadSpec.presignedUrl)}
+rm -f "$tmp_file"
+curl -fsSL --retry 3 --retry-all-errors "$download_url" -o "$tmp_file"
+actual_sha=$(sha256sum "$tmp_file" | awk '{print $1}' | tr -d '\\r')
+if [ "$actual_sha" != "$expected_sha" ]; then
+  echo "sha256 mismatch: expected=$expected_sha actual=$actual_sha"
+  exit 41
+fi
+python3 - <<'PY' "$tmp_file"
+import sys, struct
+path = sys.argv[1]
+with open(path, 'rb') as fh:
+    data = fh.read(20)
+if len(data) < 20:
+    raise SystemExit('binary_too_small')
+if data[:4] != b'\\x7fELF':
+    raise SystemExit('not_elf')
+machine = struct.unpack('<H', data[18:20])[0]
+if machine != 62:
+    raise SystemExit(f'wrong_machine:{machine}')
+PY
+mv "$tmp_file" "$target"
+chmod +x "$target"
+`;
+      await e2bConnector.runCommand(sessionId, downloadCommand, { timeoutMs: 60_000 });
     }
     writeConnectorDebugLog('[OSAC_BRIDGE_ENSURE_WRITE_BINARY_DONE]', {
       orchestratorSessionId: sessionId,
       remoteBinary,
-      binaryBytes: osacBuffer.byteLength,
-      reusedExistingBinary: probeOutput === 'EXISTS',
+      binaryBytes: downloadSpec.sizeBytes,
+      reusedExistingBinary: probeOutput === 'EXISTS_MATCH',
       forceBinaryRewrite: Boolean(input.forceBinaryRewrite),
+      osacVersion: downloadSpec.version,
+      objectKey: downloadSpec.objectKey,
+      presignTtlSeconds: downloadSpec.expiresInSeconds,
     });
   } catch (error) {
     writeConnectorDebugLog('[OSAC_BRIDGE_ENSURE_WRITE_BINARY_FAILED]', {
       orchestratorSessionId: sessionId,
       remoteBinary,
-      binaryBytes: osacBuffer.byteLength,
+      binaryBytes: downloadSpec.sizeBytes,
+      osacVersion: downloadSpec.version,
+      objectKey: downloadSpec.objectKey,
       error: error instanceof Error ? error.message : String(error),
     }, 'error');
     throw error;

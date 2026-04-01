@@ -778,3 +778,41 @@ export type E2bTemplateWithBuilds = {
 
 export type E2bTemplateBuildInfo = Record<string, unknown>;
 export type E2bTemplateBuildLogsResponse = Record<string, unknown>;
+
+export interface OsacRelease {
+  id: string;
+  artifactType: string;
+  platform: string;
+  arch: string;
+  version: string;
+  channel: string;
+  status: 'uploaded' | 'validated' | 'published' | 'archived' | string;
+  bucket: string;
+  objectKey: string;
+  manifestKey: string;
+  sha256: string;
+  sizeBytes: number;
+  releaseNotes: string;
+  sourceCommit?: string | null;
+  uploadedBy?: string | null;
+  publishedBy?: string | null;
+  uploadedAt: string;
+  publishedAt?: string | null;
+  archivedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  metadataJson?: Record<string, unknown> | null;
+}
+
+export interface OsacReleaseListResponse {
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+  channel: string;
+  items: OsacRelease[];
+}
+
+export interface OsacReleaseDetailResponse {
+  release: OsacRelease;
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+}

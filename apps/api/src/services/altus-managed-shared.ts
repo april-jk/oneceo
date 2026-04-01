@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type ChatMessageContentPart =
   | {
       type: 'text';
@@ -420,7 +422,12 @@ function sanitizeToolIdentifier(value: string) {
 }
 
 export function buildManagedMcpToolName(providerId: string, toolName: string) {
-  return `mcp__${sanitizeToolIdentifier(providerId)}__${sanitizeToolIdentifier(toolName)}`.slice(0, 64);
+  const normalizedToolName = sanitizeToolIdentifier(toolName).toLowerCase();
+  const providerDigest = createHash('sha1')
+    .update(`${providerId}::${toolName}`)
+    .digest('hex')
+    .slice(0, 12);
+  return `mcp__${normalizedToolName.slice(0, 40)}__${providerDigest}`;
 }
 
 export function buildManagedToolDefinitionsWithMcp(input?: { mcpProviders?: ManagedMcpProvider[] }) {

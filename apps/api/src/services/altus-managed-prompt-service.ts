@@ -170,9 +170,14 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
       if (profile) {
         parts.push(`profile=${profile}`);
       }
+      const lastAuthAt = asText(item.selectedProfileLastAuthAt);
+      if (lastAuthAt) {
+        parts.push(`last_authorized_at=${lastAuthAt}`);
+      }
       const repos = Array.isArray(item.authorizedRepositories) ? item.authorizedRepositories : [];
       if (repos.length > 0) {
-        parts.push(`repositories=${repos.join(', ')}`);
+        parts.push(`authorized_repositories=${repos.join(', ')}`);
+        parts.push('scope=only_these_repositories');
       }
       return `- ${parts.join(' | ')}`;
     })
@@ -221,6 +226,10 @@ export class AltusManagedPromptService {
       formatConnectors(input.connectors),
       '',
       '# Tool usage rules',
+      '- Never treat a connector/tool failure from an earlier turn as proof that the connector still fails now.',
+      '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
+      '- Do not ask the user to manually create a GitHub repository or do other fallback steps unless the current run has produced a fresh connector/tool failure for that exact action.',
+      '- Treat any connector failure that predates `last_authorized_at` as stale. If a connector shows a recent `last_authorized_at`, retry the real tool first and only trust the new result.',
       '- Prefer read/search tools before editing or making assumptions.',
       '- Keep edits minimal and directly tied to the user request.',
       '- For complex tasks, use your todo as the execution contract: complete one step, validate it, then move to the next step.',

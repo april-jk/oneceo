@@ -79,10 +79,47 @@ export class AltusManagedToolRuntime {
           providerId: provider.providerId,
           toolName: tool.toolName,
           displayName: tool.title || tool.toolName,
+          connectorKey: asText(provider.connectorKey) || null,
         },
       ])
     );
-    return new Map(entries as Array<[string, { providerId: string; toolName: string; displayName: string }]>);
+    return new Map(
+      entries as Array<
+        [
+          string,
+          { providerId: string; toolName: string; displayName: string; connectorKey: string | null }
+        ]
+      >
+    );
+  }
+
+  private normalizeMcpFailureMessage(input: {
+    connectorKey?: string | null;
+    toolName: string;
+    error: string;
+  }) {
+    const raw = asText(input.error) || 'mcp_tool_failed';
+    const normalized = raw.toLowerCase();
+    if (asText(input.connectorKey) === 'github') {
+      if (normalized.includes('没有任何可用安装') || normalized.includes('未安装到任何账号')) {
+        return '当前 GitHub App 只有用户授权，没有安装到任何账号或组织。请先完成 GitHub App 安装或批准安装更新，再重新连接。';
+      }
+      if (normalized.includes('resource not accessible by integration')) {
+        return [
+          'GitHub App 当前没有执行该操作所需权限，或安装尚未批准最新权限。',
+          '请检查 GitHub App 的 `Permissions & events`，确认 `Administration` 已设置为 `Read and write`；',
+          '然后到 App 安装页批准新的权限，并确认安装覆盖了目标账号或目标组织。',
+          '如果目标是组织仓库，还需要确认组织允许该 App 创建仓库。',
+        ].join('');
+      }
+      if (normalized.includes('mcp provider not found')) {
+        return 'GitHub 连接器运行态已丢失，当前正在重新恢复，请稍后重试。';
+      }
+      if (normalized.includes('no github installation found for repo')) {
+        return '当前 GitHub App 安装未覆盖目标仓库，请在 GitHub App 安装页将该仓库纳入安装范围后重试。';
+      }
+    }
+    return raw;
   }
 
   private ensureNotAborted(signal?: AbortSignal) {
@@ -177,10 +214,16 @@ export class AltusManagedToolRuntime {
       });
       this.ensureNotAborted(signal);
       if (response.isError) {
-        throw new Error(
+        const rawError =
           typeof response.result === 'string'
             ? response.result
-            : JSON.stringify(response.result || { error: 'mcp_tool_failed' })
+            : JSON.stringify(response.result || { error: 'mcp_tool_failed' });
+        throw new Error(
+          this.normalizeMcpFailureMessage({
+            connectorKey: mcpTool.connectorKey,
+            toolName: mcpTool.toolName,
+            error: rawError,
+          })
         );
       }
       return {

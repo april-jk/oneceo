@@ -41,6 +41,8 @@ export function connectorStatusTone(value: string) {
     case "needs_auth":
     case "not_configured":
     case "connecting":
+    case "pending_recover":
+    case "recovering":
       return "secondary" as const;
     case "error":
     case "failed":

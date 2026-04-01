@@ -713,6 +713,9 @@ export const taskSessionConnectorBindings = pgTable(
     runtimeAttachedToolsJson: jsonb('runtime_attached_tools_json'),
     runtimeLastStartedAt: timestamp('runtime_last_started_at'),
     runtimeLastStoppedAt: timestamp('runtime_last_stopped_at'),
+    recoveryQueuedAt: timestamp('recovery_queued_at'),
+    recoveryStartedAt: timestamp('recovery_started_at'),
+    recoveryCompletedAt: timestamp('recovery_completed_at'),
     enabledTools: jsonb('enabled_tools'),
     sessionConfigJson: jsonb('session_config_json'),
     definitionSnapshotJson: jsonb('definition_snapshot_json'),
@@ -730,6 +733,37 @@ export const taskSessionConnectorBindings = pgTable(
     taskSessionConnectorOrchestratorIdx: index('idx_task_session_connector_bindings_orchestrator_session_id').on(
       table.orchestratorSessionId
     ),
+  })
+);
+
+export const taskSessionMcpRecoveryJobs = pgTable(
+  'task_session_mcp_recovery_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskSessionId: text('task_session_id').notNull(),
+    orchestratorSessionId: text('orchestrator_session_id').notNull(),
+    recoveryKey: text('recovery_key').notNull(),
+    jobType: text('job_type').notNull().default('session_reconcile'),
+    status: text('status').notNull().default('pending'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    payloadJson: jsonb('payload_json'),
+    nextRetryAt: timestamp('next_retry_at'),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    recoveryKeyUnique: uniqueIndex('idx_task_session_mcp_recovery_jobs_recovery_key').on(table.recoveryKey),
+    sessionStatusIdx: index('idx_task_session_mcp_recovery_jobs_session_status').on(
+      table.taskSessionId,
+      table.status
+    ),
+    orchestratorIdx: index('idx_task_session_mcp_recovery_jobs_orchestrator_session_id').on(
+      table.orchestratorSessionId
+    ),
+    nextRetryIdx: index('idx_task_session_mcp_recovery_jobs_next_retry_at').on(table.nextRetryAt),
   })
 );
 
@@ -829,6 +863,8 @@ export type NewUserCustomSkillDocument = typeof userCustomSkillDocuments.$inferI
 
 export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
 export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;
+export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferSelect;
+export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
 
 export type ConnectorAuthRequest = typeof connectorAuthRequests.$inferSelect;
 export type NewConnectorAuthRequest = typeof connectorAuthRequests.$inferInsert;

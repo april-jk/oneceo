@@ -40,6 +40,7 @@ const REQUIRED_TABLES = [
   'user_custom_skills',
   'user_custom_skill_documents',
   'task_session_connector_bindings',
+  'task_session_mcp_recovery_jobs',
   'connector_auth_requests',
 ] as const;
 
@@ -55,9 +56,26 @@ const REQUIRED_COLUMNS = [
   ['task_session_recent_messages', 'updated_at'],
   ['task_session_runs', 'mcp_tool_snapshot_id'],
   ['task_session_connector_bindings', 'profile_id'],
+  ['task_session_connector_bindings', 'runtime_provider_id'],
+  ['task_session_connector_bindings', 'runtime_env_version'],
+  ['task_session_connector_bindings', 'runtime_transport'],
+  ['task_session_connector_bindings', 'runtime_attached_tools_json'],
+  ['task_session_connector_bindings', 'runtime_last_started_at'],
+  ['task_session_connector_bindings', 'runtime_last_stopped_at'],
+  ['task_session_connector_bindings', 'recovery_queued_at'],
+  ['task_session_connector_bindings', 'recovery_started_at'],
+  ['task_session_connector_bindings', 'recovery_completed_at'],
   ['task_session_connector_bindings', 'enabled_tools'],
   ['task_session_connector_bindings', 'session_config_json'],
   ['task_session_connector_bindings', 'definition_snapshot_json'],
+  ['task_session_mcp_recovery_jobs', 'recovery_key'],
+  ['task_session_mcp_recovery_jobs', 'job_type'],
+  ['task_session_mcp_recovery_jobs', 'status'],
+  ['task_session_mcp_recovery_jobs', 'attempt_count'],
+  ['task_session_mcp_recovery_jobs', 'payload_json'],
+  ['task_session_mcp_recovery_jobs', 'next_retry_at'],
+  ['task_session_mcp_recovery_jobs', 'started_at'],
+  ['task_session_mcp_recovery_jobs', 'completed_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
   ['platform_skills', 'slug'],
@@ -115,6 +133,7 @@ const REQUIRED_INDEXES = [
   'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
+  'idx_task_session_mcp_recovery_jobs_recovery_key',
   'idx_task_session_mcp_tool_snapshots_session_id',
   'idx_task_session_connector_runtime_events_session_id',
   'idx_platform_skills_slug',
@@ -192,11 +211,31 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   runtime_attached_tools_json JSONB,
   runtime_last_started_at TIMESTAMP,
   runtime_last_stopped_at TIMESTAMP,
+  recovery_queued_at TIMESTAMP,
+  recovery_started_at TIMESTAMP,
+  recovery_completed_at TIMESTAMP,
   enabled_tools JSONB,
   session_config_json JSONB,
   definition_snapshot_json JSONB,
   last_used_at TIMESTAMP,
   last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_mcp_recovery_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  orchestrator_session_id TEXT NOT NULL,
+  recovery_key TEXT NOT NULL,
+  job_type TEXT NOT NULL DEFAULT 'session_reconcile',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  payload_json JSONB,
+  next_retry_at TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -232,6 +271,14 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
   ON task_session_connector_bindings(task_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_session_id
   ON task_session_connector_bindings(orchestrator_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_recovery_key
+  ON task_session_mcp_recovery_jobs(recovery_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_session_status
+  ON task_session_mcp_recovery_jobs(task_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_orchestrator_session_id
+  ON task_session_mcp_recovery_jobs(orchestrator_session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_next_retry_at
+  ON task_session_mcp_recovery_jobs(next_retry_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
 
@@ -243,9 +290,24 @@ ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS runtime_attached_tools_json JSONB,
   ADD COLUMN IF NOT EXISTS runtime_last_started_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS runtime_last_stopped_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_queued_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_completed_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
   ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+ALTER TABLE IF EXISTS task_session_mcp_recovery_jobs
+  ADD COLUMN IF NOT EXISTS recovery_key TEXT,
+  ADD COLUMN IF NOT EXISTS job_type TEXT NOT NULL DEFAULT 'session_reconcile',
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_error TEXT,
+  ADD COLUMN IF NOT EXISTS payload_json JSONB,
+  ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
 
 ALTER TABLE IF EXISTS connector_auth_requests
   ADD COLUMN IF NOT EXISTS profile_id TEXT,

@@ -70,6 +70,9 @@ type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
 const NEW_PROFILE_ID = "__new__";
+const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
+const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
+const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
 const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; label: string }> = [
   { key: "app", label: "应用" },
   { key: "custom_api", label: "自定义 API" },
@@ -175,7 +178,7 @@ function getFieldValue(
     return profile?.displayName || previousValue || "";
   }
   if (fieldKey === "accessToken" || fieldKey === "dsn") {
-    return previousValue || "";
+    return profile?.secretSummary ? previousValue || "" : "";
   }
   const raw = profile?.config?.[fieldKey];
   return typeof raw === "string" ? raw : previousValue || "";
@@ -265,6 +268,14 @@ function renderEmptyTab(tab: ConnectorCenterTab) {
       </Button>
     </div>
   );
+}
+
+function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
+  return item?.key === "github";
+}
+
+function getGithubAppReauthHint() {
+  return "本地清除只会移除 oneceo 保存的授权态，不会撤销 GitHub 侧的 GitHub App 授权或安装批准。若需要强制重新走授权，请先到 GitHub 撤销授权或确认安装页已批准最新权限。";
 }
 
 export function ConnectorCenterPanel({
@@ -393,7 +404,7 @@ export function ConnectorCenterPanel({
         const attachTarget = result.returnToSessionId || effectiveTargetSessionId;
 
         let attachError: Error | null = null;
-        if (attachTarget && completedProfileId) {
+        if (attachTarget && completedProfileId && result.profile?.authStatus === "authorized") {
           try {
             await attachSessionConnector(attachTarget, connector, {
               profileId: completedProfileId,
@@ -415,6 +426,12 @@ export function ConnectorCenterPanel({
 
         if (attachError) {
           toast.error(`授权已完成，但挂载失败：${attachError.message}`);
+        } else if (
+          result.profile?.authStatus !== "authorized" &&
+          typeof result.profile?.lastError === "string" &&
+          GITHUB_INSTALLATION_MISSING_PATTERN.test(result.profile.lastError)
+        ) {
+          toast.error(result.profile.lastError);
         } else if (attachTarget) {
           toast.success("授权完成，连接器已挂载到目标会话");
         } else {
@@ -567,6 +584,7 @@ export function ConnectorCenterPanel({
 
   const handleOAuth = async () => {
     if (!detailItem) return;
+    const githubConnector = isGithubConnector(detailItem);
     
     // 如果是 GitHub 且没有选中的 Profile，则自动使用/创建一个默认 Profile
     let profileId = activeEditorProfileId;
@@ -607,6 +625,9 @@ export function ConnectorCenterPanel({
         redirectUri,
         returnToSessionId: effectiveTargetSessionId || undefined,
       });
+      if (githubConnector) {
+        toast.info("即将跳转 GitHub。若 GitHub App 仍处于已授权状态，GitHub 可能会直接回跳到 oneceo。");
+      }
       window.location.href = authUrl;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "OAuth start failed");
@@ -632,9 +653,33 @@ export function ConnectorCenterPanel({
     if (!selectedDetailProfile) return;
     setActionKey(`disconnect:${selectedDetailProfile.profileId}`);
     try {
-      await clearConnectorProfileAuth(selectedDetailProfile.profileId);
-      toast.success("连接器授权已清除");
-      await load();
+      const cleared = await clearConnectorProfileAuth(selectedDetailProfile.profileId);
+      setFormState((prev) => {
+        const key = editorKey(selectedDetailProfile.connectorKey, selectedDetailProfile.profileId);
+        const current = prev[key];
+        if (!current) return prev;
+        const next = { ...prev };
+        next[key] = {
+          ...current,
+          accessToken: "",
+          dsn: "",
+        };
+        return next;
+      });
+      if (selectedDetailProfile.connectorKey === "github" && cleared.remoteGrantRevoked === false) {
+        toast.warning(
+          cleared.remoteGrantError
+            ? `本地授权已清除，但 GitHub 远端撤销未确认：${cleared.remoteGrantError}。如果重新连接时 GitHub 直接回跳，请到 GitHub 授权页手动撤销后再试。`
+            : "本地授权已清除，但 GitHub 远端撤销未确认。如果重新连接时 GitHub 直接回跳，请到 GitHub 授权页手动撤销后再试。"
+        );
+      } else {
+        toast.success(
+          selectedDetailProfile.connectorKey === "github"
+            ? "GitHub 本地授权已清除，运行态解绑已转为后台处理。"
+            : "连接器授权已清除"
+        );
+      }
+      void load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Disconnect failed");
     } finally {
@@ -760,6 +805,7 @@ export function ConnectorCenterPanel({
 
     const Icon = resolveConnectorIcon(detailItem.icon);
     const guide = CONNECTOR_GUIDES[detailItem.key];
+    const githubConnector = isGithubConnector(detailItem);
     const statusText = connectorStatusText({
       available: detailItem.available,
       authStatus: selectedDetailProfile?.authStatus,
@@ -768,6 +814,23 @@ export function ConnectorCenterPanel({
     const busy = Boolean(actionKey);
     const actionBusy =
       actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
+    const showGithubPermissionWarning =
+      githubConnector &&
+      typeof selectedDetailProfile?.lastError === "string" &&
+      !GITHUB_INSTALLATION_MISSING_PATTERN.test(selectedDetailProfile.lastError) &&
+      /resource not accessible by integration|permission denied|installation/i.test(
+        selectedDetailProfile.lastError
+      );
+    const showGithubInstallationMissingWarning =
+      githubConnector &&
+      typeof selectedDetailProfile?.lastError === "string" &&
+      GITHUB_INSTALLATION_MISSING_PATTERN.test(selectedDetailProfile.lastError);
+    const githubStatusHint =
+      selectedDetailProfile?.authStatus === "authorized"
+        ? "当前 oneceo 已记录 GitHub 授权。若 GitHub App 权限刚变更，请到 GitHub 安装页确认已批准最新权限。"
+        : showGithubInstallationMissingWarning
+          ? "当前只完成了 GitHub App 用户授权，但 GitHub 侧没有任何可用安装。必须先安装该 App 或批准安装更新，然后再回 oneceo 重新连接。"
+          : getGithubAppReauthHint();
 
     return (
       <Dialog open={Boolean(detailItem)} onOpenChange={(open) => !open && setDetailKey(null)}>
@@ -831,19 +894,13 @@ export function ConnectorCenterPanel({
                         </Button>
                         <Button
                           className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
-                          onClick={() => {
-                            if (detailItem.key === "github") {
-                              window.open("https://github.com/settings/installations", "_blank");
-                            } else {
-                              void handleOAuth();
-                            }
-                          }}
+                          onClick={() => void handleOAuth()}
                           disabled={busy || !detailItem.available}
                         >
                           {actionKey === `oauth:${detailItem.key}` ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           ) : null}
-                          配置
+                          重新连接
                         </Button>
                       </div>
                     </div>
@@ -871,6 +928,68 @@ export function ConnectorCenterPanel({
                 {renderTargetBanner()}
 
                 <div className="w-full max-w-[720px] space-y-8 mt-4">
+                {githubConnector ? (
+                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <ShieldCheck className="h-4 w-4 text-foreground/70" />
+                        GitHub App 授权说明
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">{githubStatusHint}</p>
+                    </div>
+
+                    {showGithubPermissionWarning ? (
+                      <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="leading-relaxed">
+                          GitHub 已拒绝当前操作。请到 GitHub App 安装页确认已批准最新权限，并检查安装范围是否覆盖当前账号或目标仓库。
+                        </span>
+                      </div>
+                    ) : null}
+
+                    {showGithubInstallationMissingWarning ? (
+                      <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="leading-relaxed">
+                          当前 GitHub App 只有用户授权，没有任何安装上下文，所以 `create_repository` 这类账号级操作会被 GitHub 直接拒绝。
+                        </span>
+                      </div>
+                    ) : null}
+
+                    {selectedDetailProfile?.lastError ? (
+                      <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
+                      </div>
+                    ) : null}
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Button
+                        variant="outline"
+                        className="rounded-xl justify-between bg-background"
+                        onClick={() => window.open(GITHUB_APP_AUTHORIZATIONS_URL, "_blank", "noopener,noreferrer")}
+                      >
+                        管理 GitHub 授权
+                        <ArrowUpRight className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl justify-between bg-background"
+                        onClick={() => window.open(GITHUB_APP_INSTALLATIONS_URL, "_blank", "noopener,noreferrer")}
+                      >
+                        管理 GitHub 安装
+                        <ArrowUpRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
+                      <p className="leading-6">
+                        推荐顺序：先在 GitHub 侧撤销旧授权或批准安装更新，再回到 oneceo 点击“重新连接”。
+                        如果 GitHub 判断当前 App 已授权，授权页可能会直接回跳到 oneceo，这是 GitHub App 的正常行为。
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
                 
                 {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
                 {detailItem.key !== "github" ? (

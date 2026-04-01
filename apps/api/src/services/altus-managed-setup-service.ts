@@ -8,6 +8,7 @@ import {
 } from '../db/dao';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
 import { osacAgentService } from './osac-agent-service';
+import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
@@ -258,8 +259,9 @@ export class AltusManagedSetupService {
         providerId: asText(item.runtimeProviderId),
         transport: asText(item.runtimeTransport) || null,
         envVersion: typeof item.runtimeEnvVersion === 'number' ? item.runtimeEnvVersion : 0,
-        tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
+          tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
       }));
+    const shouldProbeLiveProviders = providers.some((item) => !Array.isArray(item.tools) || item.tools.length === 0);
     if (providers.length === 0) {
       const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
         sessionId,
@@ -276,7 +278,7 @@ export class AltusManagedSetupService {
 
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
-    if (orchestratorSessionId) {
+    if (orchestratorSessionId && shouldProbeLiveProviders) {
       const live = await osacAgentService.listSessionMcpTools(orchestratorSessionId).catch(() => null);
       const liveProviders = Array.isArray(live?.providers)
         ? live.providers.map((item) => ({
@@ -326,6 +328,7 @@ export class AltusManagedSetupService {
     if (runtimeSandboxId) {
       const reusedFromRuntime = await this.reuseKnownSandbox(sessionId, runtimeSandboxId, workspaceRoot);
       if (reusedFromRuntime) {
+        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromRuntime.sandboxId).catch(() => null);
         return reusedFromRuntime;
       }
     }
@@ -338,10 +341,12 @@ export class AltusManagedSetupService {
         existing.workspaceRoot || workspaceRoot
       );
       if (reusedFromBinding) {
+        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromBinding.sandboxId).catch(() => null);
         return reusedFromBinding;
       }
       try {
         await taskSessionRunDAO.touchSandboxBinding(sessionId, 'failed');
+        await sessionMcpRecoveryService.markPendingRecoverByOrchestratorSessionId(existing.sandboxId).catch(() => null);
         await sandboxExecutionEnvironmentDAO.updateStatus(existing.sandboxId, 'closed', null).catch(() => null);
       } catch {
         // ignore stale binding cleanup failures and continue provisioning a new sandbox
@@ -383,6 +388,7 @@ export class AltusManagedSetupService {
     await ensureSandboxRuntimeMetadata(opened.sessionId, {
       taskSessionId: sessionId,
     }).catch(() => null);
+    await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, opened.sessionId).catch(() => null);
     return {
       sandboxId: opened.sessionId,
       workspaceRoot,

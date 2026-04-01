@@ -190,7 +190,18 @@ function normalizeMcpProviderStatus(message: OsacMessage): McpProviderStatusPayl
 function throwExecutorError(message: OsacMessage): never {
   const payload = asPayloadRecord(message);
   const errorCode = asString(payload.code) || 'executor_error';
-  const errorMessage = asString(payload.message) || 'executor request failed';
+  const details =
+    payload.details && typeof payload.details === 'object'
+      ? (payload.details as Record<string, unknown>)
+      : null;
+  const detailedMessage =
+    asString(details?.error) ||
+    asString(details?.message) ||
+    (typeof payload.details === 'string' ? asString(payload.details) : '');
+  const errorMessage =
+    detailedMessage ||
+    asString(payload.message) ||
+    'executor request failed';
   throw new Error(`${errorCode}: ${errorMessage}`);
 }
 

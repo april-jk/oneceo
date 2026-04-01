@@ -14,6 +14,7 @@ import { AltusRunCoordinator, altusRunCoordinator } from './altus-run-coordinato
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -47,6 +48,10 @@ export class AltusManagedRunEntryService {
     }
 
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
+    const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId) {
+      await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId);
+    }
     const connectorSnapshot = await this.setupService.captureConnectorSnapshot(sessionId, userId);
     const mcpToolSnapshot = await this.setupService.captureMcpToolSnapshot(sessionId);
     const run = await taskSessionRunDAO.createRun({

@@ -1,6 +1,6 @@
 # 连接器模块参照 Suna Integrations 重构设计
 
-更新时间：2026-03-23
+更新时间：2026-03-31
 
 ## 1. 任务背景
 
@@ -454,6 +454,7 @@ GitHub 在阶段一需要额外遵守一个易用性原则：
 3. attach 请求把 `profileId + repositories[]` 一起提交
 4. 平台把 `repositories[]` 保存进 `session_config_json`
 5. sandbox 内 GitHub MCP 只允许访问这批仓库
+6. 若 GitHub REST 返回 `401 Bad credentials`，平台必须立即把该 profile 改写为 `needs_auth`、清除失效 token，并在设置页/会话页统一提示“需要重新授权”
 
 反例：
 
@@ -715,6 +716,69 @@ GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
 
 前端二级页只消费这个列表，不自己猜仓库。
 
+补充约束：
+
+1. GitHub session 级 attach 一旦选择了仓库列表，该 session 的 GitHub MCP 作用域就收敛为这些仓库，而不是整账号权限。
+2. 像 `create_repository` 这类账号级能力，如果目标仓库不在当前 session 的授权仓库范围内，运行时必须明确返回“当前会话仅授权这些仓库，不能创建或写入新的仓库”，不能只返回通用 `MCP_TOOL_CALL_FAILED`。
+3. Altus system prompt 也必须把 `authorized_repositories` 明确展示给模型，避免模型把 repo-scoped session 误判成 account-wide GitHub access。
+4. 如果 GitHub session attach 未选择任何仓库，则该 session 视为账号级 GitHub 能力开放，允许 `create_repository` 这类账号级操作。
+5. Altus 动态 MCP tool name 不能直接用长 `providerId` 截断生成，否则多个工具会发生命名碰撞；必须使用稳定短哈希保证每个 `providerId + toolName` 唯一映射。
+6. 当 GitHub MCP 返回 `Resource not accessible by integration` 时，平台必须优先解释为 GitHub App 权限或安装审批问题，明确提示检查：
+   `Permissions & events -> Administration: Read and write`
+   安装页是否已批准新增权限
+   安装范围是否覆盖目标账号/组织
+   组织是否允许该 App 创建仓库
+7. 用户在设置页执行“清除授权”后，前端必须同步清空本地表单里残留的 secret 字段，后续再次点击连接必须重新走 GitHub OAuth 跳转，不能把旧 token 通过保存 profile 悄悄写回。
+
+### 13.6 GitHub OAuth 成功不等于 installation 就绪
+
+本次线上排查已经确认一个必须收敛的事实：
+
+1. 当前 oneceo 走的是 GitHub App 的 OAuth，拿到的是 `ghu_` 前缀的 user access token
+2. 仅有 OAuth 成功，并不代表当前 GitHub App 已安装到用户账号或组织
+3. 如果 token 对应 `GET /user/installations` 返回 `total_count = 0`，则该 token 不能视为“GitHub 可用”
+4. 在这种状态下，`create_repository` 会直接得到 GitHub 原生 `403 Resource not accessible by integration`
+
+因此当前设计必须补充一个更严格的判定：
+
+1. GitHub OAuth callback 成功后，平台必须立刻校验 `GET /user/installations`
+2. 若返回 0 个 installation，则 profile 不能写成 `authorized`
+3. 该 profile 必须改写为 `needs_auth`，并给出明确错误：
+   `GitHub App 已授权，但当前账号下没有任何可用安装。请先在 GitHub 安装该 App 或批准安装更新后，再重新连接。`
+4. 当前 session 的 runtime refresh 也不能继续执行，因为这不是一个真实可用的 GitHub profile
+5. 任何 GitHub attach / repo 列表 / repo 操作前，也必须再次验证 installation 是否存在，防止旧的假成功状态残留
+
+这条约束的原因很直接：
+
+1. 当前运行时底层仍然是 `@modelcontextprotocol/server-github`
+2. oneceo 只是把用户 token 注入该 provider
+3. 如果平台不先保证 installation-ready，模型和用户都会误以为“已经连接完成”
+4. 这会形成“UI 已连接，但创建仓库恒定 403”的假成功体验
+
+### 13.7 GitHub 断开连接的正确语义
+
+本次继续排查后，又确认了一条必须收敛的交互语义：
+
+1. 用户点击“取消授权”时，首先需要快速清掉平台本地授权态
+2. GitHub 远端 grant revoke 与 session runtime detach 可以继续做，但不能阻塞前端一直转圈
+3. 否则用户会看到按钮长期 loading，却在关闭弹窗后发现本地状态其实已经清掉，造成“系统流程不可信”的体验
+
+因此断开连接必须调整为：
+
+1. 本地 profile 清理优先完成并立即返回给前端
+2. session runtime detach 改为后台异步执行
+3. GitHub 远端 revoke 失败不应阻塞本地断开，但必须把结果显式返回给前端
+4. 当前端收到 `remoteGrantRevoked=false` 时，必须明确提示：
+   - 本地状态已清除
+   - GitHub 远端撤销未确认
+   - 若重新连接时 GitHub 直接回跳，应去 GitHub 授权页手动撤销
+
+这样做的原因：
+
+1. “本地已清除”和“GitHub 远端仍记得该 App 已授权”是两个独立状态
+2. 用户看到“重新连接直接回跳”，并不必然说明 oneceo 本地没有断开
+3. 如果平台不把这两层状态拆开显示，用户会误以为断开流程根本没执行
+
 ## 14. 最小实现路径
 
 本任务是长任务，但实现上不能过度设计。
@@ -874,6 +938,21 @@ GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
 3. sandbox 重连后 reconcile 仍然正常
 4. sandbox 内不需要再次做连接器配置
 5. GitHub runtime 对不在 allowlist 内的仓库请求会拒绝，而不是放过 token 的全部权限
+
+### 17.4 GitHub App 授权页交互
+
+1. 设置页清除 GitHub 授权时，必须同时撤销 GitHub 侧 OAuth grant，并清除 oneceo 本地保存的授权态
+2. GitHub 连接器详情弹窗必须明确提供“管理 GitHub 授权”和“管理 GitHub 安装”两个入口
+3. GitHub 连接器详情弹窗的主操作按钮必须始终允许重新发起 OAuth，而不是用其他入口替代
+4. GitHub OAuth 要保持 GitHub 标准 `login/oauth/authorize` 流程，不额外注入 `prompt=select_account` 之类会触发账户挑战页的参数
+5. GitHub App 的安装权限更新不等于 OAuth 重新授权；当 GitHub 返回 `Resource not accessible by integration` 时，前端要明确引导用户检查安装权限审批、安装范围和组织仓库创建策略
+6. Altus 在新的 managed run 中，不得直接沿用历史 GitHub tool failure 作为当前结论；如果用户说明已重新授权、重新连接或要求重试，必须在当前 run 重新调用相关工具后才能判断仍然失败
+7. Session connectors 摘要要带出 `last_authorized_at`；Altus 必须把所有早于该时间的连接器失败视为过期结论
+8. OAuth 回调一旦成功，平台必须自动刷新所有引用该 profile 的 attached session binding，把最新授权同步进当前 session 与 OSAC runtime；这条链路应对用户透明，不能要求用户手动重新挂载或理解 OSAC
+9. session MCP recovery 属于后台任务；数据库瞬时断连（如 `ECONNRESET`）只能记录并跳过当前周期，不能把异常抛穿到 API 进程导致服务崩溃
+10. GitHub 点击“断开连接”必须同时撤销 GitHub 侧 OAuth grant、清空 oneceo 本地授权态，并自动卸载所有引用该 profile 的 session runtime 绑定；不能只做本地清除
+11. GitHub 点击“连接/重新连接”必须固定从标准 `https://github.com/login/oauth/authorize` 入口重新发起 OAuth；不能跳过这一步，也不能允许环境变量把授权入口改成其他路径
+12. GitHub 点击“断开连接”虽然必须彻底，但不能无限等待远端；GitHub revoke 要有明确超时，session runtime detach 要尽量并行执行，前端列表刷新不得阻塞用户交互
 
 ## 18. 结论
 

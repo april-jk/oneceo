@@ -4,6 +4,7 @@ import { currentUserResolver } from '../services/current-user-resolver';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { githubConnectorRepositoryService } from '../services/github-connector-repository-service';
 import { userConnectorService } from '../services/user-connector-service';
+import { sessionConnectorService } from '../services/session-connector-service';
 
 const router = express.Router();
 
@@ -164,9 +165,19 @@ router.post('/profiles/:profileId/oauth/callback', async (req, res) => {
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
+    const refreshResult =
+      result.profile.authStatus === 'authorized'
+        ? await sessionConnectorService.refreshAttachedBindingsForProfile(
+            currentUser.userId,
+            result.profile.profileId
+          )
+        : { refreshed: [], failed: [] };
     return res.json({
       success: true,
-      data: result,
+      data: {
+        ...result,
+        runtimeRefresh: refreshResult,
+      },
     });
   } catch (error) {
     return handleError(res, error, '完成连接器 OAuth 失败');
@@ -177,9 +188,21 @@ router.delete('/profiles/:profileId/auth', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const result = await userConnectorService.clearProfileAuth(currentUser.userId, req.params.profileId);
+    void sessionConnectorService.detachBindingsForProfile(currentUser.userId, req.params.profileId).catch((error) => {
+      console.error('[CONNECTOR_PROFILE_AUTH_DETACH_FAILED]', {
+        profileId: req.params.profileId,
+        userId: currentUser.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     return res.json({
       success: true,
-      data: result,
+      data: {
+        ...result.profile,
+        remoteGrantRevoked: result.remoteGrantRevoked,
+        remoteGrantError: result.remoteGrantError,
+        runtimeDetachQueued: true,
+      },
     });
   } catch (error) {
     return handleError(res, error, '断开连接器授权失败');
@@ -233,9 +256,18 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
+    const profileId = result.account?.defaultProfileId || result.account?.profileId;
+    const refreshResult = profileId
+      ? result.account?.authStatus === 'authorized'
+        ? await sessionConnectorService.refreshAttachedBindingsForProfile(currentUser.userId, profileId)
+        : { refreshed: [], failed: [] }
+      : { refreshed: [], failed: [] };
     return res.json({
       success: true,
-      data: result,
+      data: {
+        ...result,
+        runtimeRefresh: refreshResult,
+      },
     });
   } catch (error) {
     return handleError(res, error, '完成连接器 OAuth 失败');
@@ -246,10 +278,26 @@ router.delete('/:connectorKey/auth', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const connectorKey = parseConnectorKey(req.params.connectorKey);
+    const existing = await userConnectorService.getDefaultOrFirstProfile(currentUser.userId, connectorKey);
     const result = await userConnectorService.clearConnectorAuth(currentUser.userId, connectorKey);
+    if (existing) {
+      void sessionConnectorService.detachBindingsForProfile(currentUser.userId, existing.profileId).catch((error) => {
+        console.error('[CONNECTOR_AUTH_DETACH_FAILED]', {
+          connectorKey,
+          profileId: existing.profileId,
+          userId: currentUser.userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     return res.json({
       success: true,
-      data: result,
+      data: {
+        ...result.account,
+        remoteGrantRevoked: result.remoteGrantRevoked,
+        remoteGrantError: result.remoteGrantError,
+        runtimeDetachQueued: Boolean(existing),
+      },
     });
   } catch (error) {
     return handleError(res, error, '断开连接器授权失败');

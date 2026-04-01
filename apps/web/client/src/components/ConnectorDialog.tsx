@@ -56,7 +56,14 @@ interface ConnectorDialogProps {
 
 function formatStatus(value: string | null | undefined) {
   if (!value) return "unknown";
-  return value.replaceAll("_", " ");
+  switch (value) {
+    case "pending_recover":
+      return "pending recover";
+    case "recovering":
+      return "recovering";
+    default:
+      return value.replaceAll("_", " ");
+  }
 }
 
 function groupProfilesByConnector(profiles: ConnectorProfile[]) {
@@ -141,6 +148,8 @@ function statusChipTone(value: string) {
     case "needs_auth":
     case "not_configured":
     case "connecting":
+    case "pending_recover":
+    case "recovering":
       return "bg-amber-500/10 text-amber-700";
     case "failed":
     case "error":
@@ -314,6 +323,7 @@ export default function ConnectorDialog({
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : "加载 GitHub 仓库失败");
+        void load();
       })
       .finally(() => {
         setGithubRepositoriesLoading((prev) => ({
@@ -471,15 +481,20 @@ export default function ConnectorDialog({
             repositories: (sessionConfig?.repositories as string[] | undefined) || [],
           })
         );
-        await attachSessionConnector(sessionId, connectorKey, {
+        const attachedStatus = await attachSessionConnector(sessionId, connectorKey, {
           profileId,
           sessionConfig,
         });
-        toast.success("连接器已挂载到当前会话");
+        toast.success(
+          attachedStatus?.runtimeStatus === "pending_recover"
+            ? "连接器已记录，sandbox 恢复后会自动挂载"
+            : "连接器已挂载到当前会话"
+        );
       }
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "连接器操作失败");
+      void load();
     } finally {
       setActingKey(null);
     }

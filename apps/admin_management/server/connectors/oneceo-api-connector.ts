@@ -236,6 +236,43 @@ export type AdminSkillImportJob = {
   error?: string | null;
 };
 
+export type AdminConnectorGuidePolicy = {
+  id: string;
+  connectorKey: string;
+  status: 'draft' | 'active' | 'archived' | string;
+  triggerMode: 'on_attach' | 'on_active_use' | 'on_attach_and_active_use' | string;
+  description: string;
+  publishedRevisionId: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminConnectorGuideRevision = {
+  id: string;
+  policyId: string;
+  versionNumber: number;
+  status: 'draft' | 'published' | 'archived' | string;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+  notes: string;
+  createdBy?: string | null;
+  createdAt: string;
+  publishedAt?: string | null;
+};
+
+export type AdminConnectorGuidePolicyDetail = AdminConnectorGuidePolicy & {
+  publishedRevision?: AdminConnectorGuideRevision | null;
+  revisions: AdminConnectorGuideRevision[];
+};
+
+export type AdminConnectorGuideValidationResult = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -559,6 +596,122 @@ export class OneceoApiConnector {
 
   getSkillFolderImportJob(jobId: string) {
     return this.request<AdminSkillImportJob>(`/api/internal/skills/import/folder-jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  listConnectorGuides(filters?: { connectorKey?: string; status?: string; query?: string }) {
+    const params = new URLSearchParams();
+    if (filters?.connectorKey) params.set('connectorKey', filters.connectorKey);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.query) params.set('query', filters.query);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<AdminConnectorGuidePolicy[]>(`/api/internal/connector-guides${suffix}`);
+  }
+
+  getConnectorGuidePolicy(policyId: string) {
+    return this.request<AdminConnectorGuidePolicyDetail>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}`
+    );
+  }
+
+  createConnectorGuidePolicy(input: {
+    connectorKey: string;
+    triggerMode: string;
+    description?: string;
+    createdBy?: string;
+  }) {
+    return this.request<AdminConnectorGuidePolicy>('/api/internal/connector-guides', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  updateConnectorGuidePolicy(
+    policyId: string,
+    input: {
+      triggerMode?: string;
+      description?: string;
+      status?: string;
+    }
+  ) {
+    return this.request<AdminConnectorGuidePolicy>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}`,
+      {
+        method: 'PUT',
+        body: input,
+      }
+    );
+  }
+
+  createConnectorGuideRevision(policyId: string, input?: { createdBy?: string }) {
+    return this.request<AdminConnectorGuideRevision>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions`,
+      {
+        method: 'POST',
+        body: input || {},
+      }
+    );
+  }
+
+  getConnectorGuideRevision(policyId: string, revisionId: string) {
+    return this.request<AdminConnectorGuideRevision>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`
+    );
+  }
+
+  updateConnectorGuideRevision(
+    policyId: string,
+    revisionId: string,
+    input: {
+      serverInstructionsMarkdown?: string;
+      guideReminderMarkdown?: string;
+      blockingRulesMarkdown?: string;
+      notes?: string;
+    }
+  ) {
+    return this.request<AdminConnectorGuideRevision>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        method: 'PUT',
+        body: input,
+      }
+    );
+  }
+
+  validateConnectorGuideRevision(policyId: string, revisionId: string) {
+    return this.request<AdminConnectorGuideValidationResult>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
+  }
+
+  publishConnectorGuideRevision(policyId: string, revisionId: string) {
+    return this.request<{
+      policy: AdminConnectorGuidePolicy;
+      revision: AdminConnectorGuideRevision;
+      validation: AdminConnectorGuideValidationResult;
+    }>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/publish`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
+  }
+
+  rollbackConnectorGuideRevision(policyId: string, revisionId: string) {
+    return this.request<{
+      policy: AdminConnectorGuidePolicy;
+      revision: AdminConnectorGuideRevision;
+    }>(
+      `/api/internal/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
   }
 }
 

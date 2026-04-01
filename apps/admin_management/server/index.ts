@@ -6,6 +6,7 @@ import { oneceoApiConnector } from './connectors/oneceo-api-connector';
 import { createAgentManagementRoutes } from './routes/agent-management-routes';
 import { createAuditRoutes } from './routes/audit-routes';
 import { createConversationRoutes } from './routes/conversation-routes';
+import { createConnectorGuideRoutes } from './routes/connector-guide-routes';
 import { createDashboardRoutes } from './routes/dashboard-routes';
 import { createHostRoutes } from './routes/host-routes';
 import { createKvmRoutes } from './routes/kvm-routes';
@@ -14,6 +15,7 @@ import { createSkillManagementRoutes } from './routes/skill-management-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AuditService } from './services/audit-service';
 import { ConversationManagementService } from './services/conversation-management-service';
+import { ConnectorGuideManagementService } from './services/connector-guide-management-service';
 import { DashboardService } from './services/dashboard-service';
 import { HostRuntimeService } from './services/host-runtime-service';
 import { KvmService } from './services/kvm-service';
@@ -36,6 +38,7 @@ const conversationService = new ConversationManagementService(oneceoApiConnector
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
 const sandboxManagementService = new SandboxManagementService();
 const skillManagementService = new SkillManagementService(oneceoApiConnector);
+const connectorGuideManagementService = new ConnectorGuideManagementService(oneceoApiConnector);
 
 app.use(
   cors({
@@ -77,6 +80,7 @@ app.use('/api/conversations', createConversationRoutes(conversationService));
 app.use('/api/agent-management', createAgentManagementRoutes(agentManagementService));
 app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManagementService));
 app.use('/api/skill-management', createSkillManagementRoutes(skillManagementService));
+app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));
 
 app.use((req, res) => {
   return fail(res, 404, `Route ${req.method} ${req.path} not found`);

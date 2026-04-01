@@ -190,6 +190,10 @@ export class AltusManagedPromptService {
     sessionTitle?: string | null;
     workspaceRoot: string;
     connectors: SessionConnectorStatus[];
+    connectorGuideSections?: {
+      instructionsSection?: string;
+      reminderSection?: string;
+    };
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
@@ -224,6 +228,8 @@ export class AltusManagedPromptService {
       '',
       '# Session connectors',
       formatConnectors(input.connectors),
+      input.connectorGuideSections?.instructionsSection || '',
+      input.connectorGuideSections?.reminderSection || '',
       '',
       '# Tool usage rules',
       '- Never treat a connector/tool failure from an earlier turn as proof that the connector still fails now.',

@@ -1,6 +1,7 @@
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { AltusManagedToolRuntime } from './altus-managed-tool-runtime';
 import { altusManagedPromptService } from './altus-managed-prompt-service';
+import { connectorGuideService } from './connector-guide-service';
 import {
   asText,
   buildManagedToolDefinitionsWithMcp,
@@ -13,6 +14,7 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
@@ -488,11 +490,20 @@ export class AltusRunCoordinator {
       activeSkills: state.input.skills,
       mcpProviders: state.input.mcpProviders,
     });
+    const connectorGuideSections = await connectorGuideService.buildPromptSections(state.input.sessionId);
     const systemPrompt = altusManagedPromptService.buildSystemPrompt({
       sessionId: state.input.sessionId,
       sessionTitle: state.input.sessionTitle,
       workspaceRoot: state.workspaceRoot,
       connectors: state.input.connectors as any,
+      connectorGuideSections,
+    });
+    writeConnectorDebugLog('[ALTUS_RUN_PROMPT_READY]', {
+      taskSessionId: state.input.sessionId,
+      runId: state.input.runId,
+      hasConnectorGuideInstructions: Boolean(connectorGuideSections.instructionsSection),
+      hasConnectorGuideReminders: Boolean(connectorGuideSections.reminderSection),
+      connectorCount: Array.isArray(state.input.connectors) ? state.input.connectors.length : 0,
     });
     const skillCatalogPrompt = altusManagedPromptService.buildSkillCatalogPrompt(state.input.skillCatalog);
     const skillPrompt = altusManagedPromptService.buildSkillContextPrompt(state.input.skills);

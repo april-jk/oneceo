@@ -15,3 +15,4 @@ export * from './task-session-workspace-cache.dao';
 export * from './task-session-run.dao';
 export * from './task-session-deliverable-artifact.dao';
 export * from './platform-skill.dao';
+export * from './connector-guide.dao';

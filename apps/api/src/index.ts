@@ -12,6 +12,7 @@ import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
+import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -20,6 +21,7 @@ import { osacPersistentRecoveryService } from './services/osac-persistent-recove
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
+import { connectorGuideService } from './services/connector-guide-service';
 
 function mergeNoProxy(entries: string[], current?: string): string {
   const normalized = (current || '')
@@ -131,6 +133,7 @@ app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
 app.use('/api/connectors', connectorRoutes);
 app.use('/api/internal', internalSkillRoutes);
+app.use('/api/internal', internalConnectorGuideRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -309,6 +312,7 @@ osacLlmProxyBridgeService.initialize();
 
 async function startServer() {
   await connectorStorageBootstrap.ensureReady();
+  await connectorGuideService.ensureBuiltinPolicies();
 
   httpServer.listen(PORT, () => {
     isListening = true;

@@ -3,6 +3,10 @@ import type {
   AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionsResponse,
+  ConnectorGuidePolicy,
+  ConnectorGuidePolicyDetail,
+  ConnectorGuideRevision,
+  ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
   SkillDetail,
@@ -368,6 +372,91 @@ export const api = {
     }),
   getSkillFolderImportJob: (jobId: string) =>
     request<SkillImportJob>(`/api/skill-management/import/folder-jobs/${encodeURIComponent(jobId)}`),
+  listConnectorGuidePolicies: (query?: { connectorKey?: string; status?: string; query?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.connectorKey) params.set('connectorKey', query.connectorKey);
+    if (query?.status) params.set('status', query.status);
+    if (query?.query) params.set('query', query.query);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<ConnectorGuidePolicy[]>(`/api/connector-guides${suffix}`);
+  },
+  getConnectorGuidePolicy: (policyId: string) =>
+    request<ConnectorGuidePolicyDetail>(`/api/connector-guides/${encodeURIComponent(policyId)}`),
+  createConnectorGuidePolicy: (payload: {
+    connectorKey: string;
+    triggerMode: string;
+    description?: string;
+    createdBy?: string;
+  }) =>
+    request<ConnectorGuidePolicy>('/api/connector-guides', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateConnectorGuidePolicy: (
+    policyId: string,
+    payload: { triggerMode?: string; description?: string; status?: string }
+  ) =>
+    request<ConnectorGuidePolicy>(`/api/connector-guides/${encodeURIComponent(policyId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  createConnectorGuideRevision: (policyId: string, payload?: { createdBy?: string }) =>
+    request<ConnectorGuideRevision>(`/api/connector-guides/${encodeURIComponent(policyId)}/revisions`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  getConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<ConnectorGuideRevision>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`
+    ),
+  updateConnectorGuideRevision: (
+    policyId: string,
+    revisionId: string,
+    payload: {
+      serverInstructionsMarkdown?: string;
+      guideReminderMarkdown?: string;
+      blockingRulesMarkdown?: string;
+      notes?: string;
+    }
+  ) =>
+    request<ConnectorGuideRevision>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }
+    ),
+  validateConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<ConnectorGuideValidationResult>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
+  publishConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<{
+      policy: ConnectorGuidePolicy;
+      revision: ConnectorGuideRevision;
+      validation: ConnectorGuideValidationResult;
+    }>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/publish`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
+  rollbackConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<{
+      policy: ConnectorGuidePolicy;
+      revision: ConnectorGuideRevision;
+    }>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
   deleteVmFile: (vmId: string, query: { targetPath: string; recursive?: boolean; ignoreMissing?: boolean; sessionId?: string }) => {
     const params = new URLSearchParams();
     params.set('targetPath', query.targetPath);

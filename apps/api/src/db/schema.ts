@@ -736,6 +736,77 @@ export const taskSessionConnectorBindings = pgTable(
   })
 );
 
+export const connectorGuidePolicies = pgTable(
+  'connector_guide_policies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectorKey: text('connector_key').notNull(),
+    status: text('status').notNull().default('draft'),
+    triggerMode: text('trigger_mode').notNull().default('on_attach'),
+    description: text('description').notNull().default(''),
+    publishedRevisionId: uuid('published_revision_id'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    connectorKeyUnique: uniqueIndex('idx_connector_guide_policies_connector_key').on(table.connectorKey),
+    statusIdx: index('idx_connector_guide_policies_status').on(table.status),
+    publishedRevisionIdx: index('idx_connector_guide_policies_published_revision_id').on(table.publishedRevisionId),
+  })
+);
+
+export const connectorGuideRevisions = pgTable(
+  'connector_guide_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    policyId: uuid('policy_id')
+      .notNull()
+      .references(() => connectorGuidePolicies.id, { onDelete: 'cascade' }),
+    versionNumber: integer('version_number').notNull(),
+    status: text('status').notNull().default('draft'),
+    serverInstructionsMarkdown: text('server_instructions_markdown').notNull().default(''),
+    guideReminderMarkdown: text('guide_reminder_markdown').notNull().default(''),
+    blockingRulesMarkdown: text('blocking_rules_markdown').notNull().default(''),
+    notes: text('notes').notNull().default(''),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    publishedAt: timestamp('published_at'),
+  },
+  (table) => ({
+    policyVersionUnique: uniqueIndex('idx_connector_guide_revisions_policy_version').on(
+      table.policyId,
+      table.versionNumber
+    ),
+    policyIdx: index('idx_connector_guide_revisions_policy_id').on(table.policyId),
+    statusIdx: index('idx_connector_guide_revisions_status').on(table.status),
+  })
+);
+
+export const taskSessionConnectorGuides = pgTable(
+  'task_session_connector_guides',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskSessionId: text('task_session_id').notNull(),
+    connectorKey: text('connector_key').notNull(),
+    policyId: uuid('policy_id')
+      .notNull()
+      .references(() => connectorGuidePolicies.id, { onDelete: 'cascade' }),
+    revisionId: uuid('revision_id')
+      .notNull()
+      .references(() => connectorGuideRevisions.id, { onDelete: 'cascade' }),
+    triggerMode: text('trigger_mode').notNull(),
+    resolvedAt: timestamp('resolved_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    sessionConnectorUnique: uniqueIndex('idx_task_session_connector_guides_session_connector').on(
+      table.taskSessionId,
+      table.connectorKey
+    ),
+    sessionIdx: index('idx_task_session_connector_guides_task_session_id').on(table.taskSessionId),
+  })
+);
+
 export const taskSessionMcpRecoveryJobs = pgTable(
   'task_session_mcp_recovery_jobs',
   {
@@ -863,6 +934,12 @@ export type NewUserCustomSkillDocument = typeof userCustomSkillDocuments.$inferI
 
 export type TaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferSelect;
 export type NewTaskSessionConnectorBinding = typeof taskSessionConnectorBindings.$inferInsert;
+export type ConnectorGuidePolicy = typeof connectorGuidePolicies.$inferSelect;
+export type NewConnectorGuidePolicy = typeof connectorGuidePolicies.$inferInsert;
+export type ConnectorGuideRevision = typeof connectorGuideRevisions.$inferSelect;
+export type NewConnectorGuideRevision = typeof connectorGuideRevisions.$inferInsert;
+export type TaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$inferSelect;
+export type NewTaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$inferInsert;
 export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferSelect;
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
 

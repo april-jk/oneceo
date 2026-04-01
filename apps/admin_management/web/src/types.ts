@@ -298,6 +298,43 @@ export interface ConversationSessionDetailResponse {
   };
 }
 
+export interface ConnectorGuidePolicy {
+  id: string;
+  connectorKey: string;
+  status: 'draft' | 'active' | 'archived' | string;
+  triggerMode: 'on_attach' | 'on_active_use' | 'on_attach_and_active_use' | string;
+  description: string;
+  publishedRevisionId: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectorGuideRevision {
+  id: string;
+  policyId: string;
+  versionNumber: number;
+  status: 'draft' | 'published' | 'archived' | string;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+  notes: string;
+  createdBy?: string | null;
+  createdAt: string;
+  publishedAt?: string | null;
+}
+
+export interface ConnectorGuidePolicyDetail extends ConnectorGuidePolicy {
+  publishedRevision?: ConnectorGuideRevision | null;
+  revisions: ConnectorGuideRevision[];
+}
+
+export interface ConnectorGuideValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
 export interface SkillSummary {
   id: string;
   slug: string;

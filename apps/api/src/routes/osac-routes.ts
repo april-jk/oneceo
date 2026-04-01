@@ -1,9 +1,6 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
 import { osacAgentService } from '../services/osac-agent-service';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 
 const router = express.Router();
@@ -14,24 +11,6 @@ function handleError(res: express.Response, error: unknown, fallback: string) {
     success: false,
     error: getPublicErrorMessage(message || fallback),
   });
-}
-
-function resolveBinaryPath(requested: 'osac' | 'opencode') {
-  return requested === 'osac'
-    ? osacBootstrapConfig.osacBinaryPath
-    : osacBootstrapConfig.opencodeBinaryPath;
-}
-
-function assertBinaryAccess(req: express.Request, res: express.Response): boolean {
-  if (!osacBootstrapConfig.binaryAuthToken) {
-    return true;
-  }
-  const token = req.header('X-OSAC-BINARY-TOKEN');
-  if (token === osacBootstrapConfig.binaryAuthToken) {
-    return true;
-  }
-  res.status(401).json({ success: false, error: getPublicErrorMessage('未授权的下载请求') });
-  return false;
 }
 
 router.post('/provision', async (req, res) => {
@@ -50,31 +29,10 @@ router.post('/provision', async (req, res) => {
 });
 
 router.get('/binaries/:name', async (req, res) => {
-  try {
-    if (!assertBinaryAccess(req, res)) {
-      return;
-    }
-    const name = req.params.name === 'osac' ? 'osac' : req.params.name === 'opencode' ? 'opencode' : null;
-    if (!name) {
-      return res.status(404).json({ success: false, error: getPublicErrorMessage('未找到二进制文件') });
-    }
-
-    const filePath = resolveBinaryPath(name);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, error: getPublicErrorMessage('文件不存在') });
-    }
-
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
-
-    const stream = fs.createReadStream(filePath);
-    stream.on('error', () => {
-      res.status(500).json({ success: false, error: getPublicErrorMessage('读取文件失败') });
-    });
-    stream.pipe(res);
-  } catch (error) {
-    return handleError(res, error, '下载二进制文件失败');
-  }
+  return res.status(410).json({
+    success: false,
+    error: getPublicErrorMessage('OSAC 本地二进制下载链路已废弃，请通过已发布的 R2 artifact 获取运行时版本'),
+  });
 });
 
 router.post('/:sessionId/execute', async (req, res) => {

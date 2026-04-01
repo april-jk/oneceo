@@ -21,9 +21,7 @@ export function resolveGithubOauthProvider(): ConnectorOauthProvider | undefined
     provider: 'github',
     clientId,
     clientSecret,
-    authorizationUrl:
-      asText(process.env.GITHUB_CONNECTOR_AUTHORIZE_URL) ||
-      'https://github.com/login/oauth/authorize',
+    authorizationUrl: 'https://github.com/login/oauth/authorize',
     tokenUrl:
       asText(process.env.GITHUB_CONNECTOR_TOKEN_URL) ||
       'https://github.com/login/oauth/access_token',

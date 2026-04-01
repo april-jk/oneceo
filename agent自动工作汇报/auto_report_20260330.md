@@ -120,3 +120,43 @@
     - 对会话 `b5bedf20-e5b3-4d4d-b2cb-00d6b356dc9e` 的 sandbox `i4jmqcuplcwvm1z4hry7e` 执行强制 bridge 重建后，`OSAC_BRIDGE_READY_WAIT_DONE` 返回 `status: 200`
     - 直接调用 `sessionConnectorService.attachConnector(...)` 挂载 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 成功
     - 结果为 `runtimeStatus=connected`，已发现 GitHub MCP tools，`lastError=null`
+- 新增一份未采用设计文档，规划 Altus 模式下 sandbox stop/close 后的 MCP 恢复、平台持久化离线调整、以及 API 重启后的 backlog recovery：
+  - `docs/agent研发文档/20260331_Altus_Sandbox恢复与MCP持久化恢复设计_[20260331-0115已采用].md`
+- 开始落地 Altus sandbox 恢复与 MCP 持久化恢复主链路：
+  - `task_session_connector_bindings` 增加 `recovery_queued_at / recovery_started_at / recovery_completed_at`
+  - 新增 `task_session_mcp_recovery_jobs` 表与 DAO
+  - 新增 `session-mcp-recovery-service.ts`
+  - sandbox close / stale sandbox replace 后，会把已 attached 的 binding 标成 `pending_recover`
+  - `ensureSandbox()` 成功后与 managed run 启动前，会执行 `ensureSessionRecovered()`
+  - API 启动后会扫描 backlog recovery jobs
+  - sandbox 离线时，attach 改为持久化 `pending_recover`，detach 改为立即持久化 `detached`
+  - 前端对话框 connector attach 成功文案已区分“立即挂载”与“待 sandbox 恢复后自动挂载”
+- 修复 GitHub 授权失效后仓库选择仍显示 `Bad credentials`：
+  - 直接使用当前本地用户 `local-egf5ug84` 的 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 复现，后端直调 `githubConnectorRepositoryService.listRepositories(...)` 与 `https://api.github.com/user` 均返回 `401 Bad credentials`
+  - 根因是 profile 仍保留 `authStatus=authorized`，平台未在 token 失效后把状态打回 `needs_auth`
+  - 已新增 `userConnectorService.markProfileNeedsAuth(...)`
+  - `github-connector-repository-service.ts` 现在会在 GitHub REST 返回 `401 Bad credentials` 时：
+    - 将 profile 状态改为 `needs_auth`
+    - 清除失效 token
+    - 写入 `lastError`
+    - 返回统一提示 `GitHub 授权已失效，请前往设置重新授权`
+  - `session-connector-service.ts` 在 GitHub attach 前增加授权有效性校验，避免失效 token 继续“假挂载”
+  - `ConnectorDialog.tsx` 在 GitHub 仓库列表加载失败和 attach 失败后会立即刷新 profile 状态，确保 UI 及时切换到“需要重新授权”
+- 修复 OSAC WebSocket 握手 `status=409 code=mapping_stale`：
+  - 日志确认当前故障发生在复用旧 `wss://18080-.../ws` 映射时，握手层直接返回 `409 mapping_stale`
+  - 根因是 `osac-connector.ts` 之前在 `mapping_stale` 分支里只做本地 `osacMappingEpoch` bump，没有真实刷新 runtime metadata，也没有强制重建 bridge
+  - 现已改为：
+    - `mapping_stale` 进入 `[OSAC_MAPPING_STALE_REBUILD]` 路径
+    - 立即调用 `ensureSandboxRuntimeMetadata(... forceBridgeRestart=true)`
+    - 下一轮连接尝试使用新 metadata / 新 endpoint，而不是继续撞旧映射
+    - `shouldRestartOsacBridge(...)` 同时把 `mapping_stale/status=409` 视为必须恢复的握手错误
+- 优化 Altus 每次发消息的重复耗时：
+  - 最新会话 `817e03f7-6790-409d-b952-82c6015abcf1` 的日志显示：
+    - `ALTUS_MANAGED_SUBMIT_SANDBOX_READY.reused=true`，说明没有每次新建 sandbox
+    - `SANDBOX_RUNTIME_METADATA_BRIDGE_CHECK.reusableBridge=true`，说明没有每次重装 OSAC
+  - 真实的重复耗时来自两处：
+    - `ensureSessionRecovered()` 每次消息都会对已恢复的 attached bindings 再次 enqueue/reconcile
+    - `captureMcpToolSnapshot()` 每次 run 都优先打 live `LIST_SESSION_MCP_TOOLS`
+  - 已优化：
+    - `session-mcp-recovery-service.ts` 新增“当前 sandbox 已恢复”短路判断，并写 `[SESSION_MCP_RECOVERY_SKIP_ALREADY_RECOVERED]` 日志
+    - `altus-managed-setup-service.ts` 仅在 binding 上没有工具快照时才做 live MCP tools probe

@@ -17,6 +17,7 @@ import { closeDatabaseConnection, testDatabaseConnection } from './config/databa
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
+import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 
@@ -325,6 +326,10 @@ async function startServer() {
     void testDatabaseConnection({ retries: 5, delayMs: 1500 });
     // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
     void osacPersistentRecoveryService.recoverReadySessions();
+    // API 重启后恢复积压的 session MCP reconcile 任务
+    void sessionMcpRecoveryService
+      .recoverBacklog()
+      .catch((error) => console.error('[SESSION_MCP_RECOVERY_BACKLOG_FAILED]', error));
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
     

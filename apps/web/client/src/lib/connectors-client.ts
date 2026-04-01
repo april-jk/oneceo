@@ -334,8 +334,16 @@ export async function completeConnectorProfileOauth(
 
 export async function clearConnectorProfileAuth(
   profileId: string
-): Promise<ConnectorProfile> {
-  const result = await requestJson<{ data?: ConnectorProfile }>(
+): Promise<ConnectorProfile & {
+  remoteGrantRevoked?: boolean;
+  remoteGrantError?: string | null;
+  runtimeDetachQueued?: boolean;
+}> {
+  const result = await requestJson<{ data?: ConnectorProfile & {
+    remoteGrantRevoked?: boolean;
+    remoteGrantError?: string | null;
+    runtimeDetachQueued?: boolean;
+  } }>(
     `${getApiBaseUrl()}/api/connectors/profiles/${encodeURIComponent(profileId)}/auth`,
     {
       method: "DELETE",

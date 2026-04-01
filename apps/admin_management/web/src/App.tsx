@@ -15,6 +15,7 @@ import {
   YAxis,
 } from 'recharts';
 import { api } from './api';
+import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
 import { KvmControlCenter } from './components/KvmControlCenter';
 import { SkillManagementSection } from './components/SkillManagementSection';
 import type {
@@ -37,7 +38,7 @@ import type {
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'sandbox' | 'audit';
 type HostTrendPoint = {
   timestamp: number;
   timeLabel: string;
@@ -51,6 +52,7 @@ const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string; tag: 
   { key: 'conversation', label: '对话管理', subtitle: '任务创建会话', tag: 'MSG' },
   { key: 'agent', label: '智能体管理', subtitle: 'Agent 运行状态', tag: 'AGT' },
   { key: 'skill', label: '技能管理', subtitle: '平台技能与 revision', tag: 'SKL' },
+  { key: 'connectorGuide', label: '连接器 Guide', subtitle: '隐式 guide 与发布', tag: 'CGD' },
   { key: 'sandbox', label: '执行环境管理', subtitle: 'Sandbox 与 OSAC', tag: 'SBX' },
   { key: 'audit', label: '审计日志', subtitle: '操作追踪', tag: 'LOG' },
 ];
@@ -833,6 +835,8 @@ export default function App() {
           await loadAgentSection();
         } else if (section === 'skill') {
           setError(null);
+        } else if (section === 'connectorGuide') {
+          setError(null);
         } else if (section === 'sandbox') {
           await loadSandboxSection();
         } else {
@@ -1066,6 +1070,8 @@ export default function App() {
       ? agentOverview?.agentApi.online
       : activeSection === 'skill'
         ? true
+        : activeSection === 'connectorGuide'
+        ? true
       : activeSection === 'sandbox' || kvmShowsSandbox
         ? sandboxOverview?.sandboxApi.online
         : kvmOverview?.orchestrator.online;
@@ -1073,6 +1079,8 @@ export default function App() {
     activeSection === 'agent'
       ? 'Agent 服务'
       : activeSection === 'skill'
+        ? 'Oneceo API'
+        : activeSection === 'connectorGuide'
         ? 'Oneceo API'
       : activeSection === 'sandbox' || kvmShowsSandbox
         ? 'Sandbox 服务'
@@ -3270,6 +3278,7 @@ const renderAuditSection = () => (
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
+    if (activeSection === 'connectorGuide') return <ConnectorGuideManagementSection onError={setError} />;
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };

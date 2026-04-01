@@ -16,6 +16,7 @@ import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 import { githubConnectorRepositoryService } from './github-connector-repository-service';
 import { osacConnectionManager } from './osac-connection-manager';
+import { connectorGuideService } from './connector-guide-service';
 import type { OsacMessage } from '../clients/osac-client';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
@@ -586,6 +587,7 @@ export class SessionConnectorService {
         definitionSnapshotJson: catalogItem,
         lastError: '连接器尚未完成授权或配置',
       });
+      await connectorGuideService.recomputeSessionGuides(taskSessionId);
       throw new Error('连接器尚未完成授权或配置');
     }
     const runtime = await this.resolveRuntimeContext(taskSessionId, orchestratorSessionId);
@@ -615,6 +617,7 @@ export class SessionConnectorService {
         definitionSnapshotJson: catalogItem,
         lastError: 'sandbox_not_ready_pending_recover',
       });
+      await connectorGuideService.recomputeSessionGuides(taskSessionId);
       return (await this.listSessionConnectors(taskSessionId, userId)).find(
         (item) => item.connectorKey === connectorKey
       );
@@ -648,6 +651,7 @@ export class SessionConnectorService {
       definitionSnapshotJson: catalogItem,
       lastError: null,
     });
+    await connectorGuideService.recomputeSessionGuides(taskSessionId);
     await taskSessionRunDAO.appendConnectorRuntimeEvent({
       sessionId: taskSessionId,
       bindingId: binding.id,
@@ -852,6 +856,7 @@ export class SessionConnectorService {
       definitionSnapshotJson: connectorRegistry.getCatalogItem(connectorKey),
       lastError: null,
     });
+    await connectorGuideService.recomputeSessionGuides(taskSessionId);
     if (runtime) {
       try {
         if (providerId) {
@@ -949,6 +954,7 @@ export class SessionConnectorService {
         lastError: null,
       });
     }
+    await connectorGuideService.recomputeSessionGuides(taskSessionId);
     return (await this.listSessionConnectors(taskSessionId, userId)).find(
       (item) => item.connectorKey === connectorKey
     );

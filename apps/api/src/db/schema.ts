@@ -838,6 +838,78 @@ export const taskSessionMcpRecoveryJobs = pgTable(
   })
 );
 
+export const platformRuntimeArtifactReleases = pgTable(
+  'platform_runtime_artifact_releases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    artifactType: text('artifact_type').notNull(),
+    platform: text('platform').notNull(),
+    arch: text('arch').notNull(),
+    version: text('version').notNull(),
+    channel: text('channel').notNull().default('stable'),
+    status: text('status').notNull().default('uploaded'),
+    bucket: text('bucket').notNull(),
+    objectKey: text('object_key').notNull(),
+    manifestKey: text('manifest_key').notNull(),
+    sha256: text('sha256').notNull(),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    releaseNotes: text('release_notes').notNull().default(''),
+    sourceCommit: text('source_commit'),
+    uploadedBy: text('uploaded_by'),
+    publishedBy: text('published_by'),
+    uploadedAt: timestamp('uploaded_at').notNull().defaultNow(),
+    publishedAt: timestamp('published_at'),
+    archivedAt: timestamp('archived_at'),
+    metadataJson: jsonb('metadata_json'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    artifactVersionUnique: uniqueIndex('idx_platform_runtime_artifacts_type_version').on(
+      table.artifactType,
+      table.platform,
+      table.arch,
+      table.version
+    ),
+    artifactChannelIdx: index('idx_platform_runtime_artifacts_channel').on(
+      table.artifactType,
+      table.platform,
+      table.arch,
+      table.channel
+    ),
+    artifactStatusIdx: index('idx_platform_runtime_artifacts_status').on(table.status),
+    artifactUploadedIdx: index('idx_platform_runtime_artifacts_uploaded_at').on(table.uploadedAt),
+  })
+);
+
+export const platformRuntimeArtifactChannels = pgTable(
+  'platform_runtime_artifact_channels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    artifactType: text('artifact_type').notNull(),
+    platform: text('platform').notNull(),
+    arch: text('arch').notNull(),
+    channel: text('channel').notNull(),
+    publishedReleaseId: uuid('published_release_id')
+      .notNull()
+      .references(() => platformRuntimeArtifactReleases.id, { onDelete: 'cascade' }),
+    updatedBy: text('updated_by'),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    artifactChannelUnique: uniqueIndex('idx_platform_runtime_artifact_channels_unique').on(
+      table.artifactType,
+      table.platform,
+      table.arch,
+      table.channel
+    ),
+    publishedReleaseIdx: index('idx_platform_runtime_artifact_channels_published_release_id').on(
+      table.publishedReleaseId
+    ),
+  })
+);
+
 export const connectorAuthRequests = pgTable(
   'connector_auth_requests',
   {
@@ -942,6 +1014,11 @@ export type TaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$infer
 export type NewTaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$inferInsert;
 export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferSelect;
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
+
+export type PlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferSelect;
+export type NewPlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferInsert;
+export type PlatformRuntimeArtifactChannel = typeof platformRuntimeArtifactChannels.$inferSelect;
+export type NewPlatformRuntimeArtifactChannel = typeof platformRuntimeArtifactChannels.$inferInsert;
 
 export type ConnectorAuthRequest = typeof connectorAuthRequests.$inferSelect;
 export type NewConnectorAuthRequest = typeof connectorAuthRequests.$inferInsert;

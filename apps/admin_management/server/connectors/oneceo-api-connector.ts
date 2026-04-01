@@ -273,6 +273,44 @@ export type AdminConnectorGuideValidationResult = {
   warnings: string[];
 };
 
+export type AdminOsacRelease = {
+  id: string;
+  artifactType: string;
+  platform: string;
+  arch: string;
+  version: string;
+  channel: string;
+  status: 'uploaded' | 'validated' | 'published' | 'archived' | string;
+  bucket: string;
+  objectKey: string;
+  manifestKey: string;
+  sha256: string;
+  sizeBytes: number;
+  releaseNotes: string;
+  sourceCommit?: string | null;
+  uploadedBy?: string | null;
+  publishedBy?: string | null;
+  uploadedAt: string;
+  publishedAt?: string | null;
+  archivedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  metadataJson?: Record<string, unknown> | null;
+};
+
+export type AdminOsacReleaseList = {
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+  channel: string;
+  items: AdminOsacRelease[];
+};
+
+export type AdminOsacReleaseDetail = {
+  release: AdminOsacRelease;
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -710,6 +748,69 @@ export class OneceoApiConnector {
       {
         method: 'POST',
         body: {},
+      }
+    );
+  }
+
+  listOsacReleases(filters?: { status?: string; query?: string; channel?: string }) {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.channel) params.set('channel', filters.channel);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<AdminOsacReleaseList>(`/api/internal/runtime-artifacts/osac/releases${suffix}`);
+  }
+
+  getOsacRelease(releaseId: string) {
+    return this.request<AdminOsacReleaseDetail>(
+      `/api/internal/runtime-artifacts/osac/releases/${encodeURIComponent(releaseId)}`
+    );
+  }
+
+  uploadOsacRelease(input: {
+    version: string;
+    fileBase64: string;
+    releaseNotes?: string;
+    sourceCommit?: string;
+    uploadedBy?: string;
+    channel?: string;
+  }) {
+    return this.request<AdminOsacRelease>('/api/internal/runtime-artifacts/osac/releases', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  validateOsacRelease(releaseId: string) {
+    return this.request<AdminOsacRelease>(
+      `/api/internal/runtime-artifacts/osac/releases/${encodeURIComponent(releaseId)}/validate`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
+  }
+
+  publishOsacRelease(releaseId: string, publishedBy?: string) {
+    return this.request<AdminOsacReleaseDetail>(
+      `/api/internal/runtime-artifacts/osac/releases/${encodeURIComponent(releaseId)}/publish`,
+      {
+        method: 'POST',
+        body: {
+          publishedBy,
+        },
+      }
+    );
+  }
+
+  rollbackOsacRelease(releaseId: string, publishedBy?: string) {
+    return this.request<AdminOsacReleaseDetail>(
+      `/api/internal/runtime-artifacts/osac/releases/${encodeURIComponent(releaseId)}/rollback`,
+      {
+        method: 'POST',
+        body: {
+          publishedBy,
+        },
       }
     );
   }

@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express from 'express';
-import { config } from './config';
+import { config, isAllowedCorsOrigin } from './config';
 import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connector';
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
 import { createAgentManagementRoutes } from './routes/agent-management-routes';
@@ -47,7 +47,13 @@ const osacReleaseManagementService = new OsacReleaseManagementService(oneceoApiC
 
 app.use(
   cors({
-    origin: config.corsOrigin,
+    origin(origin, callback) {
+      if (isAllowedCorsOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS origin not allowed: ${origin || 'unknown'}`));
+    },
     credentials: true,
   })
 );
@@ -97,12 +103,12 @@ app.use((req, res) => {
 
 app.use(errorMiddleware);
 
-app.listen(config.port, () => {
+app.listen(config.port, config.host, () => {
   console.log('');
   console.log('Admin Management API');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`API: http://localhost:${config.port}`);
-  console.log(`Health: http://localhost:${config.port}/health`);
+  console.log(`API: http://${config.host}:${config.port}`);
+  console.log(`Health: http://${config.host}:${config.port}/health`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('');
 });

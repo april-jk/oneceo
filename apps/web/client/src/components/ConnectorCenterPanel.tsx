@@ -83,6 +83,14 @@ function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function normalizeEditableProfileId(profileId: string | null | undefined) {
+  const normalized = asText(profileId);
+  if (!normalized || normalized === NEW_PROFILE_ID) {
+    return null;
+  }
+  return normalized;
+}
+
 function editorKey(connectorKey: ConnectorKey, profileId: string | null) {
   return `${connectorKey}::${profileId || "new"}`;
 }
@@ -523,9 +531,10 @@ export function ConnectorCenterPanel({
     item: ConnectorCatalogItem,
     profileId: string | null
   ) => {
+    const editableProfileId = normalizeEditableProfileId(profileId);
     const connectorProfiles = profilesByConnector[item.key] || [];
     const currentProfile =
-      connectorProfiles.find((profile) => profile.profileId === profileId) || null;
+      connectorProfiles.find((profile) => profile.profileId === editableProfileId) || null;
     const payload = buildSavePayload(item, formState[editorKey(item.key, profileId)] || {});
     const requiresExplicitProfileName = item.key !== "github";
 
@@ -539,8 +548,8 @@ export function ConnectorCenterPanel({
       throw new Error("请先填写必需凭证");
     }
 
-    return profileId
-      ? updateConnectorProfile(profileId, payload)
+    return editableProfileId
+      ? updateConnectorProfile(editableProfileId, payload)
       : createConnectorProfile(item.key, payload);
   };
 

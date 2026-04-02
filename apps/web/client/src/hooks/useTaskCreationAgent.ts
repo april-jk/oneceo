@@ -104,6 +104,22 @@ export function buildPendingSandboxPromptDispatchKey(
   return `${sessionId}:${messageKey}`;
 }
 
+export function resolveChatInputSessionId(input: {
+  requestedSessionId?: string | null;
+  currentSessionId?: string | null;
+  locationPath?: string | null;
+}): string {
+  const requestedSessionId = asText(input.requestedSessionId);
+  if (requestedSessionId) return requestedSessionId;
+
+  const currentSessionId = asText(input.currentSessionId);
+  if (currentSessionId) return currentSessionId;
+
+  const path = asText(input.locationPath);
+  const pathMatch = path.match(/^\/session\/([^/?#]+)/);
+  return pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+}
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
@@ -1861,9 +1877,20 @@ type PersistedHistoryViewCache = {
   savedAt: number;
 };
 
+type PersistedManagedRunRecovery = {
+  version: number;
+  sessionId: string;
+  runId: string | null;
+  status: string | null;
+  processing: boolean;
+  savedAt: number;
+};
+
 const HISTORY_VIEW_CACHE_PREFIX = 'task_creation_history_view:';
 const HISTORY_VIEW_CACHE_VERSION = 5;
 const HISTORY_VIEW_CACHE_LIMIT = 300;
+const MANAGED_RUN_RECOVERY_PREFIX = 'task_creation_managed_run_recovery:';
+const MANAGED_RUN_RECOVERY_VERSION = 1;
 const HISTORY_PAGE_SIZE = 50;
 
 function getHistoryMessageKey(message: Partial<AgentMessage>): string {
@@ -1998,6 +2025,100 @@ function writeHistoryViewCache(
   } catch {
     // ignore storage failures
   }
+}
+
+export function readPersistedHistoryViewCache(sessionId: string): PersistedHistoryViewCache | null {
+  return readHistoryViewCache(sessionId);
+}
+
+function readManagedRunRecoveryState(sessionId: string): PersistedManagedRunRecovery | null {
+  if (typeof window === 'undefined' || !sessionId) return null;
+  try {
+    const raw = window.sessionStorage.getItem(`${MANAGED_RUN_RECOVERY_PREFIX}${sessionId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedManagedRunRecovery;
+    if (
+      parsed?.version !== MANAGED_RUN_RECOVERY_VERSION ||
+      parsed?.sessionId !== sessionId ||
+      typeof parsed?.processing !== 'boolean'
+    ) {
+      window.sessionStorage.removeItem(`${MANAGED_RUN_RECOVERY_PREFIX}${sessionId}`);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeManagedRunRecoveryState(input: {
+  sessionId: string;
+  runId?: string | null;
+  status?: string | null;
+  processing: boolean;
+}) {
+  if (typeof window === 'undefined' || !input.sessionId) return;
+  try {
+    const payload: PersistedManagedRunRecovery = {
+      version: MANAGED_RUN_RECOVERY_VERSION,
+      sessionId: input.sessionId,
+      runId: asText(input.runId) || null,
+      status: asText(input.status) || null,
+      processing: input.processing === true,
+      savedAt: Date.now(),
+    };
+    window.sessionStorage.setItem(
+      `${MANAGED_RUN_RECOVERY_PREFIX}${input.sessionId}`,
+      JSON.stringify(payload)
+    );
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function clearManagedRunRecoveryState(sessionId: string) {
+  if (typeof window === 'undefined' || !sessionId) return;
+  try {
+    window.sessionStorage.removeItem(`${MANAGED_RUN_RECOVERY_PREFIX}${sessionId}`);
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function readPersistedManagedRunRecoveryState(sessionId: string): PersistedManagedRunRecovery | null {
+  return readManagedRunRecoveryState(sessionId);
+}
+
+export function primeManagedRunRecoveryState(input: {
+  sessionId: string;
+  runId?: string | null;
+  status?: string | null;
+  processing: boolean;
+}): PersistedManagedRunRecovery | null {
+  writeManagedRunRecoveryState(input);
+  return readManagedRunRecoveryState(input.sessionId);
+}
+
+export function primeOptimisticHistoryViewCache(input: {
+  sessionId: string;
+  currentMessages: AgentMessage[];
+  optimisticMessage: AgentMessage;
+  oldestCursor: number | null;
+  hasOlderHistory: boolean;
+  welcomeMessage?: string;
+}): AgentMessage[] {
+  const merged = mergeRealtimeMessage(
+    input.currentMessages,
+    input.optimisticMessage,
+    input.welcomeMessage || ''
+  );
+  writeHistoryViewCache(
+    input.sessionId,
+    merged,
+    input.oldestCursor,
+    input.hasOlderHistory
+  );
+  return merged;
 }
 
 function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, historySessionId: string): AgentMessage | null {
@@ -2722,6 +2843,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       let nextMessage: AgentMessage | null = null;
       if (eventType === 'run_ack') {
         nextSessionStatus = 'in_progress';
+        if (sessionKey) {
+          writeManagedRunRecoveryState({
+            sessionId: sessionKey,
+            runId,
+            status: 'in_progress',
+            processing: true,
+          });
+        }
         nextMessage = {
           type: 'status_update',
           content: content || 'managed run 已创建',
@@ -2733,6 +2862,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         };
       } else if (eventType === 'run_status') {
         nextSessionStatus = managedStatus === 'waiting_user' ? 'waiting_user' : 'in_progress';
+        if (sessionKey) {
+          writeManagedRunRecoveryState({
+            sessionId: sessionKey,
+            runId,
+            status: managedStatus === 'waiting_user' ? 'waiting_user' : 'in_progress',
+            processing: managedStatus !== 'waiting_user',
+          });
+        }
         nextMessage = {
           type: 'status_update',
           content: content || managedStatus || '运行中',
@@ -2777,6 +2914,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         eventType === 'artifact_updated'
       ) {
         nextSessionStatus = 'in_progress';
+        if (sessionKey) {
+          writeManagedRunRecoveryState({
+            sessionId: sessionKey,
+            runId,
+            status: 'in_progress',
+            processing: true,
+          });
+        }
         nextMessage = {
           type: 'executor_event',
           content: content || eventType,
@@ -2789,6 +2934,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         eventType === 'run_stopped'
       ) {
         nextSessionStatus = eventType === 'run_completed' ? 'completed' : 'failed';
+        if (sessionKey) {
+          clearManagedRunRecoveryState(sessionKey);
+        }
         const terminalStage =
           eventType === 'run_completed'
             ? 'completed'
@@ -4000,6 +4148,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           setManagedRunStreaming(false);
           setManagedRunError(null);
           closeManagedRunStreamRef.current();
+          clearManagedRunRecoveryState(sid);
           return;
         }
 
@@ -4009,6 +4158,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         managedRunIdRef.current = nextRunId;
         setManagedRunStatus(nextStatus);
         managedRunStatusRef.current = nextStatus;
+        writeManagedRunRecoveryState({
+          sessionId: sid,
+          runId: nextRunId,
+          status: nextStatus,
+          processing: nextStatus !== 'waiting_user' && isManagedRunActiveStatus(nextStatus),
+        });
         if (typeof latest.sequence === 'number' && Number.isFinite(latest.sequence) && latest.sequence > 0) {
           managedRunSequenceRef.current = Math.floor(latest.sequence);
         }
@@ -4019,6 +4174,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         } else {
           setManagedRunStreaming(false);
           closeManagedRunStreamRef.current();
+          if (nextStatus === 'completed' || nextStatus === 'failed' || nextStatus === 'stopped') {
+            clearManagedRunRecoveryState(sid);
+          }
           if (nextStatus === 'completed' || nextStatus === 'failed' || nextStatus === 'stopped') {
             setIsProcessing(false);
           }
@@ -4164,6 +4322,19 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       closeManagedRunStreamRef.current();
       clearManagedRunReconnectTimer();
       return;
+    }
+
+    const persisted = readManagedRunRecoveryState(sessionId);
+    if (persisted) {
+      const persistedRunId = asText(persisted.runId) || null;
+      setManagedRunId(persistedRunId);
+      managedRunIdRef.current = persistedRunId;
+      setManagedRunStatus(normalizeManagedRunStatus(persisted.status));
+      setIsProcessing(persisted.processing);
+      if (persistedRunId) {
+        openManagedRunStreamRef.current(persistedRunId);
+        setManagedRunStreaming(persisted.processing);
+      }
     }
 
     void refreshManagedRun(sessionId);
@@ -4403,19 +4574,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     if (!text) return;
     const optimisticAttachments = Array.isArray(options?.files) ? buildOptimisticAttachments(options.files) : [];
 
-    let activeSessionId = (() => {
-      if (options?.sessionId) return options.sessionId;
-      if (sessionId) return sessionId;
-      const pathMatch = location.match(/^\/session\/([^/?#]+)/);
-      const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
-      if (pathSessionId) return pathSessionId;
-      try {
-        const stored = window.localStorage.getItem(SESSION_STORAGE_KEY);
-        return stored && stored.trim() ? stored.trim() : '';
-      } catch {
-        return '';
-      }
-    })();
+    let activeSessionId = resolveChatInputSessionId({
+      requestedSessionId: options?.sessionId,
+      currentSessionId: sessionId,
+      locationPath: location,
+    });
     if (activeSessionId && activeSessionId !== sessionId) {
       bindSessionId(activeSessionId);
     }
@@ -4425,10 +4588,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (isProcessing) {
         await interruptCurrentRun(activeSessionId || undefined);
       }
+      let shouldBindCreatedSession = false;
       if (!activeSessionId) {
-        const provisionalId = generateSessionId();
-        activeSessionId = provisionalId;
-        bindSessionId(provisionalId);
+        const created = await createTaskCreationDraftSession(text);
+        const createdSessionId = (created?.id || '').trim();
+        if (!createdSessionId) {
+          throw new Error('managed draft session id missing');
+        }
+        activeSessionId = createdSessionId;
+        shouldBindCreatedSession = true;
       }
 
       const messageKey = generateClientMessageKey('user');
@@ -4442,30 +4610,41 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         ...(combinedAttachments.length ? { attachments: combinedAttachments } : {}),
         messageKey,
       };
-
-      setIsProcessing(true);
-      setCurrentQuestion(null);
-      activeProcessingMessageKeyRef.current = messageKey;
-      trackPendingLocalMessage(activeSessionId, {
+      const optimisticUserMessage: AgentMessage = {
         messageKey,
         type: 'user_input',
         content: text,
         metadata: messageMetadata,
         sessionId: activeSessionId || undefined,
-      });
-      setMessages((prev) =>
-        mergeRealtimeMessage(
-          prev,
-          {
-            messageKey,
-            type: 'user_input',
-            content: text,
-            metadata: messageMetadata,
-            sessionId: activeSessionId || undefined,
-          },
-          WELCOME_MESSAGE
-        )
-      );
+      };
+
+      setIsProcessing(true);
+      setCurrentQuestion(null);
+      activeProcessingMessageKeyRef.current = messageKey;
+      if (activeSessionId) {
+        writeManagedRunRecoveryState({
+          sessionId: activeSessionId,
+          runId: null,
+          status: 'starting',
+          processing: true,
+        });
+      }
+      trackPendingLocalMessage(activeSessionId, optimisticUserMessage);
+      if (activeSessionId) {
+        const nextMessages = primeOptimisticHistoryViewCache({
+          sessionId: activeSessionId,
+          currentMessages: messagesRef.current,
+          optimisticMessage: optimisticUserMessage,
+          oldestCursor: oldestHistoryCursorRef.current,
+          hasOlderHistory,
+        });
+        setMessages(nextMessages);
+      } else {
+        setMessages((prev) => mergeRealtimeMessage(prev, optimisticUserMessage, WELCOME_MESSAGE));
+      }
+      if (shouldBindCreatedSession && activeSessionId) {
+        bindSessionId(activeSessionId);
+      }
 
       try {
         const result = await submitTaskCreationManagedInput({
@@ -4524,6 +4703,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         managedRunIdRef.current = nextRunId;
         setManagedRunId(nextRunId);
         setManagedRunStatus(normalizeManagedRunStatus(run?.status) || 'starting');
+        if (activeSessionId) {
+          writeManagedRunRecoveryState({
+            sessionId: activeSessionId,
+            runId: nextRunId,
+            status: normalizeManagedRunStatus(run?.status) || 'starting',
+            processing: true,
+          });
+        }
         setManagedRunError(null);
         setManagedRunStreaming(true);
         setIsConnected(true);
@@ -4533,6 +4720,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         });
         openManagedRunStreamRef.current(nextRunId);
       } catch (error) {
+        if (activeSessionId) {
+          clearManagedRunRecoveryState(activeSessionId);
+        }
         setManagedRunError(error instanceof Error ? error.message : String(error || 'managed run start failed'));
         setManagedRunStatus('failed');
         setManagedRunStreaming(false);

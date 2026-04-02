@@ -323,10 +323,7 @@ export class SessionConnectorService {
       throw new Error('当前用户无权管理该会话连接器');
     }
     if (!session.userId) {
-      session = await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, userId);
-    }
-    if (!session) {
-      throw new Error('会话不存在');
+      throw new Error('会话缺少归属用户，无法管理该会话连接器');
     }
     return session;
   }

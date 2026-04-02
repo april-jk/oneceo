@@ -208,11 +208,7 @@ export class AltusManagedSetupService {
         status: 'in_progress',
       });
     } else if (!session.userId) {
-      const rebound = await taskCreationSessionDAO.bindUserIfMissing(sessionId, userId);
-      if (!rebound) {
-        throw new Error('会话不存在');
-      }
-      session = rebound;
+      throw new Error('会话缺少归属用户，无法进入 Altus managed 链路');
     } else if (session.userId !== userId) {
       throw new Error('当前用户无权操作该 Altus 会话');
     }

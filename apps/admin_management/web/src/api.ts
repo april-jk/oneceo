@@ -57,6 +57,14 @@ type ApiFailure = {
 
 type ApiEnvelope<T> = ApiSuccess<T> | ApiFailure;
 
+export type AdminUser = {
+  id: string;
+  loginName: string;
+  displayName: string;
+  role: 'admin' | 'super_admin' | string;
+  status?: string;
+};
+
 const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
 
@@ -66,6 +74,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    credentials: 'include',
     signal: controller.signal,
     headers: {
       'content-type': 'application/json',
@@ -94,6 +103,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
+    credentials: 'include',
     signal: controller.signal,
     body: formData,
   }).finally(() => {
@@ -111,6 +121,18 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 }
 
 export const api = {
+  getCurrentAdmin: () => request<{ adminUser: AdminUser }>('/api/admin/auth/me'),
+  adminLogin: (payload: { loginName: string; password: string }) =>
+    request<{ adminUser: AdminUser }>('/api/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminLogout: () =>
+    request<{ ok: boolean }>('/api/admin/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
 
   listVms: (query: { withState?: boolean; limit?: number; offset?: number } = {}) => {

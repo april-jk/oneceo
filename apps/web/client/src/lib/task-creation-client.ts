@@ -1,5 +1,5 @@
 import { getApiBaseUrl, getTaskCreationWsUrl } from "@/lib/runtime-config";
-import { buildClientIdentityHeaders, getClientUserId } from "@/lib/client-identity";
+import { buildClientIdentityHeaders } from "@/lib/client-identity";
 
 export type TaskCreationSessionSummary = {
   id: string;
@@ -387,6 +387,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeout
   try {
     response = await fetch(url, {
       ...init,
+      credentials: init?.credentials || "include",
       signal: controller?.signal ?? init?.signal,
       cache: init?.cache || "no-store",
       headers: buildClientIdentityHeaders(init?.headers),
@@ -778,10 +779,6 @@ export function getTaskCreationManagedRunStreamUrl(
   }
   if (options?.clientId) {
     params.set("clientId", options.clientId);
-  }
-  const userId = getClientUserId();
-  if (userId) {
-    params.set("userId", userId);
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : "";

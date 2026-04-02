@@ -311,6 +311,17 @@ export type AdminOsacReleaseDetail = {
   currentPublishedVersion: string | null;
 };
 
+export type InternalAdminLoginResult = {
+  sessionToken: string;
+  adminUser: {
+    id: string;
+    loginName: string;
+    displayName: string;
+    role: string;
+    status: string;
+  };
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -343,7 +354,10 @@ export class OneceoApiConnector {
   private readonly timeoutMs = config.oneceoRequestTimeoutMs;
   private readonly retries = config.oneceoRequestRetries;
 
-  private async request<T>(path: string, options?: { method?: HttpMethod; body?: unknown }): Promise<T> {
+  private async request<T>(
+    path: string,
+    options?: { method?: HttpMethod; body?: unknown; headers?: Record<string, string> }
+  ): Promise<T> {
     const method = options?.method || 'GET';
     const maxAttempts = Math.max(1, this.retries + 1);
     let lastError: unknown;
@@ -359,6 +373,7 @@ export class OneceoApiConnector {
               ...(config.oneceoInternalToken
                 ? { 'x-oneceo-internal-token': config.oneceoInternalToken }
                 : {}),
+              ...(options?.headers || {}),
             },
             body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
           },
@@ -404,6 +419,27 @@ export class OneceoApiConnector {
 
   health() {
     return this.request<{ status: string; timestamp: string; version?: string }>('/health');
+  }
+
+  adminLogin(input: { loginName: string; password: string }) {
+    return this.request<InternalAdminLoginResult>('/api/internal/admin-auth/login', {
+      method: 'POST',
+      body: input,
+    });
+  }
+
+  adminLogout(sessionToken: string) {
+    return this.request<{ ok: true }>('/api/internal/admin-auth/logout', {
+      method: 'POST',
+      body: { sessionToken },
+    });
+  }
+
+  resolveAdminSession(sessionToken: string) {
+    return this.request<{ adminUser: InternalAdminLoginResult['adminUser'] }>('/api/internal/admin-auth/resolve', {
+      method: 'POST',
+      body: { sessionToken },
+    });
   }
 
   getAgentHealth() {

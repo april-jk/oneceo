@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   Bar,
@@ -225,6 +225,10 @@ function formatDuration(ms: number) {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h`;
+}
+
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function buildExportFilename(sessionId: string) {
@@ -1065,11 +1069,8 @@ export default function App() {
     );
   }
 
-  const vmPieData = useMemo(
-    () => (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0),
-    [kvmOverview]
-  );
-  const conversationSummary = useMemo(() => {
+  const vmPieData = (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0);
+  const conversationSummary = (() => {
     const summary = {
       total: conversationSessions.length,
       waitingUser: 0,
@@ -1086,36 +1087,33 @@ export default function App() {
     }
 
     return summary;
-  }, [conversationSessions]);
-  const agentCapabilitySummary = useMemo(() => {
+  })();
+  const agentCapabilitySummary = (() => {
     const capabilities = agentOverview?.capabilities || [];
     return {
       total: capabilities.length,
       available: capabilities.filter((item) => item.status === 'available').length,
       planned: capabilities.filter((item) => item.status === 'planned').length,
     };
-  }, [agentOverview]);
-  const auditSummary = useMemo(() => {
+  })();
+  const auditSummary = (() => {
     return {
       total: auditEntries.length,
       success: auditEntries.filter((item) => item.result === 'success').length,
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
-  }, [auditEntries]);
+  })();
 
-  const stateTransitions = useMemo(
-    () => conversationDetail?.trace?.stateTransitions || [],
-    [conversationDetail]
-  );
-  const sortedTransitions = useMemo(() => {
+  const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
+  const sortedTransitions = (() => {
     return [...stateTransitions].sort((a, b) => {
       const aTime = a.at ? Date.parse(a.at) : Number.MAX_SAFE_INTEGER;
       const bTime = b.at ? Date.parse(b.at) : Number.MAX_SAFE_INTEGER;
       return aTime - bTime;
     });
-  }, [stateTransitions]);
+  })();
 
-  const transitionOptions = useMemo(() => {
+  const transitionOptions = (() => {
     return {
       fromStages: uniqueSorted(sortedTransitions.map((item) => item.from?.stage)),
       toStages: uniqueSorted(sortedTransitions.map((item) => item.to?.stage)),
@@ -1126,9 +1124,9 @@ export default function App() {
       agents: uniqueSorted(sortedTransitions.map((item) => item.trigger?.agent)),
       tones: uniqueSorted(sortedTransitions.map((item) => item.trigger?.tone)),
     };
-  }, [sortedTransitions]);
+  })();
 
-  const filteredTransitions = useMemo(() => {
+  const filteredTransitions = (() => {
     const query = transitionQuery.trim().toLowerCase();
     const fromMs = parseFilterTime(transitionFilters.fromTime);
     const toMs = parseFilterTime(transitionFilters.toTime);
@@ -1179,9 +1177,9 @@ export default function App() {
 
       return true;
     });
-  }, [sortedTransitions, transitionFilters, transitionQuery]);
+  })();
 
-  const transitionStats = useMemo(() => {
+  const transitionStats = (() => {
     const stageSet = new Set(filteredTransitions.map((item) => item.to?.stage).filter(Boolean) as string[]);
     const statusSet = new Set(filteredTransitions.map((item) => item.to?.status).filter(Boolean) as string[]);
     const phaseSet = new Set(filteredTransitions.map((item) => item.to?.phase).filter(Boolean) as string[]);
@@ -1192,10 +1190,19 @@ export default function App() {
       statuses: Array.from(statusSet),
       phases: Array.from(phaseSet),
     };
-  }, [sortedTransitions.length, filteredTransitions]);
+  })();
 
   const kvmShowsSandbox = activeSection === 'kvm' && kvmMode === 'sandbox';
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
+  const sandboxApi = sandboxOverview?.sandboxApi ?? null;
+  const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
+  const sandboxRegistrySummary = sandboxRuntimeRegistry?.summary ?? null;
+  const sandboxRegistryDistributions = sandboxRuntimeRegistry?.distributions ?? null;
+  const sandboxRegistryExecutors = asArray(sandboxRegistryDistributions?.executors);
+  const sandboxRegistryItems = asArray(sandboxRuntimeRegistry?.items).map((item) => ({
+    ...item,
+    riskTags: asArray(item?.riskTags),
+  }));
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
@@ -1206,7 +1213,7 @@ export default function App() {
           : activeSection === 'osacRelease'
             ? true
       : activeSection === 'sandbox' || kvmShowsSandbox
-        ? sandboxOverview?.sandboxApi.online
+        ? sandboxApi?.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
     activeSection === 'agent'
@@ -1221,7 +1228,7 @@ export default function App() {
         ? 'Sandbox 服务'
         : 'KVM 服务';
   const updatedAtLabel = kvmShowsSandbox
-    ? sandboxOverview?.sandboxApi.timestamp || sandboxOverview?.sandboxes?.[0]?.startedAt
+    ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
     : kvmOverview?.updatedAt;
 
   const handlePower = async (vm: VmItem, action: 'start' | 'stop') => {
@@ -2282,15 +2289,15 @@ export default function App() {
   );
 
   const renderSandboxSection = () => {
-    const summary = sandboxRuntimeRegistry?.summary;
+    const summary = sandboxRegistrySummary;
     const metricsData = (sandboxRuntimeDetail?.metrics || sandboxMetrics).map((point) => ({
       timeLabel: point.timestamp ? new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '-',
       cpu: point.cpuUsagePercent ?? 0,
       memory: point.memoryUsagePercent ?? 0,
       disk: point.diskUsagePercent ?? 0,
     }));
-    const riskyItems = (sandboxRuntimeRegistry?.items || []).filter((item) => item.riskTags.length > 0).slice(0, 6);
-    const runtimeItems = sandboxRuntimeRegistry?.items || [];
+    const riskyItems = sandboxRegistryItems.filter((item) => item.riskTags.length > 0).slice(0, 6);
+    const runtimeItems = sandboxRegistryItems;
     const archiveRows = sandboxRuntimeDetail
       ? [
           {
@@ -2326,10 +2333,10 @@ export default function App() {
                 <h2>围绕 task session、executor、archive 与 connectivity 管理运行态</h2>
               </div>
               <div className="action-inline">
-                <span className={`service-state ${sandboxOverview?.sandboxApi.online ? 'ok' : 'down'}`}>
-                  {sandboxOverview?.sandboxApi.online ? 'Sandbox API 在线' : 'Sandbox API 离线'}
+                <span className={`service-state ${sandboxApi?.online ? 'ok' : 'down'}`}>
+                  {sandboxApi?.online ? 'Sandbox API 在线' : 'Sandbox API 离线'}
                 </span>
-                <span className="updated-at">{formatDateTime(sandboxOverview?.sandboxApi.timestamp)}</span>
+                <span className="updated-at">{formatDateTime(sandboxApi?.timestamp)}</span>
               </div>
             </div>
             <div className="sandbox-summary-strip">
@@ -2404,8 +2411,8 @@ export default function App() {
               <section className="kpi-grid fade-in">
                 <article className="kpi-card">
                   <p className="kpi-title">Sandbox API</p>
-                  <p className="kpi-value">{sandboxOverview?.sandboxApi.online ? '在线' : '离线'}</p>
-                  <p className="kpi-meta">{sandboxOverview?.sandboxApi.service || '-'}</p>
+                  <p className="kpi-value">{sandboxApi?.online ? '在线' : '离线'}</p>
+                  <p className="kpi-meta">{sandboxApi?.service || '-'}</p>
                 </article>
                 <article className="kpi-card">
                   <p className="kpi-title">Pending Archive</p>
@@ -2431,7 +2438,7 @@ export default function App() {
                     <span className="panel-caption">运行模式概览</span>
                   </div>
                   <div className="compact-list">
-                    {(sandboxRuntimeRegistry?.distributions.executors || []).map((item) => (
+                    {sandboxRegistryExecutors.map((item) => (
                       <div key={item.label} className="compact-item">
                         <strong>{item.label}</strong>
                         <span className="session-status">{item.value}</span>

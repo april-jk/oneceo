@@ -1,11 +1,15 @@
 import { taskSessionRunDAO } from '../db/dao';
 import { altusManagedStreamService } from './altus-managed-stream-service';
+import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { toIso, type ManagedRunSummary } from './altus-managed-shared';
 
 export class AltusRunEventWriter {
+  constructor(private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService) {}
+
   async appendRunEvent(
     runId: string,
     sessionId: string,
+    userId: string,
     eventType: string,
     payload: Record<string, unknown>
   ) {
@@ -20,9 +24,19 @@ export class AltusRunEventWriter {
       ...payload,
       runId,
       sessionId,
+      userId,
       sequence,
       eventType,
     };
+    await this.redisStateService.appendRunEvent({
+      runId,
+      sessionId,
+      userId,
+      eventId: String(event.id),
+      eventType,
+      sequence,
+      payload: envelopePayload,
+    });
     altusManagedStreamService.publish(runId, {
       sequence,
       eventType,

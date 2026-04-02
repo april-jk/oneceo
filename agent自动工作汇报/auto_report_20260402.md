@@ -58,3 +58,35 @@
 - 做了什么：继续用临时 Playwright 真实复现管理员登录后的白屏，抓到浏览器报错 `Rendered more hooks than during the previous render`，定位到 `apps/admin_management/web/src/App.tsx` 在匿名态提前 `return` 后，登录态才执行后续多组 `useMemo`，违反 React Hook 顺序规则。
 - 做了什么：已将登录后主界面的统计与筛选派生数据从 `useMemo` 改为普通常量计算，彻底移除这条登录态切换时新增 Hook 的路径，避免再次触发整页白屏。
 - 计划如何解决：继续执行 `apps/admin_management type-check` 和临时 Playwright 复测，确认登录后能稳定进入后台主界面，再决定是否收尾提交。
+- 做了什么：开始推进多用户 + Redis 主线子任务 `#10`，已先回看母任务 `#8` 与已采用的 `#9` 多用户隔离文档，确认 `#10` 的职责是先把 Redis 命名、TTL、stream/replay 约束定死，再为后续 `#11` 与 `#12` 提供统一实现依据。
+- 做了什么：已认领 `#10`，并在 issue 下补进展评论；同时在 `#8` 下追加主线顺序说明，明确建议执行顺序为 `#9 -> #10 -> #11 -> #12 -> #13 -> #14`。
+- 做了什么：新增设计稿 `docs/agent研发文档/20260402_Redis_key_stream_TTL统一规范_[尚未采用].md`，将 Redis 统一前缀、`tenant -> session -> run` 命名层级、session/run 两级 stream、TTL/trim 表、幂等/去重、dead-letter、恢复/回放规则，以及当前 `workspace cache / managed run stream / opencode event stream` 到 Redis 的首批映射全部收口。
+- 计划如何解决：等待你审核这份 `#10` 设计稿；如果你确认采用，我下一步直接把文档切到已采用状态，并开始按文档先落 `Redis key builder + stream key builder + TTL 常量 + 基础 client/namespace`，随后进入 `#11` 的实际迁移。
+- 做了什么：按“切忌过度开发”的要求再次对照 `#8`、`#9`、当前代码和 `referance/suna`，重新收紧了 `#10` 设计稿，把文档目标明确压回 `workspace/recent/history/session-events/run-state/run-stream` 这条当前平台主线。
+- 做了什么：已把 `user_context`、`kb_context`、`project_meta`、`tool guide / MCP toolkit / runtime-config` Redis 共享缓存、强制双连接池、强制 `StreamHub`、强制运维脚本/统计、独立 dead-letter 等内容移出当前必做范围，只保留为后续可选优化，不再作为 `#10` 的完成标准。
+- 遇到什么：此前版本虽然参照了 `Suna` 的完整 Redis 落点，但把“参考背景”和“当前必须实现”混在了一起，容易把 `#11/#12` 推向过宽的实现面。
+- 计划如何解决：等待你确认这份收紧后的 `#10` 稿件；确认后只按文档里保留的最小 key/stream/TTL 集合进入实现，不再提前扩平台级 Redis 能力。
+- 做了什么：你确认开始实现后，已将 `#10` 设计稿切换为已采用状态：[20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md)。
+- 做了什么：已新增最小 Redis 基础层，落了 `apps/api/src/services/redis-keyspace.ts`、`apps/api/src/services/redis-client-service.ts`、`apps/api/src/services/altus-run-redis-state-service.ts`，统一了 `tenant -> session -> run` 命名、TTL、stream maxlen、以及 run state / owner / heartbeat / stop / active-runs / run-stream 的首批写入接口。
+- 做了什么：已把 Altus managed run 主链路接到 Redis：`altus-managed-run-entry-service` 在 run 创建时注册 Redis 状态并启动 heartbeat；`altus-run-event-writer` 在 DB 事件落盘后同步写入 run stream；`altus-run-lifecycle-service` 在 `running / waiting_user / completed / failed / stopped` 时同步刷新 Redis run 状态；`altus-managed-stream-service` 订阅时优先从 Redis run stream 做短窗口回放，再回退 DB。
+- 做了什么：`altus-managed-routes` 的 run stream 入口已改成显式把 `runId + sessionId + userId` 传入 service，避免 Redis stream 订阅时丢失会话上下文。
+- 做了什么：已新增不依赖真实 Redis 的单测 `apps/api/tests/redis-keyspace.test.ts`，覆盖 key builder 和 run 协调状态写入；同时同步更新 `apps/api/tests/altus-managed-routes.test.ts` 以匹配新的 streamRun 参数结构。
+- 做了什么：已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/altus-managed-routes.test.ts tests/redis-keyspace.test.ts`，9 条测试全部通过。
+- 遇到什么：`apps/api type-check` 仍被仓库内既有历史错误阻塞，但筛选后确认本轮新增与改动文件未再出现新的 TypeScript 报错。
+- 计划如何解决：下一步继续按已采用的 `#10` 规范进入 `#11`，先把 `workspace cache + recent/history + session-events` 迁到 Redis，再看是否需要继续补 `stop/recovery` 的消费侧逻辑。
+- 做了什么：按你的要求已在本机通过 Homebrew 安装 Redis `8.6.2`，并用 `brew services start redis` 启动为后台服务；当前 `redis-cli ping` 返回 `PONG`，服务监听 `127.0.0.1:6379`，`protected-mode=yes`。
+- 做了什么：新增真实 Redis 集成测试 `apps/api/tests/redis-live.test.ts`，并用本机 `REDIS_URL=redis://127.0.0.1:6379/15` 执行 `tests/redis-live.test.ts + tests/redis-keyspace.test.ts + tests/altus-managed-routes.test.ts`，共 10 条测试全部通过。
+- 做了什么：补了一轮真实 Redis 下的缺陷修正，修复了 `redis-client-service.ts` 中 `ioredis set` 重载调用不正确导致的运行告警；修复后 live Redis 测试无新增告警。
+- 做了什么：额外执行了真实 Redis 读写自检，`oneceo:test:ping` 在本机 Redis 上写入并成功读取返回 `ok`。
+- 遇到什么：仓库中没有现成的本地 `.env` 文件，因此这次真实 Redis 测试是通过命令行显式注入 `REDIS_URL=redis://127.0.0.1:6379/15` 完成的，没有修改仓库环境文件。
+- 计划如何解决：后续如果需要把 Redis 作为本地默认开发配置，再决定是否补一个明确的本地环境文件模板或启动脚本；当前服务安装、后台启动和真实 Redis 回归都已完成。
+- 做了什么：按你的要求补了显式 Redis 启动开关，`apps/api/src/services/redis-client-service.ts` 现在只有在 `ONECEO_REDIS_ENABLED=true/1/yes/on` 且 `REDIS_URL` 有值时才启用 Redis；仅设置 `REDIS_URL` 不会自动启用。
+- 做了什么：已把本机 Redis 配置写进环境文件：`apps/.env` 当前设置为 `ONECEO_REDIS_ENABLED=true`、`REDIS_URL=redis://127.0.0.1:6379/15`；`apps/.env.example` 则以默认关闭的示例形式写明 `ONECEO_REDIS_ENABLED=false` 与本地 Redis 示例地址。
+- 做了什么：新增了“不开开关不启用 Redis”的测试断言，并使用 `ONECEO_REDIS_ENABLED=true REDIS_URL=redis://127.0.0.1:6379/15` 再次执行 Redis live 集成测试、keyspace 测试和 Altus 路由回归，共 11 条测试全部通过。
+- 做了什么：按你的要求重启并检查了本地 API，确认新的 `apps/.env` 配置已被运行时读取；进程内检查结果为 `ONECEO_REDIS_ENABLED=true`、`REDIS_URL=redis://127.0.0.1:6379/15`、`redisClientService.isEnabled() === true`。
+- 做了什么：解释并复现了“db15 为空”的原因：一开始 `4000` 端口仍是旧 API 进程，且没有发生任何实际 Redis 写入，所以 `db15` 显示为空；在明确重启 API 后，我又用运行时代码实际写入了一组诊断 run 数据。
+- 做了什么：通过 `redis-cli MONITOR` 抓到真实写入命令，包含 `SET run:state`、`SET run:heartbeat`、`SADD ops:runs:active`、`XADD run:stream`；随后回查 `redis-cli -n 15 DBSIZE` 已变为 `4`，并能读到对应 `oneceo:v1:*` 键。
+- 做了什么：按“导出所有 Redis 使用位置并逐项验证”的要求，已把当前真实落 Redis 的位置清单补进 `20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md`，明确目前真正已用 Redis 的只有 Altus managed run 这一组：`run:state`、`run:owner`、`run:heartbeat`、`ops:runs:active`、`run:stop`、`run:stream`，以及 `altus-managed-stream-service` 的“优先 Redis、空时回退 DB”读取链路。
+- 做了什么：已新增 `apps/api/tests/altus-managed-stream-service.test.ts`，覆盖 Redis 历史优先读取和 DB fallback；并扩展 `apps/api/tests/redis-live.test.ts`，覆盖真实 Redis 下的 `state / owner / heartbeat / stop / active-runs / stream` 写入与终态清理。
+- 做了什么：已执行 `ONECEO_REDIS_ENABLED=true REDIS_URL=redis://127.0.0.1:6379/15 pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/altus-managed-stream-service.test.ts tests/redis-live.test.ts tests/redis-keyspace.test.ts tests/altus-managed-routes.test.ts`，共 13 条测试全部通过。
+- 做了什么：额外写入了一组 `redis-inventory-*` 诊断数据，并直接检查 `db15` 实际键和值；确认当前 Redis 中能看到 `ops:runs:active`、`run:heartbeat`、`run:state`、`run:stop`、`run:stream` 五类键，且 `run:state`、`run:stop`、`run:stream` 的值内容正确。

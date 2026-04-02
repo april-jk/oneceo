@@ -13,17 +13,20 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunCoordinator, altusRunCoordinator } from './altus-run-coordinator';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
+import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { AltusRunState } from './altus-run-state';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
+  private readonly heartbeatTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
-    private readonly coordinator: AltusRunCoordinator = altusRunCoordinator
+    private readonly coordinator: AltusRunCoordinator = altusRunCoordinator,
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService
   ) {}
 
   private getModelName() {
@@ -33,6 +36,29 @@ export class AltusManagedRunEntryService {
       asText(process.env.OPENAI_MODEL) ||
       'claude-haiku-4-5-20251001'
     );
+  }
+
+  private getHeartbeatIntervalMs() {
+    const parsed = Number(process.env.ALTUS_RUN_HEARTBEAT_INTERVAL_MS || 15000);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 15000;
+    return Math.max(5000, Math.floor(parsed));
+  }
+
+  private startHeartbeat(runId: string, sessionId: string, userId: string) {
+    this.stopHeartbeat(runId);
+    void this.redisStateService.touchHeartbeat({ runId, sessionId, userId });
+    const timer = setInterval(() => {
+      void this.redisStateService.touchHeartbeat({ runId, sessionId, userId });
+    }, this.getHeartbeatIntervalMs());
+    this.heartbeatTimers.set(runId, timer);
+  }
+
+  private stopHeartbeat(runId: string) {
+    const timer = this.heartbeatTimers.get(runId);
+    if (timer) {
+      clearInterval(timer);
+      this.heartbeatTimers.delete(runId);
+    }
   }
 
   async startRun(sessionId: string, userId: string, input: ManagedRunStartInput) {
@@ -66,6 +92,13 @@ export class AltusManagedRunEntryService {
         mcpToolSnapshotId: mcpToolSnapshot.snapshotId,
       },
     });
+    await this.redisStateService.registerRun({
+      runId: run.id,
+      sessionId,
+      userId,
+      model: run.model || this.getModelName(),
+      status: 'queued',
+    });
 
     const isClarificationAnswer = Boolean(asText(sessionMemory?.pendingQuestion));
     const messageType = isClarificationAnswer ? 'user_response' : 'user_input';
@@ -88,7 +121,7 @@ export class AltusManagedRunEntryService {
       clearClarification: true,
     });
 
-    await this.eventWriter.appendRunEvent(run.id, sessionId, 'run_ack', {
+    await this.eventWriter.appendRunEvent(run.id, sessionId, userId, 'run_ack', {
       status: 'queued',
       content: 'managed run 已创建',
       sourceMessageKey: messageKey,
@@ -109,9 +142,11 @@ export class AltusManagedRunEntryService {
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);
+    this.startHeartbeat(run.id, sessionId, userId);
 
     void this.coordinator.execute(state, abortController).finally(() => {
       this.controllers.delete(run.id);
+      this.stopHeartbeat(run.id);
     });
 
     return this.eventWriter.toSummary(run);
@@ -129,6 +164,14 @@ export class AltusManagedRunEntryService {
       throw new Error('managed run 不存在');
     }
     await this.setupService.ensureSessionOwnership(run.sessionId, userId);
+    await this.redisStateService.requestStop(
+      {
+        runId,
+        sessionId: run.sessionId,
+        userId,
+      },
+      reason || 'user_interrupt'
+    );
     if (isManagedRunTerminalStatus(run.status)) {
       return this.eventWriter.toSummary(run);
     }
@@ -156,10 +199,22 @@ export class AltusManagedRunEntryService {
     return this.eventWriter.toSummary(await taskSessionRunDAO.getRun(runId));
   }
 
-  async streamRun(runId: string, res: express.Response, options?: { afterSequence?: number | null }) {
-    return altusManagedStreamService.subscribe(runId, res, {
+  async streamRun(
+    input: { runId: string; sessionId: string; userId: string },
+    res: express.Response,
+    options?: { afterSequence?: number | null }
+  ) {
+    return altusManagedStreamService.subscribe(
+      {
+        runId: input.runId,
+        sessionId: input.sessionId,
+        userId: input.userId,
+      },
+      res,
+      {
       afterSequence: options?.afterSequence ?? null,
-    });
+      }
+    );
   }
 }
 

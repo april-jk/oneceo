@@ -130,6 +130,7 @@ type JsonOptions = {
 async function requestJson<T>(url: string, options: JsonOptions = {}): Promise<T> {
   const response = await fetch(url, {
     method: options.method || "GET",
+    credentials: "include",
     headers: buildClientIdentityHeaders({
       "Content-Type": "application/json",
     }),

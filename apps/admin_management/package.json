@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm run start:all",
-    "start:all": "node --env-file=..\\.env ./node_modules/concurrently/dist/bin/concurrently.js --kill-others-on-fail \"npm run dev:api\" \"npm run dev:web\"",
+    "start:all": "node --env-file=../.env ./node_modules/concurrently/dist/bin/concurrently.js --kill-others-on-fail \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "tsx watch server/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "build": "npm run build:web",

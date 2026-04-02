@@ -155,9 +155,9 @@ test('GET /api/altus-managed/runs/:runId/stream uses current user instead of que
   const server = await startServer();
   runDaoAny.getRun = async () => ({ id: 'run-3', sessionId: 'altus-session-3' });
   sessionDaoAny.getSession = async () => ({ id: 'altus-session-3', userId: 'altus-user-3' });
-  let streamedRunId = '';
-  runServiceAny.streamRun = async (runId: string, res: express.Response) => {
-    streamedRunId = runId;
+  let streamedContext: Record<string, unknown> | null = null;
+  runServiceAny.streamRun = async (input: Record<string, unknown>, res: express.Response) => {
+    streamedContext = input;
     res.status(200).json({ success: true, streamed: true });
   };
 
@@ -168,7 +168,11 @@ test('GET /api/altus-managed/runs/:runId/stream uses current user instead of que
     const payload = await response.json();
 
     assert.equal(response.status, 200);
-    assert.equal(streamedRunId, 'run-3');
+    assert.deepEqual(streamedContext, {
+      runId: 'run-3',
+      sessionId: 'altus-session-3',
+      userId: 'altus-user-3',
+    });
     assert.equal(payload.streamed, true);
   } finally {
     await server.close();

@@ -4,6 +4,7 @@ import { config } from './config';
 import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connector';
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
 import { createAgentManagementRoutes } from './routes/agent-management-routes';
+import { createAdminAuthRoutes } from './routes/admin-auth-routes';
 import { createAuditRoutes } from './routes/audit-routes';
 import { createConversationRoutes } from './routes/conversation-routes';
 import { createConnectorGuideRoutes } from './routes/connector-guide-routes';
@@ -24,6 +25,7 @@ import { SandboxManagementService } from './services/sandbox-management-service'
 import { SkillManagementService } from './services/skill-management-service';
 import { OsacReleaseManagementService } from './services/osac-release-management-service';
 import { errorMiddleware, fail } from './utils/http';
+import { createAdminAuthMiddleware } from './middleware/admin-auth-middleware';
 
 const app = express();
 const jsonBodyLimitMbRaw = Number(process.env.ADMIN_JSON_BODY_LIMIT_MB || 16);
@@ -46,6 +48,7 @@ const osacReleaseManagementService = new OsacReleaseManagementService(oneceoApiC
 app.use(
   cors({
     origin: config.corsOrigin,
+    credentials: true,
   })
 );
 app.use(express.json({ limit: jsonBodyLimit }));
@@ -75,6 +78,8 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.use('/api/admin/auth', createAdminAuthRoutes(oneceoApiConnector));
+app.use('/api', createAdminAuthMiddleware(oneceoApiConnector));
 app.use('/api/kvm', createKvmRoutes(kvmService));
 app.use('/api/hosts', createHostRoutes(hostRuntimeService));
 app.use('/api/dashboard', createDashboardRoutes(dashboardService));

@@ -100,10 +100,11 @@ router.get('/skills', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('获取平台 skills 失败:', error);
-    return res.status(500).json({
+    return res.status(authError?.status || 500).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取平台 skills 失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取平台 skills 失败'),
     });
   }
 });
@@ -117,10 +118,11 @@ router.get('/settings/skills', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('获取用户技能设置失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取用户技能设置失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取用户技能设置失败'),
     });
   }
 });
@@ -131,10 +133,11 @@ router.post('/settings/skills/platform/:skillId/enable', async (req, res) => {
     const data = await userSkillService.enablePlatformSkill(currentUser.userId, req.params.skillId);
     return res.json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('启用平台技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '启用平台技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '启用平台技能失败'),
     });
   }
 });
@@ -145,10 +148,11 @@ router.post('/settings/skills/platform/:skillId/disable', async (req, res) => {
     const data = await userSkillService.disablePlatformSkill(currentUser.userId, req.params.skillId);
     return res.json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('停用平台技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '停用平台技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '停用平台技能失败'),
     });
   }
 });
@@ -174,10 +178,11 @@ router.post('/settings/skills/custom', express.json({ limit: '1mb' }), async (re
     });
     return res.status(201).json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('创建自定义技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '创建自定义技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '创建自定义技能失败'),
     });
   }
 });
@@ -202,10 +207,11 @@ router.put('/settings/skills/custom/:customSkillId', express.json({ limit: '1mb'
     });
     return res.json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('更新自定义技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '更新自定义技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '更新自定义技能失败'),
     });
   }
 });
@@ -216,10 +222,11 @@ router.post('/settings/skills/custom/:customSkillId/archive', async (req, res) =
     const data = await userSkillService.archiveCustomSkill(currentUser.userId, req.params.customSkillId);
     return res.json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('归档自定义技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '归档自定义技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '归档自定义技能失败'),
     });
   }
 });
@@ -230,10 +237,11 @@ router.post('/settings/skills/custom/:customSkillId/activate', async (req, res) 
     const data = await userSkillService.activateCustomSkill(currentUser.userId, req.params.customSkillId);
     return res.json({ success: true, data });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('启用自定义技能失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '启用自定义技能失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '启用自定义技能失败'),
     });
   }
 });
@@ -247,10 +255,11 @@ router.get('/codex/runtime-config', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('获取 Codex 运行配置失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取 Codex 运行配置失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取 Codex 运行配置失败'),
     });
   }
 });
@@ -270,10 +279,11 @@ router.put('/codex/runtime-config', express.json({ limit: '2mb' }), async (req, 
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('保存 Codex 运行配置失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '保存 Codex 运行配置失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '保存 Codex 运行配置失败'),
     });
   }
 });
@@ -336,15 +346,58 @@ function respondDatabaseUnavailable(
   });
 }
 
-function resolveTenantKey(req: express.Request): string {
-  // TODO: bind tenantKey to authenticated identity once login/auth is implemented.
-  const headerTenant = String(req.header('X-Tenant-Id') || '').trim();
-  if (headerTenant) return headerTenant;
-  const headerUser = String(req.header('X-User-Id') || '').trim();
-  if (headerUser) return headerUser;
-  const queryTenant = String(req.query.tenantId || '').trim();
-  if (queryTenant) return queryTenant;
-  return 'default';
+function resolveTenantKey(currentUser: { tenantKey: string }): string {
+  return currentUser.tenantKey;
+}
+
+function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+    return { status: 401, message };
+  }
+  return null;
+}
+
+async function requireOwnedTaskSession(sessionId: string, userId: string) {
+  const session = await taskCreationSessionDAO.getSession(sessionId);
+  if (!session) {
+    throw new Error('会话不存在');
+  }
+  if (!session.userId) {
+    throw new Error('会话缺少归属用户，禁止继续访问');
+  }
+  if (session.userId !== userId) {
+    throw new Error('当前用户无权访问该会话');
+  }
+  return session;
+}
+
+function resolveOwnedTaskSessionError(error: unknown): { status: number; message: string } | null {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message === '会话不存在') {
+    return { status: 404, message };
+  }
+  if (message === '会话缺少归属用户，禁止继续访问' || message === '当前用户无权访问该会话') {
+    return { status: 403, message };
+  }
+  return null;
+}
+
+function resolveSessionConnectorOwnershipError(error: unknown): { status: number; message: string } | null {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message === '会话不存在') {
+    return { status: 404, message };
+  }
+  if (
+    message === '当前用户无权管理该会话连接器' ||
+    message === '会话缺少归属用户，无法管理该会话连接器'
+  ) {
+    return { status: 403, message };
+  }
+  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+    return { status: 401, message };
+  }
+  return null;
 }
 
 function parseConnectorKey(value: string): ConnectorKey {
@@ -904,7 +957,7 @@ type SessionListCache = {
   data: any[];
 };
 
-let sessionListCache: SessionListCache | null = null;
+const sessionListCacheByUser = new Map<string, SessionListCache>();
 
 function mapStageFromStatus(status: string | null | undefined) {
   if (status === 'completed') return 'completed';
@@ -913,8 +966,8 @@ function mapStageFromStatus(status: string | null | undefined) {
   return 'executing';
 }
 
-async function buildSessionSummaryFromDb(limit: number) {
-  const sessions = await taskCreationSessionDAO.getRecentSessions(limit);
+async function buildSessionSummaryFromDb(limit: number, userId: string) {
+  const sessions = await taskCreationSessionDAO.getRecentSessions(limit, userId);
   const result: any[] = [];
   for (const session of sessions) {
     let description: Awaited<ReturnType<typeof taskCreationSessionDAO.getTaskDescription>> | null = null;
@@ -2677,13 +2730,13 @@ function updateSseClientCursor(key: string, cursor: number) {
  */
 router.post('/sessions', async (req, res) => {
   try {
-    const currentUser = currentUserResolver.resolve(req);
-  const requestedSessionId = asText(req.body?.sessionId);
-  const requestedTitle = asText(req.body?.title);
-  const requestedMode = asText(req.body?.mode);
-  const requestedExecutor = asText(req.body?.executor);
-  const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
-  const requestedDriver = asText(req.body?.driver);
+    const currentUser = currentUserResolver.require(req);
+    const requestedSessionId = asText(req.body?.sessionId);
+    const requestedTitle = asText(req.body?.title);
+    const requestedMode = asText(req.body?.mode);
+    const requestedExecutor = asText(req.body?.executor);
+    const requestedCodexExecutionMode = asText(req.body?.codexExecutionMode);
+    const requestedDriver = asText(req.body?.driver);
     const initialMessage = asText(req.body?.initialMessage);
     const initialMessageTypeRaw = asText(req.body?.initialMessageType);
     const initialMessageType = initialMessageTypeRaw === 'user_response' ? 'user_response' : 'user_input';
@@ -2773,7 +2826,7 @@ router.post('/sessions', async (req, res) => {
       if (!existingDbSession) {
         await taskCreationSessionDAO.createSession({
           id: session.id,
-          userId: currentUser?.userId,
+          userId: currentUser.userId,
           status: 'in_progress',
         });
       }
@@ -2806,10 +2859,11 @@ router.post('/sessions', async (req, res) => {
       message: isNewSession ? '会话已创建' : '会话已就绪',
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('创建会话失败:', error);
-    res.status(500).json({
+    res.status(authError?.status || 500).json({
       success: false,
-      error: getPublicErrorMessage('创建会话失败，请稍后重试'),
+      error: getPublicErrorMessage(authError?.message || '创建会话失败，请稍后重试'),
     });
   }
 });
@@ -2820,6 +2874,7 @@ router.post('/sessions', async (req, res) => {
  */
 router.get('/sessions', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const rawLimit = (req.query.limit as string | undefined)?.trim();
     let limit = 200;
     if (rawLimit === 'all') {
@@ -2837,9 +2892,13 @@ router.get('/sessions', async (req, res) => {
       60000
     );
     const now = Date.now();
+    const ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
+    const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
 
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
-    let sessions = rawSessions.map(toSessionSummary);
+    let sessions = rawSessions
+      .filter((session) => ownedSessionIds.has(String(session.id)))
+      .map(toSessionSummary);
     if (!refresh && sessions.length > 0) {
       return res.json({
         success: true,
@@ -2847,6 +2906,7 @@ router.get('/sessions', async (req, res) => {
       });
     }
 
+    const sessionListCache = sessionListCacheByUser.get(currentUser.userId) || null;
     if (
       !refresh &&
       sessionListCache &&
@@ -2864,12 +2924,12 @@ router.get('/sessions', async (req, res) => {
     }
 
     if (sessions.length === 0) {
-      const summaries = await buildSessionSummaryFromDb(limit);
-      sessionListCache = {
+      const summaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
+      sessionListCacheByUser.set(currentUser.userId, {
         fetchedAt: now,
         limit,
         data: summaries,
-      };
+      });
       return res.json({
         success: true,
         data: summaries,
@@ -2878,7 +2938,7 @@ router.get('/sessions', async (req, res) => {
     }
 
     try {
-      const dbSummaries = await buildSessionSummaryFromDb(limit);
+      const dbSummaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
       const dbById = new Map(dbSummaries.map((item) => [String(item.id), item]));
       sessions = sessions.map((session) => mergeSessionLifecycleFromDb(session, dbById.get(String(session.id))));
     } catch (error) {
@@ -2888,11 +2948,11 @@ router.get('/sessions', async (req, res) => {
       console.warn('[TASK_SESSION_LIST_DB_RECONCILE_FAILED]', error);
     }
 
-    sessionListCache = {
+    sessionListCacheByUser.set(currentUser.userId, {
       fetchedAt: now,
       limit,
       data: sessions,
-    };
+    });
 
     return res.json({
       success: true,
@@ -2901,6 +2961,14 @@ router.get('/sessions', async (req, res) => {
     });
   } catch (error: any) {
     console.error('获取会话列表失败:', error);
+    const currentUser = currentUserResolver.resolve(req);
+    const sessionListCache = currentUser ? sessionListCacheByUser.get(currentUser.userId) || null : null;
+    if (!currentUser) {
+      return res.status(401).json({
+        success: false,
+        error: getPublicErrorMessage(error?.message || '当前未登录'),
+      });
+    }
     if (isTransientDatabaseError(error)) {
       if (sessionListCache && sessionListCache.data.length > 0) {
         return res.json({
@@ -2933,6 +3001,13 @@ router.post('/sessions/draft', async (req, res) => {
       data: session ? toSessionSummary(session) : { id: sessionId, title, status: 'in_progress' },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
     console.error('创建草稿会话失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -2946,8 +3021,9 @@ router.post('/sessions/draft', async (req, res) => {
 
 router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
   try {
-    currentUserResolver.require(req);
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const input = normalizeSessionTitleText(req.body?.message);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
@@ -2991,6 +3067,20 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('解析会话标题失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3004,8 +3094,9 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
 
 router.post('/sessions/:sessionId/title/rename', async (req, res) => {
   try {
-    currentUserResolver.require(req);
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3033,6 +3124,20 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
       data: toSessionSummary(updated || { ...session, title: nextTitle, titleLocked: true, titleSource: 'manual' }),
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('重命名会话失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3046,8 +3151,9 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
 
 router.post('/sessions/:sessionId/favorite', async (req, res) => {
   try {
-    currentUserResolver.require(req);
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3063,6 +3169,20 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
       data: toSessionSummary(updated || { ...session, isFavorite: favorite }),
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('更新会话收藏状态失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3080,7 +3200,9 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
  */
 router.get('/sessions/:sessionId', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
@@ -3092,14 +3214,11 @@ router.get('/sessions/:sessionId', async (req, res) => {
 
     const runtimeStatus = await resolveRuntimeStatus(sessionData.runtime?.orchestratorSessionId);
     let connectorsSummary: ReturnType<typeof sessionConnectorService.summarizeStatuses> | null = null;
-    const currentUser = currentUserResolver.resolve(req);
-    if (currentUser?.userId) {
-      try {
-        const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
-        connectorsSummary = sessionConnectorService.summarizeStatuses(statuses);
-      } catch {
-        connectorsSummary = null;
-      }
+    try {
+      const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
+      connectorsSummary = sessionConnectorService.summarizeStatuses(statuses);
+    } catch {
+      connectorsSummary = null;
     }
 
     res.json({
@@ -3111,6 +3230,20 @@ router.get('/sessions/:sessionId', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取会话详情失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3128,7 +3261,9 @@ router.get('/sessions/:sessionId', async (req, res) => {
  */
 router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
     const recentMessages = filterLegacyTimelineNoise(
@@ -3208,6 +3343,20 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取最近消息缓存失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3225,7 +3374,9 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
  */
 router.get('/sessions/:sessionId/messages/history', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const beforeCursor = asTimelineCursor(req.query.before);
     const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
@@ -3248,6 +3399,20 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取增量历史失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3265,7 +3430,9 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
  */
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
     const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
@@ -3274,6 +3441,20 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
       data: messages,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取对话消息失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -3340,9 +3521,10 @@ router.post('/attachments/fetch', async (req, res) => {
     return res.status(200).send(rawBody);
   } catch (error: any) {
     console.error('远程附件获取失败:', error);
-    return res.status(400).json({
+    const authError = resolveSessionConnectorOwnershipError(error);
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '远程附件获取失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '远程附件获取失败'),
     });
   }
 });
@@ -3416,9 +3598,10 @@ router.post(
       });
     } catch (error: any) {
       console.error('上传附件失败:', error);
-      return res.status(400).json({
+      const ownershipError = resolveSessionConnectorOwnershipError(error);
+      return res.status(ownershipError?.status || 400).json({
         success: false,
-        error: getPublicErrorMessage(error?.message || '上传附件失败'),
+        error: getPublicErrorMessage(ownershipError?.message || error?.message || '上传附件失败'),
       });
     }
   }
@@ -3438,10 +3621,11 @@ router.get('/sessions/:sessionId/deliverables', async (req, res) => {
       data: deliverables.map((item) => serializeDeliverableArtifact(item)),
     });
   } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('获取交付物列表失败:', error);
-    return res.status(400).json({
+    return res.status(ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取交付物列表失败'),
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '获取交付物列表失败'),
     });
   }
 });
@@ -3466,10 +3650,11 @@ router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req,
     res.setHeader('Content-Disposition', buildAttachmentDisposition(artifact.displayName));
     return res.status(200).send(body);
   } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('下载交付物失败:', error);
-    return res.status(400).json({
+    return res.status(ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '下载交付物失败'),
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '下载交付物失败'),
     });
   }
 });
@@ -3480,7 +3665,9 @@ router.get('/sessions/:sessionId/deliverables/:artifactId/download', async (req,
  */
 router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3494,6 +3681,19 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
       data: runtime,
     });
   } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    if (error?.message === '会话不存在') {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
     console.error('启动执行环境失败:', error);
     res.status(isSandboxNotFoundError(error) ? 409 : 500).json({
       success: false,
@@ -3510,7 +3710,9 @@ router.post('/sessions/:sessionId/runtime/start', async (req, res) => {
  */
 router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -3548,6 +3750,19 @@ router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    if (error?.message === '会话不存在') {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
     console.error('维持执行环境失败:', error);
     res.status(500).json({
       success: false,
@@ -3574,9 +3789,10 @@ router.get('/sessions/:sessionId/connectors', async (req, res) => {
       },
     });
   } catch (error: any) {
-    return res.status(401).json({
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    return res.status(ownershipError?.status || 401).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取会话连接器失败'),
+      error: getPublicErrorMessage(ownershipError?.message || error?.message || '获取会话连接器失败'),
     });
   }
 });
@@ -3628,7 +3844,16 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       },
     });
   } catch (error: any) {
-    const message = error?.message || '挂载连接器失败';
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    const connectorOwnershipError = resolveSessionConnectorOwnershipError(error);
+    const message = ownershipError?.message || connectorOwnershipError?.message || error?.message || '挂载连接器失败';
     writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_FAILED]', {
       taskSessionId: req.params.sessionId,
       connectorKey: req.params.connectorKey,
@@ -3636,7 +3861,11 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     }, 'error');
     const normalized = String(message).toLowerCase();
     const status =
-      normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')
+      ownershipError?.status === 403 || connectorOwnershipError?.status === 403
+        ? 403
+        : connectorOwnershipError?.status === 401
+          ? 401
+        : normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')
         ? 401
         : normalized.includes('未授权') || normalized.includes('尚未完成授权')
           ? 409
@@ -3672,9 +3901,20 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/detach', async (req, 
       },
     });
   } catch (error: any) {
-    return res.status(400).json({
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    const connectorOwnershipError = resolveSessionConnectorOwnershipError(error);
+    return res.status(ownershipError?.status || connectorOwnershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '卸载连接器失败'),
+      error: getPublicErrorMessage(
+        ownershipError?.message || connectorOwnershipError?.message || error?.message || '卸载连接器失败'
+      ),
     });
   }
 });
@@ -3685,7 +3925,9 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/detach', async (req, 
  */
 router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
     const preserveForRetry = Boolean(req.body?.preserveForRetry ?? true);
     const clientMessageKey = asText(req.body?.clientMessageKey);
     const session = await resolveTaskSessionRecord(sessionId);
@@ -3762,6 +4004,19 @@ router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
       error: getPublicErrorMessage(`不支持的 executor: ${executor || 'unknown'}`),
     });
   } catch (error: any) {
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    if (error?.message === '会话不存在') {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
     console.error('中断执行环境失败:', error);
     return res.status(500).json({
       success: false,
@@ -3777,6 +4032,8 @@ router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
 router.get('/sessions/:sessionId/debug', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -3824,6 +4081,20 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取调试信息失败:', error);
     res.status(500).json({
       success: false,
@@ -3839,6 +4110,8 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
 router.post('/sessions/:sessionId/debug/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -3885,6 +4158,20 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('启动调试失败:', error);
     res.status(500).json({
       success: false,
@@ -3917,10 +4204,12 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('获取部署信息失败:', error);
-    return res.status(500).json({
+    return res.status(authError?.status || ownershipError?.status || 500).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取部署信息失败，请稍后重试'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取部署信息失败，请稍后重试'),
     });
   }
 });
@@ -4000,10 +4289,12 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('触发部署失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(getDeploymentErrorMessage(error)),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error)),
     });
   }
 });
@@ -4059,10 +4350,12 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('重新部署失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(getDeploymentErrorMessage(error) || '重新部署失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '重新部署失败'),
     });
   }
 });
@@ -4118,10 +4411,12 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('回滚部署失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(getDeploymentErrorMessage(error) || '回滚部署失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '回滚部署失败'),
     });
   }
 });
@@ -4150,10 +4445,12 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('获取数据库信息失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取数据库信息失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库信息失败'),
     });
   }
 });
@@ -4192,10 +4489,12 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('获取数据库表数据失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取数据库表数据失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取数据库表数据失败'),
     });
   }
 });
@@ -4233,10 +4532,12 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('新增数据库记录失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '新增数据库记录失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '新增数据库记录失败'),
     });
   }
 });
@@ -4275,10 +4576,12 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('更新数据库记录失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '更新数据库记录失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '更新数据库记录失败'),
     });
   }
 });
@@ -4316,10 +4619,12 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       data,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
     console.error('删除数据库记录失败:', error);
-    return res.status(400).json({
+    return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '删除数据库记录失败'),
+      error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '删除数据库记录失败'),
     });
   }
 });
@@ -4330,9 +4635,11 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
  */
 router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
-    const tenantKey = resolveTenantKey(req);
+    const tenantKey = resolveTenantKey(currentUser);
     const rawPath = String(req.query.path || '').trim();
     if (rawPath && isUnsafePath(rawPath)) {
       return res.status(400).json({
@@ -4509,8 +4816,23 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       data: livePage,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    const currentUser = currentUserResolver.resolve(req);
     const { sessionId } = req.params;
-    const tenantKey = resolveTenantKey(req);
+    const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     const rawPath = String(req.query.path || '').trim();
@@ -4521,7 +4843,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const includeIgnored = !['0', 'false', 'no'].includes(
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
-    if (isE2bWorkspaceExecutor(workspaceExecutor)) {
+    if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
       const cached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4565,10 +4887,12 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
  */
 router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
-    const tenantKey = resolveTenantKey(req);
+    const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
       const cached = await taskCreationCacheStore.getWorkspaceTree(tenantKey, sessionId);
@@ -4688,10 +5012,18 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
-    const tenantKey = resolveTenantKey(req);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    const currentUser = currentUserResolver.resolve(req);
+    const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
-    if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
+    if (tenantKey && isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4738,7 +5070,9 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
  */
 router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const relativePath = String(req.query.path || '').trim();
     if (isUnsafePath(relativePath)) {
       return res.status(400).json({
@@ -4750,7 +5084,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
-    const tenantKey = resolveTenantKey(req);
+    const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
       const cached = await taskCreationCacheStore.getWorkspaceFile(tenantKey, sessionId, normalizedPath);
@@ -4952,7 +5286,15 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
-    const tenantKey = resolveTenantKey(req);
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    const currentUser = currentUserResolver.resolve(req);
+    const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (isSandboxNotFoundError(error)) {
@@ -4961,7 +5303,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         await markSandboxClosed(orchestratorSessionId);
       }
       const normalizedPath = String(req.query.path || '').trim().replace(/\\/g, '/');
-      if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
+      if (tenantKey && isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
           tenantKey,
@@ -5023,6 +5365,8 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
 router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
     if (!wildcardPath || isUnsafePath(wildcardPath)) {
       return res.status(400).type('text/plain; charset=utf-8').send('非法路径');
@@ -5078,6 +5422,17 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
     );
     return res.status(200).send(buffer);
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).type('text/plain; charset=utf-8').send(getPublicErrorMessage(authError.message));
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res
+        .status(ownershipError.status)
+        .type('text/plain; charset=utf-8')
+        .send(getPublicErrorMessage(ownershipError.message));
+    }
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (isSandboxNotFoundError(error)) {
@@ -5102,6 +5457,26 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
 router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   const { sessionId } = req.params;
   let session: FileSessionRecord | null = null;
+  try {
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
+  } catch (error) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
+    throw error;
+  }
   try {
     session = await resolveTaskSessionRecord(sessionId);
   } catch (error) {
@@ -5529,6 +5904,8 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 router.get('/sessions/:sessionId/intent', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const intentResult = await taskCreationSessionDAO.getIntentResult(sessionId);
 
@@ -5544,6 +5921,20 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
       data: intentResult,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取意图识别结果失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -5562,6 +5953,8 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
 router.get('/sessions/:sessionId/task-description', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const taskDescription = await taskCreationSessionDAO.getTaskDescription(sessionId);
 
@@ -5577,6 +5970,20 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
       data: taskDescription,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取任务描述失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -5595,6 +6002,8 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
 router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     const executionPlan = await taskCreationSessionDAO.getExecutionPlan(sessionId);
 
@@ -5610,6 +6019,20 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
       data: executionPlan,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('获取执行计划失败:', error);
     if (isTransientDatabaseError(error)) {
       return respondDatabaseUnavailable(res);
@@ -5628,6 +6051,8 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
 router.delete('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await requireOwnedTaskSession(sessionId, currentUser.userId);
 
     await taskCreationSessionDAO.deleteSession(sessionId);
     await taskCreationFileMemoryStore.deleteSession(sessionId);
@@ -5637,6 +6062,20 @@ router.delete('/sessions/:sessionId', async (req, res) => {
       message: '会话已删除',
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
+    const ownershipError = resolveOwnedTaskSessionError(error);
+    if (ownershipError) {
+      return res.status(ownershipError.status).json({
+        success: false,
+        error: getPublicErrorMessage(ownershipError.message),
+      });
+    }
     console.error('删除会话失败:', error);
     res.status(500).json({
       success: false,

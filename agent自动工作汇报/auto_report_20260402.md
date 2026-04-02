@@ -37,3 +37,21 @@
 - 做了什么：已执行 API 侧完整新增测试集合，命令为 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/auth-routes.test.ts tests/internal-admin-auth-routes.test.ts tests/task-creation-business-routes.test.ts tests/connector-routes.test.ts tests/task-creation-deep-routes.test.ts tests/task-creation-route-coverage.test.ts tests/altus-managed-routes.test.ts`，共 43 条测试全部通过。
 - 遇到什么：测试运行时仍会打印大量预期内的鉴权失败日志，例如未登录 `401` 和越权 `403` 的服务端报错输出，日志噪声较大，但不影响结果。
 - 计划如何解决：下一步如果继续推进，就把这些接口测试纳入 CI 的稳定入口，并继续清理 `apps/api` 里与本轮无关的历史 TypeScript 报错，减少后续改动的验证阻力。
+- 做了什么：定位并修复了“注册登录后新建对话发送消息却跳回旧 session，并报当前用户无权操作该 Altus 会话”的问题。根因是前端 `useTaskCreationAgent` 在没有当前会话上下文时，错误地回退读取 `localStorage.task_creation_session_id`，把新对话重新绑定到了旧会话。
+- 做了什么：已移除这条旧 session 回退逻辑，改为发送消息时只认显式传入的 `sessionId`、当前 hook 状态和 URL path；当处于 `/new-task` 这类无会话上下文页面时，会创建新的 managed 会话，而不是复用旧 session。
+- 做了什么：新增前端测试 `apps/web/client/src/tests/managed-session-resolution.test.ts`，并执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“从新建任务页发送首条消息时只跳转到会话页，但消息并未真正发出，页面也不显示该消息”的问题。根因是 managed 首条消息此前仍使用前端临时生成的 provisional session id，路由跳转、历史加载和后端真实建会话之间存在竞态。
+- 做了什么：已将 managed 首条消息链路改为先通过 `createTaskCreationDraftSession()` 创建后端真实 draft session，再绑定路由并提交 `/api/altus-managed/inputs`；不再在 managed 模式下用前端 provisional session 先跳转。
+- 做了什么：已再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“新建任务首条消息已发送、会话也已创建，但跳到 `/session/:id` 后页面短时间不显示这条消息”的问题。进一步确认根因是 `/new-task -> /session/:id` 切换期间，首条 optimistic `user_input` 只存在于当前页面内存状态，没有在路由切换前同步写入会话视图缓存，页面重挂后会先看到空白消息区。
+- 做了什么：已在 `useTaskCreationAgent` 中新增首发消息缓存桥接逻辑，managed 新会话首条消息现在会先合并到 history view cache，再触发 `bindSessionId()` 切换路由，保证新页面一加载就能从 sessionStorage 视图缓存读到这条消息。
+- 做了什么：已新增回归测试，验证 optimistic 首条消息会在路由切换前写入历史视图缓存；再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“首条消息能显示，但刚跳转到 `/session/:id` 时没有 `智能体正在处理...`，实时消息也像没立刻接上”的问题。确认根因是 managed 首发后的 `isProcessing/managedRunId` 只存在于当前页面内存态，页面切换重挂后要等异步 `latest run` 查询返回，处理中提示和 managed stream 才会恢复。
+- 做了什么：已新增 managed run recovery 的 sessionStorage 持久化，发送首条 managed 消息时会先写入 `sessionId + processing + runId/status` 恢复状态；新页面进入对应 session 时会先恢复处理中提示，并在已有 `runId` 的情况下立即重连 managed run stream。
+- 做了什么：已补回归测试，验证 managed 处理中恢复态会跨路由切换保留；再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：排查了管理后台登录后白屏问题，确认管理员认证链路本身正常，`admin / admin123456` 可以成功登录并建立后台会话；真正的问题落在 `apps/admin_management/web/src/App.tsx` 登录后的默认 `kvm + sandbox` 首屏渲染分支。
+- 做了什么：已将 Sandbox 首页依赖的 `sandboxApi / sandboxes / runtime-registry summary / distributions / items / riskTags` 全部改成显式归一化读取，不再直接使用脆弱的嵌套访问；当治理接口缺字段或返回局部异常数据时，页面现在会降级为空态，而不是整页白屏。
+- 做了什么：同步更新后台登录与页面改造设计文档，补充“后台首页在治理接口返回缺字段、空数组或局部数据异常时，不允许整页白屏”的验收标准；已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/admin_management type-check`，通过。
+- 做了什么：继续用临时 Playwright 真实复现管理员登录后的白屏，抓到浏览器报错 `Rendered more hooks than during the previous render`，定位到 `apps/admin_management/web/src/App.tsx` 在匿名态提前 `return` 后，登录态才执行后续多组 `useMemo`，违反 React Hook 顺序规则。
+- 做了什么：已将登录后主界面的统计与筛选派生数据从 `useMemo` 改为普通常量计算，彻底移除这条登录态切换时新增 Hook 的路径，避免再次触发整页白屏。
+- 计划如何解决：继续执行 `apps/admin_management type-check` 和临时 Playwright 复测，确认登录后能稳定进入后台主界面，再决定是否收尾提交。

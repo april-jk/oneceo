@@ -1,4 +1,5 @@
 import { taskSessionRunDAO } from '../db/dao';
+import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { AltusRunState } from './altus-run-state';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
@@ -9,7 +10,8 @@ const RUN_STOPPED_TEXT = '已停止当前处理';
 export class AltusRunLifecycleService {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
-    private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter
+    private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService
   ) {}
 
   async markRunning(state: AltusRunState) {
@@ -25,7 +27,15 @@ export class AltusRunLifecycleService {
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'running', {
       startedAt: state.startedAt || new Date(),
     });
-    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_status', {
+    await this.redisStateService.syncRunStatus({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'running',
+      startedAt: state.startedAt || new Date(),
+    });
+    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, state.input.userId, 'run_status', {
       status: 'running',
       content: state.sandboxReused ? '已复用会话 sandbox，开始执行' : '已创建新的 sandbox，开始执行',
       sandboxId: state.sandboxId,
@@ -35,6 +45,13 @@ export class AltusRunLifecycleService {
 
   async markWaitingUser(state: AltusRunState) {
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'waiting_user');
+    await this.redisStateService.syncRunStatus({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'waiting_user',
+    });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'waiting_user',
       stage: 'clarifying',
@@ -48,6 +65,14 @@ export class AltusRunLifecycleService {
       metadataJson: {
         deliverables: state.deliverables,
       },
+    });
+    await this.redisStateService.syncRunStatus({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'completed',
+      completedAt: state.completedAt || new Date(),
     });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'completed',
@@ -72,15 +97,30 @@ export class AltusRunLifecycleService {
       },
       messageKey: `managed:${state.input.runId}:run_completed`,
     });
-    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_completed', {
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'run_completed',
+      {
       status: 'completed',
       content: RUN_COMPLETED_TEXT,
       deliverables: state.deliverables,
-    });
+      }
+    );
   }
 
   async markStopped(state: AltusRunState, reason: string) {
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'stopped', {
+      completedAt: state.completedAt || new Date(),
+      stopReason: reason,
+    });
+    await this.redisStateService.syncRunStatus({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'stopped',
       completedAt: state.completedAt || new Date(),
       stopReason: reason,
     });
@@ -103,14 +143,29 @@ export class AltusRunLifecycleService {
       },
       messageKey: `managed:${state.input.runId}:stopped`,
     });
-    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_stopped', {
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'run_stopped',
+      {
       status: 'stopped',
       content: RUN_STOPPED_TEXT,
-    });
+      }
+    );
   }
 
   async markFailed(state: AltusRunState, message: string) {
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'failed', {
+      completedAt: state.completedAt || new Date(),
+      stopReason: message,
+    });
+    await this.redisStateService.syncRunStatus({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'failed',
       completedAt: state.completedAt || new Date(),
       stopReason: message,
     });
@@ -130,11 +185,17 @@ export class AltusRunLifecycleService {
       },
       messageKey: `managed:${state.input.runId}:failed`,
     });
-    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_failed', {
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'run_failed',
+      {
       status: 'failed',
       content: `Altus managed 运行失败：${message}`,
       error: message,
-    });
+      }
+    );
   }
 }
 

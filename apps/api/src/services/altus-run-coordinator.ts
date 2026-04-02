@@ -218,11 +218,17 @@ export class AltusRunCoordinator {
       },
       messageKey: `managed:${state.input.runId}:clarification`,
     });
-    await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'clarification_requested', {
+    await this.eventWriter.appendRunEvent(
+      state.input.runId,
+      state.input.sessionId,
+      state.input.userId,
+      'clarification_requested',
+      {
       question: input.question,
       options: input.options,
       content: input.question,
-    });
+      }
+    );
     return {
       outcome: 'waiting_user' as const,
       question: input.question,
@@ -520,10 +526,16 @@ export class AltusRunCoordinator {
         throw new Error('managed_run_aborted');
       }
 
-      await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'run_status', {
+      await this.eventWriter.appendRunEvent(
+        state.input.runId,
+        state.input.sessionId,
+        state.input.userId,
+        'run_status',
+        {
         status: round === 0 ? 'running' : 'waiting_tool',
         content: round === 0 ? '正在分析并执行任务' : '继续处理工具结果',
-      });
+        }
+      );
 
       await this.setupService.refreshInlineImageUrls(messages);
 
@@ -544,13 +556,19 @@ export class AltusRunCoordinator {
             return;
           }
           toolProgressLengths.set(toolCallId, currentLength);
-          await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_progress', {
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'tool_call_progress',
+            {
             toolName,
             content: `正在准备工具 ${toolName}`,
             arguments: parseToolArguments(rawArguments),
             rawArguments,
             toolCallId,
-          });
+            }
+          );
         },
       });
       const assistantContent = truncate(asText(assistant.content), 24000);
@@ -594,12 +612,18 @@ export class AltusRunCoordinator {
         const toolName = asText(toolCall?.function?.name);
         if (!toolName) continue;
         const args = parseToolArguments(asText(toolCall?.function?.arguments));
-        await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_started', {
+        await this.eventWriter.appendRunEvent(
+          state.input.runId,
+          state.input.sessionId,
+          state.input.userId,
+          'tool_call_started',
+          {
           toolName,
           content: `调用工具 ${toolName}`,
           arguments: args,
           toolCallId: toolCall.id,
-        });
+          }
+        );
 
         try {
           const result = await runtime.execute(toolName, args, signal);
@@ -636,7 +660,12 @@ export class AltusRunCoordinator {
               },
               messageKey: `managed:${state.input.runId}:assistant_final`,
             });
-            await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_completed', {
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'tool_call_completed',
+              {
               toolName,
               content: `工具 ${toolName} 已完成`,
               arguments: args,
@@ -650,12 +679,19 @@ export class AltusRunCoordinator {
                 }),
                 4000
               ),
-            });
-            await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'assistant_message', {
+              }
+            );
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'assistant_message',
+              {
               content: finalContent,
               messageKey: `managed:${state.input.runId}:assistant_final`,
               deliverables,
-            });
+              }
+            );
             return { outcome: 'completed' as const, content: finalContent, deliverables };
           }
 
@@ -665,22 +701,34 @@ export class AltusRunCoordinator {
             name: toolName,
             content: result.content,
           });
-          await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_completed', {
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'tool_call_completed',
+            {
             toolName,
             content: `工具 ${toolName} 已完成`,
             arguments: args,
             toolCallId: toolCall.id,
             outputPreview: truncate(result.content, 4000),
-          });
+            }
+          );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error || 'tool_failed');
-          await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, 'tool_call_failed', {
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'tool_call_failed',
+            {
             toolName,
             content: `工具 ${toolName} 失败`,
             arguments: args,
             toolCallId: toolCall.id,
             error: message,
-          });
+            }
+          );
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,

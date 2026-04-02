@@ -180,9 +180,17 @@ router.get('/runs/:runId/stream', async (req, res) => {
       });
     }
     const afterSequence = Number(req.query.afterSequence);
-    await altusManagedRunService.streamRun(runId, res, {
+    await altusManagedRunService.streamRun(
+      {
+        runId,
+        sessionId: run.sessionId,
+        userId: currentUser.userId,
+      },
+      res,
+      {
       afterSequence: Number.isFinite(afterSequence) && afterSequence > 0 ? Math.floor(afterSequence) : null,
-    });
+      }
+    );
   } catch (error: any) {
     console.error('[ALTUS_MANAGED_STREAM_FAILED]', error);
     if (!res.headersSent) {

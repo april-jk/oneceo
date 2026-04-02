@@ -49,6 +49,9 @@
 - 做了什么：继续修复“首条消息能显示，但刚跳转到 `/session/:id` 时没有 `智能体正在处理...`，实时消息也像没立刻接上”的问题。确认根因是 managed 首发后的 `isProcessing/managedRunId` 只存在于当前页面内存态，页面切换重挂后要等异步 `latest run` 查询返回，处理中提示和 managed stream 才会恢复。
 - 做了什么：已新增 managed run recovery 的 sessionStorage 持久化，发送首条 managed 消息时会先写入 `sessionId + processing + runId/status` 恢复状态；新页面进入对应 session 时会先恢复处理中提示，并在已有 `runId` 的情况下立即重连 managed run stream。
 - 做了什么：已补回归测试，验证 managed 处理中恢复态会跨路由切换保留；再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：排查 GitHub OAuth 回跳后“页面需要等很久才真正连接上”的问题，确认慢点主要堆在 `/api/connectors/profiles/:profileId/oauth/callback` 的同步串行链路：先等 GitHub `/user`、再等 `/user/installations`，随后还同步等待 `refreshAttachedBindingsForProfile(...)`，导致回跳响应一直被阻塞。
+- 做了什么：已将 GitHub OAuth 回调中的 `/user` 与 `/user/installations` 校验改为并行执行，并把 callback 路由里的 `refreshAttachedBindingsForProfile(...)` 从同步等待改成后台异步队列，不再阻塞前端回跳响应。
+- 做了什么：已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/connector-routes.test.ts`，通过。
 - 做了什么：排查了管理后台登录后白屏问题，确认管理员认证链路本身正常，`admin / admin123456` 可以成功登录并建立后台会话；真正的问题落在 `apps/admin_management/web/src/App.tsx` 登录后的默认 `kvm + sandbox` 首屏渲染分支。
 - 做了什么：已将 Sandbox 首页依赖的 `sandboxApi / sandboxes / runtime-registry summary / distributions / items / riskTags` 全部改成显式归一化读取，不再直接使用脆弱的嵌套访问；当治理接口缺字段或返回局部异常数据时，页面现在会降级为空态，而不是整页白屏。
 - 做了什么：同步更新后台登录与页面改造设计文档，补充“后台首页在治理接口返回缺字段、空数组或局部数据异常时，不允许整页白屏”的验收标准；已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/admin_management type-check`，通过。

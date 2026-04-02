@@ -23,6 +23,16 @@ function parseConnectorKey(value: string): ConnectorKey {
   throw new Error(`未知连接器: ${value}`);
 }
 
+function queueProfileRuntimeRefresh(userId: string, profileId: string, context: string) {
+  void sessionConnectorService.refreshAttachedBindingsForProfile(userId, profileId).catch((error) => {
+    console.error(`[${context}]`, {
+      userId,
+      profileId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 router.get('/catalog', async (req, res) => {
   try {
     const catalog = await userConnectorService.listCatalog();
@@ -165,18 +175,19 @@ router.post('/profiles/:profileId/oauth/callback', async (req, res) => {
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
-    const refreshResult =
-      result.profile.authStatus === 'authorized'
-        ? await sessionConnectorService.refreshAttachedBindingsForProfile(
-            currentUser.userId,
-            result.profile.profileId
-          )
-        : { refreshed: [], failed: [] };
+    const runtimeRefreshQueued = result.profile.authStatus === 'authorized';
+    if (runtimeRefreshQueued) {
+      queueProfileRuntimeRefresh(
+        currentUser.userId,
+        result.profile.profileId,
+        'CONNECTOR_PROFILE_OAUTH_REFRESH_FAILED'
+      );
+    }
     return res.json({
       success: true,
       data: {
         ...result,
-        runtimeRefresh: refreshResult,
+        runtimeRefreshQueued,
       },
     });
   } catch (error) {
@@ -257,16 +268,19 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
     const profileId = result.account?.defaultProfileId || result.account?.profileId;
-    const refreshResult = profileId
-      ? result.account?.authStatus === 'authorized'
-        ? await sessionConnectorService.refreshAttachedBindingsForProfile(currentUser.userId, profileId)
-        : { refreshed: [], failed: [] }
-      : { refreshed: [], failed: [] };
+    const runtimeRefreshQueued = Boolean(profileId && result.account?.authStatus === 'authorized');
+    if (runtimeRefreshQueued && profileId) {
+      queueProfileRuntimeRefresh(
+        currentUser.userId,
+        profileId,
+        'CONNECTOR_OAUTH_REFRESH_FAILED'
+      );
+    }
     return res.json({
       success: true,
       data: {
         ...result,
-        runtimeRefresh: refreshResult,
+        runtimeRefreshQueued,
       },
     });
   } catch (error) {

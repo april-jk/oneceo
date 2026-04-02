@@ -732,14 +732,6 @@ export class UserConnectorService {
         '';
       let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
 
-      if (connectorKey === 'github') {
-        const githubProfile = await resolveGithubProfile(accessToken);
-        displayName = githubProfile.displayName || displayName;
-        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
-          profileName = buildGithubProfileName(displayName);
-        }
-      }
-
       const secret: ConnectorAccountSecret = {
         accessToken,
         refreshToken: asText(tokenPayload.refresh_token) || undefined,
@@ -753,7 +745,14 @@ export class UserConnectorService {
       let lastAuthAt: Date | null = new Date();
 
       if (connectorKey === 'github') {
-        const installationCount = await resolveGithubInstallationCount(accessToken);
+        const [githubProfile, installationCount] = await Promise.all([
+          resolveGithubProfile(accessToken),
+          resolveGithubInstallationCount(accessToken),
+        ]);
+        displayName = githubProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
+          profileName = buildGithubProfileName(displayName);
+        }
         if (installationCount <= 0) {
           authStatus = 'needs_auth';
           lastError =

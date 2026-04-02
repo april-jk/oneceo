@@ -2592,7 +2592,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         afterSequence,
         clientId: sseClientIdRef.current,
       });
-      const source = new EventSource(url);
+      const source = new EventSource(url, { withCredentials: true });
       managedRunStreamRef.current = source;
       managedRunStreamRunIdRef.current = runId;
       managedRunIdRef.current = runId;

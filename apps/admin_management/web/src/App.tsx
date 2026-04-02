@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
 import {
   Bar,
   BarChart,
@@ -15,6 +16,7 @@ import {
   YAxis,
 } from 'recharts';
 import { api } from './api';
+import type { AdminUser } from './api';
 import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
 import { KvmControlCenter } from './components/KvmControlCenter';
 import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
@@ -281,6 +283,12 @@ const DEFAULT_TRANSITION_FILTERS = {
 };
 
 export default function App() {
+  const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
+  const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
+  const [loginName, setLoginName] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
   const [kvmMode, setKvmMode] = useState<'kvm' | 'sandbox'>('sandbox');
 
@@ -339,6 +347,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const bootstrapAdminSession = useCallback(async () => {
+    try {
+      const result = await api.getCurrentAdmin();
+      setAdminUser(result.adminUser);
+      setAuthStatus('authenticated');
+      setAuthError(null);
+    } catch {
+      setAdminUser(null);
+      setAuthStatus('anonymous');
+      setAuthError(null);
+    }
+  }, []);
 
   const loadKvmSection = useCallback(async () => {
     const [overviewResult, vmResult, hostResult] = await Promise.allSettled([
@@ -865,15 +886,26 @@ export default function App() {
   );
 
   useEffect(() => {
-    loadSection(activeSection, true);
-  }, [activeSection, loadSection]);
+    void bootstrapAdminSession();
+  }, [bootstrapAdminSession]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    loadSection(activeSection, true);
+  }, [activeSection, authStatus, loadSection]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     if (activeSection !== 'kvm') return;
     void loadSection('kvm');
-  }, [activeSection, kvmMode, sandboxTab, loadSection]);
+  }, [activeSection, authStatus, kvmMode, sandboxTab, loadSection]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
     if (activeSection !== 'kvm') {
       return;
     }
@@ -894,9 +926,12 @@ export default function App() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
     if (!selectedSessionId || activeSection !== 'conversation') {
       return;
     }
@@ -928,13 +963,107 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSection, selectedSessionId]);
+  }, [activeSection, authStatus, selectedSessionId]);
 
   useEffect(() => {
     setTransitionView('timeline');
     setTransitionQuery('');
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
   }, [selectedSessionId]);
+
+  const handleAdminLogin = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      setAuthSubmitting(true);
+      setAuthError(null);
+      try {
+        const result = await api.adminLogin({
+          loginName: loginName.trim(),
+          password: loginPassword,
+        });
+        setAdminUser(result.adminUser);
+        setAuthStatus('authenticated');
+        setLoginPassword('');
+      } catch (requestError) {
+        setAdminUser(null);
+        setAuthStatus('anonymous');
+        setAuthError(requestError instanceof Error ? requestError.message : '管理员登录失败');
+      } finally {
+        setAuthSubmitting(false);
+      }
+    },
+    [loginName, loginPassword]
+  );
+
+  const handleAdminLogout = useCallback(async () => {
+    try {
+      await api.adminLogout();
+    } catch {
+      // clear local auth state even if backend session is already invalid
+    }
+    setAdminUser(null);
+    setAuthStatus('anonymous');
+    setError(null);
+  }, []);
+
+  if (authStatus === 'loading') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <section className="admin-auth-card">
+          <p className="eyebrow">Oneceo Admin</p>
+          <h1>正在校验管理员身份...</h1>
+          <p className="admin-auth-copy">后台管理入口会先验证独立的管理员会话，不与用户态身份共表。</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <div className="admin-auth-layout">
+          <section className="admin-auth-hero">
+            <p className="eyebrow">Oneceo Admin</p>
+            <h1>管理员后台与用户态彻底分离。</h1>
+            <p className="admin-auth-copy">
+              后台使用独立的 <code>admin_users</code> 和 <code>admin_user_sessions</code>，不会复用普通用户登录态。
+            </p>
+            <div className="admin-auth-badges">
+              <span>独立管理员表</span>
+              <span>独立 Cookie</span>
+              <span>统一治理入口</span>
+            </div>
+          </section>
+
+          <section className="admin-auth-card">
+            <p className="eyebrow">管理员登录</p>
+            <h2>进入治理控制台</h2>
+            <form className="admin-auth-form" onSubmit={handleAdminLogin}>
+              <label>
+                <span>登录名</span>
+                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
+              </label>
+              <label>
+                <span>密码</span>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                />
+              </label>
+              {authError ? <div className="auth-error-banner">{authError}</div> : null}
+              <button type="submit" className="primary-btn" disabled={authSubmitting}>
+                {authSubmitting ? '登录中...' : '登录后台'}
+              </button>
+            </form>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   const vmPieData = useMemo(
     () => (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0),
@@ -3336,6 +3465,9 @@ const renderAuditSection = () => (
                   {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
                 </span>
                 <p className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</p>
+                <p className="updated-at">
+                  {adminUser?.displayName || adminUser?.loginName} · {adminUser?.role || 'admin'}
+                </p>
               </div>
               <div className="header-actions">
                 {activeSection === 'kvm' ? (
@@ -3363,6 +3495,9 @@ const renderAuditSection = () => (
                   disabled={refreshing}
                 >
                   {refreshing ? '刷新中...' : '刷新当前标签'}
+                </button>
+                <button type="button" className="secondary-btn" onClick={() => void handleAdminLogout()}>
+                  退出登录
                 </button>
               </div>
             </div>

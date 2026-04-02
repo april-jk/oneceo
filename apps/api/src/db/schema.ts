@@ -7,6 +7,90 @@
 import { sql } from 'drizzle-orm';
 import { pgTable, text, timestamp, jsonb, uuid, integer, boolean, uniqueIndex, index, bigint } from 'drizzle-orm/pg-core';
 
+export const appUsers = pgTable(
+  'app_users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    displayName: text('display_name').notNull(),
+    status: text('status').notNull().default('active'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    lastLoginAt: timestamp('last_login_at'),
+  },
+  (table) => ({
+    emailUnique: uniqueIndex('idx_app_users_email').on(table.email),
+    statusIdx: index('idx_app_users_status').on(table.status),
+  })
+);
+
+export const appUserSessions = pgTable(
+  'app_user_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    sessionTokenHash: text('session_token_hash').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    revokedAt: timestamp('revoked_at'),
+    userAgent: text('user_agent'),
+    ipAddress: text('ip_address'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex('idx_app_user_sessions_token_hash').on(table.sessionTokenHash),
+    userIdIdx: index('idx_app_user_sessions_user_id').on(table.userId),
+    expiresAtIdx: index('idx_app_user_sessions_expires_at').on(table.expiresAt),
+  })
+);
+
+export const adminUsers = pgTable(
+  'admin_users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    loginName: text('login_name').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    displayName: text('display_name').notNull(),
+    role: text('role').notNull().default('admin'),
+    status: text('status').notNull().default('active'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    lastLoginAt: timestamp('last_login_at'),
+  },
+  (table) => ({
+    loginNameUnique: uniqueIndex('idx_admin_users_login_name').on(table.loginName),
+    roleIdx: index('idx_admin_users_role').on(table.role),
+    statusIdx: index('idx_admin_users_status').on(table.status),
+  })
+);
+
+export const adminUserSessions = pgTable(
+  'admin_user_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    adminUserId: uuid('admin_user_id')
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: 'cascade' }),
+    sessionTokenHash: text('session_token_hash').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    revokedAt: timestamp('revoked_at'),
+    userAgent: text('user_agent'),
+    ipAddress: text('ip_address'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex('idx_admin_user_sessions_token_hash').on(table.sessionTokenHash),
+    adminUserIdIdx: index('idx_admin_user_sessions_admin_user_id').on(table.adminUserId),
+    expiresAtIdx: index('idx_admin_user_sessions_expires_at').on(table.expiresAt),
+  })
+);
+
 /**
  * 任务创建会话表
  * 

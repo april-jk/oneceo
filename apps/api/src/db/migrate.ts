@@ -13,6 +13,10 @@ type SchemaReadinessReport = {
 };
 
 const REQUIRED_TABLES = [
+  'app_users',
+  'app_user_sessions',
+  'admin_users',
+  'admin_user_sessions',
   'task_creation_sessions',
   'conversation_messages',
   'task_session_recent_messages',
@@ -50,6 +54,19 @@ const REQUIRED_TABLES = [
 ] as const;
 
 const REQUIRED_COLUMNS = [
+  ['app_users', 'email'],
+  ['app_users', 'password_hash'],
+  ['app_users', 'display_name'],
+  ['app_user_sessions', 'user_id'],
+  ['app_user_sessions', 'session_token_hash'],
+  ['app_user_sessions', 'expires_at'],
+  ['admin_users', 'login_name'],
+  ['admin_users', 'password_hash'],
+  ['admin_users', 'display_name'],
+  ['admin_users', 'role'],
+  ['admin_user_sessions', 'admin_user_id'],
+  ['admin_user_sessions', 'session_token_hash'],
+  ['admin_user_sessions', 'expires_at'],
   ['conversation_messages', 'message_key'],
   ['conversation_messages', 'timeline_cursor'],
   ['conversation_messages', 'runtime_generation'],
@@ -160,6 +177,10 @@ const REQUIRED_COLUMNS = [
 ] as const;
 
 const REQUIRED_INDEXES = [
+  'idx_app_users_email',
+  'idx_app_user_sessions_token_hash',
+  'idx_admin_users_login_name',
+  'idx_admin_user_sessions_token_hash',
   'idx_conversation_messages_session_message_key',
   'idx_conversation_messages_session_timeline',
   'idx_task_session_recent_messages_session_message_key',
@@ -538,6 +559,67 @@ WHERE bindings.profile_id IS NULL
 
 const createTablesSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_user_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
+  user_agent TEXT,
+  ip_address TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  login_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'admin',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS admin_user_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id UUID NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
+  user_agent TEXT,
+  ip_address TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
+CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_sessions_token_hash ON app_user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_login_name ON admin_users(login_name);
+CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role);
+CREATE INDEX IF NOT EXISTS idx_admin_users_status ON admin_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_user_sessions_token_hash ON admin_user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_admin_user_sessions_admin_user_id ON admin_user_sessions(admin_user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_user_sessions_expires_at ON admin_user_sessions(expires_at);
 
 -- 任务创建会话表
 CREATE TABLE IF NOT EXISTS task_creation_sessions (

@@ -48,6 +48,29 @@ class FakeRedisPort implements RedisCommandPort {
     next?.delete(member);
   }
 
+  async deleteByPrefix(prefix: string) {
+    let deleted = 0;
+    for (const key of Array.from(this.json.keys())) {
+      if (key.startsWith(prefix)) {
+        this.json.delete(key);
+        deleted += 1;
+      }
+    }
+    for (const key of Array.from(this.strings.keys())) {
+      if (key.startsWith(prefix)) {
+        this.strings.delete(key);
+        deleted += 1;
+      }
+    }
+    for (const key of Array.from(this.streams.keys())) {
+      if (key.startsWith(prefix)) {
+        this.streams.delete(key);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   async appendStream(key: string, fields: Record<string, string | number | boolean | null | undefined>) {
     const entries = this.streams.get(key) || [];
     entries.push({

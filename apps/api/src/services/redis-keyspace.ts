@@ -69,6 +69,10 @@ export function hashRedisKeyPart(value: string) {
   return createHash('sha1').update(String(value || '')).digest('hex').slice(0, 16);
 }
 
+export function redisSessionScopePrefix(input: RedisSessionScope) {
+  return scopePrefix(input);
+}
+
 export const redisKeyspace = {
   userIdempotency(input: RedisUserScope & { operation: string; requestHash: string }) {
     return `${userPrefix(input)}:idempotency:${ensureSegment(input.operation, 'operation')}:${ensureSegment(

@@ -34,6 +34,7 @@ import {
 } from './opencode-question-adapter';
 import { DEFAULT_CODEX_MODEL } from '../utils/codex-runtime-config';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 
 type OpencodeEventListenerPayload = {
   taskSessionId: string;
@@ -3804,6 +3805,7 @@ export class OpencodeRemoteService {
       if (isSandboxNotFoundError(rawMessage)) {
         await markSandboxClosed(orchestratorSessionId);
         await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
+        await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(session.id);
         return;
       }
       if (isRecoverableEventSubscribeError(payload, rawMessage)) {
@@ -3968,6 +3970,7 @@ export class OpencodeRemoteService {
 
     if (shouldInvalidateWorkspaceCache(eventType, toolName)) {
       await taskCreationCacheStore.invalidateWorkspaceBySession(session.id);
+      await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(session.id);
     }
 
     let outcome = detectOpencodeOutcome(eventType, payload);

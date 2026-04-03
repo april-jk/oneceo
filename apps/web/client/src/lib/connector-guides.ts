@@ -149,22 +149,27 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   vercel: {
     intro:
-      "Vercel 连接器在 sandbox 外完成 token 配置，sandbox 内会直接复用该授权执行相关能力。",
+      "Vercel 连接器现在直接使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前部署还没配置 OAuth，也可以先手动填写 Personal Access Token。",
     quickLinks: [
       {
         label: "Vercel Tokens",
         href: "https://vercel.com/account/tokens",
         description: "创建或管理 access token",
       },
+      {
+        label: "Vercel MCP Docs",
+        href: "https://vercel.com/docs/agent-resources/vercel-mcp",
+        description: "查看官方 MCP 功能与授权方式",
+      },
     ],
     steps: [
-      "在 Vercel 账号设置中创建 Personal Access Token。",
-      "复制 token 并保存到连接器配置中。",
-      "sandbox 内会直接使用该 token，无需在执行时重新登录。",
+      "如果部署已配置 Vercel OAuth，优先点击连接并完成官方授权。",
+      "如果当前环境还未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
+      "保存后，sandbox 会直接通过官方 MCP 地址复用该授权。",
     ],
     tips: [
-      "建议为不同环境使用独立 token。",
-      "如果部署或项目能力异常，先检查 token 权限范围。",
+      "Team ID 仍然是可选项，用于限定团队上下文。",
+      "如果部署或项目能力异常，先检查 token 权限范围，或确认 OAuth 已授权到目标团队。",
     ],
   },
   postgres: {

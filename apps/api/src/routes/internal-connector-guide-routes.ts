@@ -11,7 +11,10 @@ function asText(value: unknown) {
 function requireInternalToken(req: express.Request, res: express.Response, next: express.NextFunction) {
   const configured = asText(process.env.ONECEO_INTERNAL_TOKEN);
   if (!configured) {
-    next();
+    res.status(403).json({
+      success: false,
+      error: getPublicErrorMessage('connector guide 内部接口未启用'),
+    });
     return;
   }
   const incoming = asText(req.header('x-oneceo-internal-token'));

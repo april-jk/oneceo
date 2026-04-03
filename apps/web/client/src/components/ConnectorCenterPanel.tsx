@@ -536,7 +536,7 @@ export function ConnectorCenterPanel({
     const currentProfile =
       connectorProfiles.find((profile) => profile.profileId === editableProfileId) || null;
     const payload = buildSavePayload(item, formState[editorKey(item.key, profileId)] || {});
-    const requiresExplicitProfileName = item.key !== "github";
+    const requiresExplicitProfileName = item.key !== "github" && item.key !== "supabase";
 
     if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error("请先填写 profile name");

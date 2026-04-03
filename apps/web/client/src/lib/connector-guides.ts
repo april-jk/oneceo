@@ -102,13 +102,8 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   supabase: {
     intro:
-      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 project ref 和 access token，sandbox 内会直接使用这些已保存的凭据。",
+      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 access token，sandbox 内会直接使用这些已保存的凭据。",
     quickLinks: [
-      {
-        label: "Supabase Project Settings",
-        href: "https://supabase.com/dashboard/project/_/settings/general",
-        description: "查看 project ref",
-      },
       {
         label: "Supabase Access Tokens",
         href: "https://supabase.com/dashboard/account/tokens",
@@ -116,16 +111,14 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
       },
     ],
     steps: [
-      "在 Supabase 控制台打开目标 project，复制 project ref。",
       "在 account tokens 页面创建或复制 access token。",
-      "把这两个值填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。",
+      "把 token 填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。",
     ],
     tips: [
       "不要把 Supabase 当作 postgres 的替代项；它是独立连接器。",
+      "Profile Name 和 Display Name 都可以留空，系统会自动补齐默认 profile 名称。",
       "保存后可以附带一个 display name，方便后续在会话里识别。",
     ],
-    exampleLabel: "Copy Project Ref Template",
-    exampleValue: "project_ref=your-project-ref",
   },
   figma: {
     intro:

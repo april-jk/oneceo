@@ -189,6 +189,52 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function buildSupabaseProxyEnv(connectorKey: ConnectorKey): Record<string, string> {
+  if (connectorKey !== 'supabase') {
+    return {};
+  }
+
+  const proxyEnabled = toBool(
+    process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
+    true
+  );
+  if (!proxyEnabled) {
+    return {};
+  }
+
+  const httpProxy = asText(process.env.HTTP_PROXY || process.env.http_proxy);
+  const httpsProxy = asText(process.env.HTTPS_PROXY || process.env.https_proxy) || httpProxy;
+  const noProxy = asText(process.env.NO_PROXY || process.env.no_proxy);
+
+  const env: Record<string, string> = {};
+  if (httpProxy) {
+    env.HTTP_PROXY = httpProxy;
+    env.http_proxy = httpProxy;
+  }
+  if (httpsProxy) {
+    env.HTTPS_PROXY = httpsProxy;
+    env.https_proxy = httpsProxy;
+  }
+  if (noProxy) {
+    env.NO_PROXY = noProxy;
+    env.no_proxy = noProxy;
+  }
+  return env;
+}
+
+function isOsacRequestTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('OSAC 请求超时') || /request timeout/i.test(message);
+}
+
 export class SessionConnectorService {
   private asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
     const payload = message?.payload;
@@ -290,12 +336,13 @@ export class SessionConnectorService {
         transportName: 'local_stdio',
       };
     }
+    const proxyEnv = buildSupabaseProxyEnv(connectorKey);
     return {
       transport: {
         type: 'remote_sse' as const,
         url: runtimeConfig.url,
         headers: runtimeConfig.headers || {},
-        env: {},
+        env: proxyEnv,
       },
       transportName: 'remote_sse',
     };
@@ -660,6 +707,60 @@ export class SessionConnectorService {
     });
 
     try {
+      const retryCountRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRIES || 1);
+      const retryDelayRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRY_DELAY_MS || 1000);
+      const maxAttempts = 1 + (Number.isFinite(retryCountRaw) ? Math.max(0, Math.floor(retryCountRaw)) : 1);
+      const retryDelayMs = Number.isFinite(retryDelayRaw) ? Math.max(100, Math.floor(retryDelayRaw)) : 1000;
+      const requestRuntimeWithTimeoutRetry = async (input: {
+        stage: 'register_provider' | 'attach_provider_to_session';
+        message: OsacMessage;
+        match: (message: OsacMessage) => boolean;
+      }) => {
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          const startedAt = Date.now();
+          try {
+            const reply = await this.requestRuntime(runtime, input.message, input.match);
+            writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_DONE]', {
+              taskSessionId,
+              connectorKey,
+              providerId,
+              stage: input.stage,
+              attempt,
+              durationMs: Date.now() - startedAt,
+            });
+            return reply;
+          } catch (error) {
+            const timeoutError = isOsacRequestTimeoutError(error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_FAILED]', {
+              taskSessionId,
+              connectorKey,
+              providerId,
+              stage: input.stage,
+              attempt,
+              durationMs: Date.now() - startedAt,
+              timeoutError,
+              error: errorMessage,
+            }, timeoutError ? 'warn' : 'error');
+            if (timeoutError && attempt < maxAttempts) {
+              writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_RETRY]', {
+                taskSessionId,
+                connectorKey,
+                providerId,
+                stage: input.stage,
+                attempt,
+                nextAttempt: attempt + 1,
+                retryDelayMs,
+              }, 'warn');
+              await wait(retryDelayMs);
+              continue;
+            }
+            throw error;
+          }
+        }
+        throw new Error('OSAC attach stage exhausted');
+      };
+
       writeConnectorDebugLog('[CONNECTOR_ATTACH_REGISTER_PROVIDER]', {
         taskSessionId,
         connectorKey,
@@ -667,9 +768,9 @@ export class SessionConnectorService {
         runtimeSessionId: runtime.orchestratorSessionId,
         transport: providerConfig.transportName,
       });
-      await this.requestRuntime(
-        runtime,
-        {
+      await requestRuntimeWithTimeoutRetry({
+        stage: 'register_provider',
+        message: {
           type: 'REGISTER_MCP_PROVIDER',
           payload: {
             providerId,
@@ -680,19 +781,19 @@ export class SessionConnectorService {
             overwrite: true,
           },
         },
-        (message) => {
+        match: (message) => {
           const payload = this.asPayloadRecord(message);
           return message.type === 'MCP_PROVIDER_STATUS' && asText(payload.providerId) === providerId;
-        }
-      );
+        },
+      });
       writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_REGISTERED]', {
         taskSessionId,
         connectorKey,
         providerId,
       });
-      const attachReply = await this.requestRuntime(
-        runtime,
-        {
+      const attachReply = await requestRuntimeWithTimeoutRetry({
+        stage: 'attach_provider_to_session',
+        message: {
           type: 'ATTACH_MCP_PROVIDER_TO_SESSION',
           payload: {
             sessionId: runtime.orchestratorSessionId,
@@ -701,15 +802,15 @@ export class SessionConnectorService {
             enabledTools,
           },
         },
-        (message) => {
+        match: (message) => {
           const payload = this.asPayloadRecord(message);
           return (
             message.type === 'MCP_PROVIDER_STATUS' &&
             asText(payload.providerId) === providerId &&
             asText(payload.sessionId) === runtime.orchestratorSessionId
           );
-        }
-      );
+        },
+      });
       writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_ATTACHED_REPLY]', {
         taskSessionId,
         connectorKey,

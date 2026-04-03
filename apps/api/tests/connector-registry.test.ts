@@ -112,6 +112,16 @@ test('connector registry materializes local and remote MCP configs', () => {
   assert.equal(vercelConfig.headers?.Authorization, 'Bearer vercel-token');
   assert.equal(vercelConfig.headers?.['X-Test'], '1');
   assert.equal(new URL(vercelConfig.url || '').searchParams.get('teamId'), 'team_123');
+
+  const supabaseConfig = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'supabase',
+    account: buildAccount('supabase', { accessToken: 'supabase-token' }),
+  });
+  assert.equal(supabaseConfig.type, 'remote');
+  assert.equal(supabaseConfig.headers?.Authorization, 'Bearer supabase-token');
+  assert.equal(new URL(supabaseConfig.url || '').origin, 'https://mcp.supabase.com');
+  assert.equal(new URL(supabaseConfig.url || '').pathname, '/mcp');
+  assert.equal(new URL(supabaseConfig.url || '').searchParams.has('project_ref'), false);
 });
 
 test('connector registry fails fast when remote adapter is unavailable', () => {

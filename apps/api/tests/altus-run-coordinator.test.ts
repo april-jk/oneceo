@@ -46,6 +46,29 @@ function createSseResponse(blocks: string[]) {
   });
 }
 
+test('readStreamedModelChoice emits assistant delta callbacks while accumulating final content', async () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const assistantDeltas: Array<{ delta: string; fullText: string }> = [];
+
+  const result = await (coordinator as any).readStreamedModelChoice({
+    response: createSseResponse([
+      'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"，世界"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ]),
+    signal: new AbortController().signal,
+    onAssistantTextDelta: async (deltaText: string, fullText: string) => {
+      assistantDeltas.push({ delta: deltaText, fullText });
+    },
+  });
+
+  assert.equal(result.content, '你好，世界');
+  assert.deepEqual(assistantDeltas, [
+    { delta: '你好', fullText: '你好' },
+    { delta: '，世界', fullText: '你好，世界' },
+  ]);
+});
+
 test('execute completes after tool round and final assistant response', async () => {
   const state = createState('run-coordinator-complete', 'session-coordinator-complete');
   const setupCalls: Record<string, unknown>[] = [];
@@ -193,12 +216,13 @@ test('execute completes after tool round and final assistant response', async ()
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'tool_call_started', 'tool_call_completed', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
+    ['run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
   );
-  assert.equal(eventCalls[1]?.payload.toolName, 'write_file');
+  assert.equal(eventCalls[0]?.payload.status, 'starting');
   assert.equal(eventCalls[2]?.payload.toolName, 'write_file');
-  assert.equal(eventCalls[4]?.payload.toolName, 'complete_task');
+  assert.equal(eventCalls[3]?.payload.toolName, 'write_file');
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
+  assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
 });
 
 test('execute injects skill catalog prompt before active skill body', async () => {
@@ -447,7 +471,7 @@ test('execute does not complete on plain assistant text and continues until comp
   assert.equal((setupCalls[0] as any).input.content, '已确认当前工作空间为空，尚未进行文件创建。\n\n验证:\n- 工作空间目录已检查');
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
+    ['run_status', 'run_status', 'run_status', 'tool_call_started', 'tool_call_completed', 'assistant_message']
   );
 });
 
@@ -559,9 +583,9 @@ test('execute requests clarification and transitions to waiting_user', async () 
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'tool_call_started', 'clarification_requested']
+    ['run_status', 'run_status', 'tool_call_started', 'clarification_requested']
   );
-  assert.equal(eventCalls[2]?.payload.question, '你希望是网页版本还是原生版本？');
+  assert.equal(eventCalls[3]?.payload.question, '你希望是网页版本还是原生版本？');
 });
 
 test('execute converts plain assistant clarification into waiting_user', async () => {
@@ -657,9 +681,9 @@ test('execute converts plain assistant clarification into waiting_user', async (
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
-    ['run_status', 'clarification_requested']
+    ['run_status', 'run_status', 'clarification_requested']
   );
-  assert.equal(eventCalls[1]?.payload.question, '你希望优化哪些方面？比如颜色、布局还是动画？');
+  assert.equal(eventCalls[2]?.payload.question, '你希望优化哪些方面？比如颜色、布局还是动画？');
 });
 
 test('execute retries transient upstream timeout before completing', async () => {

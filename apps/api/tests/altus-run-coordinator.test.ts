@@ -1161,6 +1161,264 @@ test('execute recovers from connector guide block by loading the guide and retry
   );
 });
 
+test('execute recovers from connector guide block by loading the guide and retrying the vercel mcp tool', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'list_projects');
+  const state = new AltusRunState({
+    runId: 'run-coordinator-vercel-guide-retry',
+    sessionId: 'session-coordinator-vercel-guide-retry',
+    userId: 'user-1',
+    model: 'altus-model',
+    userInput: '读取一个 Vercel 项目基础信息',
+    sessionTitle: 'Vercel connector guide retry',
+    connectors: [
+      {
+        connectorKey: 'vercel',
+        attached: true,
+        desiredState: 'attached',
+        runtimeStatus: 'connected',
+      },
+    ],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'list_projects' }],
+      },
+    ],
+    skillCatalog: [],
+    skills: [],
+  });
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-vercel-guide-retry',
+      workspaceRoot: '/workspace/session-coordinator-vercel-guide-retry',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
+      assert.match(systemPrompt, /# Connector MCP Instructions/);
+      assert.match(systemPrompt, /## vercel/);
+      return [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: input },
+      ];
+    }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  const buildPromptSectionsMock = mock.method(connectorGuideService, 'buildPromptSections', async () => ({
+    instructionsSection: '# Connector MCP Instructions\n\n## vercel\nRead the vercel guide first.',
+    reminderSection: '# Relevant Connector Guides\n\n- vercel guide active.',
+    activeGuides: [
+      {
+        connectorKey: 'vercel',
+        policyId: 'policy-vercel',
+        revisionId: 'rev-vercel-1',
+        triggerMode: 'on_attach',
+        serverInstructionsMarkdown: 'Read the vercel guide first.',
+        guideReminderMarkdown: 'vercel guide active.',
+        blockingRulesMarkdown: 'Verify project and environment before writes.',
+      },
+    ],
+  }));
+  const getActiveGuideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Read the vercel guide first.',
+      guideReminderMarkdown: 'vercel guide active.',
+      blockingRulesMarkdown: 'Verify project and environment before writes.',
+    };
+  });
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'list_projects',
+    result: {
+      ok: true,
+      projects: [{ id: 'prj_123', name: 'demo-app' }],
+    },
+    isError: false,
+  }));
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-vercel-direct-1',
+                    type: 'function',
+                    function: {
+                      name: managedToolName,
+                      arguments: JSON.stringify({
+                        teamId: 'team_123',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-load-vercel-guide-1',
+                    type: 'function',
+                    function: {
+                      name: 'load_connector_guide',
+                      arguments: JSON.stringify({
+                        connectorKey: 'vercel',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 3) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-vercel-direct-2',
+                    type: 'function',
+                    function: {
+                      name: managedToolName,
+                      arguments: JSON.stringify({
+                        teamId: 'team_123',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-vercel-guide-retry-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。',
+                      verification: ['首次直连 Vercel MCP 被阻断', '加载 guide 后重试成功'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 4);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.ok(buildPromptSectionsMock.mock.callCount() >= 1);
+  assert.ok(getActiveGuideMock.mock.callCount() >= 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+
+  const failedCall = eventCalls.find((entry) => entry.eventType === 'tool_call_failed');
+  assert.ok(failedCall);
+  assert.equal(failedCall?.payload.toolName, managedToolName);
+  assert.match(String(failedCall?.payload.error || ''), /connector_guide_blocked:vercel/);
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => String(entry.payload.toolName || ''));
+  assert.deepEqual(completedToolNames, ['load_connector_guide', managedToolName, 'complete_task']);
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(
+    timelineCall.input.content,
+    '已先加载 Vercel connector guide，再成功读取 Vercel 项目信息。\n\n验证:\n- 首次直连 Vercel MCP 被阻断\n- 加载 guide 后重试成功'
+  );
+});
+
 test('execute switches to vision model when conversation contains image blocks', async () => {
   const originalVisionModel = process.env.ALTUS_MANAGED_VISION_MODEL;
   process.env.ALTUS_MANAGED_VISION_MODEL = 'qwen3-vl-plus';

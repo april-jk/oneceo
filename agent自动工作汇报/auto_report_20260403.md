@@ -195,3 +195,54 @@
 - 计划如何解决：
   - 当前 connector guide 模块的第一阶段功能需求已经由“真实会话联调 + 协调器级 block/retry 回归测试 + runtime 单测”三层证据闭环。
   - 后续再继续推进时，优先扩展到 `Supabase / Vercel` 两个 connector 的同类真实联调，而不是继续在 GitHub 上重复加同类测试。
+
+## 2026-04-03 #6 Vercel connector guide 代码层补全与环境可用性确认
+
+- 做了什么：
+  - 在 `apps/api/tests/connector-registry.test.ts` 补了 Vercel catalog / runtime config 相关断言，覆盖 remote URL 已配置时的 materialize 逻辑，以及 `VERCEL_MCP_REMOTE_URL` 缺失时的 availability 降级提示。
+  - 在 `apps/api/tests/altus-managed-tool-runtime.test.ts` 补了 Vercel 版 runtime block 测试，验证未加载 guide 时直接调用 `list_projects` 会被 `connector_guide_blocked:vercel` 拦截，调用 `load_connector_guide` 后同一 connector 的 MCP 工具会放行。
+  - 在 `apps/api/tests/altus-run-coordinator.test.ts` 补了 Vercel 版协调器测试，完整覆盖 `blocked -> load_connector_guide -> retry vercel mcp tool -> complete_task`。
+  - 通过浏览器真实登录态调用 `/api/connectors/me` 确认当前环境下的 Vercel catalog 状态：connector 存在，但 `available=false`，原因是“部署环境未配置 Vercel MCP remote URL”。
+- 遇到什么：
+  - 当前 oneceo 运行环境里没有配置 `VERCEL_MCP_REMOTE_URL`，而且当前用户也没有 Vercel profile，因此暂时无法像 GitHub 那样继续做真实 attach + managed run 的联调。
+- 计划如何解决：
+  - 代码层面这轮已经补齐：Vercel guide、runtime block、coordinator retry、catalog availability 校验都已覆盖。
+  - 下一步若要继续做真实会话联调，需要先在部署环境补上 `VERCEL_MCP_REMOTE_URL`，并为当前用户完成 Vercel connector 授权，再复用 GitHub 的联调方法跑一轮真实 session / run 验证。
+
+## 2026-04-03 Vercel 官方 MCP 地址与 OAuth/Token 双路径收口
+
+- 做了什么：
+  - 将 `apps/api/src/connectors/definitions/vercel.ts` 改为固定使用 Vercel 官方 MCP 地址 `https://mcp.vercel.com`，不再因为 `VERCEL_MCP_REMOTE_URL` 缺失而把 catalog 判为 unavailable。
+  - 补充了可选的 Vercel OAuth provider 解析逻辑；若部署配置 `VERCEL_CONNECTOR_CLIENT_ID / VERCEL_CONNECTOR_CLIENT_SECRET`，平台会切到 OAuth 模式。
+  - 在 `apps/api/src/services/user-connector-service.ts` 补上通用 PKCE 支持，并为 Vercel OAuth 回调增加 `code_verifier` 兑换与用户信息回填。
+  - 更新了 `apps/web/client/src/lib/connector-guides.ts` 与 `apps/.env.example`，明确 Vercel 默认直连官方 MCP，OAuth 是可选增强路径。
+  - 跑通 4 组定向测试：`connector-registry.test.ts`、`user-connector-service.test.ts`、`altus-managed-tool-runtime.test.ts`、`altus-run-coordinator.test.ts`，共 `23/23` 通过。
+  - 用服务层直接核对当前真实用户 `c2f3b1e7-fcea-4585-a37d-b7aa6490addc` 的 connector 视图，确认 `vercel` 已从此前的 `unavailable` 变为 `authStatus=not_configured`，说明平台现在允许直接配置和连接。
+  - 额外直连检查 `https://mcp.vercel.com`，返回 `401 invalid_token` 且带 `resource_metadata`，证明官方 endpoint 在线并按 OAuth-protected resource 规范响应。
+- 遇到什么：
+  - 当前本地/部署环境里仍没有现成的 Vercel OAuth client，也没有当前用户可直接复用的 Vercel token，所以还不能像 GitHub 一样把真实 attach + managed run 联调完整跑穿。
+- 计划如何解决：
+  - 如果继续做真实 Vercel 联调，下一步只差一项真实授权材料：要么当前用户在连接器页手动保存一个有效的 Vercel Personal Access Token，要么部署补上 Vercel OAuth client 后走一次官方 OAuth。
+  - 一旦拿到真实授权，我会继续沿用 GitHub 的联调方法，验证 `attach -> task_session_connector_guides -> load_connector_guide -> vercel MCP tool` 的真实闭环。
+
+## 2026-04-03 Vercel 改为官方 OAuth 单路径方案整理
+
+- 做了什么：
+  - 根据用户新要求，重新收敛了 Vercel connector 目标行为：不再以手动 token 作为用户主路径，而是完全对齐 Manus 的“点击连接 -> 官方 OAuth -> 回调完成授权”模式。
+  - 新增待审文档 `20260403_Vercel连接器改为官方OAuth直连方案_[尚未采用_暂未实现-因VercelOAuthIntegration审核严格暂未申请].md`，明确了目标链路、受影响模块、实现范围、测试要求和唯一前置条件。
+- 遇到什么：
+  - 这次需求已经改变了产品边界，不再是“补齐 Vercel connector 可用性”，而是“收敛到 OAuth 单路径”。这不应该继续沿用前一轮的 token/OAuth 双路径方案直接往下写，需要先经用户确认。
+- 计划如何解决：
+  - 待用户审核该方案后，再进入代码实施。
+  - 实施前置条件不变：平台需要准备 `VERCEL_CONNECTOR_CLIENT_ID / VERCEL_CONNECTOR_CLIENT_SECRET`，否则无法真正完成官方 OAuth 闭环。
+
+## 2026-04-03 Vercel OAuth 单路径方案暂停落地记录
+
+- 做了什么：
+  - 根据最新决定，把 Vercel 单路径 OAuth 方案文档标题更新为带阻塞原因的状态文档，明确“暂未实现，因 Vercel OAuth integration 审核严格暂未申请”。
+  - 准备同步到 TODO 索引与 GitHub issue，避免后续遗漏这条外部前置条件。
+- 遇到什么：
+  - 当前阻塞不在代码，而在外部平台审批：没有正式申请到可用的 Vercel OAuth integration，就无法完成 Manus 式授权闭环。
+- 计划如何解决：
+  - 先将阻塞原因和后续动作沉淀到 TODO 与 issue。
+  - 等拿到 `client_id / client_secret` 后，再恢复该方案实施。

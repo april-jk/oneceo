@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   connectorAuthRequestDAO,
   userConnectorProfileDAO,
@@ -66,6 +66,20 @@ type CompleteOauthInput = {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function base64Url(input: Buffer): string {
+  return input
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = base64Url(randomBytes(48));
+  const challenge = base64Url(createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
 }
 
 function toIso(value: unknown): string | null {
@@ -180,6 +194,25 @@ function buildSecretPayload(
     refreshToken: asText(credentials.refreshToken) || asText(current.refreshToken) || undefined,
     tokenType: asText(credentials.tokenType) || asText(current.tokenType) || undefined,
     scope: asText(credentials.scope) || asText(current.scope) || undefined,
+  };
+}
+
+async function resolveVercelProfile(accessToken: string): Promise<{ displayName?: string }> {
+  const payload = await fetchJson('https://api.vercel.com/www/user', {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'User-Agent': 'oneceo-connectors',
+    },
+  });
+  const user =
+    payload.user && typeof payload.user === 'object'
+      ? (payload.user as Record<string, unknown>)
+      : payload;
+  return {
+    displayName:
+      asText(user.username) || asText(user.name) || asText(user.email) || undefined,
   };
 }
 
@@ -629,6 +662,7 @@ export class UserConnectorService {
     }
     const state = randomUUID();
     const requestId = randomUUID();
+    const pkce = provider.pkceMethod === 'S256' ? createPkcePair() : null;
     await connectorAuthRequestDAO.create({
       requestId,
       userId,
@@ -636,7 +670,7 @@ export class UserConnectorService {
       profileId,
       provider: provider.provider,
       state,
-      codeVerifier: randomUUID(),
+      codeVerifier: pkce?.verifier || null,
       returnToSessionId: asText(input.returnToSessionId) || null,
       status: 'pending',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
@@ -652,6 +686,10 @@ export class UserConnectorService {
     }
     for (const [key, value] of Object.entries(provider.authorizationExtraParams || {})) {
       authUrl.searchParams.set(key, value);
+    }
+    if (provider.pkceMethod === 'S256' && pkce) {
+      authUrl.searchParams.set('code_challenge_method', 'S256');
+      authUrl.searchParams.set('code_challenge', pkce.challenge);
     }
     return {
       requestId,
@@ -690,6 +728,13 @@ export class UserConnectorService {
         code: input.code,
         redirect_uri: input.redirectUri,
       };
+      if (provider.pkceMethod === 'S256') {
+        const codeVerifier = asText(request.codeVerifier);
+        if (!codeVerifier) {
+          throw new Error('OAuth 请求缺少 PKCE code_verifier');
+        }
+        body.code_verifier = codeVerifier;
+      }
       if (provider.tokenClientAuth !== 'basic') {
         body.client_id = provider.clientId;
         body.client_secret = provider.clientSecret;
@@ -759,6 +804,12 @@ export class UserConnectorService {
             'GitHub App 已授权，但当前账号下没有任何可用安装。请先在 GitHub 安装该 App 或批准安装更新后，再重新连接。';
           secretCiphertext = null;
           lastAuthAt = null;
+        }
+      } else if (connectorKey === 'vercel') {
+        const vercelProfile = await resolveVercelProfile(accessToken);
+        displayName = vercelProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'Vercel Default' || profile.profileName === 'Vercel') {
+          profileName = displayName || 'Vercel';
         }
       }
 

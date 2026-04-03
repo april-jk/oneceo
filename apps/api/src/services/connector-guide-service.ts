@@ -88,6 +88,16 @@ type ConnectorGuidePromptSections = {
   reminderSection: string;
 };
 
+export type ActiveConnectorGuide = {
+  connectorKey: string;
+  policyId: string;
+  revisionId: string;
+  triggerMode: string;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -406,9 +416,23 @@ export class ConnectorGuideService {
   }
 
   async getBlockingRulesForConnector(taskSessionId: string, connectorKey: string) {
+    const guide = await this.getActiveGuideForConnector(taskSessionId, connectorKey);
+    return guide ? guide.blockingRulesMarkdown : '';
+  }
+
+  async getActiveGuideForConnector(taskSessionId: string, connectorKey: string): Promise<ActiveConnectorGuide | null> {
     const guides = await connectorGuideDAO.listSessionGuides(taskSessionId);
     const matched = guides.find((item) => item.sessionGuide.connectorKey === connectorKey);
-    return matched ? asText(matched.revision.blockingRulesMarkdown) : '';
+    if (!matched) return null;
+    return {
+      connectorKey: matched.sessionGuide.connectorKey,
+      policyId: matched.sessionGuide.policyId,
+      revisionId: matched.sessionGuide.revisionId,
+      triggerMode: matched.sessionGuide.triggerMode,
+      serverInstructionsMarkdown: asText(matched.revision.serverInstructionsMarkdown),
+      guideReminderMarkdown: asText(matched.revision.guideReminderMarkdown),
+      blockingRulesMarkdown: asText(matched.revision.blockingRulesMarkdown),
+    };
   }
 
   async ensureBuiltinPolicies() {

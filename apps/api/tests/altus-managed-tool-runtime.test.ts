@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
+import { connectorGuideService } from '../src/services/connector-guide-service';
+import { osacAgentService } from '../src/services/osac-agent-service';
+import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 
 afterEach(() => {
   mock.reset();
@@ -74,4 +77,99 @@ test('load_skill_resource rejects inactive or non-selected skills', async () => 
     }),
     /load_skill_resource_skill_not_active/
   );
+});
+
+test('load_connector_guide returns the active connector guide and unlocks later mcp calls', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-1', 'create_repository');
+  const guideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async () => ({
+    connectorKey: 'github',
+    policyId: 'policy-1',
+    revisionId: 'rev-9',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: 'Inspect repo scope first.',
+    guideReminderMarkdown: 'GitHub guide active.',
+    blockingRulesMarkdown: 'Verify target repo before writes.',
+  }));
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-1',
+    toolName: 'create_repository',
+    result: { ok: true },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'github',
+        providerId: 'provider-1',
+        tools: [{ providerId: 'provider-1', toolName: 'create_repository' }],
+      },
+    ],
+  });
+
+  const guideResult = await runtime.execute('load_connector_guide', {
+    connectorKey: 'github',
+  });
+
+  assert.equal(guideResult.type, 'result');
+  const guidePayload = JSON.parse(guideResult.content);
+  assert.equal(guidePayload.connectorKey, 'github');
+  assert.equal(guidePayload.revisionId, 'rev-9');
+
+  const toolResult = await runtime.execute(managedToolName, {
+    name: 'demo-repo',
+  });
+
+  assert.equal(toolResult.type, 'result');
+  const payload = JSON.parse(toolResult.content);
+  assert.deepEqual(payload.result, { ok: true });
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.equal(guideMock.mock.callCount(), 2);
+});
+
+test('mcp tool call is blocked until active connector guide is loaded', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-1', 'create_repository');
+  const guideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async () => ({
+    connectorKey: 'github',
+    policyId: 'policy-1',
+    revisionId: 'rev-2',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: 'Inspect repo scope first.',
+    guideReminderMarkdown: 'GitHub guide active.',
+    blockingRulesMarkdown: 'Verify target repo before writes.',
+  }));
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-1',
+    toolName: 'create_repository',
+    result: { ok: true },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'github',
+        providerId: 'provider-1',
+        tools: [{ providerId: 'provider-1', toolName: 'create_repository' }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute(managedToolName, {
+      name: 'demo-repo',
+    }),
+    /connector_guide_blocked:github/
+  );
+
+  assert.equal(mcpMock.mock.callCount(), 0);
+  assert.equal(guideMock.mock.callCount(), 1);
 });

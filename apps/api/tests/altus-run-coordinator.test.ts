@@ -4,6 +4,9 @@ import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-me
 import { AltusRunCoordinator } from '../src/services/altus-run-coordinator';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { AltusRunState } from '../src/services/altus-run-state';
+import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
+import { connectorGuideService } from '../src/services/connector-guide-service';
+import { osacAgentService } from '../src/services/osac-agent-service';
 
 const originalFetch = global.fetch;
 
@@ -21,6 +24,7 @@ function createState(runId: string, sessionId: string) {
     userInput: '帮我开发 2048 小游戏',
     sessionTitle: 'Build 2048',
     connectors: [],
+    mcpProviders: [],
     skillCatalog: [],
     skills: [],
   });
@@ -68,7 +72,7 @@ test('execute completes after tool round and final assistant response', async ()
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
       eventCalls.push({ eventType, payload });
       return {
         sequence: eventCalls.length,
@@ -342,7 +346,7 @@ test('execute does not complete on plain assistant text and continues until comp
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
       eventCalls.push({ eventType, payload });
       return {
         sequence: eventCalls.length,
@@ -470,7 +474,7 @@ test('execute requests clarification and transitions to waiting_user', async () 
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
       eventCalls.push({ eventType, payload });
       return {
         sequence: eventCalls.length,
@@ -583,7 +587,7 @@ test('execute converts plain assistant clarification into waiting_user', async (
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
       eventCalls.push({ eventType, payload });
       return {
         sequence: eventCalls.length,
@@ -677,7 +681,7 @@ test('execute retries transient upstream timeout before completing', async () =>
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _eventType: string, payload: Record<string, unknown>) => ({
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
       sequence: 1,
       payload,
     })),
@@ -786,7 +790,7 @@ test('execute consumes streamed tool_call chunks and emits tool_call_progress', 
   };
 
   const eventWriter = {
-    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, eventType: string, payload: Record<string, unknown>) => {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
       eventCalls.push({ eventType, payload });
       return {
         sequence: eventCalls.length,
@@ -899,6 +903,264 @@ test('execute consumes streamed tool_call chunks and emits tool_call_progress', 
   );
 });
 
+test('execute recovers from connector guide block by loading the guide and retrying the github mcp tool', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-1', 'search_repositories');
+  const state = new AltusRunState({
+    runId: 'run-coordinator-connector-guide-retry',
+    sessionId: 'session-coordinator-connector-guide-retry',
+    userId: 'user-1',
+    model: 'altus-model',
+    userInput: '读取一个 GitHub 仓库基础信息',
+    sessionTitle: 'GitHub connector guide retry',
+    connectors: [
+      {
+        connectorKey: 'github',
+        attached: true,
+        desiredState: 'attached',
+        runtimeStatus: 'connected',
+      },
+    ],
+    mcpProviders: [
+      {
+        connectorKey: 'github',
+        providerId: 'provider-1',
+        tools: [{ providerId: 'provider-1', toolName: 'search_repositories' }],
+      },
+    ],
+    skillCatalog: [],
+    skills: [],
+  });
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-guide-retry',
+      workspaceRoot: '/workspace/session-coordinator-connector-guide-retry',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
+      assert.match(systemPrompt, /# Connector MCP Instructions/);
+      assert.match(systemPrompt, /# Relevant Connector Guides/);
+      return [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: input },
+      ];
+    }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  const buildPromptSectionsMock = mock.method(connectorGuideService, 'buildPromptSections', async () => ({
+    instructionsSection: '# Connector MCP Instructions\n\n## github\nRead the guide first.',
+    reminderSection: '# Relevant Connector Guides\n\n- github guide active.',
+    activeGuides: [
+      {
+        connectorKey: 'github',
+        policyId: 'policy-1',
+        revisionId: 'rev-1',
+        triggerMode: 'on_attach',
+        serverInstructionsMarkdown: 'Read the guide first.',
+        guideReminderMarkdown: 'github guide active.',
+        blockingRulesMarkdown: 'Verify target repo before writes.',
+      },
+    ],
+  }));
+  const getActiveGuideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async () => ({
+    connectorKey: 'github',
+    policyId: 'policy-1',
+    revisionId: 'rev-1',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: 'Read the guide first.',
+    guideReminderMarkdown: 'github guide active.',
+    blockingRulesMarkdown: 'Verify target repo before writes.',
+  }));
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-1',
+    toolName: 'search_repositories',
+    result: {
+      ok: true,
+      items: [{ full_name: 'april-jk/LogDesign' }],
+    },
+    isError: false,
+  }));
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-github-direct-1',
+                    type: 'function',
+                    function: {
+                      name: managedToolName,
+                      arguments: JSON.stringify({
+                        query: 'user:april-jk',
+                        perPage: 1,
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-load-guide-1',
+                    type: 'function',
+                    function: {
+                      name: 'load_connector_guide',
+                      arguments: JSON.stringify({
+                        connectorKey: 'github',
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 3) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-github-direct-2',
+                    type: 'function',
+                    function: {
+                      name: managedToolName,
+                      arguments: JSON.stringify({
+                        query: 'user:april-jk',
+                        perPage: 1,
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-guide-retry-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已先加载 connector guide，再成功读取 GitHub 仓库信息。',
+                      verification: ['首次直连 GitHub MCP 被阻断', '加载 guide 后重试成功'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 4);
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.ok(buildPromptSectionsMock.mock.callCount() >= 1);
+  assert.ok(getActiveGuideMock.mock.callCount() >= 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const failedCall = eventCalls.find((entry) => entry.eventType === 'tool_call_failed');
+  assert.ok(failedCall);
+  assert.equal(failedCall?.payload.toolName, managedToolName);
+  assert.match(String(failedCall?.payload.error || ''), /connector_guide_blocked:github/);
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => String(entry.payload.toolName || ''));
+  assert.deepEqual(completedToolNames, ['load_connector_guide', managedToolName, 'complete_task']);
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(
+    timelineCall.input.content,
+    '已先加载 connector guide，再成功读取 GitHub 仓库信息。\n\n验证:\n- 首次直连 GitHub MCP 被阻断\n- 加载 guide 后重试成功'
+  );
+});
+
 test('execute switches to vision model when conversation contains image blocks', async () => {
   const originalVisionModel = process.env.ALTUS_MANAGED_VISION_MODEL;
   process.env.ALTUS_MANAGED_VISION_MODEL = 'qwen3-vl-plus';
@@ -926,7 +1188,7 @@ test('execute switches to vision model when conversation contains image blocks',
     };
 
     const eventWriter = {
-      appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _eventType: string, payload: Record<string, unknown>) => ({
+      appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
         sequence: 1,
         payload,
       })),

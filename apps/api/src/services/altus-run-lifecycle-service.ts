@@ -3,6 +3,7 @@ import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-ru
 import { AltusRunState } from './altus-run-state';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
+import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
 
 const RUN_COMPLETED_TEXT = 'managed run 已完成';
 const RUN_STOPPED_TEXT = '已停止当前处理';
@@ -11,7 +12,8 @@ export class AltusRunLifecycleService {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
-    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
   ) {}
 
   async markRunning(state: AltusRunState) {
@@ -35,6 +37,25 @@ export class AltusRunLifecycleService {
       status: 'running',
       startedAt: state.startedAt || new Date(),
     });
+    await this.redisStateService.setRecoverySnapshot({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+      model: state.input.model,
+      status: 'running',
+      sandbox: {
+        sandboxId: state.sandboxId,
+        workspaceRoot: state.workspaceRoot,
+        reused: state.sandboxReused,
+        updatedAt: new Date(),
+      },
+      connectorRuntime: {
+        providerIds: state.input.mcpProviders
+          .map((item) => typeof item?.providerId === 'string' ? item.providerId.trim() : '')
+          .filter(Boolean),
+        updatedAt: new Date(),
+      },
+    });
     await this.eventWriter.appendRunEvent(state.input.runId, state.input.sessionId, state.input.userId, 'run_status', {
       status: 'running',
       content: state.sandboxReused ? '已复用会话 sandbox，开始执行' : '已创建新的 sandbox，开始执行',
@@ -52,6 +73,7 @@ export class AltusRunLifecycleService {
       model: state.input.model,
       status: 'waiting_user',
     });
+    await this.recoveryService.reconcileRunById(state.input.runId);
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'waiting_user',
       stage: 'clarifying',
@@ -73,6 +95,16 @@ export class AltusRunLifecycleService {
       model: state.input.model,
       status: 'completed',
       completedAt: state.completedAt || new Date(),
+    });
+    await this.redisStateService.clearStopRequest({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+    });
+    await this.redisStateService.clearRecoverySnapshot({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
     });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'completed',
@@ -124,6 +156,16 @@ export class AltusRunLifecycleService {
       completedAt: state.completedAt || new Date(),
       stopReason: reason,
     });
+    await this.redisStateService.clearStopRequest({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+    });
+    await this.redisStateService.clearRecoverySnapshot({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+    });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'in_progress',
       stage: 'collecting',
@@ -168,6 +210,16 @@ export class AltusRunLifecycleService {
       status: 'failed',
       completedAt: state.completedAt || new Date(),
       stopReason: message,
+    });
+    await this.redisStateService.clearStopRequest({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
+    });
+    await this.redisStateService.clearRecoverySnapshot({
+      runId: state.input.runId,
+      sessionId: state.input.sessionId,
+      userId: state.input.userId,
     });
     await this.setupService.updateSessionLifecycle(state.input.sessionId, {
       status: 'failed',

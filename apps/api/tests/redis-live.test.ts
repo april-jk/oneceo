@@ -10,7 +10,7 @@ function getRedisUrl() {
   return String(process.env.REDIS_URL || '').trim();
 }
 
-test('live redis integration writes run state and stream entries', async (t) => {
+test('live redis integration writes run state, recovery snapshot and terminal cleanup', async (t) => {
   process.env.ONECEO_REDIS_ENABLED = 'true';
   const redisUrl = getRedisUrl();
   if (!redisUrl) {
@@ -92,6 +92,11 @@ test('live redis integration writes run state and stream entries', async (t) => 
     sessionId,
     runId,
   });
+  const recoveryKey = redisKeyspace.runRecovery({
+    tenantKey,
+    sessionId,
+    runId,
+  });
   const activeRunsKey = redisKeyspace.activeRuns(tenantKey);
   const streamKey = redisKeyspace.runEventsStream({
     tenantKey,
@@ -118,6 +123,39 @@ test('live redis integration writes run state and stream entries', async (t) => 
     streamRows.some((row) => row?.[1]?.includes('eventType') && row?.[1]?.includes('run_status')),
     true
   );
+
+  await service.setRecoverySnapshot({
+    userId,
+    sessionId,
+    runId,
+    status: 'running',
+    sequence: 1,
+    model: 'live-model',
+    sandbox: {
+      sandboxId: 'sandbox-live',
+      workspaceRoot: '/workspace',
+      reused: true,
+      updatedAt: new Date('2026-04-03T12:00:00.000Z'),
+    },
+    connectorRuntime: {
+      providerIds: ['provider-live'],
+      updatedAt: new Date('2026-04-03T12:00:01.000Z'),
+    },
+    stream: {
+      latestSequence: 1,
+      latestEventType: 'run_status',
+    },
+  });
+  const recoveryRaw = await raw.get(recoveryKey);
+  assert.ok(recoveryRaw);
+  const recovery = JSON.parse(recoveryRaw) as {
+    status: string;
+    connectorRuntime: { providerIds: string[] };
+    stream: { latestSequence: number };
+  };
+  assert.equal(recovery.status, 'running');
+  assert.deepEqual(recovery.connectorRuntime.providerIds, ['provider-live']);
+  assert.equal(recovery.stream.latestSequence, 1);
 
   await service.requestStop(
     {
@@ -149,6 +187,19 @@ test('live redis integration writes run state and stream entries', async (t) => 
   assert.ok(terminalStateRaw);
   const terminalState = JSON.parse(terminalStateRaw) as { status: string };
   assert.equal(terminalState.status, 'completed');
+
+  await service.clearStopRequest({
+    userId,
+    sessionId,
+    runId,
+  });
+  await service.clearRecoverySnapshot({
+    userId,
+    sessionId,
+    runId,
+  });
+  assert.equal(await raw.get(stopKey), null);
+  assert.equal(await raw.get(recoveryKey), null);
 });
 
 test('live redis integration writes session workspace cache, recent page and session-event stream', async (t) => {

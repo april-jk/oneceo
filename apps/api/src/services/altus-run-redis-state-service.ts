@@ -24,6 +24,31 @@ type RunStatusSnapshot = {
   updatedAt: string;
 };
 
+export type RunRecoverySnapshot = {
+  tenantKey: string;
+  userId: string;
+  sessionId: string;
+  runId: string;
+  model?: string | null;
+  status: Extract<ManagedRunStatus, 'queued' | 'running' | 'waiting_user'>;
+  sequence: number;
+  sandbox: {
+    sandboxId: string | null;
+    workspaceRoot: string | null;
+    reused: boolean;
+    updatedAt: string | null;
+  };
+  connectorRuntime: {
+    providerIds: string[];
+    updatedAt: string | null;
+  };
+  stream: {
+    latestSequence: number;
+    latestEventType: string | null;
+  };
+  updatedAt: string;
+};
+
 type RunEventEnvelope = {
   tenantKey: string;
   userId: string;
@@ -88,6 +113,95 @@ export class AltusRunRedisStateService {
       stopReason: input.stopReason || null,
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  async getRunState(input: RunRedisContext) {
+    const scope = this.buildScope(input);
+    return this.redis.getJson<RunStatusSnapshot>(redisKeyspace.runState(scope));
+  }
+
+  async setRecoverySnapshot(input: RunRedisContext & {
+    status: Extract<ManagedRunStatus, 'queued' | 'running' | 'waiting_user'>;
+    sequence?: number;
+    model?: string | null;
+    sandbox?: {
+      sandboxId?: string | null;
+      workspaceRoot?: string | null;
+      reused?: boolean;
+      updatedAt?: Date | string | null;
+    };
+    connectorRuntime?: {
+      providerIds?: string[];
+      updatedAt?: Date | string | null;
+    };
+    stream?: {
+      latestSequence?: number;
+      latestEventType?: string | null;
+    };
+  }) {
+    const scope = this.buildScope(input);
+    const existing = await this.getRecoverySnapshot(scope);
+    const next = {
+      tenantKey: scope.tenantKey,
+      userId: scope.userId,
+      sessionId: scope.sessionId,
+      runId: scope.runId,
+      model: input.model ?? existing?.model ?? null,
+      status: input.status,
+      sequence: Math.max(
+        existing?.sequence || 0,
+        Number.isFinite(input.sequence as number) ? Math.floor(Number(input.sequence || 0)) : existing?.sequence || 0
+      ),
+      sandbox: {
+        sandboxId: input.sandbox?.sandboxId ?? existing?.sandbox?.sandboxId ?? null,
+        workspaceRoot: input.sandbox?.workspaceRoot ?? existing?.sandbox?.workspaceRoot ?? null,
+        reused: input.sandbox?.reused ?? existing?.sandbox?.reused ?? false,
+        updatedAt: toIso(input.sandbox?.updatedAt) ?? existing?.sandbox?.updatedAt ?? null,
+      },
+      connectorRuntime: {
+        providerIds: Array.isArray(input.connectorRuntime?.providerIds)
+          ? input.connectorRuntime?.providerIds.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
+          : existing?.connectorRuntime?.providerIds ?? [],
+        updatedAt: toIso(input.connectorRuntime?.updatedAt) ?? existing?.connectorRuntime?.updatedAt ?? null,
+      },
+      stream: {
+        latestSequence: Math.max(
+          existing?.stream?.latestSequence || 0,
+          Number.isFinite(input.stream?.latestSequence as number)
+            ? Math.floor(Number(input.stream?.latestSequence || 0))
+            : existing?.stream?.latestSequence || 0
+        ),
+        latestEventType: input.stream?.latestEventType ?? existing?.stream?.latestEventType ?? null,
+      },
+      updatedAt: new Date().toISOString(),
+    } satisfies RunRecoverySnapshot;
+    await this.redis.setJson(redisKeyspace.runRecovery(scope), next, redisTtlSeconds.runRecovery);
+  }
+
+  async getRecoverySnapshot(input: RunRedisContext) {
+    const scope = this.buildScope(input);
+    return this.redis.getJson<RunRecoverySnapshot>(redisKeyspace.runRecovery(scope));
+  }
+
+  async clearRecoverySnapshot(input: RunRedisContext) {
+    const scope = this.buildScope(input);
+    await this.redis.delete(redisKeyspace.runRecovery(scope));
+  }
+
+  async clearStopRequest(input: RunRedisContext) {
+    const scope = this.buildScope(input);
+    await this.redis.delete(redisKeyspace.runStop(scope));
+  }
+
+  async listActiveRuns(tenantKey: string) {
+    const normalized = deriveTenantKeyForRedis(tenantKey, tenantKey);
+    return this.redis.listSetMembers(redisKeyspace.activeRuns(normalized));
+  }
+
+  async hasLiveHeartbeat(input: RunRedisContext) {
+    const scope = this.buildScope(input);
+    const heartbeat = await this.redis.getString(redisKeyspace.runHeartbeat(scope));
+    return Boolean(String(heartbeat || '').trim());
   }
 
   async registerRun(input: RunRedisContext & { model?: string | null; status?: ManagedRunStatus }) {
@@ -224,6 +338,21 @@ export class AltusRunRedisStateService {
       },
       redisTtlSeconds.runState
     );
+    const existingRecovery = await this.getRecoverySnapshot(scope);
+    if (existingRecovery) {
+      await this.setRecoverySnapshot({
+        ...scope,
+        status: existingRecovery.status,
+        model: existingRecovery.model ?? null,
+        sequence: Math.max(existingRecovery.sequence || 0, envelope.sequence),
+        sandbox: existingRecovery.sandbox,
+        connectorRuntime: existingRecovery.connectorRuntime,
+        stream: {
+          latestSequence: envelope.sequence,
+          latestEventType: envelope.eventType,
+        },
+      });
+    }
   }
 
   async listRunEvents(input: RunRedisContext & { afterSequence?: number | null }) {

@@ -26,6 +26,14 @@ function shortSha(value?: string | null) {
   return text ? `${text.slice(0, 12)}...` : '-';
 }
 
+function releaseStatusLabel(status?: string | null) {
+  if (status === 'uploaded') return '已上传';
+  if (status === 'validated') return '已校验';
+  if (status === 'published') return '已发布';
+  if (status === 'failed') return '失败';
+  return status || '-';
+}
+
 async function fileToBase64(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
   let binary = '';
@@ -196,7 +204,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
           </div>
           <div className="hero-metrics">
             <div>
-              <span className="hero-metric-label">Current Published</span>
+              <span className="hero-metric-label">当前已发布</span>
               <strong>{detail?.currentPublishedVersion || publishedVersion || '-'}</strong>
             </div>
             <div>
@@ -274,7 +282,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
             </div>
             <div className="skill-form-grid">
               <label className="form-field">
-                <span>version</span>
+                <span>版本号</span>
                 <input
                   className="control-input"
                   value={uploadForm.version}
@@ -282,11 +290,11 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                 />
               </label>
               <label className="form-field">
-                <span>channel</span>
+                <span>渠道</span>
                 <input className="control-input" value={uploadForm.channel} disabled />
               </label>
               <label className="form-field field-span-2">
-                <span>sourceCommit</span>
+                <span>来源提交</span>
                 <input
                   className="control-input"
                   value={uploadForm.sourceCommit}
@@ -294,7 +302,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                 />
               </label>
               <label className="form-field field-span-2">
-                <span>releaseNotes</span>
+                <span>发布说明</span>
                 <textarea
                   className="control-textarea"
                   rows={4}
@@ -303,7 +311,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                 />
               </label>
               <label className="form-field field-span-2">
-                <span>binary</span>
+                <span>二进制文件</span>
                 <input
                   className="control-input"
                   type="file"
@@ -355,10 +363,10 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                         >
                           <td>
                             <strong>{item.version}</strong>
-                            <div className="cell-subtle">{item.id === currentPublishedReleaseId ? 'current published' : '-'}</div>
+                            <div className="cell-subtle">{item.id === currentPublishedReleaseId ? '当前已发布' : '-'}</div>
                           </td>
                           <td>
-                            <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                            <span className={`status-pill status-${item.status}`}>{releaseStatusLabel(item.status)}</span>
                           </td>
                           <td>{formatBytes(item.sizeBytes)}</td>
                           <td>{formatDateTime(item.uploadedAt)}</td>
@@ -393,21 +401,21 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               {detail?.release ? (
                 <>
                   <div className="signal-list">
-                    <p><strong>version:</strong> {detail.release.version}</p>
-                    <p><strong>status:</strong> {detail.release.status}</p>
-                    <p><strong>bucket:</strong> {detail.release.bucket}</p>
-                    <p><strong>objectKey:</strong> {detail.release.objectKey}</p>
-                    <p><strong>manifestKey:</strong> {detail.release.manifestKey}</p>
-                    <p><strong>sha256:</strong> {shortSha(detail.release.sha256)}</p>
-                    <p><strong>size:</strong> {formatBytes(detail.release.sizeBytes)}</p>
-                    <p><strong>sourceCommit:</strong> {detail.release.sourceCommit || '-'}</p>
-                    <p><strong>uploadedBy:</strong> {detail.release.uploadedBy || '-'}</p>
-                    <p><strong>uploadedAt:</strong> {formatDateTime(detail.release.uploadedAt)}</p>
-                    <p><strong>publishedAt:</strong> {formatDateTime(detail.release.publishedAt)}</p>
+                    <p><strong>版本号：</strong> {detail.release.version}</p>
+                    <p><strong>状态：</strong> {releaseStatusLabel(detail.release.status)}</p>
+                    <p><strong>存储桶：</strong> {detail.release.bucket}</p>
+                    <p><strong>对象 Key：</strong> {detail.release.objectKey}</p>
+                    <p><strong>清单 Key：</strong> {detail.release.manifestKey}</p>
+                    <p><strong>SHA256：</strong> {shortSha(detail.release.sha256)}</p>
+                    <p><strong>大小：</strong> {formatBytes(detail.release.sizeBytes)}</p>
+                    <p><strong>来源提交：</strong> {detail.release.sourceCommit || '-'}</p>
+                    <p><strong>上传人：</strong> {detail.release.uploadedBy || '-'}</p>
+                    <p><strong>上传时间：</strong> {formatDateTime(detail.release.uploadedAt)}</p>
+                    <p><strong>发布时间：</strong> {formatDateTime(detail.release.publishedAt)}</p>
                   </div>
 
                   <label className="form-field" style={{ marginTop: 16 }}>
-                    <span>releaseNotes</span>
+                    <span>发布说明</span>
                     <textarea
                       className="control-textarea"
                       rows={5}

@@ -356,10 +356,12 @@ export class OneceoApiConnector {
 
   private async request<T>(
     path: string,
-    options?: { method?: HttpMethod; body?: unknown; headers?: Record<string, string> }
+    options?: { method?: HttpMethod; body?: unknown; headers?: Record<string, string>; timeoutMs?: number; retries?: number }
   ): Promise<T> {
     const method = options?.method || 'GET';
-    const maxAttempts = Math.max(1, this.retries + 1);
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const retries = options?.retries ?? this.retries;
+    const maxAttempts = Math.max(1, retries + 1);
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -377,7 +379,7 @@ export class OneceoApiConnector {
             },
             body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
           },
-          this.timeoutMs
+          timeoutMs
         );
 
         const payload = (await response.json().catch(() => ({}))) as OneceoEnvelope<unknown>;
@@ -454,6 +456,10 @@ export class OneceoApiConnector {
     return this.request<SandboxEnvironmentRecord[]>(`/api/sandbox/environment?limit=${limit}`);
   }
 
+  listSandboxEnvironmentRegistry(limit = 20) {
+    return this.request<SandboxEnvironmentRecord[]>(`/api/internal/sandbox/environment-registry?limit=${limit}`);
+  }
+
   listTaskCreationSessions(limit = 20) {
     return this.request<TaskCreationSession[]>(`/api/task-creation/sessions?limit=${limit}`);
   }
@@ -490,9 +496,11 @@ export class OneceoApiConnector {
 
   startTaskCreationRuntime(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/runtime/start`,
+      `/api/internal/task-creation/sessions/${encodeURIComponent(sessionId)}/runtime/start`,
       {
         method: 'POST',
+        timeoutMs: 60_000,
+        retries: 0,
       }
     );
   }
@@ -516,6 +524,12 @@ export class OneceoApiConnector {
       {
         method: 'POST',
       }
+    );
+  }
+
+  getSandboxArchiveHistory(sessionId: string) {
+    return this.request<Array<Record<string, unknown>>>(
+      `/api/internal/sandbox/${encodeURIComponent(sessionId)}/archive-history`
     );
   }
 

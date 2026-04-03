@@ -516,16 +516,44 @@ function normalizeLiveSessionStage(
 }
 
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
-  const limit = clampNumber(Number(process.env.SANDBOX_RUNTIME_LOOKUP_LIMIT || 500), 50, 5000);
-  const environments = await sandboxExecutionEnvironmentDAO.listRecent(limit);
+  const environments = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 200);
+  return environments[0] || null;
+}
+
+async function reconcileTaskSessionDuplicateEnvironments(
+  taskSessionId: string,
+  activeOrchestratorSessionId: string
+) {
+  if (!taskSessionId || !activeOrchestratorSessionId) return;
+  const environments = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 200);
   for (const env of environments) {
-    const meta = (env.metadata || {}) as Record<string, unknown>;
-    const metaTaskId = typeof (meta as any).taskSessionId === 'string' ? String((meta as any).taskSessionId) : '';
-    if (metaTaskId && metaTaskId === taskSessionId) {
-      return env;
+    if (env.sessionId === activeOrchestratorSessionId || env.status === 'closed') {
+      continue;
     }
+    const metadata = ((env.metadata || {}) as Record<string, unknown>) || {};
+    const isE2b = String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
+    if (isE2b) {
+      try {
+        await e2bConnector.killSandbox(env.sessionId);
+      } catch (error) {
+        if (!isSandboxNotFoundError(error)) {
+          console.warn('[TASK_RUNTIME_DUPLICATE_KILL_FAILED]', {
+            taskSessionId,
+            staleSandboxId: env.sessionId,
+            activeOrchestratorSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    await sandboxExecutionEnvironmentDAO.updateMetadata(env.sessionId, {
+      ...metadata,
+      dedupeReplacedAt: new Date().toISOString(),
+      dedupeReason: 'task_runtime_rebound',
+      dedupeReplacementSandboxId: activeOrchestratorSessionId,
+    }).catch(() => null);
+    await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName || null).catch(() => null);
   }
-  return null;
 }
 
 async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
@@ -1064,7 +1092,7 @@ function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver
   return asText(session.mode) === 'altus' || asText(session.driver) === 'altus';
 }
 
-async function ensureTaskSessionRuntime(sessionId: string) {
+export async function ensureTaskSessionRuntime(sessionId: string) {
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
@@ -1121,6 +1149,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
         }
         await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
+        await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSED]', {
           taskSessionId: sessionId,
@@ -1173,6 +1202,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
+  await reconcileTaskSessionDuplicateEnvironments(sessionId, provision.sessionId);
 
   const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
   writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_PROVISIONED]', {
@@ -2469,7 +2499,14 @@ function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
-  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+  return (
+    normalized.includes('sandbox was not found') ||
+    normalized.includes('sandbox not found') ||
+    normalized.includes('not running anymore') ||
+    normalized.includes('guest has been shut down') ||
+    normalized.includes('instance was stopped') ||
+    normalized.includes('failed to connect to sandbox')
+  );
 }
 
 async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {

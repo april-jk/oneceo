@@ -13,9 +13,11 @@ import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
+import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
 import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-routes';
 import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
+import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -153,9 +155,11 @@ app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
 app.use('/api/connectors', connectorRoutes);
 app.use('/api/internal', internalSkillRoutes);
+app.use('/api/internal', internalSandboxRoutes);
 app.use('/api/internal', internalConnectorGuideRoutes);
 app.use('/api/internal', internalRuntimeArtifactRoutes);
 app.use('/api/internal', internalAdminAuthRoutes);
+app.use('/api/internal', internalTaskCreationRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -360,6 +364,10 @@ async function startServer() {
     void sessionMcpRecoveryService
       .recoverBacklog()
       .catch((error) => console.error('[SESSION_MCP_RECOVERY_BACKLOG_FAILED]', error));
+    // Connector guide session 重算改为监听后后台执行，避免启动前卡住端口绑定。
+    void connectorGuideService
+      .recomputeBuiltinPolicySessions()
+      .catch((error) => console.error('[CONNECTOR_GUIDE_BACKGROUND_RECOMPUTE_FAILED]', error));
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
     

@@ -75,6 +75,14 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   );
 
   router.get(
+    '/environments/:sandboxId/archive-history',
+    asyncHandler(async (req, res) => {
+      const result = await service.getArchiveHistory(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/environments/:sandboxId',
     asyncHandler(async (req, res) => {
       const result = await service.getEnvironment(req.params.sandboxId);
@@ -105,6 +113,22 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
     asyncHandler(async (req, res) => {
       const payload = createSandboxSchema.parse(req.body);
       const result = await service.createEnvironment(payload);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/open',
+    asyncHandler(async (req, res) => {
+      const result = await service.openEnvironment(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/restart',
+    asyncHandler(async (req, res) => {
+      const result = await service.restartEnvironment(req.params.sandboxId);
       return ok(res, result);
     })
   );

@@ -654,6 +654,9 @@ export interface SandboxRuntimeRegistryItem {
   createdAt?: string | null;
   updatedAt?: string | null;
   closedAt?: string | null;
+  dedupeReplacedAt?: string | null;
+  dedupeReason?: string | null;
+  dedupeReplacementSandboxId?: string | null;
   riskTags: string[];
   source: 'tracked' | 'live_only';
 }
@@ -673,6 +676,7 @@ export interface SandboxRuntimeRegistry {
     templates: Array<{ label: string; value: number }>;
     archiveStatuses: Array<{ label: string; value: number }>;
   };
+  hasMore: boolean;
   items: SandboxRuntimeRegistryItem[];
 }
 
@@ -704,7 +708,20 @@ export interface SandboxRuntimeDetail {
     lastDirtyReason?: string | null;
     restoredAt?: string | null;
   };
+  archiveHistory?: SandboxArchiveHistoryEntry[];
   metadata: Record<string, unknown>;
+}
+
+export interface SandboxArchiveHistoryEntry {
+  snapshotKey: string;
+  archiveKey?: string | null;
+  metadataKey?: string | null;
+  archivedAt: string | null;
+  sizeBytes?: number | null;
+  sha256?: string | null;
+  reason?: string | null;
+  status?: string | null;
+  isCurrent: boolean;
 }
 
 export interface E2bSandboxItem {

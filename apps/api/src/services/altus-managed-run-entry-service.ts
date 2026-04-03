@@ -16,6 +16,7 @@ import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { AltusRunState } from './altus-run-state';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
+import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -26,7 +27,8 @@ export class AltusManagedRunEntryService {
     private readonly eventWriter: AltusRunEventWriter = altusRunEventWriter,
     private readonly lifecycleService: AltusRunLifecycleService = altusRunLifecycleService,
     private readonly coordinator: AltusRunCoordinator = altusRunCoordinator,
-    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
   ) {}
 
   private getModelName() {
@@ -68,6 +70,7 @@ export class AltusManagedRunEntryService {
     }
 
     await this.setupService.ensureSessionOwnership(sessionId, userId);
+    await this.recoveryService.reconcileLatestRun(sessionId, userId);
     const activeRun = await taskSessionRunDAO.findActiveRun(sessionId);
     if (activeRun) {
       throw new Error('当前会话已有运行中的 Altus managed run');
@@ -98,6 +101,24 @@ export class AltusManagedRunEntryService {
       userId,
       model: run.model || this.getModelName(),
       status: 'queued',
+    });
+    const queuedRecovery = await this.recoveryService.buildRecoverySnapshot({
+      runId: run.id,
+      sessionId,
+      userId,
+      model: run.model || this.getModelName(),
+      status: 'queued',
+    });
+    await this.redisStateService.setRecoverySnapshot({
+      runId: run.id,
+      sessionId,
+      userId,
+      model: queuedRecovery.model || null,
+      status: 'queued',
+      sequence: queuedRecovery.sequence,
+      sandbox: queuedRecovery.sandbox,
+      connectorRuntime: queuedRecovery.connectorRuntime,
+      stream: queuedRecovery.stream,
     });
 
     const isClarificationAnswer = Boolean(asText(sessionMemory?.pendingQuestion));
@@ -154,6 +175,7 @@ export class AltusManagedRunEntryService {
 
   async getLatestRun(sessionId: string, userId: string) {
     await this.setupService.ensureSessionOwnership(sessionId, userId);
+    await this.recoveryService.reconcileLatestRun(sessionId, userId);
     const latest = await taskSessionRunDAO.getLatestRun(sessionId);
     return this.eventWriter.toSummary(latest);
   }

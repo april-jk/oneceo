@@ -1,6 +1,7 @@
 import type express from 'express';
 import { taskSessionRunDAO } from '../db/dao';
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
+import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
 
 type ManagedStreamEnvelope = {
   sequence: number;
@@ -27,13 +28,17 @@ function writeSse(res: express.Response, input: ManagedStreamEnvelope) {
 export class AltusManagedStreamService {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
 
-  constructor(private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService) {}
+  constructor(
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
+  ) {}
 
   async subscribe(
     input: { runId: string; sessionId: string; userId: string },
     res: express.Response,
     options?: { afterSequence?: number | null }
   ) {
+    await this.recoveryService.reconcileRunById(input.runId);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');

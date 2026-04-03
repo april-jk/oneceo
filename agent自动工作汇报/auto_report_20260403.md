@@ -30,3 +30,23 @@
 - 做了什么：已将 Git 相关文档拆分为“Git 操作与提交指南”和“Git 协作开发指南”两份，前者收口状态检查、同步、提交与提交说明，后者只保留多人协作、边界、冲突与跨系统约束，并已同步优化 `AGENTS.md` 引用结构。
 - 遇到什么：现有缓存实现分散在本地文件、DB fallback、进程内内存三套路径里，迁移时如果不先收口边界，很容易把 Redis 扩成过大的平台缓存工程。
 - 计划如何解决：下一步整理这批 `#11` 第一批实现的提交与 issue 进展；若你继续让我推进，我会开始收口剩余 route 级验收并准备提交，同时后续针对具体功能测试会直接按新测试指南先出测试文档再执行脚本与存储核验。
+- 做了什么：已重新读取仓库 `AGENTS.md` 与 `docs/AGENTS_GUIDE/CODEX_PROMPT.md`，并重新收口 `#8/#9/#10/#11` 当前上下文，确认下一步 `#12` 应只做 Altus run 级运行态与恢复，不扩到平台级调度工程。
+- 做了什么：已认领 `#12`，并新增设计稿 `docs/agent研发文档/20260403_Altus运行时状态在Redis中的落点与恢复机制_[尚未采用].md`。
+- 做了什么：这版 `#12` 设计明确只纳入 `run:state / owner / heartbeat / stop / recovery / active-runs / run:stream`，以及 sandbox / connector runtime 的最小恢复引用；同时明确不引入通用 run center、全局 startup cleanup 框架、或 connector 大对象 Redis 缓存。
+- 做了什么：已继续收紧 `#12` 设计稿中的持久化原则，明确 run / run_event / sandbox binding / connector snapshot 必须坚持“先落 DB，再写 Redis 派生热状态”，并补上了 `DB 与 Redis 冲突时永远以 DB 为准重建 Redis` 的规则，避免双真相和状态失效。
+- 做了什么：已再次检查 `#12` 是否过度设计，并继续收口：去掉了“API 启动时全局恢复扫描”这类重入口，只保留新 run 启动前、stream 订阅前、latest run 查询前三个轻量恢复入口；同时把 `run:recovery.connectorRuntime` 缩成只保留 `providerIds`，不再额外保存可由 DB 直接重算的版本字段。
+- 遇到什么：当前代码里 `run:state / run:stream / stop / heartbeat` 已存在，但 `run:recovery` 还未启用，active-runs 也还没有真正配套恢复入口。
+- 计划如何解决：等待用户审核这版 `[尚未采用]` 设计稿。确认后再进入 `#12` 代码实现，优先补 `altus-run-recovery-service` 与 `run:recovery` 的读写和清理。
+## 2026-04-03 #12 Altus 运行态 Redis 恢复实现
+
+- 做了什么：
+  - 开始实现 `#12`，新增 `apps/api/src/services/altus-run-recovery-service.ts`，把 Altus run 的恢复入口收敛到 `startRun`、`runs/latest`、`run stream subscribe` 三处。
+  - 在 `apps/api/src/services/altus-run-redis-state-service.ts` 增加 `run:recovery`、`clearStopRequest`、`clearRecoverySnapshot`、`listActiveRuns`、`hasLiveHeartbeat` 等能力，并在 run event 追加后同步刷新 recovery 的 stream 游标。
+  - 在 `apps/api/src/services/altus-managed-run-entry-service.ts`、`apps/api/src/services/altus-managed-stream-service.ts`、`apps/api/src/services/altus-run-lifecycle-service.ts` 接入 DB-first 的 recovery 同步与终态清理。
+  - 更新设计文档状态为已采用，并补齐 `redis-keyspace`、`redis-live`、`altus-managed-redis-route-live` 三组测试对 `run:recovery` 和 `latest-run` 恢复入口的覆盖。
+- 遇到什么：
+  - `RedisCommandPort` 新增 `listSetMembers` 后，测试桩需要同步补齐，否则只能静态改代码，无法验证 active-runs 的真实读取行为。
+  - 之前的 live Redis 测试只覆盖到 `run:state / run:stream / stop`，没有覆盖 `run:recovery`，无法验证 `#12` 的核心落点。
+- 计划如何解决：
+  - 下一步继续把 `#12` 的接口验收矩阵补进文档，并整理提交。
+  - 后续再进入 `#13`，针对 connector / guide / session runtime 的多用户隔离继续做回归。

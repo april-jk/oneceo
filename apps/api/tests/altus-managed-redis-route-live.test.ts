@@ -35,7 +35,10 @@ const originalCreateRun = runDaoAny.createRun;
 const originalAppendRunEvent = runDaoAny.appendRunEvent;
 const originalGetLatestRunEventSequence = runDaoAny.getLatestRunEventSequence;
 const originalGetRun = runDaoAny.getRun;
+const originalGetLatestRun = runDaoAny.getLatestRun;
 const originalListRunEvents = runDaoAny.listRunEvents;
+const originalGetSandboxBindingBySession = runDaoAny.getSandboxBindingBySession;
+const originalGetMcpToolSnapshot = runDaoAny.getMcpToolSnapshot;
 const originalGetSession = sessionDaoAny.getSession;
 const originalEnsureOwnership = setupAny.ensureSessionOwnership;
 const originalCaptureConnectorSnapshot = setupAny.captureConnectorSnapshot;
@@ -142,6 +145,18 @@ beforeEach(async () => {
     payloadJson: input.payloadJson,
   });
   runDaoAny.getLatestRunEventSequence = async () => 1;
+  runDaoAny.getLatestRun = async (sessionId: string) => ({
+    id: '22222222-2222-4222-8222-aaaaaaaaaaaa',
+    sessionId,
+    status: 'running',
+    mode: 'managed',
+    model: 'test-model',
+    stopReason: null,
+    startedAt: new Date(),
+    completedAt: null,
+    updatedAt: new Date(),
+    mcpToolSnapshotId: 'mcp-snapshot',
+  });
   runDaoAny.getRun = async (runId: string) => ({
     id: runId,
     sessionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
@@ -152,6 +167,24 @@ beforeEach(async () => {
     startedAt: new Date(),
     completedAt: null,
     updatedAt: new Date(),
+    mcpToolSnapshotId: 'mcp-snapshot',
+  });
+  runDaoAny.getSandboxBindingBySession = async (sessionId: string) => ({
+    id: `binding-${sessionId}`,
+    sessionId,
+    sandboxId: 'sandbox-live',
+    workspaceRoot: '/workspace',
+    status: 'ready',
+    metadataJson: { reused: true },
+    updatedAt: new Date(),
+    lastActiveAt: new Date(),
+  });
+  runDaoAny.getMcpToolSnapshot = async () => ({
+    id: 'mcp-snapshot',
+    snapshotJson: {
+      providers: [{ providerId: 'provider-live' }],
+    },
+    createdAt: new Date(),
   });
   runDaoAny.listRunEvents = async () => {
     throw new Error('db run-event fallback should not be used when redis stream is populated');
@@ -173,7 +206,10 @@ after(async () => {
   runDaoAny.appendRunEvent = originalAppendRunEvent;
   runDaoAny.getLatestRunEventSequence = originalGetLatestRunEventSequence;
   runDaoAny.getRun = originalGetRun;
+  runDaoAny.getLatestRun = originalGetLatestRun;
   runDaoAny.listRunEvents = originalListRunEvents;
+  runDaoAny.getSandboxBindingBySession = originalGetSandboxBindingBySession;
+  runDaoAny.getMcpToolSnapshot = originalGetMcpToolSnapshot;
   sessionDaoAny.getSession = originalGetSession;
   setupAny.ensureSessionOwnership = originalEnsureOwnership;
   setupAny.captureConnectorSnapshot = originalCaptureConnectorSnapshot;
@@ -221,6 +257,7 @@ test('live route: POST /sessions/:sessionId/runs writes run coordination keys an
     const runState = JSON.parse((await inspector.get(redisKeyspace.runState(scope))) || 'null');
     const runOwner = await inspector.get(redisKeyspace.runOwner(scope));
     const runHeartbeat = await inspector.get(redisKeyspace.runHeartbeat(scope));
+    const runRecovery = JSON.parse((await inspector.get(redisKeyspace.runRecovery(scope))) || 'null');
     const activeRuns = await inspector.smembers(redisKeyspace.activeRuns(scope.tenantKey));
     const runStreamRows = await inspector.xrange(redisKeyspace.runEventsStream(scope), '-', '+');
 
@@ -229,8 +266,69 @@ test('live route: POST /sessions/:sessionId/runs writes run coordination keys an
     assert.equal(runState.sequence, 1);
     assert.ok(runOwner);
     assert.ok(runHeartbeat);
+    assert.equal(runRecovery.runId, ids.runId);
+    assert.equal(runRecovery.status, 'queued');
+    assert.equal(runRecovery.sandbox.sandboxId, 'sandbox-live');
+    assert.deepEqual(runRecovery.connectorRuntime.providerIds, ['provider-live']);
     assert.deepEqual(activeRuns, [ids.runId]);
     assert.equal(runStreamRows.length, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('live route: GET /sessions/:sessionId/runs/latest reconciles recovery snapshot from db facts', async () => {
+  const server = await startServer();
+  const ids = buildIds('dddddddddddd');
+  const scope = buildScope(ids.sessionId, ids.runId, ids.userId);
+  runDaoAny.getLatestRun = async () => ({
+    id: ids.runId,
+    sessionId: ids.sessionId,
+    status: 'running',
+    mode: 'managed',
+    model: 'test-model',
+    stopReason: null,
+    startedAt: new Date(),
+    completedAt: null,
+    updatedAt: new Date(),
+    mcpToolSnapshotId: 'mcp-snapshot',
+  });
+  runDaoAny.getRun = async () => ({
+    id: ids.runId,
+    sessionId: ids.sessionId,
+    status: 'running',
+    mode: 'managed',
+    model: 'test-model',
+    stopReason: null,
+    startedAt: new Date(),
+    completedAt: null,
+    updatedAt: new Date(),
+    mcpToolSnapshotId: 'mcp-snapshot',
+  });
+  sessionDaoAny.getSession = async () => sessionRecord(ids.sessionId, ids.userId);
+
+  try {
+    assert.equal(await inspector.get(redisKeyspace.runRecovery(scope)), null);
+
+    const response = await testFetch(`${server.origin}/api/altus-managed/sessions/${ids.sessionId}/runs/latest`, {
+      headers: { 'x-user-id': ids.userId },
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.id, ids.runId);
+
+    const stateRaw = await inspector.get(redisKeyspace.runState(scope));
+    const recoveryRaw = await inspector.get(redisKeyspace.runRecovery(scope));
+    assert.ok(stateRaw);
+    assert.ok(recoveryRaw);
+    const recovery = JSON.parse(recoveryRaw!) as {
+      status: string;
+      sandbox: { sandboxId: string | null };
+      connectorRuntime: { providerIds: string[] };
+    };
+    assert.equal(recovery.status, 'running');
+    assert.equal(recovery.sandbox.sandboxId, 'sandbox-live');
+    assert.deepEqual(recovery.connectorRuntime.providerIds, ['provider-live']);
   } finally {
     await server.close();
   }

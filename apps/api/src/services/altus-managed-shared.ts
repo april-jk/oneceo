@@ -351,6 +351,23 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'load_connector_guide',
+        description:
+          'Load the active connector usage guide for a session connector before first use of that connector MCP toolset in the current run.',
+        parameters: objectSchema(
+          {
+            connectorKey: {
+              type: 'string',
+              description: 'Attached connector key such as github, supabase, or vercel.',
+            },
+          },
+          ['connectorKey']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'ask_user',
         description: 'Ask the user one precise clarification question when blocked by missing requirements.',
         parameters: objectSchema(

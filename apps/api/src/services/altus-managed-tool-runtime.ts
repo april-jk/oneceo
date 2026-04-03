@@ -3,6 +3,8 @@ import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
+import { connectorGuideService } from './connector-guide-service';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   asText,
   buildManagedMcpToolName,
@@ -59,6 +61,7 @@ function truncate(value: string, limit = 16000) {
 
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
+  private readonly loadedConnectorGuides = new Set<string>();
 
   constructor(
     private readonly input: {
@@ -205,8 +208,63 @@ export class AltusManagedToolRuntime {
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    if (toolName === 'load_connector_guide') {
+      const connectorKey = asText(rawArgs.connectorKey).toLowerCase();
+      if (!connectorKey) {
+        throw new Error('load_connector_guide_missing_connector_key');
+      }
+      const guide = await connectorGuideService.getActiveGuideForConnector(this.input.sessionId, connectorKey);
+      this.ensureNotAborted(signal);
+      if (!guide) {
+        throw new Error(`load_connector_guide_not_found:${connectorKey}`);
+      }
+      this.loadedConnectorGuides.add(connectorKey);
+      writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_LOADED]', {
+        taskSessionId: this.input.sessionId,
+        connectorKey,
+        revisionId: guide.revisionId,
+      });
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          connectorKey: guide.connectorKey,
+          policyId: guide.policyId,
+          revisionId: guide.revisionId,
+          triggerMode: guide.triggerMode,
+          serverInstructionsMarkdown: guide.serverInstructionsMarkdown,
+          guideReminderMarkdown: guide.guideReminderMarkdown,
+          blockingRulesMarkdown: guide.blockingRulesMarkdown,
+        }),
+      };
+    }
+
     const mcpTool = this.buildMcpToolMap().get(toolName);
     if (mcpTool) {
+      if (mcpTool.connectorKey) {
+        const activeGuide = await connectorGuideService.getActiveGuideForConnector(
+          this.input.sessionId,
+          mcpTool.connectorKey
+        );
+        this.ensureNotAborted(signal);
+        if (activeGuide && !this.loadedConnectorGuides.has(mcpTool.connectorKey)) {
+          writeConnectorDebugLog('[CONNECTOR_GUIDE_RUNTIME_BLOCKED]', {
+            taskSessionId: this.input.sessionId,
+            connectorKey: mcpTool.connectorKey,
+            toolName: mcpTool.toolName,
+            managedToolName: toolName,
+            revisionId: activeGuide.revisionId,
+          });
+          throw new Error(
+            [
+              `connector_guide_blocked:${mcpTool.connectorKey}`,
+              `Call load_connector_guide with connectorKey=${mcpTool.connectorKey} before using ${mcpTool.displayName}.`,
+              activeGuide.blockingRulesMarkdown || activeGuide.serverInstructionsMarkdown || activeGuide.guideReminderMarkdown,
+            ]
+              .filter(Boolean)
+              .join('\n')
+          );
+        }
+      }
       const response = await osacAgentService.callSessionMcpTool(this.input.sandboxId, {
         providerId: mcpTool.providerId,
         toolName: mcpTool.toolName,

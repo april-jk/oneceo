@@ -144,3 +144,54 @@
   - 当前需要警惕的不是生产代码绕开开关，而是后续新增 Redis 能力时有人直接在业务代码里 `new Redis(...)`。这次已经通过 `AGENTS.md` 明确禁止。
 - 计划如何解决：
   - 后续凡是新增 Redis 缓存或 stream，都继续复用 `redis-client-service.ts` 统一开关，不允许在业务层重复接环境变量。
+## 2026-04-03 #6 ClaudeCode 风格 connector guide runtime 强约束实现
+
+- 做了什么：
+  - 已认领 GitHub issue `#6`，并重新对照 `referance/claudecode_src/CLAUDECODE_MCP_SKILLS_REFERENCE.md` 检查当前实现，确认此前只完成了 prompt 注入和 relevant guides surfaced，仍缺 runtime blocking requirement。
+  - 在 `connector-guide-service.ts` 增加 `getActiveGuideForConnector`，供运行时一次性读取当前 session 下某 connector 的 active guide 文本。
+  - 在 `altus-managed-shared.ts` 新增内建工具 `load_connector_guide`，在 `altus-managed-prompt-service.ts` 明确要求：命中 active connector guide 后，先调用 `load_connector_guide`，再调用该 connector 的 MCP 工具。
+  - 在 `altus-managed-tool-runtime.ts` 落地 ClaudeCode 风格的首次调用阻断：如果某 connector 在当前 session 有 active guide、但当前 run 尚未加载该 guide，则首次 MCP 调用直接阻断；guide 加载成功后，同一 run 内该 connector 的 MCP 工具恢复放行。
+  - 已补 `apps/api/tests/altus-managed-tool-runtime.test.ts` 两条定向测试，覆盖“guide 加载后放行”和“未加载前阻断”两条主路径；同时更新采用文档，去掉“runtime preflight 放第二阶段”的旧描述。
+- 遇到什么：
+  - 当前仓库已经有一批并行中的 connector guide 多用户隔离改动，不能覆盖用户现有工作区，只能在现有 adopted 文档基础上做边界内更新。
+- 计划如何解决：
+  - 下一步继续做真实会话联调，直接验证 GitHub connector attach 后，Altus 在首次 MCP 工具调用前会命中 `load_connector_guide` / 阻断日志，而不是只停留在单测。
+
+## 2026-04-03 #6 GitHub connector guide 真实会话联调阻塞排查
+
+- 做了什么：
+  - 按最真实路径执行了一轮联调：真实创建 task session、真实 `ensureSandbox`、真实 GitHub attach、真实 managed run 生命周期、真实 OSAC/MCP provider 恢复与工具快照读取。
+  - 首次联调在新 session 的 attach 阶段被 `githubConnectorRepositoryService.assertProfileAuthorized()` 直接拦住；进一步核对后确认当前 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 已被系统标记为 `needs_auth`，`user_connector_profiles.secret_ciphertext` 为空，access token / refresh token 都不存在。
+  - 为避免误判，又继续尝试复用历史上真实 attached 的 GitHub session（`daff72f6-2717-41fe-a325-17573932cab8` 与 `aac2ac06-9173-4eb8-8861-332a2d093da5`），确认 sandbox/OSAC 可以被恢复，但 `captureMcpToolSnapshot()` 最终返回 `0 provider`，说明历史 GitHub MCP runtime 也已经不存在，无法继续做真实 tool 调用链路验证。
+  - 已对本轮联调过程中启动/恢复的 sandbox 做清理，实际 kill 了 `i7nr7pku8q91fxv4bpl1z`、`ilgkd142w9i7ru02vcp4h`、`i92xz5t7ywqskh6rllqk8`，并把对应 session 的 sandbox binding 标记为 `closed`，避免继续产生 E2B 计费。
+- 遇到什么：
+  - 这轮无法继续验证 `load_connector_guide -> GitHub MCP tool retry` 的真实 run 链路，不是因为 connector guide/runtime 代码路径有新错误，而是因为当前 GitHub 授权状态已经被系统判定失效，且 secret 已经被清空；历史 session 里的 GitHub provider 也已消失，无法作为替代执行面。
+- 计划如何解决：
+  - 下一步必须先完成 GitHub 重新授权，直到 `user_connector_profiles.auth_status = authorized` 且 secret 恢复存在，再重新跑真实 attach + run 联调。
+  - GitHub 恢复后，优先复测目标证据链：`tool_call_failed(connector_guide_blocked:github)` -> `tool_call_completed(load_connector_guide)` -> `tool_call_completed(github MCP tool)`。
+
+## 2026-04-03 #6 GitHub connector guide 真实会话联调已通过
+
+- 做了什么：
+  - 改用当前浏览器真实登录用户 `c2f3b1e7-fcea-4585-a37d-b7aa6490addc` 的最新 GitHub profile `f9c0bbaf-fdf8-4b0a-8894-dfec1e54813d` 继续联调，确认该 profile 处于 `authorized` 且 secret 存在。
+  - 通过真实前端登录态调用 `/api/task-creation/sessions` 创建了真实 session `1bbe31ef-8608-4f5d-a0b8-c27ed0e7e52d`，再通过真实 attach 路由把 GitHub connector 挂到该 session；随后核对 `task_session_connector_guides` 已写入 `github` 对应的 policy/revision 记录。
+  - 使用真实 `/api/altus-managed/inputs` 发起 managed run `f083414d-39eb-4658-948a-c3343569665e`，要求 Altus 直接使用 GitHub 连接器做一次最小读操作；实际事件链路表现为：先 `tool_call_completed(load_connector_guide)`，再 `tool_call_completed(mcp__search_repositories__...)`，最后 `complete_task` 收尾。
+  - 同步抓取 `data/connector-debug.log`，已确认 `CONNECTOR_GUIDE_PROMPT_SECTIONS_READY`、`ALTUS_RUN_PROMPT_READY`、`CONNECTOR_GUIDE_RUNTIME_LOADED` 均命中该真实 session / run。
+  - 联调结束后已 kill 本轮新启动的 sandbox `igwfxxny8xe59wn31cnnk`，避免继续产生 E2B 计费。
+- 遇到什么：
+  - 这次真实模型没有先“错误地直接打 GitHub MCP 然后被 runtime block”，而是直接遵守 prompt 指令，先调用了 `load_connector_guide`，因此没有出现 `connector_guide_blocked:github` 这条失败事件。
+- 计划如何解决：
+  - 当前第一阶段目标已经达成：真实 session 下 guide 自动挂载、prompt 注入、运行时显式加载、GitHub MCP 随后执行这条闭环已成立。
+  - 如果后续要强制验出 `connector_guide_blocked:github`，需要再补一条可控联调路径，让模型或测试驱动先直接发起 GitHub MCP tool，再观察 runtime block；这属于第二层“防误用”验证，不影响当前闭环成立。
+
+## 2026-04-03 #6 connector guide 防误用链路自动化补测
+
+- 做了什么：
+  - 在 `apps/api/tests/altus-run-coordinator.test.ts` 补了一条协调器级回归测试：第一轮模型直接调用 GitHub MCP `search_repositories`，第二轮根据 `tool_call_failed(connector_guide_blocked:github)` 改为调用 `load_connector_guide`，第三轮重试同一个 GitHub MCP tool，最后 `complete_task` 收尾。
+  - 顺手修正了同文件里历史 `appendRunEvent` mock 的参数签名，避免事件类型被旧测试基线错误记录成 `userId`。
+  - 重新跑通 `tests/altus-run-coordinator.test.ts` 与 `tests/altus-managed-tool-runtime.test.ts`，现在两套测试都覆盖了 prompt 注入、runtime block、guide 加载、retry 放行三层行为。
+- 遇到什么：
+  - 旧测试基线与当前 `appendRunEvent(runId, sessionId, userId, eventType, payload)` 签名不一致，导致一整批旧断言假失败；这次已一并收口。
+- 计划如何解决：
+  - 当前 connector guide 模块的第一阶段功能需求已经由“真实会话联调 + 协调器级 block/retry 回归测试 + runtime 单测”三层证据闭环。
+  - 后续再继续推进时，优先扩展到 `Supabase / Vercel` 两个 connector 的同类真实联调，而不是继续在 GitHub 上重复加同类测试。

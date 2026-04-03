@@ -842,6 +842,8 @@ GitHub 要做仓库授权页，runtime 就必须真实执行 repo allowlist。
 4. Supabase
 5. Figma
 6. Vercel
+   - 运行时固定直连官方 MCP 地址 `https://mcp.vercel.com`
+   - 优先支持官方 OAuth；若部署暂未配置 Vercel OAuth client，则退回手动 Personal Access Token
 
 ## 15. 受影响文件
 

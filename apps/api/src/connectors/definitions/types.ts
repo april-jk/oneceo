@@ -27,6 +27,7 @@ export type ConnectorOauthProvider = {
   clientSecret: string;
   authorizationUrl: string;
   tokenUrl: string;
+  pkceMethod?: 'S256';
   scopeParam?: string;
   scopes: string[];
   tokenRequestBodyFormat?: 'json' | 'form';

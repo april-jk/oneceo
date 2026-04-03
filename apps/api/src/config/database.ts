@@ -12,7 +12,9 @@ import path from 'path';
 
 const envCandidates = [
   path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '..', '.env'),
   path.resolve(process.cwd(), 'apps', 'api', '.env'),
+  path.resolve(process.cwd(), 'apps', '.env'),
 ];
 
 for (const candidate of envCandidates) {

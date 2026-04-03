@@ -105,6 +105,7 @@ export class TaskCreationSessionDAO {
       'approvalText',
       'approvalOptions',
       'attachments',
+      'skills',
       'attachmentContext',
       'attachmentContextIncluded',
       'originalInput',
@@ -450,6 +451,7 @@ export class TaskCreationSessionDAO {
           'tone', metadata->>'tone',
           'streamKey', metadata->>'streamKey',
           'attachments', metadata->'attachments',
+          'skills', metadata->'skills',
           'attachmentContext', metadata->'attachmentContext',
           'attachmentContextIncluded', metadata->'attachmentContextIncluded',
           'originalInput', metadata->>'originalInput',
@@ -762,9 +764,23 @@ export class TaskCreationSessionDAO {
         userId: data.userId,
         status: data.status || 'in_progress',
       })
+      .onConflictDoNothing({
+        target: taskCreationSessions.id,
+      })
       .returning();
 
-    return session;
+    if (session) {
+      return session;
+    }
+
+    if (data.id) {
+      const existing = await this.getSession(data.id);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    throw new Error('创建任务会话失败');
   }
 
   /**

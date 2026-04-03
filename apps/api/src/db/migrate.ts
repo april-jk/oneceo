@@ -13,6 +13,10 @@ type SchemaReadinessReport = {
 };
 
 const REQUIRED_TABLES = [
+  'app_users',
+  'app_user_sessions',
+  'admin_users',
+  'admin_user_sessions',
   'task_creation_sessions',
   'conversation_messages',
   'task_session_recent_messages',
@@ -22,15 +26,47 @@ const REQUIRED_TABLES = [
   'task_session_deliverable_artifacts',
   'task_session_sandbox_bindings',
   'task_session_connector_snapshots',
+  'task_session_mcp_tool_snapshots',
+  'task_session_connector_runtime_events',
+  'platform_skills',
+  'platform_skill_revisions',
+  'platform_skill_revision_resources',
+  'platform_skill_revision_entries',
+  'platform_skill_revision_resource_indexes',
+  'platform_skill_revision_resource_bodies',
+  'platform_skill_revision_resource_chunks',
+  'platform_skill_revision_resource_links',
   'sandbox_execution_environments',
   'user_connector_accounts',
   'user_connector_profiles',
   'user_codex_runtime_configs',
+  'user_platform_skill_bindings',
+  'user_custom_skills',
+  'user_custom_skill_documents',
   'task_session_connector_bindings',
+  'connector_guide_policies',
+  'connector_guide_revisions',
+  'task_session_connector_guides',
+  'task_session_mcp_recovery_jobs',
   'connector_auth_requests',
+  'platform_runtime_artifact_releases',
+  'platform_runtime_artifact_channels',
 ] as const;
 
 const REQUIRED_COLUMNS = [
+  ['app_users', 'email'],
+  ['app_users', 'password_hash'],
+  ['app_users', 'display_name'],
+  ['app_user_sessions', 'user_id'],
+  ['app_user_sessions', 'session_token_hash'],
+  ['app_user_sessions', 'expires_at'],
+  ['admin_users', 'login_name'],
+  ['admin_users', 'password_hash'],
+  ['admin_users', 'display_name'],
+  ['admin_users', 'role'],
+  ['admin_user_sessions', 'admin_user_id'],
+  ['admin_user_sessions', 'session_token_hash'],
+  ['admin_user_sessions', 'expires_at'],
   ['conversation_messages', 'message_key'],
   ['conversation_messages', 'timeline_cursor'],
   ['conversation_messages', 'runtime_generation'],
@@ -40,15 +76,111 @@ const REQUIRED_COLUMNS = [
   ['task_session_recent_messages', 'timeline_cursor'],
   ['task_session_recent_messages', 'runtime_generation'],
   ['task_session_recent_messages', 'updated_at'],
+  ['task_session_runs', 'mcp_tool_snapshot_id'],
   ['task_session_connector_bindings', 'profile_id'],
+  ['task_session_connector_bindings', 'runtime_provider_id'],
+  ['task_session_connector_bindings', 'runtime_env_version'],
+  ['task_session_connector_bindings', 'runtime_transport'],
+  ['task_session_connector_bindings', 'runtime_attached_tools_json'],
+  ['task_session_connector_bindings', 'runtime_last_started_at'],
+  ['task_session_connector_bindings', 'runtime_last_stopped_at'],
+  ['task_session_connector_bindings', 'recovery_queued_at'],
+  ['task_session_connector_bindings', 'recovery_started_at'],
+  ['task_session_connector_bindings', 'recovery_completed_at'],
   ['task_session_connector_bindings', 'enabled_tools'],
   ['task_session_connector_bindings', 'session_config_json'],
   ['task_session_connector_bindings', 'definition_snapshot_json'],
+  ['task_session_mcp_recovery_jobs', 'recovery_key'],
+  ['task_session_mcp_recovery_jobs', 'job_type'],
+  ['task_session_mcp_recovery_jobs', 'status'],
+  ['task_session_mcp_recovery_jobs', 'attempt_count'],
+  ['task_session_mcp_recovery_jobs', 'payload_json'],
+  ['task_session_mcp_recovery_jobs', 'next_retry_at'],
+  ['task_session_mcp_recovery_jobs', 'started_at'],
+  ['task_session_mcp_recovery_jobs', 'completed_at'],
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
+  ['platform_skills', 'slug'],
+  ['platform_skills', 'published_revision_id'],
+  ['platform_skill_revisions', 'skill_id'],
+  ['platform_skill_revisions', 'revision_number'],
+  ['platform_skill_revisions', 'body_markdown'],
+  ['platform_skill_revision_resources', 'revision_id'],
+  ['platform_skill_revision_resources', 'resource_path'],
+  ['platform_skill_revision_resources', 'content_markdown'],
+  ['platform_skill_revision_entries', 'revision_id'],
+  ['platform_skill_revision_entries', 'body_markdown'],
+  ['platform_skill_revision_resource_indexes', 'revision_id'],
+  ['platform_skill_revision_resource_indexes', 'resource_key'],
+  ['platform_skill_revision_resource_indexes', 'resource_path'],
+  ['platform_skill_revision_resource_indexes', 'resource_kind'],
+  ['platform_skill_revision_resource_indexes', 'title'],
+  ['platform_skill_revision_resource_indexes', 'summary'],
+  ['platform_skill_revision_resource_indexes', 'content_storage'],
+  ['platform_skill_revision_resource_indexes', 'mime_type'],
+  ['platform_skill_revision_resource_indexes', 'storage_path'],
+  ['platform_skill_revision_resource_indexes', 'storage_locator_json'],
+  ['platform_skill_revision_resource_indexes', 'load_stage'],
+  ['platform_skill_revision_resource_indexes', 'sort_order'],
+  ['platform_skill_revision_resource_bodies', 'resource_index_id'],
+  ['platform_skill_revision_resource_bodies', 'content_format'],
+  ['platform_skill_revision_resource_bodies', 'content_mode'],
+  ['platform_skill_revision_resource_bodies', 'content_size'],
+  ['platform_skill_revision_resource_chunks', 'resource_body_id'],
+  ['platform_skill_revision_resource_chunks', 'chunk_index'],
+  ['platform_skill_revision_resource_chunks', 'chunk_role'],
+  ['platform_skill_revision_resource_chunks', 'content_text'],
+  ['platform_skill_revision_resource_links', 'revision_id'],
+  ['platform_skill_revision_resource_links', 'from_type'],
+  ['platform_skill_revision_resource_links', 'from_id'],
+  ['platform_skill_revision_resource_links', 'to_resource_index_id'],
+  ['user_platform_skill_bindings', 'user_id'],
+  ['user_platform_skill_bindings', 'platform_skill_id'],
+  ['user_custom_skills', 'user_id'],
+  ['user_custom_skills', 'slug'],
+  ['user_custom_skills', 'body_markdown'],
+  ['user_custom_skill_documents', 'custom_skill_id'],
+  ['user_custom_skill_documents', 'document_key'],
+  ['user_custom_skill_documents', 'document_path'],
+  ['user_custom_skill_documents', 'body_markdown'],
+  ['connector_guide_policies', 'connector_key'],
+  ['connector_guide_policies', 'published_revision_id'],
+  ['connector_guide_revisions', 'policy_id'],
+  ['connector_guide_revisions', 'version_number'],
+  ['connector_guide_revisions', 'server_instructions_markdown'],
+  ['connector_guide_revisions', 'guide_reminder_markdown'],
+  ['connector_guide_revisions', 'blocking_rules_markdown'],
+  ['task_session_connector_guides', 'task_session_id'],
+  ['task_session_connector_guides', 'connector_key'],
+  ['task_session_connector_guides', 'policy_id'],
+  ['task_session_connector_guides', 'revision_id'],
+  ['platform_runtime_artifact_releases', 'artifact_type'],
+  ['platform_runtime_artifact_releases', 'platform'],
+  ['platform_runtime_artifact_releases', 'arch'],
+  ['platform_runtime_artifact_releases', 'version'],
+  ['platform_runtime_artifact_releases', 'channel'],
+  ['platform_runtime_artifact_releases', 'status'],
+  ['platform_runtime_artifact_releases', 'bucket'],
+  ['platform_runtime_artifact_releases', 'object_key'],
+  ['platform_runtime_artifact_releases', 'manifest_key'],
+  ['platform_runtime_artifact_releases', 'sha256'],
+  ['platform_runtime_artifact_releases', 'size_bytes'],
+  ['platform_runtime_artifact_releases', 'release_notes'],
+  ['platform_runtime_artifact_releases', 'uploaded_by'],
+  ['platform_runtime_artifact_releases', 'uploaded_at'],
+  ['platform_runtime_artifact_releases', 'metadata_json'],
+  ['platform_runtime_artifact_channels', 'artifact_type'],
+  ['platform_runtime_artifact_channels', 'platform'],
+  ['platform_runtime_artifact_channels', 'arch'],
+  ['platform_runtime_artifact_channels', 'channel'],
+  ['platform_runtime_artifact_channels', 'published_release_id'],
 ] as const;
 
 const REQUIRED_INDEXES = [
+  'idx_app_users_email',
+  'idx_app_user_sessions_token_hash',
+  'idx_admin_users_login_name',
+  'idx_admin_user_sessions_token_hash',
   'idx_conversation_messages_session_message_key',
   'idx_conversation_messages_session_timeline',
   'idx_task_session_recent_messages_session_message_key',
@@ -58,6 +190,24 @@ const REQUIRED_INDEXES = [
   'idx_task_session_deliverable_artifacts_storage_key',
   'idx_task_session_sandbox_bindings_session_id',
   'idx_task_session_connector_bindings_session_connector',
+  'idx_task_session_mcp_recovery_jobs_recovery_key',
+  'idx_task_session_mcp_tool_snapshots_session_id',
+  'idx_task_session_connector_runtime_events_session_id',
+  'idx_platform_skills_slug',
+  'idx_platform_skill_revisions_skill_revision',
+  'idx_platform_skill_revision_resources_revision_path',
+  'idx_platform_skill_revision_entries_revision_id',
+  'idx_platform_skill_resource_indexes_revision_key',
+  'idx_platform_skill_resource_bodies_resource_index_id',
+  'idx_platform_skill_resource_chunks_body_chunk',
+  'idx_user_platform_skill_bindings_user_skill',
+  'idx_user_custom_skills_user_slug',
+  'idx_user_custom_skill_documents_skill_key',
+  'idx_connector_guide_policies_connector_key',
+  'idx_connector_guide_revisions_policy_version',
+  'idx_task_session_connector_guides_session_connector',
+  'idx_platform_runtime_artifacts_type_version',
+  'idx_platform_runtime_artifact_channels_unique',
 ] as const;
 
 /**
@@ -117,11 +267,73 @@ CREATE TABLE IF NOT EXISTS task_session_connector_bindings (
   runtime_status TEXT NOT NULL DEFAULT 'unknown',
   orchestrator_session_id TEXT,
   server_name TEXT,
+  runtime_provider_id TEXT,
+  runtime_env_version INTEGER NOT NULL DEFAULT 0,
+  runtime_transport TEXT,
+  runtime_attached_tools_json JSONB,
+  runtime_last_started_at TIMESTAMP,
+  runtime_last_stopped_at TIMESTAMP,
+  recovery_queued_at TIMESTAMP,
+  recovery_started_at TIMESTAMP,
+  recovery_completed_at TIMESTAMP,
   enabled_tools JSONB,
   session_config_json JSONB,
   definition_snapshot_json JSONB,
   last_used_at TIMESTAMP,
   last_error TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS connector_guide_policies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  connector_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  trigger_mode TEXT NOT NULL DEFAULT 'on_attach',
+  description TEXT NOT NULL DEFAULT '',
+  published_revision_id UUID,
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS connector_guide_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  policy_id UUID NOT NULL REFERENCES connector_guide_policies(id) ON DELETE CASCADE,
+  version_number INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  server_instructions_markdown TEXT NOT NULL DEFAULT '',
+  guide_reminder_markdown TEXT NOT NULL DEFAULT '',
+  blocking_rules_markdown TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  published_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS task_session_connector_guides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  connector_key TEXT NOT NULL,
+  policy_id UUID NOT NULL REFERENCES connector_guide_policies(id) ON DELETE CASCADE,
+  revision_id UUID NOT NULL REFERENCES connector_guide_revisions(id) ON DELETE CASCADE,
+  trigger_mode TEXT NOT NULL,
+  resolved_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_mcp_recovery_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_session_id TEXT NOT NULL,
+  orchestrator_session_id TEXT NOT NULL,
+  recovery_key TEXT NOT NULL,
+  job_type TEXT NOT NULL DEFAULT 'session_reconcile',
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  payload_json JSONB,
+  next_retry_at TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -143,6 +355,43 @@ CREATE TABLE IF NOT EXISTS connector_auth_requests (
   completed_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS platform_runtime_artifact_releases (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_type TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  arch TEXT NOT NULL,
+  version TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'stable',
+  status TEXT NOT NULL DEFAULT 'uploaded',
+  bucket TEXT NOT NULL,
+  object_key TEXT NOT NULL,
+  manifest_key TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  release_notes TEXT NOT NULL DEFAULT '',
+  source_commit TEXT,
+  uploaded_by TEXT,
+  published_by TEXT,
+  uploaded_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  published_at TIMESTAMP,
+  archived_at TIMESTAMP,
+  metadata_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_runtime_artifact_channels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  artifact_type TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  arch TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  published_release_id UUID NOT NULL REFERENCES platform_runtime_artifact_releases(id) ON DELETE CASCADE,
+  updated_by TEXT,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_accounts_user_connector ON user_connector_accounts(user_id, connector_key);
 CREATE INDEX IF NOT EXISTS idx_user_connector_accounts_user_id ON user_connector_accounts(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_connector_profiles_user_connector_profile
@@ -157,14 +406,101 @@ CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_task_session_id
   ON task_session_connector_bindings(task_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_bindings_orchestrator_session_id
   ON task_session_connector_bindings(orchestrator_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_guide_policies_connector_key
+  ON connector_guide_policies(connector_key);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_policies_status
+  ON connector_guide_policies(status);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_policies_published_revision_id
+  ON connector_guide_policies(published_revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_guide_revisions_policy_version
+  ON connector_guide_revisions(policy_id, version_number);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_revisions_policy_id
+  ON connector_guide_revisions(policy_id);
+CREATE INDEX IF NOT EXISTS idx_connector_guide_revisions_status
+  ON connector_guide_revisions(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_connector_guides_session_connector
+  ON task_session_connector_guides(task_session_id, connector_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_guides_task_session_id
+  ON task_session_connector_guides(task_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_recovery_key
+  ON task_session_mcp_recovery_jobs(recovery_key);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_session_status
+  ON task_session_mcp_recovery_jobs(task_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_orchestrator_session_id
+  ON task_session_mcp_recovery_jobs(orchestrator_session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_recovery_jobs_next_retry_at
+  ON task_session_mcp_recovery_jobs(next_retry_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_auth_requests_state ON connector_auth_requests(state);
 CREATE INDEX IF NOT EXISTS idx_connector_auth_requests_user_id ON connector_auth_requests(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_type_version
+  ON platform_runtime_artifact_releases(artifact_type, platform, arch, version);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_channel
+  ON platform_runtime_artifact_releases(artifact_type, platform, arch, channel);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_status
+  ON platform_runtime_artifact_releases(status);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifacts_uploaded_at
+  ON platform_runtime_artifact_releases(uploaded_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_runtime_artifact_channels_unique
+  ON platform_runtime_artifact_channels(artifact_type, platform, arch, channel);
+CREATE INDEX IF NOT EXISTS idx_platform_runtime_artifact_channels_published_release_id
+  ON platform_runtime_artifact_channels(published_release_id);
 
 ALTER TABLE IF EXISTS task_session_connector_bindings
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_provider_id TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_env_version INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS runtime_transport TEXT,
+  ADD COLUMN IF NOT EXISTS runtime_attached_tools_json JSONB,
+  ADD COLUMN IF NOT EXISTS runtime_last_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS runtime_last_stopped_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_queued_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS recovery_completed_at TIMESTAMP,
   ADD COLUMN IF NOT EXISTS enabled_tools JSONB,
   ADD COLUMN IF NOT EXISTS session_config_json JSONB,
   ADD COLUMN IF NOT EXISTS definition_snapshot_json JSONB;
+
+ALTER TABLE IF EXISTS connector_guide_policies
+  ADD COLUMN IF NOT EXISTS connector_key TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft',
+  ADD COLUMN IF NOT EXISTS trigger_mode TEXT NOT NULL DEFAULT 'on_attach',
+  ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS published_revision_id UUID,
+  ADD COLUMN IF NOT EXISTS created_by TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS connector_guide_revisions
+  ADD COLUMN IF NOT EXISTS policy_id UUID,
+  ADD COLUMN IF NOT EXISTS version_number INTEGER,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'draft',
+  ADD COLUMN IF NOT EXISTS server_instructions_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS guide_reminder_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS blocking_rules_markdown TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS created_by TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS published_at TIMESTAMP;
+
+ALTER TABLE IF EXISTS task_session_connector_guides
+  ADD COLUMN IF NOT EXISTS task_session_id TEXT,
+  ADD COLUMN IF NOT EXISTS connector_key TEXT,
+  ADD COLUMN IF NOT EXISTS policy_id UUID,
+  ADD COLUMN IF NOT EXISTS revision_id UUID,
+  ADD COLUMN IF NOT EXISTS trigger_mode TEXT,
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE IF EXISTS task_session_mcp_recovery_jobs
+  ADD COLUMN IF NOT EXISTS recovery_key TEXT,
+  ADD COLUMN IF NOT EXISTS job_type TEXT NOT NULL DEFAULT 'session_reconcile',
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_error TEXT,
+  ADD COLUMN IF NOT EXISTS payload_json JSONB,
+  ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
 
 ALTER TABLE IF EXISTS connector_auth_requests
   ADD COLUMN IF NOT EXISTS profile_id TEXT,
@@ -223,6 +559,67 @@ WHERE bindings.profile_id IS NULL
 
 const createTablesSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
+CREATE TABLE IF NOT EXISTS app_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_user_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
+  user_agent TEXT,
+  ip_address TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  login_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'admin',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_login_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS admin_user_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id UUID NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  session_token_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  revoked_at TIMESTAMP,
+  user_agent TEXT,
+  ip_address TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
+CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_sessions_token_hash ON app_user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_login_name ON admin_users(login_name);
+CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role);
+CREATE INDEX IF NOT EXISTS idx_admin_users_status ON admin_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_user_sessions_token_hash ON admin_user_sessions(session_token_hash);
+CREATE INDEX IF NOT EXISTS idx_admin_user_sessions_admin_user_id ON admin_user_sessions(admin_user_id);
+CREATE INDEX IF NOT EXISTS idx_admin_user_sessions_expires_at ON admin_user_sessions(expires_at);
 
 -- 任务创建会话表
 CREATE TABLE IF NOT EXISTS task_creation_sessions (
@@ -287,6 +684,7 @@ CREATE TABLE IF NOT EXISTS task_session_runs (
   stop_reason TEXT,
   sandbox_binding_id UUID,
   connector_snapshot_id UUID,
+  mcp_tool_snapshot_id UUID,
   metadata_json JSONB,
   started_at TIMESTAMP,
   completed_at TIMESTAMP,
@@ -324,6 +722,157 @@ CREATE TABLE IF NOT EXISTS task_session_connector_snapshots (
   session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
   snapshot_json JSONB NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_mcp_tool_snapshots (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  snapshot_json JSONB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS task_session_connector_runtime_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES task_creation_sessions(id) ON DELETE CASCADE,
+  binding_id UUID NOT NULL REFERENCES task_session_connector_bindings(id) ON DELETE CASCADE,
+  provider_id TEXT,
+  event_type TEXT NOT NULL,
+  payload_json JSONB,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 平台 skills 主表
+CREATE TABLE IF NOT EXISTS platform_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'general',
+  status TEXT NOT NULL DEFAULT 'active',
+  published_revision_id UUID,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- 平台 skills revision 表
+CREATE TABLE IF NOT EXISTS platform_skill_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  skill_id UUID NOT NULL REFERENCES platform_skills(id) ON DELETE CASCADE,
+  revision_number INTEGER NOT NULL,
+  slug_snapshot TEXT NOT NULL,
+  name_snapshot TEXT NOT NULL,
+  description_snapshot TEXT NOT NULL DEFAULT '',
+  category_snapshot TEXT NOT NULL DEFAULT 'general',
+  body_markdown TEXT NOT NULL,
+  published_at TIMESTAMP,
+  created_by TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  resource_path TEXT NOT NULL,
+  resource_type TEXT NOT NULL DEFAULT 'reference',
+  content_markdown TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  entry_name TEXT NOT NULL,
+  entry_description TEXT NOT NULL DEFAULT '',
+  allowed_tools_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  body_markdown TEXT NOT NULL,
+  render_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_indexes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  resource_key TEXT NOT NULL,
+  resource_path TEXT NOT NULL,
+  resource_kind TEXT NOT NULL DEFAULT 'reference',
+  title TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  content_storage TEXT NOT NULL DEFAULT 'database',
+  mime_type TEXT NOT NULL DEFAULT 'text/markdown',
+  storage_path TEXT,
+  storage_locator_json JSONB,
+  load_stage TEXT NOT NULL DEFAULT 'on_demand',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_bodies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_index_id UUID NOT NULL REFERENCES platform_skill_revision_resource_indexes(id) ON DELETE CASCADE,
+  content_format TEXT NOT NULL DEFAULT 'markdown',
+  content_mode TEXT NOT NULL DEFAULT 'inline',
+  full_text_hash TEXT,
+  content_size INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_chunks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_body_id UUID NOT NULL REFERENCES platform_skill_revision_resource_bodies(id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  chunk_role TEXT NOT NULL DEFAULT 'body',
+  chunk_summary TEXT NOT NULL DEFAULT '',
+  content_text TEXT NOT NULL,
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS platform_skill_revision_resource_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  revision_id UUID NOT NULL REFERENCES platform_skill_revisions(id) ON DELETE CASCADE,
+  from_type TEXT NOT NULL,
+  from_id UUID NOT NULL,
+  to_resource_index_id UUID NOT NULL REFERENCES platform_skill_revision_resource_indexes(id) ON DELETE CASCADE,
+  link_type TEXT NOT NULL DEFAULT 'suggested',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_platform_skill_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  platform_skill_id UUID NOT NULL REFERENCES platform_skills(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_custom_skills (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'general',
+  status TEXT NOT NULL DEFAULT 'active',
+  body_markdown TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_custom_skill_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  custom_skill_id UUID NOT NULL REFERENCES user_custom_skills(id) ON DELETE CASCADE,
+  document_key TEXT NOT NULL,
+  document_path TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  body_markdown TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- 意图识别结果表
@@ -422,6 +971,74 @@ CREATE INDEX IF NOT EXISTS idx_task_session_sandbox_bindings_sandbox_id
   ON task_session_sandbox_bindings(sandbox_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_connector_snapshots_session_id
   ON task_session_connector_snapshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_mcp_tool_snapshots_session_id
+  ON task_session_mcp_tool_snapshots(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_session_id
+  ON task_session_connector_runtime_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_binding_id
+  ON task_session_connector_runtime_events(binding_id);
+CREATE INDEX IF NOT EXISTS idx_task_session_connector_runtime_events_provider_id
+  ON task_session_connector_runtime_events(provider_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skills_slug
+  ON platform_skills(slug);
+CREATE INDEX IF NOT EXISTS idx_platform_skills_status
+  ON platform_skills(status);
+CREATE INDEX IF NOT EXISTS idx_platform_skills_published_revision_id
+  ON platform_skills(published_revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revisions_skill_revision
+  ON platform_skill_revisions(skill_id, revision_number);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_skill_created_at
+  ON platform_skill_revisions(skill_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revisions_published_at
+  ON platform_skill_revisions(published_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revision_resources_revision_path
+  ON platform_skill_revision_resources(revision_id, resource_path);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_revision_resources_revision_id
+  ON platform_skill_revision_resources(revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_revision_entries_revision_id
+  ON platform_skill_revision_entries(revision_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_key
+  ON platform_skill_revision_resource_indexes(revision_id, resource_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_path
+  ON platform_skill_revision_resource_indexes(revision_id, resource_path);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_indexes_revision_sort
+  ON platform_skill_revision_resource_indexes(revision_id, sort_order);
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS content_storage TEXT NOT NULL DEFAULT 'database';
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT 'text/markdown';
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS storage_path TEXT;
+ALTER TABLE platform_skill_revision_resource_indexes
+  ADD COLUMN IF NOT EXISTS storage_locator_json JSONB;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_bodies_resource_index_id
+  ON platform_skill_revision_resource_bodies(resource_index_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_skill_resource_chunks_body_chunk
+  ON platform_skill_revision_resource_chunks(resource_body_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_chunks_body_role
+  ON platform_skill_revision_resource_chunks(resource_body_id, chunk_role);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_links_revision_from
+  ON platform_skill_revision_resource_links(revision_id, from_type, from_id);
+CREATE INDEX IF NOT EXISTS idx_platform_skill_resource_links_revision_to
+  ON platform_skill_revision_resource_links(revision_id, to_resource_index_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_skill
+  ON user_platform_skill_bindings(user_id, platform_skill_id);
+CREATE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_user_id
+  ON user_platform_skill_bindings(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_platform_skill_bindings_platform_skill_id
+  ON user_platform_skill_bindings(platform_skill_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skills_user_slug
+  ON user_custom_skills(user_id, slug);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skills_user_status
+  ON user_custom_skills(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skills_updated_at
+  ON user_custom_skills(updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_key
+  ON user_custom_skill_documents(custom_skill_id, document_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
+  ON user_custom_skill_documents(custom_skill_id, document_path);
+CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
+  ON user_custom_skill_documents(custom_skill_id, sort_order);
 ${connectorTablesSQL}
 `;
 
@@ -450,6 +1067,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_deliverable_artifacts_storage
 
 const backfillMessageStorageSQL = `
 CREATE SEQUENCE IF NOT EXISTS conversation_message_timeline_cursor_seq;
+
+ALTER TABLE IF EXISTS task_session_runs
+  ADD COLUMN IF NOT EXISTS mcp_tool_snapshot_id UUID;
 
 ALTER TABLE conversation_messages
   ADD COLUMN IF NOT EXISTS message_key TEXT,
@@ -692,8 +1312,13 @@ export async function runMigration() {
     console.log('  - sandbox_execution_environments');
     console.log('  - user_connector_accounts');
     console.log('  - task_session_connector_bindings');
+    console.log('  - connector_guide_policies');
+    console.log('  - connector_guide_revisions');
+    console.log('  - task_session_connector_guides');
     console.log('  - connector_auth_requests');
     console.log('  - user_codex_runtime_configs');
+    console.log('  - platform_runtime_artifact_releases');
+    console.log('  - platform_runtime_artifact_channels');
     
     return true;
   } catch (error) {
@@ -731,8 +1356,16 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS task_session_workspace_cache CASCADE;
       DROP TABLE IF EXISTS task_session_deliverable_artifacts CASCADE;
       DROP TABLE IF EXISTS sandbox_execution_environments CASCADE;
+      DROP TABLE IF EXISTS task_session_connector_guides CASCADE;
+      DROP TABLE IF EXISTS connector_guide_revisions CASCADE;
+      DROP TABLE IF EXISTS connector_guide_policies CASCADE;
       DROP TABLE IF EXISTS task_session_connector_bindings CASCADE;
       DROP TABLE IF EXISTS connector_auth_requests CASCADE;
+      DROP TABLE IF EXISTS platform_runtime_artifact_channels CASCADE;
+      DROP TABLE IF EXISTS platform_runtime_artifact_releases CASCADE;
+      DROP TABLE IF EXISTS user_custom_skill_documents CASCADE;
+      DROP TABLE IF EXISTS user_custom_skills CASCADE;
+      DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
       DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;

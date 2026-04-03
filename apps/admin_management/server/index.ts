@@ -1,25 +1,38 @@
 import cors from 'cors';
 import express from 'express';
-import { config } from './config';
+import { config, isAllowedCorsOrigin } from './config';
 import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connector';
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
 import { createAgentManagementRoutes } from './routes/agent-management-routes';
+import { createAdminAuthRoutes } from './routes/admin-auth-routes';
 import { createAuditRoutes } from './routes/audit-routes';
 import { createConversationRoutes } from './routes/conversation-routes';
+import { createConnectorGuideRoutes } from './routes/connector-guide-routes';
 import { createDashboardRoutes } from './routes/dashboard-routes';
 import { createHostRoutes } from './routes/host-routes';
 import { createKvmRoutes } from './routes/kvm-routes';
 import { createSandboxManagementRoutes } from './routes/sandbox-management-routes';
+import { createSkillManagementRoutes } from './routes/skill-management-routes';
+import { createOsacReleaseRoutes } from './routes/osac-release-routes';
 import { AgentManagementService } from './services/agent-management-service';
 import { AuditService } from './services/audit-service';
 import { ConversationManagementService } from './services/conversation-management-service';
+import { ConnectorGuideManagementService } from './services/connector-guide-management-service';
 import { DashboardService } from './services/dashboard-service';
 import { HostRuntimeService } from './services/host-runtime-service';
 import { KvmService } from './services/kvm-service';
 import { SandboxManagementService } from './services/sandbox-management-service';
+import { SkillManagementService } from './services/skill-management-service';
+import { OsacReleaseManagementService } from './services/osac-release-management-service';
 import { errorMiddleware, fail } from './utils/http';
+import { createAdminAuthMiddleware } from './middleware/admin-auth-middleware';
 
 const app = express();
+const jsonBodyLimitMbRaw = Number(process.env.ADMIN_JSON_BODY_LIMIT_MB || 16);
+const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
+  ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
+  : 16;
+const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
 
 const auditService = new AuditService();
 const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
@@ -28,13 +41,23 @@ const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
 const conversationService = new ConversationManagementService(oneceoApiConnector, kvmOrchestratorConnector, auditService);
 const agentManagementService = new AgentManagementService(oneceoApiConnector);
 const sandboxManagementService = new SandboxManagementService();
+const skillManagementService = new SkillManagementService(oneceoApiConnector);
+const connectorGuideManagementService = new ConnectorGuideManagementService(oneceoApiConnector);
+const osacReleaseManagementService = new OsacReleaseManagementService(oneceoApiConnector);
 
 app.use(
   cors({
-    origin: config.corsOrigin,
+    origin(origin, callback) {
+      if (isAllowedCorsOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS origin not allowed: ${origin || 'unknown'}`));
+    },
+    credentials: true,
   })
 );
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: jsonBodyLimit }));
 
 app.use((req, res, next) => {
   const startedAt = Date.now();
@@ -61,6 +84,8 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.use('/api/admin/auth', createAdminAuthRoutes(oneceoApiConnector));
+app.use('/api', createAdminAuthMiddleware(oneceoApiConnector));
 app.use('/api/kvm', createKvmRoutes(kvmService));
 app.use('/api/hosts', createHostRoutes(hostRuntimeService));
 app.use('/api/dashboard', createDashboardRoutes(dashboardService));
@@ -68,6 +93,9 @@ app.use('/api/audit', createAuditRoutes(auditService));
 app.use('/api/conversations', createConversationRoutes(conversationService));
 app.use('/api/agent-management', createAgentManagementRoutes(agentManagementService));
 app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManagementService));
+app.use('/api/skill-management', createSkillManagementRoutes(skillManagementService));
+app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));
+app.use('/api/osac-releases', createOsacReleaseRoutes(osacReleaseManagementService));
 
 app.use((req, res) => {
   return fail(res, 404, `Route ${req.method} ${req.path} not found`);
@@ -75,12 +103,12 @@ app.use((req, res) => {
 
 app.use(errorMiddleware);
 
-app.listen(config.port, () => {
+app.listen(config.port, config.host, () => {
   console.log('');
   console.log('Admin Management API');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log(`API: http://localhost:${config.port}`);
-  console.log(`Health: http://localhost:${config.port}/health`);
+  console.log(`API: http://${config.host}:${config.port}`);
+  console.log(`Health: http://${config.host}:${config.port}/health`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('');
 });

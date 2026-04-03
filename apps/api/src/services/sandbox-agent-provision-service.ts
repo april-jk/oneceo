@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureDatabaseConnection } from '../config/database';
@@ -21,6 +20,7 @@ import {
 } from '../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
@@ -39,6 +39,12 @@ import {
 } from './connector-registry';
 import { userConnectorService } from './user-connector-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import {
+  canReuseOsacBridge,
+  ensureOsacBridge,
+  waitForOsacBridgeReady,
+} from './sandbox-osac-bridge-service';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
 type ProvisionInput = {
   metadata?: Record<string, unknown>;
@@ -73,7 +79,7 @@ type ProvisionResult = {
   trafficAccessToken?: string | null;
 };
 
-type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode';
+type ProvisionExecutor = 'opencode' | 'codex' | 'claudecode' | 'altus';
 type ProvisionCodexMode = 'sdk' | 'ws';
 
 function pickString(value: unknown): string | null {
@@ -83,6 +89,7 @@ function pickString(value: unknown): string | null {
 
 function normalizeProvisionExecutor(value: unknown): ProvisionExecutor {
   const normalized = pickString(value)?.toLowerCase();
+  if (normalized === 'altus') return 'altus';
   if (normalized === 'codex') return 'codex';
   if (normalized === 'claudecode') return 'claudecode';
   return 'opencode';
@@ -121,46 +128,6 @@ function resolveProvisionTemplate(
     return codexExecutionMode === 'ws' ? e2bConfig.codexWsTemplate : e2bConfig.codexTemplate;
   }
   return e2bConfig.template;
-}
-
-function resolveExecutorRemoteBaseDir(
-  executor: ProvisionExecutor,
-  workspaceRoot?: string | null
-): string {
-  const configured = (osacBootstrapConfig.remoteBaseDir || '').trim();
-  if (executor !== 'codex') {
-    return configured || '/opt/.altus/opencode';
-  }
-
-  if (configured && configured !== '/opt/.altus/opencode') {
-    return configured;
-  }
-
-  const normalizedWorkspace = pickString(workspaceRoot);
-  if (normalizedWorkspace) {
-    const trimmed = normalizedWorkspace.replace(/\/+$/, '');
-    const workspaceMarker = trimmed.indexOf('/workspaces/');
-    if (workspaceMarker > 0) {
-      return trimmed.slice(0, workspaceMarker);
-    }
-    const stateMarker = trimmed.indexOf('/state/');
-    if (stateMarker > 0) {
-      return trimmed.slice(0, stateMarker);
-    }
-    const idx = trimmed.lastIndexOf('/');
-    if (idx > 0) {
-      const parent = trimmed.slice(0, idx);
-      if (parent.endsWith('/workspaces') || parent.endsWith('/state')) {
-        const parentIdx = parent.lastIndexOf('/');
-        if (parentIdx > 0) {
-          return parent.slice(0, parentIdx);
-        }
-      }
-      return parent;
-    }
-  }
-
-  return '/home/user/.altus/opencode';
 }
 
 async function resolveReusableSandbox(
@@ -365,48 +332,6 @@ function buildSandboxEnv(): Record<string, string> {
   }
   env.XDG_RUNTIME_DIR = '/tmp';
   return env;
-}
-
-async function fileExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveLocalOsacBinaryPath(): Promise<string> {
-  const candidates = [osacBootstrapConfig.osacBinaryPath];
-  const localDistDirs = [
-    path.resolve(process.cwd(), 'OSAC_client/dist'),
-    path.resolve(process.cwd(), '../OSAC_client/dist'),
-    path.resolve(process.cwd(), '../../OSAC_client/dist'),
-  ];
-  for (const localDistDir of localDistDirs) {
-    try {
-      const entries = await fs.readdir(localDistDir);
-      const matched = entries
-        .filter((entry) => /^osac-linux-amd64/.test(entry))
-        .sort()
-        .reverse();
-      for (const entry of matched) {
-        candidates.push(path.join(localDistDir, entry));
-      }
-    } catch {
-      // ignore local dist scan failures for this directory
-    }
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
-    if (await fileExists(resolved)) {
-      return resolved;
-    }
-  }
-
-  throw new Error(`OSAC binary not found; checked ${candidates.filter(Boolean).join(', ')}`);
 }
 
 async function resolveE2bPublicHost(sessionId: string, port: number): Promise<string> {
@@ -1108,133 +1033,15 @@ async function restartOpencodeServer(
   await startOpencodeServer(sessionId, baseUrl, envs, stateRoot, trafficAccessToken);
 }
 
-async function ensureOsacBridge(
-  sessionId: string,
-  input: {
-    executor: ProvisionExecutor;
-    workspaceRoot?: string | null;
-    authToken?: string | null;
-    codexPath?: string | null;
-  }
-): Promise<{
-  osacEndpoint: string;
-  osacHost: string;
-  osacAuthToken: string;
-  osacRemoteBinary: string;
-}> {
-  const osacBinaryPath = await resolveLocalOsacBinaryPath();
-  const osacBuffer = await fs.readFile(osacBinaryPath);
-  const remoteBaseDir = resolveExecutorRemoteBaseDir(input.executor, input.workspaceRoot);
-  const remoteBinaryName = osacBootstrapConfig.osacBinaryName || 'osac';
-  const remoteBinary = `${remoteBaseDir.replace(/\/+$/, '')}/${remoteBinaryName}`;
-  const osacLogDir = `${remoteBaseDir.replace(/\/+$/, '')}/log`;
-  const osacTmpDir = `${remoteBaseDir.replace(/\/+$/, '')}/tmp`;
-  const osacLockPath = `${remoteBaseDir.replace(/\/+$/, '')}/osac.lock`;
-  const authToken = pickString(input.authToken) || `e2b_${randomUUID().replace(/-/g, '')}`;
-  const workspaceRoot = pickString(input.workspaceRoot) || '';
-
-  await e2bConnector.runCommand(
-    sessionId,
-    `mkdir -p ${shellEscape(remoteBaseDir)} ${shellEscape(osacLogDir)} ${shellEscape(osacTmpDir)}`,
-    { timeoutMs: 30_000 }
-  );
-  await e2bConnector.writeFile(sessionId, remoteBinary, osacBuffer);
-
-  const envParts = [
-    `OSAC_AUTH_TOKEN=${shellEscape(authToken)}`,
-    `OSAC_LISTEN_ADDR=':${osacBootstrapConfig.osacPort}'`,
-    `OSAC_LOG_DIR=${shellEscape(osacLogDir)}`,
-    `OSAC_UPDATE_TMP=${shellEscape(osacTmpDir)}`,
-    `OSAC_INSTANCE_LOCK_PATH=${shellEscape(osacLockPath)}`,
-    `OSAC_CODEX_PATH=${shellEscape(pickString(input.codexPath) || 'codex')}`,
-    `OSAC_CODEX_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
-    `OSAC_OPENCODE_PATH='opencode'`,
-    `OSAC_OPENCODE_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
-    `OSAC_LLM_PROXY_ENABLE='false'`,
-  ];
-  const startCommand = `
-set -euo pipefail
-chmod +x ${shellEscape(remoteBinary)}
-pkill -x ${shellEscape(remoteBinaryName)} || true
-rm -f ${shellEscape(osacLockPath)}
-nohup env ${envParts.join(' ')} ${shellEscape(remoteBinary)} >> ${shellEscape(`${osacLogDir}/osac.log`)} 2>&1 < /dev/null &
-sleep 1
-if command -v ss >/dev/null 2>&1; then
-  ss -ltnp | grep -E ':${osacBootstrapConfig.osacPort}\\b' || true
-else
-  netstat -ltnp | grep -E ':${osacBootstrapConfig.osacPort}\\b' || true
-fi
-`;
-  await e2bConnector.runCommand(sessionId, startCommand, { timeoutMs: 30_000 });
-
-  const osacHost = await resolveE2bPublicHost(sessionId, osacBootstrapConfig.osacPort);
-  const protocol = osacHost.startsWith('localhost') || osacHost.startsWith('127.') ? 'ws' : 'wss';
-
-  return {
-    osacEndpoint: `${protocol}://${osacHost}${osacBootstrapConfig.osacPathSuffix}`,
-    osacHost,
-    osacAuthToken: authToken,
-    osacRemoteBinary: remoteBinary,
-  };
-}
-
-async function waitForOsacBridgeReady(input: {
-  endpoint: string;
-  authToken: string;
-}): Promise<void> {
-  const statusUrl = input.endpoint.replace(/^ws/i, 'http').replace(/\/ws$/, '/status');
-  const attempts = Math.max(5, Number(process.env.OSAC_READY_ATTEMPTS || 20));
-  const delayMs = Math.max(250, Number(process.env.OSAC_READY_DELAY_MS || 1000));
-  let lastError: unknown = null;
-
-  for (let index = 0; index < attempts; index += 1) {
-    try {
-      const response = await fetch(statusUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${input.authToken}`,
-        },
-      });
-      if (response.ok) {
-        return;
-      }
-      lastError = new Error(`status=${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-
-    if (index + 1 < attempts) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(String(lastError || 'osac bridge not ready'));
-}
-
-async function canReuseOsacBridge(input: {
-  endpoint?: string | null;
-  authToken?: string | null;
-}): Promise<boolean> {
-  const endpoint = pickString(input.endpoint);
-  const authToken = pickString(input.authToken);
-  if (!endpoint || !authToken) {
-    return false;
-  }
-  try {
-    await waitForOsacBridgeReady({ endpoint, authToken });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
 
 export class SandboxAgentProvisionService {
   async syncOpencodeRuntimeConfig(input: { orchestratorSessionId: string; taskSessionId?: string }) {
     const sessionId = input.orchestratorSessionId;
+    writeConnectorDebugLog('[OPENCODE_RUNTIME_SYNC_START]', {
+      orchestratorSessionId: sessionId,
+      taskSessionId: input.taskSessionId || null,
+    });
     const info = await e2bConnector.getSandboxInfo(sessionId);
     const trafficAccessToken =
       (info as any)?.trafficAccessToken || (info as any)?.traffic_access_token || null;
@@ -1255,6 +1062,13 @@ export class SandboxAgentProvisionService {
       stateRoot,
       trafficAccessToken
     );
+    writeConnectorDebugLog('[OPENCODE_RUNTIME_SYNC_DONE]', {
+      orchestratorSessionId: sessionId,
+      taskSessionId: input.taskSessionId || null,
+      baseUrl,
+      connectorMcpKeys: Object.keys(connectorBootstrap.mcpEntries),
+      processEnvKeys: Object.keys(connectorBootstrap.processEnvs),
+    });
     return {
       baseUrl,
       trafficAccessToken,
@@ -1342,6 +1156,7 @@ export class SandboxAgentProvisionService {
           const restored = await restoreWorkspaceIfArchived(sessionId);
           if (restored && taskSessionId) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
           }
         }
 
@@ -1378,6 +1193,34 @@ export class SandboxAgentProvisionService {
               ? restartOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
               : startOpencodeServer(sessionId, baseUrl!, opencodeEnvs, stateRoot, trafficAccessToken)
           );
+          const reusableBridge = await canReuseOsacBridge({
+            endpoint: osacEndpoint,
+            authToken: osacAuthToken,
+          });
+          if (reusableBridge) {
+            osacHostPort =
+              Number(existingMetadata.osacHostPort || osacBootstrapConfig.osacPort) || osacBootstrapConfig.osacPort;
+            osacConnectionMode = pickString(existingMetadata.osacConnectionMode) || 'direct';
+          } else {
+            const bridge = await runStep('osac_bridge', () =>
+              ensureOsacBridge(sessionId, {
+                executor,
+                workspaceRoot,
+                authToken: osacAuthToken,
+              })
+            );
+            osacEndpoint = bridge.osacEndpoint;
+            osacHost = bridge.osacHost;
+            osacHostPort = osacBootstrapConfig.osacPort;
+            osacConnectionMode = 'direct';
+            osacAuthToken = bridge.osacAuthToken;
+            await runStep('osac_ready', () =>
+              waitForOsacBridgeReady({
+                endpoint: bridge.osacEndpoint,
+                authToken: bridge.osacAuthToken,
+              })
+            );
+          }
           await runStep('sandbox_verify', () => runSandboxVerify(sessionId));
           await runStep('playwright_mcp', () => osacAgentService.ensurePlaywrightMcp(sessionId));
           await runStep('neko_debug', () => ensureNekoDebug(sessionId));
@@ -1436,6 +1279,36 @@ export class SandboxAgentProvisionService {
               })
             );
           }
+        } else if (executor === 'altus') {
+          const reusableBridge = await canReuseOsacBridge({
+            endpoint: osacEndpoint,
+            authToken: osacAuthToken,
+          });
+          if (reusableBridge) {
+            osacHostPort =
+              Number(existingMetadata.osacHostPort || osacBootstrapConfig.osacPort) || osacBootstrapConfig.osacPort;
+            osacConnectionMode = pickString(existingMetadata.osacConnectionMode) || 'direct';
+          } else {
+            const bridge = await runStep('osac_bridge', () =>
+              ensureOsacBridge(sessionId, {
+                executor,
+                workspaceRoot,
+                authToken: osacAuthToken,
+              })
+            );
+            osacEndpoint = bridge.osacEndpoint;
+            osacHost = bridge.osacHost;
+            osacHostPort = osacBootstrapConfig.osacPort;
+            osacConnectionMode = 'direct';
+            osacAuthToken = bridge.osacAuthToken;
+            await runStep('osac_ready', () =>
+              waitForOsacBridgeReady({
+                endpoint: bridge.osacEndpoint,
+                authToken: bridge.osacAuthToken,
+              })
+            );
+          }
+          await runStep('neko_debug', () => ensureNekoDebug(sessionId));
         } else {
           throw new Error(`unsupported sandbox executor: ${executor}`);
         }
@@ -1448,6 +1321,16 @@ export class SandboxAgentProvisionService {
           executor,
           codexExecutionMode: codexExecutionMode || undefined,
           codexMode: codexExecutionMode || undefined,
+          sandboxBaseUrl: baseUrl,
+          sandboxPort: baseUrl ? e2bConfig.opencodePort : undefined,
+          sandboxHost: host,
+          workspaceRoot: workspaceRoot || undefined,
+          stateRoot: stateRoot || undefined,
+          altusBaseUrl: executor === 'altus' ? baseUrl : undefined,
+          altusPort: executor === 'altus' && baseUrl ? e2bConfig.opencodePort : undefined,
+          altusHost: executor === 'altus' ? host : undefined,
+          altusWorkspaceRoot: executor === 'altus' ? workspaceRoot || undefined : undefined,
+          altusStateRoot: executor === 'altus' ? stateRoot || undefined : undefined,
           opencodeBaseUrl: baseUrl,
           opencodePort: baseUrl ? e2bConfig.opencodePort : undefined,
           opencodeHost: host,

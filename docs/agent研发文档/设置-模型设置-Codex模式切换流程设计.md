@@ -162,8 +162,8 @@ oneceo 不能照搬它“服务端直接跑 codex sdk/cli”的部署方式，�
 3. 已完成本地测试：
    - `cd OSAC_client && PATH=/opt/homebrew/bin:$PATH go test ./...`
 4. 已完成 Linux amd64 编译：
-   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24`
-   - `OSAC_client/dist/osac-linux-amd64_v1.1.2.fix24_debug`
+   - `OSAC_client/dist/osac-linux-amd64_v1.1.3`
+   - `OSAC_client/dist/osac-linux-amd64_v1.1.3_debug`
 
 边界说明：
 
@@ -741,7 +741,7 @@ oneceo 再把这些事件映射到自己的 timeline 消息。
 2. oneceo 需要的 `codex runtime ensure / create / resume / input / interrupt / status`
    - OSAC 已有最小 handler 和 manager
 3. oneceo 需要的 sandbox 内 binary
-   - 已产出 `v1.1.2.fix22`
+   - 当前统一交付版本已提升为 `v1.1.3`
 
 但仍未完成：
 

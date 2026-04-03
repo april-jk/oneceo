@@ -1,0 +1,92 @@
+# auto report 2026-04-02
+
+- 做了什么：已认领 GitHub issue `#9`《设计多用户隔离模型，统一 tenantKey / userId / sessionId 边界》。
+- 做了什么：按仓库要求先核对 `AGENTS.md`、`docs/AGENTS_GUIDE/CODEX_PROMPT.md`、Altus/OSAC/直通模式相关既有设计文档，并梳理了 `tenantKey / userId / sessionId / orchestratorSessionId / opencodeSessionId` 在现有实现中的分布。
+- 做了什么：新增《20260402_多用户隔离模型与标识边界设计_[尚未采用].md》，明确 `userId` 是授权主键、`tenantKey` 只是命名空间、`sessionId` 是运行态隔离锚点，并给出 Redis 迁移前置约束、涉及模块清单与改造优先级。
+- 遇到什么：当前实现同时存在 `managed run stream` 的强用户校验、`workspace cache` 的 `default tenant` 回退、以及 `tenantKey -> userId` 的弱身份推断，隔离强度不一致。
+- 计划如何解决：等待你审核 #9 设计稿；若通过，下一步直接进入 `#10`，把 Redis key / stream / TTL 规范严格建立在本次定义的 `tenantKey + sessionId + runtime 子键` 模型上。
+- 做了什么：你已确认进入实现阶段，已将 #9 设计文档状态从 `[尚未采用]` 更新为 `[20260402-1106已采用]`。
+- 做了什么：已落第一轮 P0 实现，移除 `current-user-resolver` 中 `tenantKey -> userId` 的弱回退，改为 `tenantKey` 缺省直接等于 `userId`；同时收紧 `/sessions`、`workspace/dir`、`workspace/tree`、`workspace/file` 这几条入口为“必须先识别用户，再校验 session 归属”。
+- 做了什么：已停止 `Altus managed` 和 `session connector` 两条主链路中对 `bindUserIfMissing()` 的继续使用，改为遇到无归属用户的旧 session 直接拒绝进入主流程。
+- 遇到什么：仓库内仍存在 WebSocket 直通链路在补建 DB session 时不写 `userId` 的旧实现，这意味着后续还需要继续清理非 HTTP 创建链路，才能彻底消除无归属 session 来源。
+- 计划如何解决：先完成本轮最小验证；若通过，下一步继续清理 WebSocket/直通补建 session 的匿名写入路径，并把 `bindUserIfMissing()` 彻底退出主业务路径。
+- 做了什么：根据新增要求，已补一组新的认证与后台设计文档，覆盖用户端登录页、注册页、后台管理登录页，以及用户身份与对话、skills、连接器授权的绑定规则。
+- 做了什么：新增主索引 [README](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260402_用户身份认证与后台管理设计/README.md) 及三份子文档，明确当前 `apps/web` 只有占位 `AuthDialog`、`UserMenu` 仍是静态用户信息、`apps/admin_management` 目前没有管理员鉴权入口，不能直接在现状上补几个按钮了事。
+- 计划如何解决：等待你审核这组 `[尚未采用]` 设计文档；只有你确认采用后，我再按文档顺序进入登录/注册/API 认证/后台守卫的代码实现。
+- 做了什么：你补充“用户态与管理端使用两张不同身份表”的要求后，我已将设计文档更新为 `app_users` / `admin_users` 双表、双 session、双 cookie 的硬边界，不再保留共表方案。
+- 做了什么：我额外扫描了主站和后台的真实调用面，补充了用户态需要鉴权的完整范围，不只限于对话、skills、连接器，还包括会话详情、recent/history、workspace、交付物下载、runtime 配置、Altus 输入链路、附件、标题/收藏/分享/删除等入口；后台则覆盖全部现有管理路由。
+- 计划如何解决：等待你确认这轮修订后的认证设计文档；确认后再进入代码实现，并按“用户态认证主链 -> 用户态页面守卫/API 替换 -> 后台管理员认证主链 -> 后台路由守卫”顺序推进。
+- 做了什么：你已确认开始实现，我已将 `20260402_用户身份认证与后台管理设计` 目录下的认证设计文档统一切换为 `[20260402-1137已采用]`，并同步更新 README 索引。
+- 做了什么：主站已新增真实用户登录/注册链路，补了 `AuthContext`、`/login`、`/register`、受保护路由守卫和 `UserMenu` 的真实用户信息展示；内部页统一改为依赖登录 cookie，不再继续注入本地伪 `X-User-Id`。
+- 做了什么：用户态请求链已补齐 cookie 透传，`task-creation-client`、`connectors-client` 和全局 `fetch` 默认携带 `credentials: include`；Altus managed run 的 SSE 订阅也切到 `withCredentials`，并移除了 URL 上拼接本地 userId 的旧行为。
+- 做了什么：管理后台 web 端已接入管理员登录门禁，新增 `/api/admin/auth` 的前端调用、未登录登录页、已登录管理员身份展示和登出动作；后台与用户态继续保持双表双 session 双 cookie 隔离。
+- 遇到什么：`apps/api` 仍有一批与本次改动无关的历史 TypeScript 报错，导致仓库级 API `type-check` 不能通过，错误集中在 `agents/`、`task-creation-service`、`env.ts`、`railway-deployment-service.ts` 等旧模块。
+- 计划如何解决：本轮先以通过的 `apps/web check` 和 `apps/admin_management type-check` 作为前端改动验收；下一步继续补用户态后端业务面上的细颗粒鉴权，并在清理 API 历史 TS 问题后再做更完整的全仓静态检查。
+- 做了什么：按当前认证主线，已导出相关接口清单并新增《05_认证接口清单与单元测试方案_[20260402-1152已采用].md》，明确用户态 API、内部管理员 API、管理端代理 API 三组接口和对应断言口径。
+- 做了什么：已新增接口级自动化测试 `apps/api/tests/auth-routes.test.ts`、`apps/api/tests/internal-admin-auth-routes.test.ts`、`apps/admin_management/tests/admin-auth-routes.test.ts`，覆盖登录、注册、会话查询、登出、内部 token 拒绝、会话失效、cookie 写入与清理等核心场景。
+- 做了什么：已执行新增测试并全部通过；`apps/api` 认证接口 11 条测试通过，`apps/admin_management` 管理员代理接口 4 条测试通过。
+- 计划如何解决：下一步继续沿同一文档把更大范围的用户态业务接口纳入同样的接口清单与自动化测试，重点是对话、附件、workspace、Altus 输入和连接器授权。
+- 做了什么：继续把用户态业务接口纳入同一测试方案，新增了任务会话与 workspace、连接器个人配置两组接口清单，并同步更新认证接口测试文档。
+- 做了什么：已新增 `apps/api/tests/task-creation-business-routes.test.ts` 与 `apps/api/tests/connector-routes.test.ts`，覆盖会话创建绑定当前用户、会话列表拒绝匿名访问、会话列表不泄漏其他用户 session、workspace 目录跨用户访问返回 `403`、连接器个人配置只按当前用户读取与创建。
+- 做了什么：已修正 `GET /api/task-creation/sessions` 的实现，改为必须先鉴权、只按当前用户读取最近会话，并把列表缓存改成按 `userId` 隔离，避免跨用户命中同一个全局缓存。
+- 做了什么：已执行新增用户态业务接口测试，`task-creation` 与 `connector` 新增测试共 7 条全部通过。
+- 计划如何解决：下一步继续扩展到用户态更深的业务接口，包括 recent/history、attachments、deliverables、runtime start/touch/interrupt、session connector attach/detach 和 Altus 输入链路。
+- 做了什么：已继续把用户态深水区接口全部纳入接口级测试方案，更新《05_认证接口清单与单元测试方案_[20260402-1152已采用].md》，把 `task-creation` 与 `altus-managed` 当前已暴露的用户态 HTTP 接口完整列入清单。
+- 做了什么：补了 `apps/api/tests/task-creation-route-coverage.test.ts`，把 `skills/settings`、`codex runtime-config`、`draft session`、`title/favorite`、`workspace tree/file/raw`、`debug`、`opencode events`、`intent/task-description/execution-plan/delete`、`attachments upload`、`deliverables download`、`deployment`、`deployment database rows` 这些此前未完全覆盖的接口统一纳入 HTTP 级测试。
+- 做了什么：后端同步修正了一批真实鉴权缺口，补齐了 `debug`、`workspace/raw`、`opencode/events`、`intent/task-description/execution-plan`、`DELETE /sessions/:sessionId` 等路由的 owner 校验；同时把 `skills/runtime-config/draft/deployment/database` 一组接口的未登录返回码统一收敛到 `401/403`。
+- 做了什么：已执行 API 侧完整新增测试集合，命令为 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/auth-routes.test.ts tests/internal-admin-auth-routes.test.ts tests/task-creation-business-routes.test.ts tests/connector-routes.test.ts tests/task-creation-deep-routes.test.ts tests/task-creation-route-coverage.test.ts tests/altus-managed-routes.test.ts`，共 43 条测试全部通过。
+- 遇到什么：测试运行时仍会打印大量预期内的鉴权失败日志，例如未登录 `401` 和越权 `403` 的服务端报错输出，日志噪声较大，但不影响结果。
+- 计划如何解决：下一步如果继续推进，就把这些接口测试纳入 CI 的稳定入口，并继续清理 `apps/api` 里与本轮无关的历史 TypeScript 报错，减少后续改动的验证阻力。
+- 做了什么：定位并修复了“注册登录后新建对话发送消息却跳回旧 session，并报当前用户无权操作该 Altus 会话”的问题。根因是前端 `useTaskCreationAgent` 在没有当前会话上下文时，错误地回退读取 `localStorage.task_creation_session_id`，把新对话重新绑定到了旧会话。
+- 做了什么：已移除这条旧 session 回退逻辑，改为发送消息时只认显式传入的 `sessionId`、当前 hook 状态和 URL path；当处于 `/new-task` 这类无会话上下文页面时，会创建新的 managed 会话，而不是复用旧 session。
+- 做了什么：新增前端测试 `apps/web/client/src/tests/managed-session-resolution.test.ts`，并执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“从新建任务页发送首条消息时只跳转到会话页，但消息并未真正发出，页面也不显示该消息”的问题。根因是 managed 首条消息此前仍使用前端临时生成的 provisional session id，路由跳转、历史加载和后端真实建会话之间存在竞态。
+- 做了什么：已将 managed 首条消息链路改为先通过 `createTaskCreationDraftSession()` 创建后端真实 draft session，再绑定路由并提交 `/api/altus-managed/inputs`；不再在 managed 模式下用前端 provisional session 先跳转。
+- 做了什么：已再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“新建任务首条消息已发送、会话也已创建，但跳到 `/session/:id` 后页面短时间不显示这条消息”的问题。进一步确认根因是 `/new-task -> /session/:id` 切换期间，首条 optimistic `user_input` 只存在于当前页面内存状态，没有在路由切换前同步写入会话视图缓存，页面重挂后会先看到空白消息区。
+- 做了什么：已在 `useTaskCreationAgent` 中新增首发消息缓存桥接逻辑，managed 新会话首条消息现在会先合并到 history view cache，再触发 `bindSessionId()` 切换路由，保证新页面一加载就能从 sessionStorage 视图缓存读到这条消息。
+- 做了什么：已新增回归测试，验证 optimistic 首条消息会在路由切换前写入历史视图缓存；再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：继续修复“首条消息能显示，但刚跳转到 `/session/:id` 时没有 `智能体正在处理...`，实时消息也像没立刻接上”的问题。确认根因是 managed 首发后的 `isProcessing/managedRunId` 只存在于当前页面内存态，页面切换重挂后要等异步 `latest run` 查询返回，处理中提示和 managed stream 才会恢复。
+- 做了什么：已新增 managed run recovery 的 sessionStorage 持久化，发送首条 managed 消息时会先写入 `sessionId + processing + runId/status` 恢复状态；新页面进入对应 session 时会先恢复处理中提示，并在已有 `runId` 的情况下立即重连 managed run stream。
+- 做了什么：已补回归测试，验证 managed 处理中恢复态会跨路由切换保留；再次执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web exec vitest run client/src/tests/managed-session-resolution.test.ts client/src/tests/managed-history-pending-message.test.ts client/src/tests/managed-message-stream-identity.test.ts` 与 `pnpm --dir /Users/watson/codingProj/oneceo/apps/web check`，全部通过。
+- 做了什么：排查 GitHub OAuth 回跳后“页面需要等很久才真正连接上”的问题，确认慢点主要堆在 `/api/connectors/profiles/:profileId/oauth/callback` 的同步串行链路：先等 GitHub `/user`、再等 `/user/installations`，随后还同步等待 `refreshAttachedBindingsForProfile(...)`，导致回跳响应一直被阻塞。
+- 做了什么：已将 GitHub OAuth 回调中的 `/user` 与 `/user/installations` 校验改为并行执行，并把 callback 路由里的 `refreshAttachedBindingsForProfile(...)` 从同步等待改成后台异步队列，不再阻塞前端回跳响应。
+- 做了什么：已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/connector-routes.test.ts`，通过。
+- 做了什么：排查了管理后台登录后白屏问题，确认管理员认证链路本身正常，`admin / admin123456` 可以成功登录并建立后台会话；真正的问题落在 `apps/admin_management/web/src/App.tsx` 登录后的默认 `kvm + sandbox` 首屏渲染分支。
+- 做了什么：已将 Sandbox 首页依赖的 `sandboxApi / sandboxes / runtime-registry summary / distributions / items / riskTags` 全部改成显式归一化读取，不再直接使用脆弱的嵌套访问；当治理接口缺字段或返回局部异常数据时，页面现在会降级为空态，而不是整页白屏。
+- 做了什么：同步更新后台登录与页面改造设计文档，补充“后台首页在治理接口返回缺字段、空数组或局部数据异常时，不允许整页白屏”的验收标准；已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/admin_management type-check`，通过。
+- 做了什么：继续用临时 Playwright 真实复现管理员登录后的白屏，抓到浏览器报错 `Rendered more hooks than during the previous render`，定位到 `apps/admin_management/web/src/App.tsx` 在匿名态提前 `return` 后，登录态才执行后续多组 `useMemo`，违反 React Hook 顺序规则。
+- 做了什么：已将登录后主界面的统计与筛选派生数据从 `useMemo` 改为普通常量计算，彻底移除这条登录态切换时新增 Hook 的路径，避免再次触发整页白屏。
+- 计划如何解决：继续执行 `apps/admin_management type-check` 和临时 Playwright 复测，确认登录后能稳定进入后台主界面，再决定是否收尾提交。
+- 做了什么：开始推进多用户 + Redis 主线子任务 `#10`，已先回看母任务 `#8` 与已采用的 `#9` 多用户隔离文档，确认 `#10` 的职责是先把 Redis 命名、TTL、stream/replay 约束定死，再为后续 `#11` 与 `#12` 提供统一实现依据。
+- 做了什么：已认领 `#10`，并在 issue 下补进展评论；同时在 `#8` 下追加主线顺序说明，明确建议执行顺序为 `#9 -> #10 -> #11 -> #12 -> #13 -> #14`。
+- 做了什么：新增设计稿 `docs/agent研发文档/20260402_Redis_key_stream_TTL统一规范_[尚未采用].md`，将 Redis 统一前缀、`tenant -> session -> run` 命名层级、session/run 两级 stream、TTL/trim 表、幂等/去重、dead-letter、恢复/回放规则，以及当前 `workspace cache / managed run stream / opencode event stream` 到 Redis 的首批映射全部收口。
+- 计划如何解决：等待你审核这份 `#10` 设计稿；如果你确认采用，我下一步直接把文档切到已采用状态，并开始按文档先落 `Redis key builder + stream key builder + TTL 常量 + 基础 client/namespace`，随后进入 `#11` 的实际迁移。
+- 做了什么：按“切忌过度开发”的要求再次对照 `#8`、`#9`、当前代码和 `referance/suna`，重新收紧了 `#10` 设计稿，把文档目标明确压回 `workspace/recent/history/session-events/run-state/run-stream` 这条当前平台主线。
+- 做了什么：已把 `user_context`、`kb_context`、`project_meta`、`tool guide / MCP toolkit / runtime-config` Redis 共享缓存、强制双连接池、强制 `StreamHub`、强制运维脚本/统计、独立 dead-letter 等内容移出当前必做范围，只保留为后续可选优化，不再作为 `#10` 的完成标准。
+- 遇到什么：此前版本虽然参照了 `Suna` 的完整 Redis 落点，但把“参考背景”和“当前必须实现”混在了一起，容易把 `#11/#12` 推向过宽的实现面。
+- 计划如何解决：等待你确认这份收紧后的 `#10` 稿件；确认后只按文档里保留的最小 key/stream/TTL 集合进入实现，不再提前扩平台级 Redis 能力。
+- 做了什么：你确认开始实现后，已将 `#10` 设计稿切换为已采用状态：[20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md)。
+- 做了什么：已新增最小 Redis 基础层，落了 `apps/api/src/services/redis-keyspace.ts`、`apps/api/src/services/redis-client-service.ts`、`apps/api/src/services/altus-run-redis-state-service.ts`，统一了 `tenant -> session -> run` 命名、TTL、stream maxlen、以及 run state / owner / heartbeat / stop / active-runs / run-stream 的首批写入接口。
+- 做了什么：已把 Altus managed run 主链路接到 Redis：`altus-managed-run-entry-service` 在 run 创建时注册 Redis 状态并启动 heartbeat；`altus-run-event-writer` 在 DB 事件落盘后同步写入 run stream；`altus-run-lifecycle-service` 在 `running / waiting_user / completed / failed / stopped` 时同步刷新 Redis run 状态；`altus-managed-stream-service` 订阅时优先从 Redis run stream 做短窗口回放，再回退 DB。
+- 做了什么：`altus-managed-routes` 的 run stream 入口已改成显式把 `runId + sessionId + userId` 传入 service，避免 Redis stream 订阅时丢失会话上下文。
+- 做了什么：已新增不依赖真实 Redis 的单测 `apps/api/tests/redis-keyspace.test.ts`，覆盖 key builder 和 run 协调状态写入；同时同步更新 `apps/api/tests/altus-managed-routes.test.ts` 以匹配新的 streamRun 参数结构。
+- 做了什么：已执行 `pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/altus-managed-routes.test.ts tests/redis-keyspace.test.ts`，9 条测试全部通过。
+- 遇到什么：`apps/api type-check` 仍被仓库内既有历史错误阻塞，但筛选后确认本轮新增与改动文件未再出现新的 TypeScript 报错。
+- 计划如何解决：下一步继续按已采用的 `#10` 规范进入 `#11`，先把 `workspace cache + recent/history + session-events` 迁到 Redis，再看是否需要继续补 `stop/recovery` 的消费侧逻辑。
+- 做了什么：按你的要求已在本机通过 Homebrew 安装 Redis `8.6.2`，并用 `brew services start redis` 启动为后台服务；当前 `redis-cli ping` 返回 `PONG`，服务监听 `127.0.0.1:6379`，`protected-mode=yes`。
+- 做了什么：新增真实 Redis 集成测试 `apps/api/tests/redis-live.test.ts`，并用本机 `REDIS_URL=redis://127.0.0.1:6379/15` 执行 `tests/redis-live.test.ts + tests/redis-keyspace.test.ts + tests/altus-managed-routes.test.ts`，共 10 条测试全部通过。
+- 做了什么：补了一轮真实 Redis 下的缺陷修正，修复了 `redis-client-service.ts` 中 `ioredis set` 重载调用不正确导致的运行告警；修复后 live Redis 测试无新增告警。
+- 做了什么：额外执行了真实 Redis 读写自检，`oneceo:test:ping` 在本机 Redis 上写入并成功读取返回 `ok`。
+- 遇到什么：仓库中没有现成的本地 `.env` 文件，因此这次真实 Redis 测试是通过命令行显式注入 `REDIS_URL=redis://127.0.0.1:6379/15` 完成的，没有修改仓库环境文件。
+- 计划如何解决：后续如果需要把 Redis 作为本地默认开发配置，再决定是否补一个明确的本地环境文件模板或启动脚本；当前服务安装、后台启动和真实 Redis 回归都已完成。
+- 做了什么：按你的要求补了显式 Redis 启动开关，`apps/api/src/services/redis-client-service.ts` 现在只有在 `ONECEO_REDIS_ENABLED=true/1/yes/on` 且 `REDIS_URL` 有值时才启用 Redis；仅设置 `REDIS_URL` 不会自动启用。
+- 做了什么：已把本机 Redis 配置写进环境文件：`apps/.env` 当前设置为 `ONECEO_REDIS_ENABLED=true`、`REDIS_URL=redis://127.0.0.1:6379/15`；`apps/.env.example` 则以默认关闭的示例形式写明 `ONECEO_REDIS_ENABLED=false` 与本地 Redis 示例地址。
+- 做了什么：新增了“不开开关不启用 Redis”的测试断言，并使用 `ONECEO_REDIS_ENABLED=true REDIS_URL=redis://127.0.0.1:6379/15` 再次执行 Redis live 集成测试、keyspace 测试和 Altus 路由回归，共 11 条测试全部通过。
+- 做了什么：按你的要求重启并检查了本地 API，确认新的 `apps/.env` 配置已被运行时读取；进程内检查结果为 `ONECEO_REDIS_ENABLED=true`、`REDIS_URL=redis://127.0.0.1:6379/15`、`redisClientService.isEnabled() === true`。
+- 做了什么：解释并复现了“db15 为空”的原因：一开始 `4000` 端口仍是旧 API 进程，且没有发生任何实际 Redis 写入，所以 `db15` 显示为空；在明确重启 API 后，我又用运行时代码实际写入了一组诊断 run 数据。
+- 做了什么：通过 `redis-cli MONITOR` 抓到真实写入命令，包含 `SET run:state`、`SET run:heartbeat`、`SADD ops:runs:active`、`XADD run:stream`；随后回查 `redis-cli -n 15 DBSIZE` 已变为 `4`，并能读到对应 `oneceo:v1:*` 键。
+- 做了什么：按“导出所有 Redis 使用位置并逐项验证”的要求，已把当前真实落 Redis 的位置清单补进 `20260402_Redis_key_stream_TTL统一规范_[20260402-2250已采用].md`，明确目前真正已用 Redis 的只有 Altus managed run 这一组：`run:state`、`run:owner`、`run:heartbeat`、`ops:runs:active`、`run:stop`、`run:stream`，以及 `altus-managed-stream-service` 的“优先 Redis、空时回退 DB”读取链路。
+- 做了什么：已新增 `apps/api/tests/altus-managed-stream-service.test.ts`，覆盖 Redis 历史优先读取和 DB fallback；并扩展 `apps/api/tests/redis-live.test.ts`，覆盖真实 Redis 下的 `state / owner / heartbeat / stop / active-runs / stream` 写入与终态清理。
+- 做了什么：已执行 `ONECEO_REDIS_ENABLED=true REDIS_URL=redis://127.0.0.1:6379/15 pnpm --dir /Users/watson/codingProj/oneceo/apps/api exec tsx --test tests/altus-managed-stream-service.test.ts tests/redis-live.test.ts tests/redis-keyspace.test.ts tests/altus-managed-routes.test.ts`，共 13 条测试全部通过。
+- 做了什么：额外写入了一组 `redis-inventory-*` 诊断数据，并直接检查 `db15` 实际键和值；确认当前 Redis 中能看到 `ops:runs:active`、`run:heartbeat`、`run:state`、`run:stop`、`run:stream` 五类键，且 `run:state`、`run:stop`、`run:stream` 的值内容正确。

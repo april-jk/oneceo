@@ -5,6 +5,7 @@ import { ensureDatabaseConnection } from '../config/database';
 import { sandboxSecurityConfig } from '../config/sandbox-security';
 import { archiveSandboxWorkspace, isArchiveStorageConfigured } from './sandbox-archive-service';
 import { setSandboxMetadata } from './sandbox-activity-service';
+import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 
 const SANDBOX_BLOCKED_ENV_PATTERNS = [
   /^R2_/i,
@@ -165,6 +166,9 @@ export class SandboxEnvironmentService {
     }
 
     if (isE2b) {
+      await sessionMcpRecoveryService
+        .markPendingRecoverByOrchestratorSessionId(environment.orchestratorSessionId)
+        .catch(() => null);
       await e2bConnector.killSandbox(environment.orchestratorSessionId);
     }
 

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import {
   Bar,
   BarChart,
@@ -15,7 +16,11 @@ import {
   YAxis,
 } from 'recharts';
 import { api } from './api';
+import type { AdminUser } from './api';
+import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
 import { KvmControlCenter } from './components/KvmControlCenter';
+import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
+import { SkillManagementSection } from './components/SkillManagementSection';
 import type {
   AgentManagementOverview,
   AuditLogEntry,
@@ -36,7 +41,7 @@ import type {
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'agent' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type HostTrendPoint = {
   timestamp: number;
   timeLabel: string;
@@ -49,6 +54,9 @@ const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string; tag: 
   { key: 'kvm', label: 'KVM 管理', subtitle: '虚拟机与资源', tag: 'KVM' },
   { key: 'conversation', label: '对话管理', subtitle: '任务创建会话', tag: 'MSG' },
   { key: 'agent', label: '智能体管理', subtitle: 'Agent 运行状态', tag: 'AGT' },
+  { key: 'skill', label: '技能管理', subtitle: '平台技能与 revision', tag: 'SKL' },
+  { key: 'connectorGuide', label: '连接器 Guide', subtitle: '隐式 guide 与发布', tag: 'CGD' },
+  { key: 'osacRelease', label: 'OSAC 版本', subtitle: '工件发布与 latest', tag: 'OSA' },
   { key: 'sandbox', label: '执行环境管理', subtitle: 'Sandbox 与 OSAC', tag: 'SBX' },
   { key: 'audit', label: '审计日志', subtitle: '操作追踪', tag: 'LOG' },
 ];
@@ -219,6 +227,10 @@ function formatDuration(ms: number) {
   return `${hours}h`;
 }
 
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function buildExportFilename(sessionId: string) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `conversation-${sessionId}-${stamp}.json`;
@@ -275,6 +287,12 @@ const DEFAULT_TRANSITION_FILTERS = {
 };
 
 export default function App() {
+  const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
+  const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
+  const [loginName, setLoginName] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
   const [kvmMode, setKvmMode] = useState<'kvm' | 'sandbox'>('sandbox');
 
@@ -333,6 +351,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const bootstrapAdminSession = useCallback(async () => {
+    try {
+      const result = await api.getCurrentAdmin();
+      setAdminUser(result.adminUser);
+      setAuthStatus('authenticated');
+      setAuthError(null);
+    } catch {
+      setAdminUser(null);
+      setAuthStatus('anonymous');
+      setAuthError(null);
+    }
+  }, []);
 
   const loadKvmSection = useCallback(async () => {
     const [overviewResult, vmResult, hostResult] = await Promise.allSettled([
@@ -829,6 +860,10 @@ export default function App() {
           await loadConversationSessions();
         } else if (section === 'agent') {
           await loadAgentSection();
+        } else if (section === 'skill') {
+          setError(null);
+        } else if (section === 'connectorGuide') {
+          setError(null);
         } else if (section === 'sandbox') {
           await loadSandboxSection();
         } else {
@@ -855,15 +890,26 @@ export default function App() {
   );
 
   useEffect(() => {
-    loadSection(activeSection, true);
-  }, [activeSection, loadSection]);
+    void bootstrapAdminSession();
+  }, [bootstrapAdminSession]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    loadSection(activeSection, true);
+  }, [activeSection, authStatus, loadSection]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
     if (activeSection !== 'kvm') return;
     void loadSection('kvm');
-  }, [activeSection, kvmMode, sandboxTab, loadSection]);
+  }, [activeSection, authStatus, kvmMode, sandboxTab, loadSection]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
     if (activeSection !== 'kvm') {
       return;
     }
@@ -884,9 +930,12 @@ export default function App() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
     if (!selectedSessionId || activeSection !== 'conversation') {
       return;
     }
@@ -918,7 +967,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSection, selectedSessionId]);
+  }, [activeSection, authStatus, selectedSessionId]);
 
   useEffect(() => {
     setTransitionView('timeline');
@@ -926,11 +975,102 @@ export default function App() {
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
   }, [selectedSessionId]);
 
-  const vmPieData = useMemo(
-    () => (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0),
-    [kvmOverview]
+  const handleAdminLogin = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      setAuthSubmitting(true);
+      setAuthError(null);
+      try {
+        const result = await api.adminLogin({
+          loginName: loginName.trim(),
+          password: loginPassword,
+        });
+        setAdminUser(result.adminUser);
+        setAuthStatus('authenticated');
+        setLoginPassword('');
+      } catch (requestError) {
+        setAdminUser(null);
+        setAuthStatus('anonymous');
+        setAuthError(requestError instanceof Error ? requestError.message : '管理员登录失败');
+      } finally {
+        setAuthSubmitting(false);
+      }
+    },
+    [loginName, loginPassword]
   );
-  const conversationSummary = useMemo(() => {
+
+  const handleAdminLogout = useCallback(async () => {
+    try {
+      await api.adminLogout();
+    } catch {
+      // clear local auth state even if backend session is already invalid
+    }
+    setAdminUser(null);
+    setAuthStatus('anonymous');
+    setError(null);
+  }, []);
+
+  if (authStatus === 'loading') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <section className="admin-auth-card">
+          <p className="eyebrow">Oneceo Admin</p>
+          <h1>正在校验管理员身份...</h1>
+          <p className="admin-auth-copy">后台管理入口会先验证独立的管理员会话，不与用户态身份共表。</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <div className="admin-auth-layout">
+          <section className="admin-auth-hero">
+            <p className="eyebrow">Oneceo Admin</p>
+            <h1>管理员后台与用户态彻底分离。</h1>
+            <p className="admin-auth-copy">
+              后台使用独立的 <code>admin_users</code> 和 <code>admin_user_sessions</code>，不会复用普通用户登录态。
+            </p>
+            <div className="admin-auth-badges">
+              <span>独立管理员表</span>
+              <span>独立 Cookie</span>
+              <span>统一治理入口</span>
+            </div>
+          </section>
+
+          <section className="admin-auth-card">
+            <p className="eyebrow">管理员登录</p>
+            <h2>进入治理控制台</h2>
+            <form className="admin-auth-form" onSubmit={handleAdminLogin}>
+              <label>
+                <span>登录名</span>
+                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
+              </label>
+              <label>
+                <span>密码</span>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                />
+              </label>
+              {authError ? <div className="auth-error-banner">{authError}</div> : null}
+              <button type="submit" className="primary-btn" disabled={authSubmitting}>
+                {authSubmitting ? '登录中...' : '登录后台'}
+              </button>
+            </form>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  const vmPieData = (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0);
+  const conversationSummary = (() => {
     const summary = {
       total: conversationSessions.length,
       waitingUser: 0,
@@ -947,36 +1087,33 @@ export default function App() {
     }
 
     return summary;
-  }, [conversationSessions]);
-  const agentCapabilitySummary = useMemo(() => {
+  })();
+  const agentCapabilitySummary = (() => {
     const capabilities = agentOverview?.capabilities || [];
     return {
       total: capabilities.length,
       available: capabilities.filter((item) => item.status === 'available').length,
       planned: capabilities.filter((item) => item.status === 'planned').length,
     };
-  }, [agentOverview]);
-  const auditSummary = useMemo(() => {
+  })();
+  const auditSummary = (() => {
     return {
       total: auditEntries.length,
       success: auditEntries.filter((item) => item.result === 'success').length,
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
-  }, [auditEntries]);
+  })();
 
-  const stateTransitions = useMemo(
-    () => conversationDetail?.trace?.stateTransitions || [],
-    [conversationDetail]
-  );
-  const sortedTransitions = useMemo(() => {
+  const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
+  const sortedTransitions = (() => {
     return [...stateTransitions].sort((a, b) => {
       const aTime = a.at ? Date.parse(a.at) : Number.MAX_SAFE_INTEGER;
       const bTime = b.at ? Date.parse(b.at) : Number.MAX_SAFE_INTEGER;
       return aTime - bTime;
     });
-  }, [stateTransitions]);
+  })();
 
-  const transitionOptions = useMemo(() => {
+  const transitionOptions = (() => {
     return {
       fromStages: uniqueSorted(sortedTransitions.map((item) => item.from?.stage)),
       toStages: uniqueSorted(sortedTransitions.map((item) => item.to?.stage)),
@@ -987,9 +1124,9 @@ export default function App() {
       agents: uniqueSorted(sortedTransitions.map((item) => item.trigger?.agent)),
       tones: uniqueSorted(sortedTransitions.map((item) => item.trigger?.tone)),
     };
-  }, [sortedTransitions]);
+  })();
 
-  const filteredTransitions = useMemo(() => {
+  const filteredTransitions = (() => {
     const query = transitionQuery.trim().toLowerCase();
     const fromMs = parseFilterTime(transitionFilters.fromTime);
     const toMs = parseFilterTime(transitionFilters.toTime);
@@ -1040,9 +1177,9 @@ export default function App() {
 
       return true;
     });
-  }, [sortedTransitions, transitionFilters, transitionQuery]);
+  })();
 
-  const transitionStats = useMemo(() => {
+  const transitionStats = (() => {
     const stageSet = new Set(filteredTransitions.map((item) => item.to?.stage).filter(Boolean) as string[]);
     const statusSet = new Set(filteredTransitions.map((item) => item.to?.status).filter(Boolean) as string[]);
     const phaseSet = new Set(filteredTransitions.map((item) => item.to?.phase).filter(Boolean) as string[]);
@@ -1053,24 +1190,45 @@ export default function App() {
       statuses: Array.from(statusSet),
       phases: Array.from(phaseSet),
     };
-  }, [sortedTransitions.length, filteredTransitions]);
+  })();
 
   const kvmShowsSandbox = activeSection === 'kvm' && kvmMode === 'sandbox';
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
+  const sandboxApi = sandboxOverview?.sandboxApi ?? null;
+  const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
+  const sandboxRegistrySummary = sandboxRuntimeRegistry?.summary ?? null;
+  const sandboxRegistryDistributions = sandboxRuntimeRegistry?.distributions ?? null;
+  const sandboxRegistryExecutors = asArray(sandboxRegistryDistributions?.executors);
+  const sandboxRegistryItems = asArray(sandboxRuntimeRegistry?.items).map((item) => ({
+    ...item,
+    riskTags: asArray(item?.riskTags),
+  }));
   const activeServiceOnline =
     activeSection === 'agent'
       ? agentOverview?.agentApi.online
+      : activeSection === 'skill'
+        ? true
+        : activeSection === 'connectorGuide'
+          ? true
+          : activeSection === 'osacRelease'
+            ? true
       : activeSection === 'sandbox' || kvmShowsSandbox
-        ? sandboxOverview?.sandboxApi.online
+        ? sandboxApi?.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
     activeSection === 'agent'
       ? 'Agent 服务'
+      : activeSection === 'skill'
+        ? 'Oneceo API'
+        : activeSection === 'connectorGuide'
+          ? 'Oneceo API'
+          : activeSection === 'osacRelease'
+            ? 'Oneceo API'
       : activeSection === 'sandbox' || kvmShowsSandbox
         ? 'Sandbox 服务'
         : 'KVM 服务';
   const updatedAtLabel = kvmShowsSandbox
-    ? sandboxOverview?.sandboxApi.timestamp || sandboxOverview?.sandboxes?.[0]?.startedAt
+    ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
     : kvmOverview?.updatedAt;
 
   const handlePower = async (vm: VmItem, action: 'start' | 'stop') => {
@@ -2131,15 +2289,15 @@ export default function App() {
   );
 
   const renderSandboxSection = () => {
-    const summary = sandboxRuntimeRegistry?.summary;
+    const summary = sandboxRegistrySummary;
     const metricsData = (sandboxRuntimeDetail?.metrics || sandboxMetrics).map((point) => ({
       timeLabel: point.timestamp ? new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '-',
       cpu: point.cpuUsagePercent ?? 0,
       memory: point.memoryUsagePercent ?? 0,
       disk: point.diskUsagePercent ?? 0,
     }));
-    const riskyItems = (sandboxRuntimeRegistry?.items || []).filter((item) => item.riskTags.length > 0).slice(0, 6);
-    const runtimeItems = sandboxRuntimeRegistry?.items || [];
+    const riskyItems = sandboxRegistryItems.filter((item) => item.riskTags.length > 0).slice(0, 6);
+    const runtimeItems = sandboxRegistryItems;
     const archiveRows = sandboxRuntimeDetail
       ? [
           {
@@ -2175,10 +2333,10 @@ export default function App() {
                 <h2>围绕 task session、executor、archive 与 connectivity 管理运行态</h2>
               </div>
               <div className="action-inline">
-                <span className={`service-state ${sandboxOverview?.sandboxApi.online ? 'ok' : 'down'}`}>
-                  {sandboxOverview?.sandboxApi.online ? 'Sandbox API 在线' : 'Sandbox API 离线'}
+                <span className={`service-state ${sandboxApi?.online ? 'ok' : 'down'}`}>
+                  {sandboxApi?.online ? 'Sandbox API 在线' : 'Sandbox API 离线'}
                 </span>
-                <span className="updated-at">{formatDateTime(sandboxOverview?.sandboxApi.timestamp)}</span>
+                <span className="updated-at">{formatDateTime(sandboxApi?.timestamp)}</span>
               </div>
             </div>
             <div className="sandbox-summary-strip">
@@ -2253,8 +2411,8 @@ export default function App() {
               <section className="kpi-grid fade-in">
                 <article className="kpi-card">
                   <p className="kpi-title">Sandbox API</p>
-                  <p className="kpi-value">{sandboxOverview?.sandboxApi.online ? '在线' : '离线'}</p>
-                  <p className="kpi-meta">{sandboxOverview?.sandboxApi.service || '-'}</p>
+                  <p className="kpi-value">{sandboxApi?.online ? '在线' : '离线'}</p>
+                  <p className="kpi-meta">{sandboxApi?.service || '-'}</p>
                 </article>
                 <article className="kpi-card">
                   <p className="kpi-title">Pending Archive</p>
@@ -2280,7 +2438,7 @@ export default function App() {
                     <span className="panel-caption">运行模式概览</span>
                   </div>
                   <div className="compact-list">
-                    {(sandboxRuntimeRegistry?.distributions.executors || []).map((item) => (
+                    {sandboxRegistryExecutors.map((item) => (
                       <div key={item.label} className="compact-item">
                         <strong>{item.label}</strong>
                         <span className="session-status">{item.value}</span>
@@ -3261,6 +3419,9 @@ const renderAuditSection = () => (
     if (activeSection === 'kvm') return kvmMode === 'sandbox' ? renderSandboxSection() : renderKvmSection();
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
+    if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
+    if (activeSection === 'connectorGuide') return <ConnectorGuideManagementSection onError={setError} />;
+    if (activeSection === 'osacRelease') return <OsacReleaseManagementSection onError={setError} />;
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
@@ -3311,6 +3472,9 @@ const renderAuditSection = () => (
                   {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
                 </span>
                 <p className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</p>
+                <p className="updated-at">
+                  {adminUser?.displayName || adminUser?.loginName} · {adminUser?.role || 'admin'}
+                </p>
               </div>
               <div className="header-actions">
                 {activeSection === 'kvm' ? (
@@ -3338,6 +3502,9 @@ const renderAuditSection = () => (
                   disabled={refreshing}
                 >
                   {refreshing ? '刷新中...' : '刷新当前标签'}
+                </button>
+                <button type="button" className="secondary-btn" onClick={() => void handleAdminLogout()}>
+                  退出登录
                 </button>
               </div>
             </div>

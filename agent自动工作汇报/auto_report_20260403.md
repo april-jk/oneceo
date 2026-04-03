@@ -50,3 +50,15 @@
 - 计划如何解决：
   - 下一步继续把 `#12` 的接口验收矩阵补进文档，并整理提交。
   - 后续再进入 `#13`，针对 connector / guide / session runtime 的多用户隔离继续做回归。
+
+## 2026-04-03 #12 真实 DB + Redis 联调验证
+
+- 做了什么：
+  - 按 `AGENTS.md` 要求重新执行了 `#12` 的最小闭环验证：`redis-keyspace.test.ts`、`redis-live.test.ts`、`altus-managed-redis-route-live.test.ts`，结果 `9/9 pass`。
+  - 额外执行了一次真实 DAO/service 联调脚本，不 mock 数据库，只把 `altusRunCoordinator.execute` 截成 no-op，验证 `startRun -> DB run/session/event 落盘 -> Redis state/recovery/active-runs/stream 写入 -> 删除 Redis 后 latestRun 按 DB 重建 -> markCompleted 终态清理` 整条链路。
+  - 联调脚本中已直接核对 DB 记录和 Redis 记录：`task_creation_sessions.user_id`、`task_session_runs.status`、`task_session_run_events.event_type`，以及 `run:state / run:recovery / run:stop / ops:runs:active / run:stream`。
+  - 真实联调结束后已清理测试 session 与 Redis key，并确认 `redis db15` 没有残留验证数据。
+- 遇到什么：
+  - 直接在 shell 中拼接长 `tsx` 脚本时容易被引号和模板字符串展开干扰，第一次诊断脚本因为命令展开失败，后续已改为 heredoc 方式执行。
+- 计划如何解决：
+  - 如果后续继续推进 `#12/#13`，就把这一套“真实 DB + Redis 双证据链”的脚本思路扩展到更多用户态深水区接口，而不是只停留在路由 mock 测试。

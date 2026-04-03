@@ -136,6 +136,35 @@ test('redis client stays disabled unless ONECEO_REDIS_ENABLED is explicitly true
   }
 });
 
+test('redis client falls back safely when redis endpoint is unreachable', async () => {
+  const previousToggle = process.env.ONECEO_REDIS_ENABLED;
+  const previousUrl = process.env.REDIS_URL;
+  const client = new RedisClientService();
+  try {
+    process.env.ONECEO_REDIS_ENABLED = 'true';
+    process.env.REDIS_URL = 'redis://127.0.0.1:1/15';
+
+    assert.equal(await client.getJson('missing-json'), null);
+    assert.equal(await client.getString('missing-string'), null);
+    assert.equal(await client.setString('fallback-key', 'value'), false);
+    assert.deepEqual(await client.listSetMembers('fallback-set'), []);
+    assert.deepEqual(await client.readStream('fallback-stream'), []);
+    assert.equal(await client.deleteByPrefix('oneceo:v1:tenant:fallback'), 0);
+  } finally {
+    await client.disconnect?.();
+    if (previousToggle === undefined) {
+      delete process.env.ONECEO_REDIS_ENABLED;
+    } else {
+      process.env.ONECEO_REDIS_ENABLED = previousToggle;
+    }
+    if (previousUrl === undefined) {
+      delete process.env.REDIS_URL;
+    } else {
+      process.env.REDIS_URL = previousUrl;
+    }
+  }
+});
+
 test('altus redis state service writes minimal run coordination keys and stream events', async () => {
   const fakeRedis = new FakeRedisPort();
   const service = new AltusRunRedisStateService(fakeRedis);

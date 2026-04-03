@@ -80,3 +80,55 @@
 - 计划如何解决：
   - 下一步把这轮 `#13` 提交 cherry-pick 到 `origin/task-creation-agent` 最新基础上并推送。
   - 随后更新 `#13` 和母任务 `#8` 的 issue 进展，明确当前 worktree 下的验证结论：授权结果、DB 归属字段、以及“无直接 Redis 写入”的隔离效果都已符合预期。
+
+## 2026-04-03 #14 多用户 + Redis 稳定性、回放与恢复测试方案
+
+- 做了什么：
+  - 已认领 `#14`，并回看 issue 范围、`#11`、`#12`、`#13` 当前产物。
+  - 新增设计稿 `docs/agent研发文档/20260403_多用户与Redis稳定性_回放_恢复测试方案_[尚未采用].md`。
+  - 这版方案已明确：`#14` 只负责统一测试矩阵和当前真实缺口，不扩成新的测试平台。
+  - 文档已把验收对象收成四类：多用户隔离稳定性、Redis 稳定性、SSE / stream 回放、Altus / connector 恢复。
+  - 也已经把与 `#7` 的衔接口径写清楚：`#14` 先给统一证据链，`#7` 再基于它补 connector guide 细化场景。
+- 遇到什么：
+  - 当前仓库里已有测试资产较多，`#14` 最大风险不是“缺测试”，而是重复发明一套新框架导致过度开发。
+- 计划如何解决：
+  - 等用户审核这份 `[尚未采用]` 设计稿。
+  - 如果确认开始实现，就严格按文档顺序只补真实缺口：先总表，再 Redis 不可用 / 清空后的 rebuild 验证，最后整理统一验收命令。
+
+## 2026-04-03 #14 第一批实现
+
+- 做了什么：
+  - 用户已确认开始，`#14` 文档已切换为已采用：`20260403_多用户与Redis稳定性_回放_恢复测试方案_[20260403-1308已采用].md`。
+  - 在文档中补了当前统一验收总表，明确已有测试资产、这轮新增缺口测试、统一执行命令和通过标准。
+  - 新增 `apps/api/tests/altus-run-recovery.service.test.ts`，覆盖 `reconcileLatestRun()` 在 Redis 清空后的 DB rebuild，以及 terminal 状态下 stale stop/recovery 清理。
+  - 扩展 `apps/api/tests/redis-keyspace.test.ts`，覆盖 Redis endpoint 不可达时 `RedisClientService` 的安全回退。
+- 遇到什么：
+  - `#14` 当前最容易过度开发的地方是把已有 live 测试再写一遍；这轮实现刻意只补真实缺口，没有重写已有 route/live harness。
+- 计划如何解决：
+  - 继续跑 `#14` 当前最小闭环测试。
+  - 如果通过，再决定是否继续补“Redis 清空后的 task-creation replay”这类下一层缺口。
+
+## 2026-04-03 #14 下一层缺口补齐
+
+- 做了什么：
+  - 继续扩展 `apps/api/tests/task-creation-redis-route-live.test.ts`。
+  - 新增 `history cursor` 被删除后，`messages/history` 仍按 DB timeline 返回并重新写回 cursor 的 live 用例。
+  - 新增 `session-events stream` 被删除后，`opencode/events` 会回退 DB replay，且不会继续回放已删除的 stale Redis 事件。
+  - 同步把这两条新缺口纳入 `#14` 已采用文档的总表和统一执行命令。
+- 遇到什么：
+  - 这两条场景本身已有 route 级 mock 覆盖，新的价值在于 live Redis 下验证“key 被清空后的真实行为”，而不是重复授权测试。
+- 计划如何解决：
+  - 继续运行 `task-creation-redis-route-live` 与 `#14` 当前统一命令，确认 replay / rebuild 全链路成立。
+
+## 2026-04-03 #14 统一验收收口
+
+- 做了什么：
+  - 按 `#14` 已采用文档里的统一验收命令整组执行了 9 组测试，覆盖多用户隔离、Redis 不可用、Redis 清空后的 rebuild、session replay、Altus recovery、connector/guide/runtime 隔离。
+  - 先定位出 3 个失败项，其中 2 个来自 `apps/api/tests/altus-managed-stream-service.test.ts` 没有跟上 `subscribe()` 新增的 `reconcileRunById()` 前置调用；已最小化补齐 mock，不改业务实现。
+  - 复跑后统一验收已全部通过，确认 `altus-managed`、`task-creation`、`connector guide/runtime` 当前纳入 `#14` 的测试矩阵全部成立。
+- 遇到什么：
+  - `altus-managed-stream-service` 这类 service 级测试对 recovery 前置依赖较敏感，如果只 mock `listRunEvents` 而不 mock recovery，会误把真实 DB 查询失败当作功能回归。
+  - Redis 不可达用例会产生预期内 warning 日志，当前结果可以接受，但后续如要继续扩展总表，需要保持“允许 warning、禁止主流程失败”的验收口径一致。
+- 计划如何解决：
+  - 下一步可直接整理并提交 `#14` 当前测试收口结果。
+  - 如果继续推进母任务 `#8`，后续就转入与 `#7` 衔接的 connector guide 细化测试，而不再重复建设新的 Redis 测试框架。

@@ -132,3 +132,15 @@
 - 计划如何解决：
   - 下一步可直接整理并提交 `#14` 当前测试收口结果。
   - 如果继续推进母任务 `#8`，后续就转入与 `#7` 衔接的 connector guide 细化测试，而不再重复建设新的 Redis 测试框架。
+
+## 2026-04-03 Redis 显式启用规则复核
+
+- 做了什么：
+  - 按你的要求重新检查了仓库里所有生产代码的 Redis 使用点，并把“只有显式配置 `ONECEO_REDIS_ENABLED=true` 且提供 `REDIS_URL` 才允许启用 Redis”写入 `AGENTS.md`。
+  - 逐个核对了 `apps/api/src/services/redis-client-service.ts`、`altus-run-redis-state-service.ts`、`task-session-redis-cache-service.ts`，以及它们在 `task-creation-routes.ts`、`altus-managed-*`、`opencode-*`、`sandbox-agent-provision-service.ts`、`opencode-remote-service.ts` 中的调用链。
+  - 同时检查了仓库默认环境样例，确认 `apps/.env.example` 当前默认是 `ONECEO_REDIS_ENABLED=false`，不会把 Redis 作为默认开发依赖打开。
+  - 复跑了 `apps/api/tests/redis-keyspace.test.ts`，确认“只配 `REDIS_URL` 但未显式开启 `ONECEO_REDIS_ENABLED` 时，Redis client 仍然保持禁用”这条断言继续成立。
+- 遇到什么：
+  - 当前需要警惕的不是生产代码绕开开关，而是后续新增 Redis 能力时有人直接在业务代码里 `new Redis(...)`。这次已经通过 `AGENTS.md` 明确禁止。
+- 计划如何解决：
+  - 后续凡是新增 Redis 缓存或 stream，都继续复用 `redis-client-service.ts` 统一开关，不允许在业务层重复接环境变量。

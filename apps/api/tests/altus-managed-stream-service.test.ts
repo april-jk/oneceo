@@ -44,9 +44,11 @@ function createFakeResponse(): FakeResponse {
 test('altus managed stream service prefers redis historical events before db fallback', async () => {
   const service: any = altusManagedStreamService;
   const originalRedisList = service.redisStateService.listRunEvents.bind(service.redisStateService);
+  const originalReconcileRunById = service.recoveryService.reconcileRunById.bind(service.recoveryService);
   const originalDaoList = taskSessionRunDAO.listRunEvents.bind(taskSessionRunDAO);
   let daoCalled = false;
 
+  service.recoveryService.reconcileRunById = async () => undefined;
   service.redisStateService.listRunEvents = async () => [
     {
       sequence: 3,
@@ -83,6 +85,7 @@ test('altus managed stream service prefers redis historical events before db fal
     assert.match(output, /from redis/);
   } finally {
     service.redisStateService.listRunEvents = originalRedisList;
+    service.recoveryService.reconcileRunById = originalReconcileRunById;
     (taskSessionRunDAO as any).listRunEvents = originalDaoList;
   }
 });
@@ -90,9 +93,11 @@ test('altus managed stream service prefers redis historical events before db fal
 test('altus managed stream service falls back to db when redis has no stream history', async () => {
   const service: any = altusManagedStreamService;
   const originalRedisList = service.redisStateService.listRunEvents.bind(service.redisStateService);
+  const originalReconcileRunById = service.recoveryService.reconcileRunById.bind(service.recoveryService);
   const originalDaoList = taskSessionRunDAO.listRunEvents.bind(taskSessionRunDAO);
   let daoCalled = false;
 
+  service.recoveryService.reconcileRunById = async () => undefined;
   service.redisStateService.listRunEvents = async () => [];
   (taskSessionRunDAO as any).listRunEvents = async () => {
     daoCalled = true;
@@ -129,6 +134,7 @@ test('altus managed stream service falls back to db when redis has no stream his
     assert.match(output, /from db/);
   } finally {
     service.redisStateService.listRunEvents = originalRedisList;
+    service.recoveryService.reconcileRunById = originalReconcileRunById;
     (taskSessionRunDAO as any).listRunEvents = originalDaoList;
   }
 });

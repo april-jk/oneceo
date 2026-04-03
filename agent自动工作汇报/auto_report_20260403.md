@@ -62,3 +62,21 @@
   - 直接在 shell 中拼接长 `tsx` 脚本时容易被引号和模板字符串展开干扰，第一次诊断脚本因为命令展开失败，后续已改为 heredoc 方式执行。
 - 计划如何解决：
   - 如果后续继续推进 `#12/#13`，就把这一套“真实 DB + Redis 双证据链”的脚本思路扩展到更多用户态深水区接口，而不是只停留在路由 mock 测试。
+
+## 2026-04-03 #13 connector / guide / session runtime 多用户隔离校验
+
+- 做了什么：
+  - 在当前 `22f5` worktree 重新启动 `#13`，并新增已采用设计稿 `docs/agent研发文档/20260403_connector_guide_session_runtime多用户隔离校验_[20260403-2028已采用].md`。
+  - 先核对当前代码事实，确认这份 worktree 不包含前面 Redis 基础层，因此把 `#13` 的 Redis 结论收紧为“这三条链路当前无直接 Redis 状态，测试必须验证不产生额外 Redis 写入”。
+  - 收紧 `apps/api/src/routes/internal-connector-guide-routes.ts`：`ONECEO_INTERNAL_TOKEN` 未配置时直接 `403`，不再默认放行内部 guide 接口。
+  - 新增 `apps/api/tests/internal-connector-guide-routes.test.ts`，覆盖内部 token 未配置、缺 token、正确 token 三种管理边界。
+  - 新增 `apps/api/tests/connector-guide-runtime-isolation-live.test.ts`，对 `connector profile -> session attach`、`guide 投影`、`runtime recovery` 三条链路做真实 DB + 本机 Redis 联调。
+  - 本机安装并启动了 PostgreSQL 16，创建 `oneceo_test` 数据库；同时复用本机 Redis `db15` 做“无直接 Redis 写入”核验。
+  - live test 中额外补了最小测试建表与 UUID 默认值校正，避免把整套迁移系统引进 `#13`。
+- 遇到什么：
+  - 当前 worktree 是 detached HEAD，且远端 `task-creation-agent` 已领先，不能直接推送，需要后续基于远端最新分支重新 cherry-pick。
+  - 本机最初没有 PostgreSQL，导致 live DB 测试先后遇到 `ECONNREFUSED 127.0.0.1:5432` 和测试连接串用户不匹配的问题，后续已改为使用本机实际用户 `watson`。
+  - `oneceo_test` 的自动迁移结果没有完全覆盖 `connector_guide_* / task_session_connector_*` 需要的默认值，导致第一次 live test 因 `id default uuid` 不完整失败，已在测试中补最小修正。
+- 计划如何解决：
+  - 下一步把这轮 `#13` 提交 cherry-pick 到 `origin/task-creation-agent` 最新基础上并推送。
+  - 随后更新 `#13` 和母任务 `#8` 的 issue 进展，明确当前 worktree 下的验证结论：授权结果、DB 归属字段、以及“无直接 Redis 写入”的隔离效果都已符合预期。

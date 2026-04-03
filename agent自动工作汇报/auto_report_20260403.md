@@ -21,5 +21,11 @@
 - 做了什么：已把同样的方法扩到 `altus-managed`，新增 `apps/api/tests/altus-managed-redis-route-live.test.ts`。这轮纳入 live Redis 校验的接口是：`POST /api/altus-managed/sessions/:sessionId/runs`、`GET /api/altus-managed/runs/:runId/stream`、`POST /api/altus-managed/runs/:runId/stop`。
 - 做了什么：`altus-managed` 这组 live 校验会直接检查 Redis 中的 `run:state`、`run:owner`、`run:heartbeat`、`ops:runs:active`、`run:stream`、`run:stop`。`GET /sessions/:sessionId/runs/latest` 仅做 DB 汇总读取，不直接触发 Redis 写入；`POST /inputs` 是对 `startRun` 的组合包装，本轮不单独重复做一套等价 Redis 存储校验。
 - 做了什么：已把 `task-creation + altus-managed` 的“接口 -> Redis key -> 验证方式 -> 当前状态”总表补回 `docs/agent研发文档/20260403_会话缓存与事件流迁移到Redis设计_[20260403-1125已采用].md`，并把当前 live 验证命令和 `9/9 pass` 结果写进文档，作为 `#11` 当前验收基线。
+- 做了什么：新增系统级《调试与测试指南》，统一 oneceo 在“先设计文档再开发再测试”和“直接测试某功能”两类场景下的执行流程。
+- 做了什么：已把新指南接入根 `AGENTS.md` 的必读和架构导览，后续 agent 会把它当作调试与测试入口文档使用。
+- 做了什么：文档中补全了 web、api、service、db、redis、sandbox/osac/opencode 七个层级的自动测试方案，并明确 Redis/DB/事件流的证据链要求。
+- 做了什么：已按你刚刚手动修改后的要求重新读取文档并继续收紧测试指南，明确“以结果为导向”是最高原则，测试前必须先写测试文档、先导出最小测试单元、再写预期输入输出和边界条件、再编写脚本逐个验证。
+- 做了什么：文档中已补充强制要求：涉及数据库必须脚本触发后直连数据库核验；涉及 Redis 必须在触发后检查实际 key/value 或 stream；接口返回 200 或脚本返回 success 均不能直接判定通过；全链路测试需在底层验证完成后再征求用户确认。
+- 做了什么：已补充测试资产存放规则，明确测试脚本继续放在现有目录不迁移，新的测试文档统一存放到 `docs/单元测试文档/`，并已创建该目录占位。
 - 遇到什么：现有缓存实现分散在本地文件、DB fallback、进程内内存三套路径里，迁移时如果不先收口边界，很容易把 Redis 扩成过大的平台缓存工程。
-- 计划如何解决：下一步整理这批 `#11` 第一批实现的提交与 issue 进展；若你继续让我推进，我会开始收口剩余 route 级验收并准备提交。
+- 计划如何解决：下一步整理这批 `#11` 第一批实现的提交与 issue 进展；若你继续让我推进，我会开始收口剩余 route 级验收并准备提交，同时后续针对具体功能测试会直接按新测试指南先出测试文档再执行脚本与存储核验。

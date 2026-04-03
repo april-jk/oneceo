@@ -48,6 +48,10 @@ class FakeRedisPort implements RedisCommandPort {
     next?.delete(member);
   }
 
+  async listSetMembers(key: string) {
+    return Array.from(this.sets.get(key) || []);
+  }
+
   async deleteByPrefix(prefix: string) {
     let deleted = 0;
     for (const key of Array.from(this.json.keys())) {
@@ -184,6 +188,46 @@ test('altus redis state service writes minimal run coordination keys and stream 
   assert.equal(events[0]?.eventType, 'run_status');
   assert.equal(events[0]?.payload.status, 'running');
 
+  await service.setRecoverySnapshot({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    runId: 'run-1',
+    status: 'running',
+    sequence: 1,
+    model: 'gpt-test',
+    sandbox: {
+      sandboxId: 'sbx-1',
+      workspaceRoot: '/workspace',
+      reused: true,
+      updatedAt: new Date('2026-04-03T11:00:00.000Z'),
+    },
+    connectorRuntime: {
+      providerIds: ['provider-a'],
+      updatedAt: new Date('2026-04-03T11:01:00.000Z'),
+    },
+    stream: {
+      latestSequence: 1,
+      latestEventType: 'run_status',
+    },
+  });
+  const recovery = await service.getRecoverySnapshot({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    runId: 'run-1',
+  });
+  assert.equal(recovery?.status, 'running');
+  assert.deepEqual(recovery?.connectorRuntime.providerIds, ['provider-a']);
+  assert.equal(recovery?.stream.latestSequence, 1);
+  assert.deepEqual(await service.listActiveRuns('user-1'), ['run-1']);
+  assert.equal(
+    await service.hasLiveHeartbeat({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      runId: 'run-1',
+    }),
+    true
+  );
+
   await service.syncRunStatus({
     userId: 'user-1',
     sessionId: 'session-1',
@@ -195,4 +239,23 @@ test('altus redis state service writes minimal run coordination keys and stream 
   const terminalState = (await fakeRedis.getJson<{ status: string }>(stateKey)) || { status: '' };
   assert.equal(terminalState.status, 'completed');
   assert.equal(fakeRedis.sets.get(activeRunsKey)?.has('run-1'), false);
+
+  await service.clearStopRequest({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    runId: 'run-1',
+  });
+  await service.clearRecoverySnapshot({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    runId: 'run-1',
+  });
+  assert.equal(
+    await service.getRecoverySnapshot({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      runId: 'run-1',
+    }),
+    null
+  );
 });

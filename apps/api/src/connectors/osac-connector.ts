@@ -4,6 +4,8 @@ import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { sandboxExecutionEnvironmentDAO } from '../db/dao';
 import { OsacClient, type OsacMessage } from '../clients/osac-client';
 import { kvmConnector } from './kvm-connector';
+import { ensureSandboxRuntimeMetadata } from '../services/sandbox-runtime-metadata-service';
+import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   buildSandboxPortProbeQuery,
   extractSandboxPortMappings,
@@ -150,6 +152,21 @@ function relayFallbackEnabled(): boolean {
 function isMappingStaleError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.includes('mapping_stale') || /mapping_stale/i.test(text);
+}
+
+function shouldRestartOsacBridge(error: unknown): boolean {
+  const text = (error instanceof Error ? error.message : String(error || '')).toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes('mapping_stale') ||
+    text.includes('status=409') ||
+    text.includes('osac websocket 握手失败: status=502') ||
+    text.includes('osac websocket 握手失败: status=503') ||
+    text.includes('osac websocket 连接超时') ||
+    text.includes('econnrefused') ||
+    text.includes('socket hang up') ||
+    text.includes('fetch failed')
+  );
 }
 
 async function issueRelayTcpTicket(sessionId: string): Promise<RelayTicketContext> {
@@ -702,11 +719,22 @@ export const osacConnector = {
         }
 
         if (mappingStaleRetry) {
-          const bumpedEpoch = Math.max(1, mapping.mappingEpoch || 1) + 1;
-          nextMetadata.osacMappingEpoch = bumpedEpoch;
-          await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, {
-            ...nextMetadata,
+          writeConnectorDebugLog('[OSAC_MAPPING_STALE_REBUILD]', {
+            sessionId,
+            attempt,
+            endpoint,
+            mappingId: mapping.mappingId,
+            mappingEpoch: mapping.mappingEpoch,
+            connectionMode,
           });
+          try {
+            await ensureSandboxRuntimeMetadata(sessionId, {
+              forceBridgeRestart: true,
+              forceBinaryRewrite: false,
+            });
+          } catch (refreshError) {
+            lastError = refreshError;
+          }
 
           if (attempt >= maxAttempts && relayFallback) {
             const fallbackMapping = resolveMappingContext(
@@ -721,7 +749,7 @@ export const osacConnector = {
               sessionId,
               fallbackMapping
             );
-            console.warn('[OSAC_MAPPING_STALE_FALLBACK]', sessionId, `epoch_bumped=${bumpedEpoch}`);
+            console.warn('[OSAC_MAPPING_STALE_FALLBACK]', sessionId, 'bridge_rebuilt');
             for (const fallbackCandidate of fallbackAuthEndpoints) {
               const fallbackHandle = await tryConnectCandidate(fallbackCandidate, null);
               if (fallbackHandle) {
@@ -729,6 +757,17 @@ export const osacConnector = {
               }
             }
           }
+        }
+      }
+
+      if (shouldRestartOsacBridge(lastError)) {
+        try {
+          await ensureSandboxRuntimeMetadata(sessionId, {
+            forceBridgeRestart: true,
+            forceBinaryRewrite: true,
+          });
+        } catch (restartError) {
+          lastError = restartError;
         }
       }
 

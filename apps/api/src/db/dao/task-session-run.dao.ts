@@ -6,6 +6,8 @@ import {
   taskSessionRunEvents,
   taskSessionSandboxBindings,
   taskSessionConnectorSnapshots,
+  taskSessionMcpToolSnapshots,
+  taskSessionConnectorRuntimeEvents,
   type NewTaskSessionRun,
 } from '../schema';
 
@@ -37,6 +39,7 @@ export class TaskSessionRunDAO {
         stopReason: data.stopReason || null,
         sandboxBindingId: data.sandboxBindingId || null,
         connectorSnapshotId: data.connectorSnapshotId || null,
+        mcpToolSnapshotId: (data as NewTaskSessionRun & { mcpToolSnapshotId?: string | null }).mcpToolSnapshotId || null,
         metadataJson: data.metadataJson || {},
         startedAt: data.startedAt || null,
         completedAt: data.completedAt || null,
@@ -215,6 +218,24 @@ export class TaskSessionRunDAO {
     return binding || null;
   }
 
+  async updateSandboxBindingMetadata(
+    sessionId: string,
+    metadataJson: Record<string, unknown>,
+    options?: { status?: string }
+  ) {
+    const [binding] = await db
+      .update(taskSessionSandboxBindings)
+      .set({
+        metadataJson,
+        ...(options?.status ? { status: options.status } : {}),
+        updatedAt: new Date(),
+        lastActiveAt: new Date(),
+      })
+      .where(eq(taskSessionSandboxBindings.sessionId, sessionId))
+      .returning();
+    return binding || null;
+  }
+
   async createConnectorSnapshot(input: {
     sessionId: string;
     snapshotJson: Record<string, unknown>;
@@ -228,6 +249,51 @@ export class TaskSessionRunDAO {
       })
       .returning();
     return snapshot;
+  }
+
+  async createMcpToolSnapshot(input: {
+    sessionId: string;
+    snapshotJson: Record<string, unknown>;
+  }) {
+    const [snapshot] = await db
+      .insert(taskSessionMcpToolSnapshots)
+      .values({
+        id: createId(),
+        sessionId: input.sessionId,
+        snapshotJson: input.snapshotJson,
+      })
+      .returning();
+    return snapshot;
+  }
+
+  async getMcpToolSnapshot(snapshotId: string) {
+    const [snapshot] = await db
+      .select()
+      .from(taskSessionMcpToolSnapshots)
+      .where(eq(taskSessionMcpToolSnapshots.id, snapshotId))
+      .limit(1);
+    return snapshot || null;
+  }
+
+  async appendConnectorRuntimeEvent(input: {
+    sessionId: string;
+    bindingId: string;
+    providerId?: string | null;
+    eventType: string;
+    payloadJson?: Record<string, unknown> | null;
+  }) {
+    const [event] = await db
+      .insert(taskSessionConnectorRuntimeEvents)
+      .values({
+        id: createId(),
+        sessionId: input.sessionId,
+        bindingId: input.bindingId,
+        providerId: input.providerId || null,
+        eventType: input.eventType,
+        payloadJson: input.payloadJson || {},
+      })
+      .returning();
+    return event;
   }
 
   async getConnectorSnapshot(snapshotId: string) {

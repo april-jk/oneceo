@@ -1,0 +1,23 @@
+# auto report 2026-04-01
+
+- 做了什么：完成《20260401_连接器隐式 Skills 挂载与后台管理设计》主方案，并在你确认后将方案状态更新为 `[20260401-1037已采用]`。
+- 做了什么：继续将该主方案拆分为三份实现前文档，分别覆盖 API 设计、管理后台页面设计、数据表与任务清单，供后续逐份审核。
+- 做了什么：对照 `referance/claudecode_src/CLAUDECODE_MCP_SKILLS_REFERENCE.md` 重新收敛方案，去掉了对 platform skills 的复用，改为 connector 域内纯文本 guide 文档体系，并补入了 MCP instructions、relevant guide surfaced、blocking requirement 三条核心逻辑。
+- 遇到什么：上一版“复用 platform skill”的方案与当前“不要影响 skills 模块”的要求冲突，必须整体重写文档边界。
+- 做了什么：你确认“首批只在 prompt 层闭环”和“`task_session_connector_guides` 首批直接落库”后，三份子文档已更新为 `[20260401-1158已采用]`。
+- 计划如何解决：下一步进入代码实现阶段，先从数据表、DAO、connector guide service 和 prompt 注入链路开始。
+- 做了什么：已落第一轮代码实现，新增 connector guide 三张表的 schema/migration、`connector-guide.dao.ts`、`connector-guide-service.ts`、内部管理路由、admin_management 后端代理路由，并把 session attach/detach 后的 guide 重算与 Altus system prompt 注入接通。
+- 遇到什么：`apps/api` 全量 TypeScript 检查仍被仓库内既有错误阻塞，无法作为本次改动的有效验收。
+- 计划如何解决：继续以定向导入校验和局部链路验证为主，下一步补 API/admin 的管理界面实现，并在运行态实际验证 GitHub/Supabase/Vercel 三类 guide 的 prompt 注入结果。
+- 做了什么：已完成第二轮实现，补上内置 GitHub/Supabase/Vercel guide seed 初始化逻辑，API 启动时会在缺失 policy/revision 时自动创建；同时新增 admin_management 前端 `连接器 Guide` 管理区块，可直接查看 policy、编辑 revision 文本、校验、发布和回滚。
+- 做了什么：已实际执行 `apps/api/src/db/migrate.ts`，迁移脚本成功完成。
+- 遇到什么：数据库仍存在间歇性连接超时，导致直接用脚本查询 connector guide 数据时偶发 `Connection terminated due to connection timeout`，这属于当前环境稳定性问题，不是 guide 模块接口定义错误。
+- 计划如何解决：下一步在服务稳定时做一次真实 UI 联调，确认三套内置 guide 已成功落库并能在 Altus prompt 中可见。
+- 做了什么：已补《20260401_连接器Guide_GitHub真实会话联调计划_[20260401-1352已采用].md》，并已按计划完成 GitHub 真实会话联调。
+- 做了什么：联调中先补了最小量调试日志，新增 `CONNECTOR_GUIDE_RECOMPUTE_START/DONE`、`CONNECTOR_GUIDE_PROMPT_SECTIONS_READY`、`ALTUS_RUN_PROMPT_READY` 三组日志，用于确认 attach 后 guide 落库与 run prompt 注入顺序。
+- 做了什么：真实会话 `daff72f6-2717-41fe-a325-17573932cab8` 中，GitHub connector attach 成功；`task_session_connector_guides` 已落一条 `github` guide 记录，`policyId=06fe07ae-965e-4b74-9680-fbf6ed73b890`、`revisionId=7c920234-500f-4f93-8f5b-f1449c82c367`。
+- 做了什么：真实 managed run `be83ea6b-d5cb-43f0-9ff3-98cbd649ecb0` 已在日志中确认 prompt 注入生效，出现 `CONNECTOR_GUIDE_PROMPT_SECTIONS_READY` 和 `ALTUS_RUN_PROMPT_READY`，且两项 guide section 均为非空。
+- 做了什么：已直接调用 `connectorGuideService.buildPromptSections('daff72f6-2717-41fe-a325-17573932cab8')` 验证实际注入文本，确认包含 `# Connector MCP Instructions`、`## github` 以及 GitHub guide published revision 的正文片段。
+- 遇到什么：联调首次发现 `task_session_connector_guides` 的“先删后插”写法在并发 attach / 重算时会触发唯一键竞争，导致 connector 实际已挂载成功但 attach 接口返回 `400` 假失败。
+- 做了什么：已将 `connectorGuideDAO.replaceSessionGuides()` 改为按 `(task_session_id, connector_key)` 做幂等 upsert，并删除不再命中的 guide；修复后复跑真实会话，attach 返回恢复为 `200`。
+- 计划如何解决：下一步继续做第二批联调，覆盖 Supabase / Vercel，并开始接前端或调试面板级的可视化验证入口，减少后续只能靠日志排查的成本。

@@ -21,6 +21,8 @@ function createState(runId: string, sessionId: string) {
     userInput: '帮我开发 2048 小游戏',
     sessionTitle: 'Build 2048',
     connectors: [],
+    skillCatalog: [],
+    skills: [],
   });
 }
 
@@ -193,6 +195,128 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[2]?.payload.toolName, 'write_file');
   assert.equal(eventCalls[4]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
+});
+
+test('execute injects skill catalog prompt before active skill body', async () => {
+  const state = new AltusRunState({
+    runId: 'run-coordinator-skills',
+    sessionId: 'session-coordinator-skills',
+    userId: 'user-1',
+    model: 'altus-model',
+    userInput: '帮我做一个演示文稿',
+    sessionTitle: 'Build PPT',
+    connectors: [],
+    skillCatalog: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        },
+      },
+    ],
+    skills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief\n\nDo the work.',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 1,
+          templateCount: 1,
+          paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+        },
+      },
+    ],
+  });
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-skills',
+      workspaceRoot: '/workspace/session-coordinator-skills',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => {
+      assert.match(systemPrompt, /# Available skills catalog/);
+      assert.match(systemPrompt, /office-ppt: 创建专业演示文稿/);
+      assert.match(systemPrompt, /# Active skills/);
+      assert.match(systemPrompt, /# Skill Brief/);
+      return [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: input },
+      ];
+    }),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async () => ({ sequence: 1, payload: {} })),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {}),
+    markWaitingUser: mock.fn(async () => {}),
+    markCompleted: mock.fn(async () => {}),
+    markFailed: mock.fn(async () => {}),
+    markStopped: mock.fn(async () => {}),
+  };
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-skills',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: 'done',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: 'done',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+  assert.equal((setupService.buildConversationMessages as any).mock.callCount(), 1);
 });
 
 test('execute does not complete on plain assistant text and continues until complete_task', async () => {

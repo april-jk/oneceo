@@ -1,5 +1,7 @@
 import type express from 'express';
 import { taskSessionRunDAO } from '../db/dao';
+import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
+import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-recovery-service';
 
 type ManagedStreamEnvelope = {
   sequence: number;
@@ -26,15 +28,38 @@ function writeSse(res: express.Response, input: ManagedStreamEnvelope) {
 export class AltusManagedStreamService {
   private readonly subscribers = new Map<string, Set<Subscriber>>();
 
-  async subscribe(runId: string, res: express.Response, options?: { afterSequence?: number | null }) {
+  constructor(
+    private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService,
+    private readonly recoveryService: AltusRunRecoveryService = altusRunRecoveryService
+  ) {}
+
+  async subscribe(
+    input: { runId: string; sessionId: string; userId: string },
+    res: express.Response,
+    options?: { afterSequence?: number | null }
+  ) {
+    await this.recoveryService.reconcileRunById(input.runId);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
-    const historical = await taskSessionRunDAO.listRunEvents(runId, {
+    const redisHistorical = await this.redisStateService.listRunEvents({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      userId: input.userId,
       afterSequence: options?.afterSequence ?? null,
     });
+    const historical =
+      redisHistorical.length > 0
+        ? redisHistorical.map((event) => ({
+            sequence: event.sequence,
+            eventType: event.eventType,
+            payloadJson: event.payload,
+          }))
+        : await taskSessionRunDAO.listRunEvents(input.runId, {
+            afterSequence: options?.afterSequence ?? null,
+          });
     for (const event of historical) {
       writeSse(res, {
         sequence: Number(event.sequence || 0),
@@ -48,18 +73,18 @@ export class AltusManagedStreamService {
       closed: false,
     };
 
-    const current = this.subscribers.get(runId) || new Set<Subscriber>();
+    const current = this.subscribers.get(input.runId) || new Set<Subscriber>();
     current.add(subscriber);
-    this.subscribers.set(runId, current);
+    this.subscribers.set(input.runId, current);
 
     const cleanup = () => {
       if (subscriber.closed) return;
       subscriber.closed = true;
-      const set = this.subscribers.get(runId);
+      const set = this.subscribers.get(input.runId);
       if (!set) return;
       set.delete(subscriber);
       if (set.size === 0) {
-        this.subscribers.delete(runId);
+        this.subscribers.delete(input.runId);
       }
     };
 

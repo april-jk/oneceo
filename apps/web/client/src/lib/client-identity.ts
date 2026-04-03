@@ -19,7 +19,5 @@ export function getClientUserId() {
 }
 
 export function buildClientIdentityHeaders(init?: HeadersInit): HeadersInit {
-  const base = new Headers(init);
-  base.set("X-User-Id", getClientUserId());
-  return base;
+  return new Headers(init);
 }

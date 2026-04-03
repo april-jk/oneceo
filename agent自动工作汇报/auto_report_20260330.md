@@ -1,0 +1,162 @@
+# 2026-03-30 自动工作汇报
+
+- 删除“Altus 自己托管 MCP runtime”的旧口径，改成以 `OSAC` 为沙箱内 MCP Runtime Host 的主方案。
+- 新增设计文档 `docs/agent研发文档/20260330_OSAC驱动Altus模式MCP运行时注册设计.md`，明确 `apps/api -> osac-agent-service -> OSAC MCP Control API -> Altus session tool assembly` 的主链路。
+- 新增协议文档 `docs/agent研发文档/20260330_OSAC_MCP控制协议设计.md`，把 Altus mode 下的控制指令从旧的 `ADD_MCP_SERVER / REMOVE_MCP_SERVER` 提升为 `REGISTER_MCP_PROVIDER / UPDATE_MCP_PROVIDER_ENV / ATTACH_MCP_PROVIDER_TO_SESSION / LIST_SESSION_MCP_TOOLS` 等 provider 生命周期协议。
+- 文档中明确 token/env 更新的正确语义：对于本地子进程型 MCP，OSAC 需要更新 provider 内存态 env，并在下一次调用前按需 restart provider，不能假设旧进程自动读取新环境。
+- 新增实施文档 `docs/agent研发文档/20260330_OSAC驱动Altus模式MCP实施文档.md`，按 `apps/api`、`OSAC`、`Altus managed` 三层拆出具体改动文件、数据字段、开发顺序与测试计划，明确第一阶段先打通 `local_stdio + REGISTER_MCP_PROVIDER + LIST_SESSION_MCP_TOOLS`。
+- 继续把实施文档拆成三份开发任务文档：`20260330_API侧_OSAC驱动Altus模式MCP开发任务文档.md`、`20260330_OSAC侧_Altus模式MCP开发任务文档.md`、`20260330_AltusManaged侧_MCP接入开发任务文档.md`，分别对应 API 控制面、OSAC provider runtime、Altus managed tool assembly 的实现边界。
+- 进入代码实现阶段后，已将上述 MCP 方案文档状态统一更新为 `[20260330-1027已采用]`。
+- `apps/api` 已新增 session 级 MCP tool snapshot / connector runtime event 表与运行态字段，`session-connector-service` 开始改为走 OSAC provider lifecycle，而不是 OpenCode `/mcp` 配置同步。
+- `osac-agent-service` 与 `osac-routes` 已新增 `REGISTER_MCP_PROVIDER / UPDATE_MCP_PROVIDER_ENV / ATTACH_MCP_PROVIDER_TO_SESSION / DETACH_MCP_PROVIDER_FROM_SESSION / REMOVE_MCP_PROVIDER / LIST_SESSION_MCP_TOOLS` 对应接口。
+- `OSAC_client` 已新增内存态 MCP provider registry 和 session attachment registry，并补齐协议结构、server handler 与 `SESSION_MCP_TOOLS_RESPONSE` 返回。
+- `OSAC_client/internal/mcp/mcp.go` 已从纯 registry 升级为真实 runtime：`local_stdio` 会实际 spawn 子进程并走 JSON-RPC，`remote_sse` 会建立 SSE 连接并通过 HTTP POST 发起 MCP request。
+- 新增 `CALL_SESSION_MCP_TOOL` 协议，Altus managed 现在可以通过 `osac-agent-service` 直接调用 session 级 MCP tool。
+- `Altus managed` 已把 MCP provider tools 注入到动态 tool definitions，并在 `AltusManagedToolRuntime` 内把 namespaced tool 名映射回 `providerId + toolName` 执行。
+- `captureMcpToolSnapshot` 现优先读取 OSAC 当前 session 的 live MCP tool 视图，而不是只依赖 binding 表缓存。
+- MCP/OSAC 联调验证：
+  - 重新执行 `pnpm test`，当前仓库全量单元测试通过，`apps/api` 为 `94/94` 通过。
+  - 本机没有可用本地 Postgres 测试库，`postgresql://postgres:postgres@127.0.0.1:5432/oneceo_test?sslmode=disable` 直连返回 `ECONNREFUSED`；`docker` 也未安装，无法临时拉本地数据库容器。
+  - 本地起了一套最小 OSAC 调试实例：`OSAC_AUTH_TOKEN=local-test-token OSAC_LISTEN_ADDR=127.0.0.1:18080 OSAC_WS_REQUIRE_MAPPING=false go run ./cmd/osac`。
+  - 用真实 websocket 客户端直连 OSAC，完成一条真实 `local_stdio MCP` 链路验证：
+    - `REGISTER_MCP_PROVIDER`
+    - `ATTACH_MCP_PROVIDER_TO_SESSION`
+    - `CALL_SESSION_MCP_TOOL`
+    - `UPDATE_MCP_PROVIDER_ENV`
+    - 再次 `CALL_SESSION_MCP_TOOL`
+    - `LIST_SESSION_MCP_TOOLS`
+    - `DETACH_MCP_PROVIDER_FROM_SESSION`
+    - `REMOVE_MCP_PROVIDER`
+  - 验证结果：
+    - attach 后成功发现 2 个 tools：`echo_text`、`read_env`
+    - 第一次调用返回 `echo:hello:v1`
+    - `UPDATE_MCP_PROVIDER_ENV` 后 provider `envVersion=2`
+    - 第二次调用返回 `marker=v2`，说明运行时 env 更新和“下次调用前重启 provider”生效
+  - 当前仍缺一段真正的 `apps/api -> DB session/profile/binding -> OSAC` 写库联调，因为这台机器缺少可安全写入的测试数据库。
+  - 后续继续排查时发现真正可用的开发库在 [apps/.env](/Users/watson/codingProj/oneceo/apps/.env)，不是 `env.windows` 里的 Railway 串；前者可正常查询 `oneceo_dev`，后者用 `pg` 查询会返回 `unexpected emptyQuery`。
+  - 已完成一条真实 `apps/api -> DB profile/session/binding -> OSAC -> Postgres MCP` 联调：
+    - 临时创建独立 `userId / profileId / taskSessionId / orchestratorSessionId`
+    - `userConnectorService.createProfile(... postgres dsn ...)`
+    - `sessionConnectorService.attachConnector(...)`
+    - `osacAgentService.listSessionMcpTools(...)`
+    - `osacAgentService.callSessionMcpTool(... toolName='query', sql='select 1 as ok')`
+  - API 联调结果：
+    - binding 已成功写库，`runtimeStatus=connected`
+    - OSAC live provider 已发现真实 Postgres MCP tool：`query`
+    - tool call 返回 `[{\"ok\":1}]`
+    - runtime event 已落库：`provider_register_requested`、`provider_attached`
+    - 联调结束后已清理测试 binding / runtime event / sandbox env / profile / session 记录
+- 会话配置 MCP 时出现 `未找到 OSAC 认证 Token（metadata.osacAuthToken）`：
+  - 根因是 session MCP attach 已经统一走 OSAC，但 `opencode` sandbox 启动链没有像 `codex` 一样稳定补齐 `osacEndpoint/osacAuthToken`。
+  - 已新增共享桥接服务 [sandbox-osac-bridge-service.ts](/Users/watson/codingProj/oneceo/apps/api/src/services/sandbox-osac-bridge-service.ts)，统一封装 OSAC bridge 的启动、探活、复用。
+  - `sandbox-agent-provision-service.ts` 现已让 `opencode` 分支也执行 OSAC bridge 建立/复用，确保新启动会话带上 token。
+  - `ensureSandboxRuntimeMetadata()` 现已加入旧会话自愈：如果现有 metadata 缺 `osacEndpoint` 或 `osacAuthToken`，会在读取 runtime metadata 时自动补桥接并回写数据库。
+  - 验证：
+    - `node --import tsx` 成功加载这次改动涉及的三个 service 模块。
+    - `pnpm exec tsc --noEmit -p apps/api/tsconfig.json` 仍被仓库历史 TS 错误阻塞，但这次修改的文件未出现在报错列表中。
+    - `pnpm test` 在当前 Codex 沙箱里被 `tsx` 的 IPC pipe 权限限制拦截，失败原因为 `listen EPERM ... tsx-*.pipe`，不是本次业务改动报错。
+- Altus 模式下配置 connector 仍提示 `exit status 1`：
+  - 排查后确认 `task-creation-routes.ts` 中的 `ensureTaskSessionRuntime()` 在 Altus 会话复用现有 sandbox 时，仍沿用旧的 OpenCode 直连链路，执行 `syncOpencodeRuntimeConfig()` 和 OpenCode server ensure。
+  - 这与当前 Altus/OSAC 的 session MCP attach 主链路冲突，属于不应在 Altus attach 前触发的额外步骤，也会把 OpenCode 配置写入/重启失败暴露成前端的模糊 `exit status 1`。
+- OSAC 正式交付版本统一调整为 `1.1.3`：
+  - 新增交付文档 `OSAC_client/使用方式文档-交付v1.1.3.md`
+  - 平台默认引用已从旧的 `v1.1.2.fix17` 调整到 `v1.1.3`
+  - 交付说明中补齐了 `EXECUTOR_*` 与 MCP runtime host 能力
+- 继续排查 `exit status 1` 后，从 `connector-debug.log` 确认失败发生在 `ensureOsacBridge()` 第一步：
+  - `mkdir -p /opt/.altus/opencode ...` 直接失败
+  - 当前 Altus/opencode sandbox 的实际 workspace 已经是 `/home/user/opencode/workspaces/...`
+- 已修正 `sandbox-osac-bridge-service.ts` 的 remote base dir 解析：
+  - 当 workspaceRoot 落在 `/home/user/opencode/workspaces/...` 时，OSAC bridge 改为使用 `/home/user/opencode`
+  - 不再继续硬绑旧的 `/opt/.altus/opencode`
+- 继续按“Altus 已独立于 OpenCode”做主链路收口：
+  - `sandbox-agent-provision-service.ts` 新增 `executor=altus`
+  - Altus sandbox provision 只确保 OSAC bridge，不再触发 OpenCode server/bootstrap
+  - `task-creation-routes.ts` 在 Altus managed 会话下，runtime ensure 改为按 `altus` 处理
+  - `sandbox-runtime-metadata-service.ts` / `osac-agent-service.ts` 开始优先读取 `workspaceRoot/stateRoot/sandboxBaseUrl` 与 `altus*` 字段
+  - `file-memory-store.ts` 正式补齐 `runtime.workspaceRoot`
+  - 已修正为：Altus managed 会话在复用现有 runtime 时，跳过 OpenCode 配置热同步和 OpenCode server ensure，只保留 OSAC/provider lifecycle 所需链路。
+  - 设计文档已同步补充 Altus 与 Direct/OpenCode 的运行时职责边界。
+  - 验证：`node --import tsx` 成功加载 [task-creation-routes.ts](/Users/watson/codingProj/oneceo/apps/api/src/routes/task-creation-routes.ts)。
+- OSAC 交付版本更新：
+  - 重新基于当前 `OSAC_client` 源码构建了新的交付版本：
+    - `dist/osac-linux-amd64_v1.1.2.fix26`
+    - `dist/osac-linux-amd64_v1.1.2.fix26_debug`
+  - 新增交付说明文档：[使用方式文档-交付v1.1.2.fix26.md](/Users/watson/codingProj/oneceo/OSAC_client/使用方式文档-交付v1.1.2.fix26.md)。
+  - 当前 `apps/api` 的二进制扫描顺序会优先选到 `fix26`，因此重启 API 后 sandbox 下发的 OSAC 会切到新版本。
+- 修复启动时报 `Failed query: insert into "task_creation_sessions"`：
+  - 直接连开发库复现后确认真实原因是主键冲突：同一个 `sessionId` 被重复创建，报错 `duplicate key value violates unique constraint "task_creation_sessions_pkey"`。
+  - 已将 `TaskCreationSessionDAO.createSession()` 改为幂等创建：`ON CONFLICT DO NOTHING` 后回查现有记录，避免启动重入或并发创建把会话链路打断。
+  - 使用 `node --import tsx` 做了 DAO 级验证：同一 `sessionId` 连续调用两次 `createSession()`，两次都能返回同一条记录，不再抛冲突错误。
+- 修复 Altus 模式下普通对话卡在“智能体正在处理...”：
+  - 根因 1：`listSessionConnectors()` 在没有任何会话级 binding 时仍然强制做 runtime MCP 探测，直接把 connector 页和普通对话绑到 OSAC runtime。
+  - 根因 2：`captureConnectorSnapshot()` 会在 managed run 启动前隐式自动挂载 GitHub，普通对话被错误拖进 connector attach 链路。
+  - 根因 3：`ensureSandboxRuntimeMetadata()` 之前会在每次请求里重复重建 OSAC bridge，并且把 `/status` 探活放在主链路上，导致旧 sandbox 反复写入 OSAC 二进制，最终出现 `fetch failed`。
+  - 已修复：
+    - 无 binding 时，connector 列表不再探 runtime。
+    - managed run 启动前不再隐式自动挂 GitHub。
+    - 无已挂载 provider 时，不再为了 MCP snapshot 调 OSAC。
+    - OSAC bridge 改为“sandbox 创建/首次修复时写入一次”，已有二进制时直接复用，不再重复写入。
+    - OSAC readiness 改为后台 best-effort，不再阻塞 `ensureSandboxRuntimeMetadata()` 主链路；metadata 会先写回，后续直接复用。
+  - 回归：
+    - `GET /api/task-creation/sessions/:sessionId/connectors` 已从 `fetch failed` 恢复为正常返回。
+    - `POST /api/altus-managed/inputs` 已成功返回 run。
+    - 会话 `b9c5451a-3450-4c74-aff3-24f7005f2ebf` 已落库 `user_input` 与 `clarification_request`，run `a400783a-5e75-4d1a-a594-8780e62dff95` 状态为 `waiting_user`。
+- 修复 Altus 模式下 GitHub MCP `OSAC WebSocket 握手失败: status=502`：
+  - 直接进入 sandbox `i4jmqcuplcwvm1z4hry7e` 检查 `osac.log`，确认当前下发包在 Linux 内报错：
+    - `/home/user/opencode/osac: 1: ... not found`
+    - `Syntax error: "(" unexpected`
+  - 本地核对发现平台引用的 `OSAC_client/dist/osac-linux-amd64_v1.1.3` 实际是 `Mach-O 64-bit executable arm64`，属于错误平台产物被误命名为 Linux 包。
+  - 已重新构建真实 Linux 交付：
+    - `OSAC_client/dist/osac-linux-amd64_v1.1.3`
+    - `OSAC_client/dist/osac-linux-amd64_v1.1.3_debug`
+    - `file` 校验结果已变为 `ELF 64-bit LSB executable, x86-64`
+    - `PATH=/opt/homebrew/bin:$PATH GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ...` 已通过
+    - `PATH=/opt/homebrew/bin:$PATH go test ./...` 已通过
+  - 代码修复：
+    - `sandbox-osac-bridge-service.ts` 新增 Linux ELF + amd64 二进制校验，避免再次把 darwin 包投递进 sandbox。
+    - `sandbox-runtime-metadata-service.ts` 去掉 `baseUrl <- metadata.osacEndpoint` 的错误回退，并对被污染成 `wss://.../ws` 的 `baseUrl` 做自动纠正。
+    - `osac-connector.ts` 在握手 `502/503`、连接超时、`ECONNREFUSED` 等场景下，会触发一次强制 bridge 重建，并强制重写远端 OSAC 二进制；正常新 sandbox 仍保持“仅创建时写入一次”。
+  - 直接回归：
+    - 对会话 `b5bedf20-e5b3-4d4d-b2cb-00d6b356dc9e` 的 sandbox `i4jmqcuplcwvm1z4hry7e` 执行强制 bridge 重建后，`OSAC_BRIDGE_READY_WAIT_DONE` 返回 `status: 200`
+    - 直接调用 `sessionConnectorService.attachConnector(...)` 挂载 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 成功
+    - 结果为 `runtimeStatus=connected`，已发现 GitHub MCP tools，`lastError=null`
+- 新增一份未采用设计文档，规划 Altus 模式下 sandbox stop/close 后的 MCP 恢复、平台持久化离线调整、以及 API 重启后的 backlog recovery：
+  - `docs/agent研发文档/20260331_Altus_Sandbox恢复与MCP持久化恢复设计_[20260331-0115已采用].md`
+- 开始落地 Altus sandbox 恢复与 MCP 持久化恢复主链路：
+  - `task_session_connector_bindings` 增加 `recovery_queued_at / recovery_started_at / recovery_completed_at`
+  - 新增 `task_session_mcp_recovery_jobs` 表与 DAO
+  - 新增 `session-mcp-recovery-service.ts`
+  - sandbox close / stale sandbox replace 后，会把已 attached 的 binding 标成 `pending_recover`
+  - `ensureSandbox()` 成功后与 managed run 启动前，会执行 `ensureSessionRecovered()`
+  - API 启动后会扫描 backlog recovery jobs
+  - sandbox 离线时，attach 改为持久化 `pending_recover`，detach 改为立即持久化 `detached`
+  - 前端对话框 connector attach 成功文案已区分“立即挂载”与“待 sandbox 恢复后自动挂载”
+- 修复 GitHub 授权失效后仓库选择仍显示 `Bad credentials`：
+  - 直接使用当前本地用户 `local-egf5ug84` 的 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 复现，后端直调 `githubConnectorRepositoryService.listRepositories(...)` 与 `https://api.github.com/user` 均返回 `401 Bad credentials`
+  - 根因是 profile 仍保留 `authStatus=authorized`，平台未在 token 失效后把状态打回 `needs_auth`
+  - 已新增 `userConnectorService.markProfileNeedsAuth(...)`
+  - `github-connector-repository-service.ts` 现在会在 GitHub REST 返回 `401 Bad credentials` 时：
+    - 将 profile 状态改为 `needs_auth`
+    - 清除失效 token
+    - 写入 `lastError`
+    - 返回统一提示 `GitHub 授权已失效，请前往设置重新授权`
+  - `session-connector-service.ts` 在 GitHub attach 前增加授权有效性校验，避免失效 token 继续“假挂载”
+  - `ConnectorDialog.tsx` 在 GitHub 仓库列表加载失败和 attach 失败后会立即刷新 profile 状态，确保 UI 及时切换到“需要重新授权”
+- 修复 OSAC WebSocket 握手 `status=409 code=mapping_stale`：
+  - 日志确认当前故障发生在复用旧 `wss://18080-.../ws` 映射时，握手层直接返回 `409 mapping_stale`
+  - 根因是 `osac-connector.ts` 之前在 `mapping_stale` 分支里只做本地 `osacMappingEpoch` bump，没有真实刷新 runtime metadata，也没有强制重建 bridge
+  - 现已改为：
+    - `mapping_stale` 进入 `[OSAC_MAPPING_STALE_REBUILD]` 路径
+    - 立即调用 `ensureSandboxRuntimeMetadata(... forceBridgeRestart=true)`
+    - 下一轮连接尝试使用新 metadata / 新 endpoint，而不是继续撞旧映射
+    - `shouldRestartOsacBridge(...)` 同时把 `mapping_stale/status=409` 视为必须恢复的握手错误
+- 优化 Altus 每次发消息的重复耗时：
+  - 最新会话 `817e03f7-6790-409d-b952-82c6015abcf1` 的日志显示：
+    - `ALTUS_MANAGED_SUBMIT_SANDBOX_READY.reused=true`，说明没有每次新建 sandbox
+    - `SANDBOX_RUNTIME_METADATA_BRIDGE_CHECK.reusableBridge=true`，说明没有每次重装 OSAC
+  - 真实的重复耗时来自两处：
+    - `ensureSessionRecovered()` 每次消息都会对已恢复的 attached bindings 再次 enqueue/reconcile
+    - `captureMcpToolSnapshot()` 每次 run 都优先打 live `LIST_SESSION_MCP_TOOLS`
+  - 已优化：
+    - `session-mcp-recovery-service.ts` 新增“当前 sandbox 已恢复”短路判断，并写 `[SESSION_MCP_RECOVERY_SKIP_ALREADY_RECOVERED]` 日志
+    - `altus-managed-setup-service.ts` 仅在 binding 上没有工具快照时才做 live MCP tools probe

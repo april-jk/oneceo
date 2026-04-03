@@ -3,6 +3,8 @@ import { afterEach, mock, test } from 'node:test';
 import { taskSessionRunDAO } from '../src/db/dao';
 import { e2bConnector } from '../src/connectors/e2b-connector';
 import { AltusManagedInputService } from '../src/services/altus-managed-input-service';
+import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
+import { userSkillService } from '../src/services/user-skill-service';
 
 afterEach(() => {
   mock.reset();
@@ -10,6 +12,46 @@ afterEach(() => {
 
 test('submit uploads attachments, persists context metadata, and starts managed run', async () => {
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 1,
+        templateCount: 1,
+        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+      },
+    },
+  ] as any);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      renderedMarkdown: '# office-ppt',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 1,
+        templateCount: 1,
+        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+      },
+    },
+  ] as any);
+  const syncSkillsMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    changed: true,
+  }) as any);
   const mkdirMock = mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: '',
     stderr: '',
@@ -40,7 +82,10 @@ test('submit uploads attachments, persists context metadata, and starts managed 
     sessionId: 'session-1',
     content: '请根据附件继续处理',
     messageKey: 'msg-1',
-    metadata: { source: 'chat' },
+    metadata: {
+      source: 'chat',
+      skills: [{ sourceType: 'platform', skillId: 'skill-1', revisionId: 'rev-1' }],
+    },
     files: [
       {
         name: 'spec.md',
@@ -54,6 +99,7 @@ test('submit uploads attachments, persists context metadata, and starts managed 
   assert.equal(result.sessionId, 'session-1');
   assert.equal(setupService.ensureSessionOwnership.mock.callCount(), 1);
   assert.equal(setupService.ensureSandbox.mock.callCount(), 1);
+  assert.equal(syncSkillsMock.mock.callCount(), 1);
   assert.equal(mkdirMock.mock.callCount(), 1);
   assert.equal(writeFileMock.mock.callCount(), 1);
   assert.equal(touchMock.mock.callCount(), 1);
@@ -66,6 +112,8 @@ test('submit uploads attachments, persists context metadata, and starts managed 
   assert.equal(startRunCall?.arguments[1], 'user-1');
   assert.match(String(startRunCall?.arguments[2]?.content), /\[Attached: spec\.md -> uploads\//);
   assert.equal(startRunCall?.arguments[2]?.metadata?.source, 'chat');
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillCatalog?.length, 1);
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext?.length, 1);
   assert.equal(startRunCall?.arguments[2]?.metadata?.attachments?.length, 1);
   assert.equal(startRunCall?.arguments[2]?.metadata?.attachmentContext?.length, 1);
   assert.match(
@@ -76,6 +124,9 @@ test('submit uploads attachments, persists context metadata, and starts managed 
 
 test('submit uploads image attachments to managed image bucket and persists external object keys', async () => {
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => []);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => []);
+  mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({ changed: false }) as any);
   mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: '',
     stderr: '',

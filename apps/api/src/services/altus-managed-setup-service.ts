@@ -4,12 +4,16 @@ import {
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
+  taskSessionConnectorBindingDAO,
 } from '../db/dao';
 import { sandboxEnvironmentService } from './sandbox-environment-service';
+import { osacAgentService } from './osac-agent-service';
+import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { sessionConnectorService } from './session-connector-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
+import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
@@ -204,11 +208,7 @@ export class AltusManagedSetupService {
         status: 'in_progress',
       });
     } else if (!session.userId) {
-      const rebound = await taskCreationSessionDAO.bindUserIfMissing(sessionId, userId);
-      if (!rebound) {
-        throw new Error('会话不存在');
-      }
-      session = rebound;
+      throw new Error('会话缺少归属用户，无法进入 Altus managed 链路');
     } else if (session.userId !== userId) {
       throw new Error('当前用户无权操作该 Altus 会话');
     }
@@ -225,7 +225,7 @@ export class AltusManagedSetupService {
   }
 
   async captureConnectorSnapshot(sessionId: string, userId: string) {
-    const statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
+    let statuses = await sessionConnectorService.listSessionConnectors(sessionId, userId).catch(() => []);
     const attached = statuses
       .filter((item) => item.attached)
       .map((item) => ({
@@ -246,6 +246,77 @@ export class AltusManagedSetupService {
     };
   }
 
+  async captureMcpToolSnapshot(sessionId: string) {
+    const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
+    const providers = bindings
+      .filter((item) => item.desiredState === 'attached' && asText(item.runtimeProviderId))
+      .map((item) => ({
+        connectorKey: item.connectorKey,
+        providerId: asText(item.runtimeProviderId),
+        transport: asText(item.runtimeTransport) || null,
+        envVersion: typeof item.runtimeEnvVersion === 'number' ? item.runtimeEnvVersion : 0,
+          tools: Array.isArray(item.runtimeAttachedToolsJson) ? item.runtimeAttachedToolsJson : [],
+      }));
+    const shouldProbeLiveProviders = providers.some((item) => !Array.isArray(item.tools) || item.tools.length === 0);
+    if (providers.length === 0) {
+      const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+        sessionId,
+        snapshotJson: {
+          providers: [],
+          tools: [],
+        },
+      });
+      return {
+        snapshotId: snapshot.id,
+        providers: [],
+      };
+    }
+
+    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
+    const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
+    if (orchestratorSessionId && shouldProbeLiveProviders) {
+      const live = await osacAgentService.listSessionMcpTools(orchestratorSessionId).catch(() => null);
+      const liveProviders = Array.isArray(live?.providers)
+        ? live.providers.map((item) => ({
+            connectorKey: null,
+            providerId: asText((item as Record<string, unknown>)?.providerId),
+            transport: asText((item as Record<string, unknown>)?.transport) || null,
+            envVersion:
+              typeof (item as Record<string, unknown>)?.envVersion === 'number'
+                ? ((item as Record<string, unknown>).envVersion as number)
+                : 0,
+            tools: Array.isArray((item as Record<string, unknown>)?.tools)
+              ? ((item as Record<string, unknown>).tools as unknown[])
+              : [],
+          }))
+        : [];
+      if (liveProviders.length > 0) {
+        const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+          sessionId,
+          snapshotJson: {
+            providers: liveProviders,
+            tools: liveProviders.flatMap((item) => (Array.isArray(item.tools) ? item.tools : [])),
+          },
+        });
+        return {
+          snapshotId: snapshot.id,
+          providers: liveProviders,
+        };
+      }
+    }
+    const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({
+      sessionId,
+      snapshotJson: {
+        providers,
+        tools: providers.flatMap((item) => (Array.isArray(item.tools) ? item.tools : [])),
+      },
+    });
+    return {
+      snapshotId: snapshot.id,
+      providers,
+    };
+  }
+
   async ensureSandbox(sessionId: string, sessionTitle?: string | null) {
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
@@ -253,6 +324,7 @@ export class AltusManagedSetupService {
     if (runtimeSandboxId) {
       const reusedFromRuntime = await this.reuseKnownSandbox(sessionId, runtimeSandboxId, workspaceRoot);
       if (reusedFromRuntime) {
+        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromRuntime.sandboxId).catch(() => null);
         return reusedFromRuntime;
       }
     }
@@ -265,10 +337,12 @@ export class AltusManagedSetupService {
         existing.workspaceRoot || workspaceRoot
       );
       if (reusedFromBinding) {
+        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromBinding.sandboxId).catch(() => null);
         return reusedFromBinding;
       }
       try {
         await taskSessionRunDAO.touchSandboxBinding(sessionId, 'failed');
+        await sessionMcpRecoveryService.markPendingRecoverByOrchestratorSessionId(existing.sandboxId).catch(() => null);
         await sandboxExecutionEnvironmentDAO.updateStatus(existing.sandboxId, 'closed', null).catch(() => null);
       } catch {
         // ignore stale binding cleanup failures and continue provisioning a new sandbox
@@ -280,6 +354,9 @@ export class AltusManagedSetupService {
         taskSessionId: sessionId,
         taskTitle: sessionTitle || undefined,
         sandboxProvider: 'e2b',
+        sandboxExecutor: 'altus',
+        executor: 'altus',
+        workspaceRoot,
         opencodeWorkspaceRoot: workspaceRoot,
         altusMode: 'managed',
       },
@@ -302,7 +379,12 @@ export class AltusManagedSetupService {
     });
     await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
       orchestratorSessionId: opened.sessionId,
+      executor: 'altus',
     });
+    await ensureSandboxRuntimeMetadata(opened.sessionId, {
+      taskSessionId: sessionId,
+    }).catch(() => null);
+    await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, opened.sessionId).catch(() => null);
     return {
       sandboxId: opened.sessionId,
       workspaceRoot,

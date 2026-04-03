@@ -29,6 +29,7 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   const createRunMock = mock.method(taskSessionRunDAO, 'createRun', async (input: any) => ({
     ...run,
     connectorSnapshotId: input.connectorSnapshotId,
+    mcpToolSnapshotId: input.mcpToolSnapshotId,
     metadataJson: input.metadataJson,
   }));
 
@@ -38,6 +39,15 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
     captureConnectorSnapshot: mock.fn(async () => ({
       snapshotId: 'snapshot-1',
       statuses: [{ connectorKey: 'github', authStatus: 'authorized' }],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-1',
+      providers: [
+        {
+          providerId: 'provider-1',
+          tools: [{ providerId: 'provider-1', toolName: 'github_search' }],
+        },
+      ],
     })),
     persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
       setupCalls.push({ type: 'timeline', input });
@@ -81,12 +91,52 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   const summary = await service.startRun('session-1', 'user-1', {
     content: '帮我开发 2048 小游戏',
     messageKey: 'msg-1',
-    metadata: { source: 'chat' },
+    metadata: {
+      source: 'chat',
+      managedSkillCatalog: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-1',
+          revisionId: 'rev-1',
+          slug: 'office-ppt',
+          name: 'PPT 办公',
+          description: '创建专业演示文稿',
+          category: 'office',
+          revisionNumber: 2,
+          resourceSummary: {
+            totalCount: 2,
+            referenceCount: 1,
+            templateCount: 1,
+            paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          },
+        },
+      ],
+      managedSkillContext: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-1',
+          revisionId: 'rev-1',
+          slug: 'office-ppt',
+          name: 'PPT 办公',
+          description: '创建专业演示文稿',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: {
+            totalCount: 2,
+            referenceCount: 1,
+            templateCount: 1,
+            paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+          },
+        },
+      ],
+    },
   });
 
   assert.equal(summary?.id, 'run-1');
   assert.equal(createRunMock.mock.callCount(), 1);
   assert.equal((createRunMock.mock.calls[0]?.arguments[0] as any).connectorSnapshotId, 'snapshot-1');
+  assert.equal((createRunMock.mock.calls[0]?.arguments[0] as any).mcpToolSnapshotId, 'mcp-snapshot-1');
 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'user_input');
@@ -110,6 +160,16 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   assert.equal(capturedState?.input.sessionId, 'session-1');
   assert.equal(capturedState?.input.sessionTitle, 'Build game');
   assert.deepEqual(capturedState?.input.connectors, [{ connectorKey: 'github', authStatus: 'authorized' }]);
+  assert.deepEqual(capturedState?.input.mcpProviders, [
+    {
+      providerId: 'provider-1',
+      tools: [{ providerId: 'provider-1', toolName: 'github_search' }],
+    },
+  ]);
+  assert.equal(capturedState?.input.skillCatalog?.length, 1);
+  assert.equal(capturedState?.input.skills?.length, 1);
+  assert.equal(capturedState?.input.skillCatalog?.[0]?.slug, 'office-ppt');
+  assert.equal(capturedState?.input.skills?.[0]?.resourceSummary?.totalCount, 2);
   assert.ok(capturedAbortController instanceof AbortController);
 });
 
@@ -139,6 +199,10 @@ test('stopRun aborts active controller for in-flight run', async () => {
     captureConnectorSnapshot: mock.fn(async () => ({
       snapshotId: 'snapshot-2',
       statuses: [],
+    })),
+    captureMcpToolSnapshot: mock.fn(async () => ({
+      snapshotId: 'mcp-snapshot-2',
+      providers: [],
     })),
     persistTimelineMessage: mock.fn(async () => {}),
     updateSessionLifecycle: mock.fn(async () => {}),

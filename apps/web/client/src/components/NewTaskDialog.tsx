@@ -26,8 +26,10 @@ import {
 import {
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
+  mergePendingPlatformSkills,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import { toast } from "sonner";
 
 interface NewTaskDialogProps {
@@ -43,13 +45,13 @@ export default function NewTaskDialog({
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [showAgentChat, setShowAgentChat] = useState(false);
   const [initialAgentInput, setInitialAgentInput] = useState("");
-  const [initialAttachments, setInitialAttachments] = useState<File[]>([]);
+  const [initialAttachments, setInitialAttachments] = useState<PendingAttachment[]>([]);
 
   const handleSend = () => {
     const trimmed = message.trim();
     if (!trimmed && attachments.length === 0) return;
     setInitialAgentInput(trimmed || DEFAULT_ATTACHMENT_PROMPT);
-    setInitialAttachments(attachments.map((item) => item.file));
+    setInitialAttachments(attachments);
     setShowAgentChat(true);
     setMessage("");
     setAttachments([]);
@@ -59,6 +61,10 @@ export default function NewTaskDialog({
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
+    setAttachments((current) => mergePendingPlatformSkills(current, skills));
   };
 
   const removeAttachment = (id: string) => {
@@ -132,6 +138,7 @@ export default function NewTaskDialog({
                         <div className="flex items-center gap-1">
                           <AttachmentPickerButton
                             onSelectFiles={handleAttachmentSelect}
+                            onSelectSkills={handleSkillSelect}
                           />
 
                           <ConnectorDialog />

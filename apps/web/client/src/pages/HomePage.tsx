@@ -21,9 +21,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import UserMenu from "@/components/UserMenu";
+import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
+  mergePendingPlatformSkills,
   stashPendingDraftAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
@@ -37,7 +39,7 @@ export default function HomePage() {
   const goToNewTask = (input: string) => {
     const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!value) return;
-    stashPendingDraftAttachments(attachments.map((item) => item.file));
+    stashPendingDraftAttachments(attachments);
     setLocation(`/new-task?q=${encodeURIComponent(value)}`);
   };
 
@@ -45,6 +47,10 @@ export default function HomePage() {
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
+    setAttachments((current) => mergePendingPlatformSkills(current, skills));
   };
 
   const removeAttachment = (id: string) => {
@@ -123,7 +129,10 @@ export default function HomePage() {
               <TooltipProvider>
                 <div className="flex items-center justify-between pt-2">
                   <div className="flex items-center gap-1">
-                    <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
+                    <AttachmentPickerButton
+                      onSelectFiles={handleAttachmentSelect}
+                      onSelectSkills={handleSkillSelect}
+                    />
 
                     <ConnectorDialog />
 

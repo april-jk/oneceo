@@ -91,4 +91,77 @@ describe('managed message stream identity', () => {
     expect(next).toHaveLength(1);
     expect(next[0]?.content).toBe('工具 read_file 已完成');
   });
+
+  it('appends managed assistant delta chunks and replaces them with the final assistant message', () => {
+    const assistantKey = resolveManagedStreamMessageKey({
+      eventType: 'assistant_delta',
+      runId: 'run-3',
+      payloadMessageKey: 'managed:run-3:assistant',
+      sequence: 11,
+    });
+
+    const withDelta = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content: '你好',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-3',
+          sequence: 11,
+          stream: true,
+          streamDelta: true,
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    const withSecondDelta = mergeRealtimeMessage(
+      withDelta,
+      {
+        type: 'agent_message',
+        content: '，世界',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-3',
+          sequence: 12,
+          stream: true,
+          streamDelta: true,
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withSecondDelta).toHaveLength(1);
+    expect(withSecondDelta[0]?.content).toBe('你好，世界');
+
+    const withFinal = mergeRealtimeMessage(
+      withSecondDelta,
+      {
+        type: 'agent_message',
+        content: '你好，世界',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_message',
+          runId: 'run-3',
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withFinal).toHaveLength(1);
+    expect(withFinal[0]?.content).toBe('你好，世界');
+    expect(withFinal[0]?.metadata?.eventType).toBe('assistant_message');
+  });
 });

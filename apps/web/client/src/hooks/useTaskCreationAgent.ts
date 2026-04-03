@@ -1455,6 +1455,7 @@ export function mergeRealtimeMessage(
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
   const messageKey = resolveAgentMessageKey(message);
+  const metadata = toRecord(message.metadata);
   if (message.type === 'error') {
     const errorText = (message.message || message.content || '').trim();
     if (!shouldDisplayErrorText(errorText)) {
@@ -1476,6 +1477,26 @@ export function mergeRealtimeMessage(
   }
   const lastMessage = prev[prev.length - 1];
   const existingIndexByKey = prev.findIndex((item) => resolveAgentMessageKey(item) === messageKey);
+  if (existingIndexByKey >= 0 && message.type === 'agent_message' && metadata.streamDelta === true) {
+    const next = [...prev];
+    const existing = next[existingIndexByKey];
+    const existingMeta = toRecord(existing?.metadata);
+    const chunkSignature = `${asFiniteNumber(metadata.sequence) ?? 'na'}:${message.content || ''}`;
+    if (chunkSignature !== 'na:' && asText(existingMeta._streamChunkSignature) === chunkSignature) {
+      return prev;
+    }
+    next[existingIndexByKey] = normalizeAgentMessageIdentity({
+      ...existing,
+      ...message,
+      content: `${existing?.content || ''}${message.content || ''}`,
+      metadata: {
+        ...existingMeta,
+        ...metadata,
+        _streamChunkSignature: chunkSignature !== 'na:' ? chunkSignature : undefined,
+      },
+    });
+    return next;
+  }
   if (existingIndexByKey >= 0 && message.type !== 'opencode_event') {
     const next = [...prev];
     next[existingIndexByKey] = normalizeAgentMessageIdentity({
@@ -1530,8 +1551,6 @@ export function mergeRealtimeMessage(
   if (isDuplicateExecutorTail) {
     return prev;
   }
-
-  const metadata = toRecord(message.metadata);
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) {
     const hasSameSessionEventSeq = prev.some((item) => {
@@ -4685,6 +4704,34 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (!nextRunId) {
           throw new Error('managed run id missing');
         }
+        const runAckKey = resolveManagedStreamMessageKey({
+          eventType: 'run_ack',
+          runId: nextRunId,
+        });
+        setMessages((prev) =>
+          mergeRealtimeMessage(
+            prev,
+            {
+              messageKey: runAckKey,
+              type: 'status_update',
+              content: 'managed run 已创建',
+              message: 'managed run 已创建',
+              stage: 'executing',
+              tone: 'system',
+              sessionId: activeSessionId || undefined,
+              metadata: {
+                eventType: 'run_ack',
+                runId: nextRunId,
+                status: normalizeManagedRunStatus(run?.status) || 'queued',
+                sourceMessageKey: messageKey,
+                messageKey: runAckKey,
+                executor: 'altus',
+                executionMode: 'managed',
+              },
+            },
+            WELCOME_MESSAGE
+          )
+        );
         if (activeSessionId && shouldAttemptSessionTitleResolve(text)) {
           void resolveTaskCreationSessionTitle(activeSessionId, text)
             .then((resolved) => {

@@ -6,6 +6,8 @@ import {
   Book,
   Check,
   CheckCircle2,
+  ChevronRight,
+  CornerDownRight,
   Link2,
   Loader2,
   Plug,
@@ -54,7 +56,14 @@ interface ConnectorDialogProps {
 
 function formatStatus(value: string | null | undefined) {
   if (!value) return "unknown";
-  return value.replaceAll("_", " ");
+  switch (value) {
+    case "pending_recover":
+      return "pending recover";
+    case "recovering":
+      return "recovering";
+    default:
+      return value.replaceAll("_", " ");
+  }
 }
 
 function groupProfilesByConnector(profiles: ConnectorProfile[]) {
@@ -75,6 +84,30 @@ function summarizeRepositoryLabel(fullName: string | null | undefined) {
   if (!fullName) return null;
   const parts = fullName.split("/");
   return parts.length > 1 ? parts[parts.length - 1] : fullName;
+}
+
+function splitSelectedRepositoriesSummary(repositories: string[]) {
+  if (repositories.length === 0) {
+    return {
+      primary: "未选择代码库",
+      extra: null as string | null,
+    };
+  }
+  return {
+    primary: summarizeRepositoryLabel(repositories[0]) || repositories[0],
+    extra: repositories.length > 1 ? `+${repositories.length - 1}` : null,
+  };
+}
+
+function normalizeRepositoriesForCompare(repositories?: string[]) {
+  return [...(repositories || [])].sort();
+}
+
+function sameRepositories(left?: string[], right?: string[]) {
+  const leftNormalized = normalizeRepositoriesForCompare(left);
+  const rightNormalized = normalizeRepositoriesForCompare(right);
+  if (leftNormalized.length !== rightNormalized.length) return false;
+  return leftNormalized.every((item, index) => item === rightNormalized[index]);
 }
 
 function resolvePreferredProfileId(
@@ -115,6 +148,8 @@ function statusChipTone(value: string) {
     case "needs_auth":
     case "not_configured":
     case "connecting":
+    case "pending_recover":
+    case "recovering":
       return "bg-amber-500/10 text-amber-700";
     case "failed":
     case "error":
@@ -136,6 +171,9 @@ export default function ConnectorDialog({
   const [sessionStatuses, setSessionStatuses] = useState<Record<string, SessionConnectorStatus>>(
     {}
   );
+  const [sessionStatusOverrides, setSessionStatusOverrides] = useState<
+    Partial<Record<ConnectorKey, SessionConnectorStatus>>
+  >({});
   const [profileSelection, setProfileSelection] = useState<
     Partial<Record<ConnectorKey, string | null>>
   >({});
@@ -169,7 +207,17 @@ export default function ConnectorDialog({
           sessionData.items.map((item) => [item.connectorKey, item])
         );
       }
-      setSessionStatuses(nextSessionStatuses);
+      const mergedSessionStatuses = {
+        ...nextSessionStatuses,
+      } as Record<string, SessionConnectorStatus>;
+      for (const [connectorKey, override] of Object.entries(sessionStatusOverrides) as [
+        ConnectorKey,
+        SessionConnectorStatus | undefined,
+      ][]) {
+        if (!override) continue;
+        mergedSessionStatuses[connectorKey] = override;
+      }
+      setSessionStatuses(mergedSessionStatuses);
 
       const profilesByConnector = groupProfilesByConnector(me.profiles);
       setProfileSelection((prev) => {
@@ -177,7 +225,7 @@ export default function ConnectorDialog({
         for (const item of me.catalog) {
           next[item.key] = resolvePreferredProfileId(
             profilesByConnector[item.key] || [],
-            nextSessionStatuses[item.key],
+            mergedSessionStatuses[item.key],
             prev[item.key]
           );
         }
@@ -233,13 +281,11 @@ export default function ConnectorDialog({
     [catalog, profileSelection, profilesByConnector, sessionStatuses]
   );
 
-  const activeGithubConnector = useMemo(
-    () =>
-      detailKey === "github"
-        ? mergedConnectors.find((item) => item.item.key === "github") || null
-        : null,
-    [detailKey, mergedConnectors]
+  const githubConnector = useMemo(
+    () => mergedConnectors.find((item) => item.item.key === "github") || null,
+    [mergedConnectors]
   );
+  const activeGithubConnector = detailKey === "github" ? githubConnector : null;
   const activeDetailConnector = useMemo(
     () => (detailKey ? mergedConnectors.find((item) => item.item.key === detailKey) || null : null),
     [detailKey, mergedConnectors]
@@ -248,6 +294,14 @@ export default function ConnectorDialog({
     "github",
     activeGithubConnector?.selectedProfileId || null
   );
+
+  useEffect(() => {
+    if (!open) return;
+    const isGithubChecked = githubConnector?.session?.attached;
+    if (!isGithubChecked && detailKey === "github") {
+      setDetailKey(null);
+    }
+  }, [open, detailKey, githubConnector?.session?.attached]);
 
   useEffect(() => {
     if (!open || detailKey !== "github") return;
@@ -269,6 +323,7 @@ export default function ConnectorDialog({
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : "加载 GitHub 仓库失败");
+        void load();
       })
       .finally(() => {
         setGithubRepositoriesLoading((prev) => ({
@@ -287,7 +342,9 @@ export default function ConnectorDialog({
 
   useEffect(() => {
     if (!activeGithubConnector?.selectedProfileId) return;
-    if ((githubSelectedRepositories[activeGithubSelectionKey] || []).length > 0) return;
+    if (Object.prototype.hasOwnProperty.call(githubSelectedRepositories, activeGithubSelectionKey)) {
+      return;
+    }
     const sessionRepositories =
       activeGithubConnector.session?.attachedProfileId ===
       activeGithubConnector.selectedProfileId
@@ -315,6 +372,60 @@ export default function ConnectorDialog({
     setOpen(false);
   };
 
+  const attachedConnectors = useMemo(
+    () => mergedConnectors.filter(({ session }) => Boolean(session?.attached)),
+    [mergedConnectors]
+  );
+
+  const buildOptimisticSessionStatus = ({
+    item,
+    session,
+    connectorProfiles,
+    selectedProfileId,
+    selectedProfile,
+    attached,
+    repositories,
+  }: {
+    item: ConnectorCatalogItem;
+    session?: SessionConnectorStatus;
+    connectorProfiles: ConnectorProfile[];
+    selectedProfileId: string | null;
+    selectedProfile: ConnectorProfile | null;
+    attached: boolean;
+    repositories?: string[];
+  }): SessionConnectorStatus => ({
+    connectorKey: item.key,
+    name: session?.name || item.name,
+    icon: session?.icon || item.icon,
+    authMode: session?.authMode || item.authMode,
+    available: item.available,
+    availabilityReason: item.availabilityReason,
+    globalAuthStatus: selectedProfile?.authStatus || session?.globalAuthStatus || "not_configured",
+    attached,
+    desiredState: attached ? "attached" : "detached",
+    runtimeStatus: attached ? "connecting" : "disconnected",
+    usageStatus: session?.usageStatus || "idle",
+    displayName: selectedProfile?.displayName || session?.displayName || null,
+    selectedProfileId,
+    selectedProfileName: selectedProfile?.profileName || session?.selectedProfileName || null,
+    attachedProfileId: attached ? selectedProfileId : null,
+    attachedProfileName: attached ? selectedProfile?.profileName || null : null,
+    availableProfilesCount: connectorProfiles.length,
+    enabledTools: session?.enabledTools || [],
+    authorizedRepositories: attached ? repositories || [] : [],
+  });
+
+  const applySessionStatusOverride = (status: SessionConnectorStatus) => {
+    setSessionStatusOverrides((prev) => ({
+      ...prev,
+      [status.connectorKey]: status,
+    }));
+    setSessionStatuses((prev) => ({
+      ...prev,
+      [status.connectorKey]: status,
+    }));
+  };
+
   const handleAttach = async (
     connectorKey: ConnectorKey,
     profileId: string,
@@ -325,49 +436,112 @@ export default function ConnectorDialog({
     setActingKey(connectorKey);
     try {
       if (mode === "detach") {
+        applySessionStatusOverride(
+          buildOptimisticSessionStatus({
+            item: catalog.find((entry) => entry.key === connectorKey) || {
+              key: connectorKey,
+              name: sessionStatuses[connectorKey]?.name || connectorKey,
+              icon: sessionStatuses[connectorKey]?.icon || "plug",
+              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              available: true,
+              category: "app",
+            } as ConnectorCatalogItem,
+            session: sessionStatuses[connectorKey],
+            connectorProfiles: profilesByConnector[connectorKey] || [],
+            selectedProfileId: profileId,
+            selectedProfile:
+              (profilesByConnector[connectorKey] || []).find(
+                (profile) => profile.profileId === profileId
+              ) || null,
+            attached: false,
+            repositories: [],
+          })
+        );
         await detachSessionConnector(sessionId, connectorKey);
         toast.success("连接器已从当前会话移除");
       } else {
-        await attachSessionConnector(sessionId, connectorKey, {
+        applySessionStatusOverride(
+          buildOptimisticSessionStatus({
+            item: catalog.find((entry) => entry.key === connectorKey) || {
+              key: connectorKey,
+              name: sessionStatuses[connectorKey]?.name || connectorKey,
+              icon: sessionStatuses[connectorKey]?.icon || "plug",
+              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              available: true,
+              category: "app",
+            } as ConnectorCatalogItem,
+            session: sessionStatuses[connectorKey],
+            connectorProfiles: profilesByConnector[connectorKey] || [],
+            selectedProfileId: profileId,
+            selectedProfile:
+              (profilesByConnector[connectorKey] || []).find(
+                (profile) => profile.profileId === profileId
+              ) || null,
+            attached: true,
+            repositories: (sessionConfig?.repositories as string[] | undefined) || [],
+          })
+        );
+        const attachedStatus = await attachSessionConnector(sessionId, connectorKey, {
           profileId,
           sessionConfig,
         });
-        toast.success("连接器已挂载到当前会话");
+        toast.success(
+          attachedStatus?.runtimeStatus === "pending_recover"
+            ? "连接器已记录，sandbox 恢复后会自动挂载"
+            : "连接器已挂载到当前会话"
+        );
       }
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "连接器操作失败");
+      void load();
     } finally {
       setActingKey(null);
     }
   };
 
-  const toggleGithubRepository = (selectionKey: string, repositoryFullName: string) => {
-    setGithubSelectedRepositories((prev) => {
-      const current = prev[selectionKey] || [];
-      const exists = current.includes(repositoryFullName);
-      return {
-        ...prev,
-        [selectionKey]: exists ? [] : [repositoryFullName],
-      };
-    });
-  };
-
   const selectGithubRepository = async (
+    item: ConnectorCatalogItem,
     connectorKey: ConnectorKey,
+    session: SessionConnectorStatus | undefined,
+    connectorProfiles: ConnectorProfile[],
     profileId: string | null,
+    selectedProfile: ConnectorProfile | null,
     selectionKey: string,
     repositoryFullName: string,
     canAttach: boolean
   ) => {
     if (!profileId) return;
-    setGithubSelectedRepositories((prev) => ({
-      ...prev,
-      [selectionKey]: [repositoryFullName],
-    }));
+
+    let nextRepositories: string[] = [];
+    setGithubSelectedRepositories((prev) => {
+      const current = prev[selectionKey] || [];
+      const exists = current.includes(repositoryFullName);
+      nextRepositories = exists
+        ? current.filter((repository) => repository !== repositoryFullName)
+        : [...current, repositoryFullName];
+
+      return {
+        ...prev,
+        [selectionKey]: nextRepositories,
+      };
+    });
+
+    applySessionStatusOverride(
+      buildOptimisticSessionStatus({
+        item,
+        session,
+        connectorProfiles,
+        selectedProfileId: profileId,
+        selectedProfile,
+        attached: true,
+        repositories: nextRepositories,
+      })
+    );
+
     if (!sessionId || !canAttach) return;
     await handleAttach(connectorKey, profileId, "attach", {
-      repositories: [repositoryFullName],
+      repositories: nextRepositories,
     });
   };
 
@@ -387,9 +561,28 @@ export default function ConnectorDialog({
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-9 w-9 rounded-xl hover:bg-muted transition-colors", className)}
+              className={cn("h-9 w-9 rounded-[10px] hover:bg-muted/80 transition-colors", className)}
             >
-              <Plug className="h-4 w-4 text-muted-foreground" />
+              {attachedConnectors.length === 0 ? (
+                <Plug className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <div className="flex items-center justify-center pl-0.5">
+                  {attachedConnectors.slice(0, 3).map(({ item }, index) => {
+                    const AttachedIcon = resolveConnectorIcon(item.icon) || Link2;
+                    return (
+                      <span
+                        key={item.key}
+                        className={cn(
+                          "flex h-4.5 w-4.5 items-center justify-center rounded-[8px] border border-background/90 bg-background ring-1 ring-border/30",
+                          index > 0 ? "-ml-1" : ""
+                        )}
+                      >
+                        <AttachedIcon className="h-2.5 w-2.5 text-foreground/85" />
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -447,92 +640,155 @@ export default function ConnectorDialog({
                         githubSelectedRepositories[githubRepoSelectionKey] ||
                         attachedAuthorizedRepositories ||
                         [];
-                      const selectedRepositoryName = selectedRepositories[0] || null;
-                      const rowDescription = isGithub
-                        ? selectedProfile?.displayName
-                          ? selectedRepositoryName
-                            ? `${selectedProfile.displayName} · ${summarizeRepositoryLabel(selectedRepositoryName)}`
-                            : `${selectedProfile.displayName} · 选择仓库`
-                          : summarizeRepositoryLabel(selectedRepositoryName) || "选择当前会话仓库"
-                        : selectedProfile?.profileName || `${connectorProfiles.length} profiles`;
+                      const selectedRepositoriesSummary = splitSelectedRepositoriesSummary(
+                        selectedRepositories
+                      );
 
                       return (
-                        <div
-                          key={item.key}
-                          className="flex items-center justify-between gap-1.5 rounded-[8px] px-1.5 py-1 hover:bg-muted/45"
-                        >
-                          <button
-                            type="button"
+                        <div key={item.key} className="flex flex-col gap-0.5">
+                          <div
                             className={cn(
-                              "flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[7px] px-1.5 text-left transition hover:bg-muted/35",
-                              detailKey === item.key ? "bg-muted/45" : ""
+                              "flex h-[36px] items-center justify-between gap-2 rounded-[8px] px-2 pl-1 transition hover:bg-muted/45",
+                              detailKey === item.key && !isGithub ? "bg-muted/45" : ""
                             )}
-                            onClick={() =>
-                              setDetailKey((prev) => (prev === item.key ? null : item.key))
-                            }
                           >
-                            <div className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-muted text-foreground/90">
-                              <DetailIcon className="h-3.5 w-3.5" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-[13px] font-medium text-foreground">
-                                {item.name}
-                              </div>
-                              <div className="truncate text-[11px] text-muted-foreground">
-                                {rowDescription}
-                              </div>
-                            </div>
-                            {checked ? (
-                              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                            ) : null}
-                          </button>
-
-                          <button
-                            type="button"
-                            className="group flex items-center gap-2"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (isGithub) {
-                                if (attachedToSelected) {
-                                  void handleAttach(item.key, selectedProfileId || "", "detach");
-                                } else {
-                                  setDetailKey(item.key);
+                            <button
+                              type="button"
+                              className="flex h-full min-w-0 flex-1 items-center gap-1 text-left"
+                              onClick={() => {
+                                if (isGithub) {
+                                  if (!selectedProfileId || selectedProfile?.authStatus !== "authorized") {
+                                    openSettingsDialog({
+                                      tab: "connectors",
+                                      connectorKey: "github",
+                                      targetSessionId: sessionId,
+                                    });
+                                    setDetailKey(null);
+                                    setOpen(false);
+                                    return;
+                                  }
+                                  return;
                                 }
-                                return;
-                              }
-                              if (!selectedProfileId) {
-                                setDetailKey(item.key);
-                                return;
-                              }
-                              if (!attachedToSelected && !canAttach) {
-                                setDetailKey(item.key);
-                                return;
-                              }
-                              void handleAttach(
-                                item.key,
-                                selectedProfileId,
-                                attachedToSelected ? "detach" : "attach"
-                              );
-                            }}
-                            aria-label={checked ? "Disable connector" : "Enable connector"}
-                          >
-                            {busy ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                            ) : null}
-                            <div
-                              className={cn(
-                                "h-4 w-[26px] rounded-full px-[1px] transition-colors",
-                                checked ? "bg-primary" : "bg-muted-foreground/30"
-                              )}
+                                setDetailKey((prev) => (prev === item.key ? null : item.key));
+                              }}
                             >
-                              <span
+                              <div className="flex size-7 shrink-0 items-center justify-center rounded-[4px] text-foreground/90">
+                                <DetailIcon className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[14px] leading-5 text-foreground">
+                                  {item.name}
+                                </div>
+                              </div>
+                              {checked && !isGithub ? (
+                                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                              ) : null}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="group relative z-10 shrink-0 rounded-full p-1 transition hover:bg-muted/45"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (busy) return;
+                                if (isGithub) {
+                                  if (!selectedProfileId || selectedProfile?.authStatus !== "authorized") {
+                                    openSettingsDialog({
+                                      tab: "connectors",
+                                      connectorKey: "github",
+                                      targetSessionId: sessionId,
+                                    });
+                                    setDetailKey(null);
+                                    setOpen(false);
+                                    return;
+                                  }
+                                  const nextMode = attachedToSelected ? "detach" : "attach";
+                                  setSessionStatuses((prev) => ({
+                                    ...prev,
+                                    [item.key]: buildOptimisticSessionStatus({
+                                      item,
+                                      session,
+                                      connectorProfiles,
+                                      selectedProfileId,
+                                      selectedProfile,
+                                      attached: nextMode === "attach",
+                                      repositories:
+                                        nextMode === "attach" ? selectedRepositories : [],
+                                    }),
+                                  }));
+                                  if (nextMode === "detach") {
+                                    setDetailKey(null);
+                                  }
+                                  void handleAttach(item.key, selectedProfileId, nextMode, {
+                                    repositories: nextMode === "attach" ? selectedRepositories : [],
+                                  });
+                                  return;
+                                }
+
+                                if (!selectedProfileId) {
+                                  setDetailKey(item.key);
+                                  return;
+                                }
+                                if (!attachedToSelected && !canAttach) {
+                                  setDetailKey(item.key);
+                                  return;
+                                }
+                                void handleAttach(
+                                  item.key,
+                                  selectedProfileId,
+                                  attachedToSelected ? "detach" : "attach"
+                                );
+                              }}
+                              aria-label={checked ? "Disable connector" : "Enable connector"}
+                            >
+                              {busy ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                              ) : null}
+                              <div
                                 className={cn(
-                                  "mt-[1px] block h-3.5 w-3.5 rounded-full bg-background transition-transform",
-                                  checked ? "translate-x-2.5" : "translate-x-0"
+                                  "h-4 w-[26px] rounded-full px-[1px] transition-colors",
+                                  checked ? "bg-primary" : "bg-muted-foreground/30"
                                 )}
-                              />
-                            </div>
-                          </button>
+                              >
+                                <span
+                                  className={cn(
+                                    "mt-[1px] block h-3.5 w-3.5 rounded-full bg-background transition-transform",
+                                    checked ? "translate-x-2.5" : "translate-x-0"
+                                  )}
+                                />
+                              </div>
+                            </button>
+                          </div>
+
+                          {isGithub && checked ? (
+                            <button
+                              type="button"
+                              className={cn(
+                                "ml-1 mr-1 mb-2 mt-0.5 flex h-[36px] items-center justify-between gap-2 rounded-[8px] px-2 pl-1 text-left transition",
+                                detailKey === "github" ? "bg-muted/45" : "hover:bg-muted/35"
+                              )}
+                              onClick={() => setDetailKey((prev) => (prev === "github" ? null : "github"))}
+                            >
+                              <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+                                <div className="flex size-7 shrink-0 items-center justify-center">
+                                  <CornerDownRight className="h-4 w-4 text-foreground/80" />
+                                </div>
+                                <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[14px] leading-5 text-foreground">
+                                  <span className="truncate">{selectedRepositoriesSummary.primary}</span>
+                                  {selectedRepositoriesSummary.extra ? (
+                                    <span className="shrink-0 whitespace-nowrap">
+                                      {selectedRepositoriesSummary.extra}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            </button>
+                          ) : null}
                         </div>
                       );
                     }
@@ -562,18 +818,23 @@ export default function ConnectorDialog({
           </div>
 
           {activeDetailConnector ? (
-            activeDetailConnector.item.key === "github" ? (
               <div
-                className="absolute left-[calc(100%+8px)] top-0 z-20 w-[min(280px,calc(100vw-32px))] overflow-hidden rounded-[12px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
+                className="absolute left-[calc(100%+8px)] top-0 z-20 w-[min(310px,calc(100vw-32px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
                 style={{
                   height:
-                    "min(430px, calc(var(--radix-popover-content-available-height, 75vh) - 8px))",
+                    "min(440px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
                 }}
               >
                 {(() => {
                   const { item, session, connectorProfiles, selectedProfileId, selectedProfile } =
                     activeDetailConnector;
                   const busy = actingKey === item.key;
+                  const attachedToSelected =
+                    Boolean(session?.attached) &&
+                    session?.attachedProfileId === selectedProfileId;
+                  const isGithubDetail = item.key === "github";
+                  const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
+                  const guide = CONNECTOR_GUIDES[item.key];
                   const canAttach =
                     Boolean(sessionId) &&
                     item.available &&
@@ -591,80 +852,72 @@ export default function ConnectorDialog({
                     githubSelectedRepositories[githubRepoSelectionKey] ||
                     attachedAuthorizedRepositories ||
                     [];
+                  const filteredRepositories = isGithubDetail
+                    ? (githubRepositories[selectedProfileId || ""] || []).filter((repository) => {
+                        const keyword = (
+                          githubRepositorySearch[githubRepoSelectionKey] || ""
+                        ).trim().toLowerCase();
+                        if (!keyword) return true;
+                        return (
+                          repository.fullName.toLowerCase().includes(keyword) ||
+                          repository.owner.toLowerCase().includes(keyword) ||
+                          repository.name.toLowerCase().includes(keyword)
+                        );
+                      })
+                    : [];
 
-                  return (
-                    <div className="flex h-full min-w-0 flex-col overflow-hidden">
-                      <div className="border-b border-border/70 p-2">
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                          <Input
-                            value={githubRepositorySearch[githubRepoSelectionKey] || ""}
-                            onChange={(event) =>
-                              setGithubRepositorySearch((prev) => ({
-                                ...prev,
-                                [githubRepoSelectionKey]: event.target.value,
-                              }))
-                            }
-                            placeholder="搜索代码库"
-                            className="h-8 rounded-[8px] border-border/70 bg-muted/15 pl-8 text-[13px]"
-                          />
-                        </div>
-                      </div>
-
-                      <ScrollArea className="min-h-0 flex-1">
-                        <div className="space-y-1 p-1.5">
-                          {!selectedProfileId ? (
-                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
-                              先选择一个 GitHub 账户，再继续选择仓库。
-                            </div>
-                          ) : !selectedProfile ? (
-                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
-                              还没有可用的 GitHub 授权账户，请先完成 GitHub 连接。
-                            </div>
-                          ) : item.availabilityReason ? (
-                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-destructive">
-                              {item.availabilityReason}
-                            </div>
-                          ) : selectedProfile.lastError ? (
-                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-destructive">
-                              {selectedProfile.lastError}
-                            </div>
-                          ) : githubRepositoriesLoading[selectedProfileId] ? (
-                            <div className="flex items-center gap-2 rounded-[8px] px-2.5 py-3 text-[11px] text-muted-foreground">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              正在加载可授权仓库
-                            </div>
-                          ) : (githubRepositories[selectedProfileId] || []).length === 0 ? (
-                            <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
-                              当前 GitHub 账户下没有可读取的仓库，或仓库列表尚未返回。
-                            </div>
-                          ) : (
-                            (() => {
-                              const filteredRepositories = (
-                                githubRepositories[selectedProfileId] || []
-                              ).filter((repository) => {
-                                const keyword = (
-                                  githubRepositorySearch[githubRepoSelectionKey] || ""
-                                )
-                                  .trim()
-                                  .toLowerCase();
-                                if (!keyword) return true;
-                                return (
-                                  repository.fullName.toLowerCase().includes(keyword) ||
-                                  repository.owner.toLowerCase().includes(keyword) ||
-                                  repository.name.toLowerCase().includes(keyword)
-                                );
-                              });
-
-                              if (filteredRepositories.length === 0) {
-                                return (
-                                  <div className="rounded-[8px] px-2.5 py-3 text-[11px] leading-5 text-muted-foreground">
-                                    没有找到匹配的代码库。
-                                  </div>
-                                );
+                  if (isGithubDetail) {
+                    return (
+                      <div className="flex h-full min-w-0 flex-col overflow-hidden">
+                        <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
+                          <div className="text-xs font-medium text-foreground">选择代码库</div>
+                          <div className="relative mt-2">
+                            <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              value={githubRepositorySearch[githubRepoSelectionKey] || ""}
+                              onChange={(event) =>
+                                setGithubRepositorySearch((prev) => ({
+                                  ...prev,
+                                  [githubRepoSelectionKey]: event.target.value,
+                                }))
                               }
+                              placeholder="搜索代码库"
+                              className="h-8 rounded-[8px] border-border/70 bg-background pl-7 text-[12px]"
+                            />
+                          </div>
 
-                              return filteredRepositories.map((repository) => {
+                          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pt-2">
+                            {!selectedProfileId ? (
+                              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+                                先选择一个 GitHub 账户，再继续选择仓库。
+                              </div>
+                            ) : !selectedProfile ? (
+                              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+                                还没有可用的 GitHub 授权账户。
+                              </div>
+                            ) : item.availabilityReason ? (
+                              <div className="px-2 py-2 text-[11px] text-destructive">
+                                {item.availabilityReason}
+                              </div>
+                            ) : selectedProfile.lastError ? (
+                              <div className="px-2 py-2 text-[11px] text-destructive">
+                                {selectedProfile.lastError}
+                              </div>
+                            ) : githubRepositoriesLoading[selectedProfileId] ? (
+                              <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-muted-foreground">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                加载中...
+                              </div>
+                            ) : (githubRepositories[selectedProfileId] || []).length === 0 ? (
+                              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+                                没有可读取的仓库。
+                              </div>
+                            ) : filteredRepositories.length === 0 ? (
+                              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+                                没有匹配的代码库。
+                              </div>
+                            ) : (
+                              filteredRepositories.map((repository) => {
                                 const selected = selectedRepositories.includes(repository.fullName);
                                 return (
                                   <div
@@ -672,98 +925,60 @@ export default function ConnectorDialog({
                                     role="button"
                                     tabIndex={0}
                                     className={cn(
-                                      "flex items-center gap-2 justify-between rounded-[8px] px-2 py-2 transition outline-none focus-visible:bg-muted/45 focus-visible:ring-0",
+                                      "flex items-center justify-between gap-2 rounded-[8px] px-2 py-1.5 transition outline-none focus-visible:bg-muted/45",
                                       selected ? "bg-muted/50" : "hover:bg-muted/35"
                                     )}
                                     onClick={() =>
                                       void selectGithubRepository(
+                                        item,
                                         item.key,
+                                        session,
+                                        connectorProfiles,
                                         selectedProfileId,
+                                        selectedProfile,
                                         githubRepoSelectionKey,
                                         repository.fullName,
                                         canAttach
                                       )
                                     }
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter" || event.key === " ") {
-                                        event.preventDefault();
-                                        void selectGithubRepository(
-                                          item.key,
-                                          selectedProfileId,
-                                          githubRepoSelectionKey,
-                                          repository.fullName,
-                                          canAttach
-                                        );
-                                      }
-                                    }}
-                                    title={repository.fullName}
                                   >
                                     <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                                      <Book className="h-4 w-4 shrink-0 text-foreground/80" />
+                                      <Book className="h-3.5 w-3.5 shrink-0 text-foreground/80" />
                                       <div className="min-w-0 flex-1">
-                                        <div className="truncate text-[13px] leading-5 text-foreground">
+                                        <div className="truncate text-[12px] leading-tight text-foreground">
                                           {repository.name}
                                         </div>
-                                        <div className="truncate text-[11px] text-muted-foreground">
+                                        <div className="truncate text-[10px] text-muted-foreground">
                                           {repository.fullName}
                                         </div>
                                       </div>
                                     </div>
                                     {selected ? (
-                                      <Check className="h-4 w-4 shrink-0 text-foreground" />
+                                      <Check className="h-3.5 w-3.5 shrink-0 text-foreground" />
                                     ) : null}
                                   </div>
                                 );
-                              });
-                            })()
-                          )}
-                        </div>
-                      </ScrollArea>
-
-                      <div className="border-t border-border/70 p-1.5">
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between rounded-[8px] px-2 py-2 text-left transition hover:bg-muted/45"
-                          onClick={() => openConnectorSettings(item.key)}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-muted text-foreground/90">
-                              {(() => {
-                                const GithubIcon = resolveConnectorIcon(item.icon);
-                                return <GithubIcon className="h-3.5 w-3.5" />;
-                              })()}
-                            </div>
-                            <span className="text-[13px] text-foreground">配置 GitHub</span>
+                              })
+                            )}
                           </div>
-                          <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
-                        </button>
+                        </div>
+
+                        <div className="shrink-0 border-t border-border/70 px-3 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-[10px]"
+                              onClick={() => openConnectorSettings(item.key)}
+                            >
+                              <Settings2 className="mr-2 h-4 w-4" />
+                              配置授权
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            ) : (
-              <div
-                className="absolute left-[calc(100%+8px)] top-0 z-20 w-[min(310px,calc(100vw-32px))] overflow-hidden rounded-[14px] border border-border/70 bg-background p-0 shadow-[0px_4px_16px_rgba(15,23,42,0.16)]"
-                style={{
-                  height:
-                    "min(440px, calc(var(--radix-popover-content-available-height, 70vh) - 8px))",
-                }}
-              >
-                {(() => {
-                  const { item, session, connectorProfiles, selectedProfileId, selectedProfile } =
-                    activeDetailConnector;
-                  const busy = actingKey === item.key;
-                  const attachedToSelected =
-                    Boolean(session?.attached) &&
-                    session?.attachedProfileId === selectedProfileId;
-                  const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
-                  const guide = CONNECTOR_GUIDES[item.key];
-                  const canAttach =
-                    Boolean(sessionId) &&
-                    item.available &&
-                    Boolean(selectedProfileId) &&
-                    selectedProfile?.authStatus === "authorized";
+                    );
+                  }
 
                   return (
                     <div className="flex h-full min-w-0 flex-col overflow-hidden">
@@ -978,7 +1193,6 @@ export default function ConnectorDialog({
                   );
                 })()}
               </div>
-            )
           ) : null}
         </div>
       </PopoverContent>

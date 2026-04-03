@@ -1,0 +1,100 @@
+import type { OneceoApiConnector } from '../connectors/oneceo-api-connector';
+
+export class SkillManagementService {
+  constructor(private readonly oneceoApi: OneceoApiConnector) {}
+
+  listSkills(filters?: { query?: string; status?: string; category?: string }) {
+    return this.oneceoApi.listSkills(filters);
+  }
+
+  getSkill(skillId: string) {
+    return this.oneceoApi.getSkill(skillId);
+  }
+
+  createSkill(input: {
+    slug: string;
+    name: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown: string;
+    resources?: Array<{
+      resourcePath: string;
+      resourceType?: 'reference' | 'template';
+      contentMarkdown: string;
+    }>;
+    createdBy?: string;
+  }) {
+    return this.oneceoApi.createSkill(input);
+  }
+
+  updateSkill(
+    skillId: string,
+    input: {
+      name?: string;
+      description?: string;
+      category?: string;
+      bodyMarkdown?: string;
+      resources?: Array<{
+        resourcePath: string;
+        resourceType?: 'reference' | 'template';
+        contentMarkdown: string;
+      }>;
+      createdBy?: string;
+    }
+  ) {
+    return this.oneceoApi.updateSkill(skillId, input);
+  }
+
+  archiveSkill(skillId: string) {
+    return this.oneceoApi.archiveSkill(skillId);
+  }
+
+  activateSkill(skillId: string) {
+    return this.oneceoApi.activateSkill(skillId);
+  }
+
+  listRevisions(skillId: string) {
+    return this.oneceoApi.listSkillRevisions(skillId);
+  }
+
+  getRenderedRevision(skillId: string, revisionId: string) {
+    return this.oneceoApi.getRenderedSkillRevision(skillId, revisionId);
+  }
+
+  getRevisionResources(skillId: string, revisionId: string) {
+    return this.oneceoApi.getSkillRevisionResources(skillId, revisionId);
+  }
+
+  validateRevision(skillId: string, revisionId: string, sessionId: string) {
+    return this.oneceoApi.validateSkillRevision(skillId, revisionId, sessionId);
+  }
+
+  previewFolderImport(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+  }) {
+    return this.oneceoApi.previewSkillFolderImport(input);
+  }
+
+  importFolder(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.oneceoApi.importSkillFolder(input);
+  }
+
+  createFolderImportJob(input: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) {
+    return this.oneceoApi.createSkillFolderImportJob(input);
+  }
+
+  getFolderImportJob(jobId: string) {
+    return this.oneceoApi.getSkillFolderImportJob(jobId);
+  }
+}

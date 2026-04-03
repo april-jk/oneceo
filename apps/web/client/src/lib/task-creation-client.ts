@@ -1,5 +1,5 @@
 import { getApiBaseUrl, getTaskCreationWsUrl } from "@/lib/runtime-config";
-import { buildClientIdentityHeaders, getClientUserId } from "@/lib/client-identity";
+import { buildClientIdentityHeaders } from "@/lib/client-identity";
 
 export type TaskCreationSessionSummary = {
   id: string;
@@ -98,15 +98,63 @@ export type SubmitTaskCreationManagedInput = {
   files?: File[];
 };
 
+export type TaskCreationPlatformSkill = {
+  sourceType?: "platform" | "custom";
+  skillId: string;
+  revisionId: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  revisionNumber: number | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
+};
+
+export type TaskCreationUserCustomSkill = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: "active" | "archived";
+  bodyMarkdown?: string;
+  documents?: Array<{
+    id: string;
+    documentKey: string;
+    documentPath: string;
+    title: string;
+    summary: string;
+    bodyMarkdown: string;
+    sortOrder: number;
+    updatedAt: string;
+  }>;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  } | null;
+  updatedAt: string;
+};
+
+export type TaskCreationUserSkillSettings = {
+  platformCatalog: Array<TaskCreationPlatformSkill & { enabled: boolean }>;
+  customSkills: TaskCreationUserCustomSkill[];
+  availableSkills: TaskCreationPlatformSkill[];
+};
+
 export type TaskCreationUploadedAttachment = {
   name: string;
   path: string;
   size: number;
   mimeType?: string;
   uploadedAt?: string;
-  attachmentKind?: "uploaded_file" | "inline_skill";
-  inlineContent?: string;
-  templateId?: string;
+  attachmentKind?: "uploaded_file";
 };
 
 export type SubmitTaskCreationManagedInputResult = {
@@ -339,6 +387,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, options?: { timeout
   try {
     response = await fetch(url, {
       ...init,
+      credentials: init?.credentials || "include",
       signal: controller?.signal ?? init?.signal,
       cache: init?.cache || "no-store",
       headers: buildClientIdentityHeaders(init?.headers),
@@ -376,6 +425,144 @@ export async function listTaskCreationSessions(
   const url = `${getApiBaseUrl()}/api/task-creation/sessions?limit=${encodeURIComponent(String(limit))}`;
   const result = await fetchJson<{ data?: TaskCreationSessionSummary[] }>(url);
   return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function listTaskCreationSkills(): Promise<TaskCreationPlatformSkill[]> {
+  const url = `${getApiBaseUrl()}/api/task-creation/skills`;
+  const result = await fetchJson<{ data?: TaskCreationPlatformSkill[] }>(url);
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
+export async function getTaskCreationUserSkillSettings(): Promise<TaskCreationUserSkillSettings> {
+  const url = `${getApiBaseUrl()}/api/task-creation/settings/skills`;
+  const result = await fetchJson<{ data?: TaskCreationUserSkillSettings }>(url);
+  if (result?.data) return result.data;
+  throw new Error("failed to load user skill settings");
+}
+
+export async function enableTaskCreationPlatformSkill(skillId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/platform/${encodeURIComponent(skillId)}/enable`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function disableTaskCreationPlatformSkill(skillId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/platform/${encodeURIComponent(skillId)}/disable`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({}),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function createTaskCreationCustomSkill(input: {
+  slug: string;
+  name: string;
+  description?: string;
+  category?: string;
+  bodyMarkdown: string;
+  documents?: Array<{
+    documentKey?: string;
+    documentPath: string;
+    title?: string;
+    summary?: string;
+    bodyMarkdown: string;
+  }>;
+}): Promise<TaskCreationUserCustomSkill> {
+  const response = await fetch(`${getApiBaseUrl()}/api/task-creation/settings/skills/custom`, {
+    method: "POST",
+    headers: buildClientIdentityHeaders({
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationUserCustomSkill };
+  if (!result.data) {
+    throw new Error("custom skill empty");
+  }
+  return result.data;
+}
+
+export async function updateTaskCreationCustomSkill(
+  customSkillId: string,
+  input: {
+    name?: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown?: string;
+    documents?: Array<{
+      documentKey?: string;
+      documentPath: string;
+      title?: string;
+      summary?: string;
+      bodyMarkdown: string;
+    }>;
+  }
+): Promise<TaskCreationUserCustomSkill> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}`,
+    {
+      method: "PUT",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(input),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const result = (await response.json()) as { data?: TaskCreationUserCustomSkill };
+  if (!result.data) {
+    throw new Error("custom skill empty");
+  }
+  return result.data;
+}
+
+export async function archiveTaskCreationCustomSkill(customSkillId: string) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}/archive`,
+    {
+      method: "POST",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({}),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export async function activateTaskCreationCustomSkill(customSkillId: string) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/task-creation/settings/skills/custom/${encodeURIComponent(customSkillId)}/activate`,
+    {
+      method: "POST",
+      headers: buildClientIdentityHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({}),
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }
 
 export async function createTaskCreationSession(
@@ -592,10 +779,6 @@ export function getTaskCreationManagedRunStreamUrl(
   }
   if (options?.clientId) {
     params.set("clientId", options.clientId);
-  }
-  const userId = getClientUserId();
-  if (userId) {
-    params.set("userId", userId);
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : "";

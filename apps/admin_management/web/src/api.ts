@@ -3,8 +3,24 @@ import type {
   AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionsResponse,
+  ConnectorGuidePolicy,
+  ConnectorGuidePolicyDetail,
+  ConnectorGuideRevision,
+  ConnectorGuideValidationResult,
   DashboardOverview,
   HostListResponse,
+  OsacRelease,
+  OsacReleaseDetailResponse,
+  OsacReleaseListResponse,
+  SkillDetail,
+  SkillImportJob,
+  SkillImportResult,
+  SkillImportPreview,
+  SkillRenderedRevision,
+  SkillRevision,
+  SkillRevisionResources,
+  SkillSummary,
+  SkillValidationResult,
   KvmJobInfo,
   KvmSandboxInfo,
   KvmSandboxPortMapping,
@@ -41,6 +57,14 @@ type ApiFailure = {
 
 type ApiEnvelope<T> = ApiSuccess<T> | ApiFailure;
 
+export type AdminUser = {
+  id: string;
+  loginName: string;
+  displayName: string;
+  role: 'admin' | 'super_admin' | string;
+  status?: string;
+};
+
 const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
 
@@ -50,6 +74,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    credentials: 'include',
     signal: controller.signal,
     headers: {
       'content-type': 'application/json',
@@ -78,6 +103,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
+    credentials: 'include',
     signal: controller.signal,
     body: formData,
   }).finally(() => {
@@ -95,6 +121,18 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 }
 
 export const api = {
+  getCurrentAdmin: () => request<{ adminUser: AdminUser }>('/api/admin/auth/me'),
+  adminLogin: (payload: { loginName: string; password: string }) =>
+    request<{ adminUser: AdminUser }>('/api/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  adminLogout: () =>
+    request<{ ok: boolean }>('/api/admin/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
 
   listVms: (query: { withState?: boolean; limit?: number; offset?: number } = {}) => {
@@ -256,6 +294,231 @@ export const api = {
     requestForm<Record<string, unknown>>(`/api/kvm/vms/${encodeURIComponent(vmId)}/files`, formData),
   uploadSessionFile: (sessionId: string, formData: FormData) =>
     requestForm<Record<string, unknown>>(`/api/kvm/sessions/${encodeURIComponent(sessionId)}/files`, formData),
+  listSkills: (query?: { query?: string; status?: string; category?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.query) params.set('query', query.query);
+    if (query?.status) params.set('status', query.status);
+    if (query?.category) params.set('category', query.category);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<SkillSummary[]>(`/api/skill-management${suffix}`);
+  },
+  getSkill: (skillId: string) => request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`),
+  createSkill: (payload: {
+    slug: string;
+    name: string;
+    description?: string;
+    category?: string;
+    bodyMarkdown: string;
+    resources?: Array<{
+      resourcePath: string;
+      resourceType?: 'reference' | 'template';
+      contentMarkdown: string;
+    }>;
+    createdBy?: string;
+  }) =>
+    request<SkillDetail>('/api/skill-management', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSkill: (
+    skillId: string,
+    payload: {
+      name?: string;
+      description?: string;
+      category?: string;
+      bodyMarkdown?: string;
+      resources?: Array<{
+        resourcePath: string;
+        resourceType?: 'reference' | 'template';
+        contentMarkdown: string;
+      }>;
+      createdBy?: string;
+    }
+  ) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveSkill: (skillId: string) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  activateSkill: (skillId: string) =>
+    request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  listSkillRevisions: (skillId: string) =>
+    request<SkillRevision[]>(`/api/skill-management/${encodeURIComponent(skillId)}/revisions`),
+  getRenderedSkillRevision: (skillId: string, revisionId: string) =>
+    request<SkillRenderedRevision>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/rendered`
+    ),
+  getSkillRevisionResources: (skillId: string, revisionId: string) =>
+    request<SkillRevisionResources>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/resources`
+    ),
+  validateSkillRevision: (skillId: string, revisionId: string, sessionId: string) =>
+    request<SkillValidationResult>(
+      `/api/skill-management/${encodeURIComponent(skillId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionId }),
+      }
+    ),
+  previewSkillFolderImport: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+  }) =>
+    request<SkillImportPreview>('/api/skill-management/import/folder-preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  importSkillFolder: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) =>
+    request<SkillImportResult>('/api/skill-management/import/folder', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  createSkillFolderImportJob: (payload: {
+    rootFolderName?: string;
+    files: Array<{ relativePath: string; content: string }>;
+    createdBy?: string;
+    skillId?: string;
+  }) =>
+    request<SkillImportJob>('/api/skill-management/import/folder-jobs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getSkillFolderImportJob: (jobId: string) =>
+    request<SkillImportJob>(`/api/skill-management/import/folder-jobs/${encodeURIComponent(jobId)}`),
+  listConnectorGuidePolicies: (query?: { connectorKey?: string; status?: string; query?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.connectorKey) params.set('connectorKey', query.connectorKey);
+    if (query?.status) params.set('status', query.status);
+    if (query?.query) params.set('query', query.query);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<ConnectorGuidePolicy[]>(`/api/connector-guides${suffix}`);
+  },
+  getConnectorGuidePolicy: (policyId: string) =>
+    request<ConnectorGuidePolicyDetail>(`/api/connector-guides/${encodeURIComponent(policyId)}`),
+  createConnectorGuidePolicy: (payload: {
+    connectorKey: string;
+    triggerMode: string;
+    description?: string;
+    createdBy?: string;
+  }) =>
+    request<ConnectorGuidePolicy>('/api/connector-guides', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateConnectorGuidePolicy: (
+    policyId: string,
+    payload: { triggerMode?: string; description?: string; status?: string }
+  ) =>
+    request<ConnectorGuidePolicy>(`/api/connector-guides/${encodeURIComponent(policyId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  createConnectorGuideRevision: (policyId: string, payload?: { createdBy?: string }) =>
+    request<ConnectorGuideRevision>(`/api/connector-guides/${encodeURIComponent(policyId)}/revisions`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
+  getConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<ConnectorGuideRevision>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`
+    ),
+  updateConnectorGuideRevision: (
+    policyId: string,
+    revisionId: string,
+    payload: {
+      serverInstructionsMarkdown?: string;
+      guideReminderMarkdown?: string;
+      blockingRulesMarkdown?: string;
+      notes?: string;
+    }
+  ) =>
+    request<ConnectorGuideRevision>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }
+    ),
+  validateConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<ConnectorGuideValidationResult>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/validate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
+  publishConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<{
+      policy: ConnectorGuidePolicy;
+      revision: ConnectorGuideRevision;
+      validation: ConnectorGuideValidationResult;
+    }>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/publish`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
+  rollbackConnectorGuideRevision: (policyId: string, revisionId: string) =>
+    request<{
+      policy: ConnectorGuidePolicy;
+      revision: ConnectorGuideRevision;
+    }>(
+      `/api/connector-guides/${encodeURIComponent(policyId)}/revisions/${encodeURIComponent(revisionId)}/rollback`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
+  listOsacReleases: (query?: { status?: string; channel?: string; query?: string }) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.channel) params.set('channel', query.channel);
+    if (query?.query) params.set('query', query.query);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<OsacReleaseListResponse>(`/api/osac-releases${suffix}`);
+  },
+  getOsacRelease: (releaseId: string) =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}`),
+  uploadOsacRelease: (payload: {
+    version: string;
+    fileBase64: string;
+    releaseNotes?: string;
+    sourceCommit?: string;
+    uploadedBy?: string;
+    channel?: string;
+  }) =>
+    request<OsacRelease>('/api/osac-releases', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  validateOsacRelease: (releaseId: string) =>
+    request<OsacRelease>(`/api/osac-releases/${encodeURIComponent(releaseId)}/validate`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  publishOsacRelease: (releaseId: string, publishedBy = 'admin_management') =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ publishedBy }),
+    }),
+  rollbackOsacRelease: (releaseId: string, publishedBy = 'admin_management') =>
+    request<OsacReleaseDetailResponse>(`/api/osac-releases/${encodeURIComponent(releaseId)}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ publishedBy }),
+    }),
   deleteVmFile: (vmId: string, query: { targetPath: string; recursive?: boolean; ignoreMissing?: boolean; sessionId?: string }) => {
     const params = new URLSearchParams();
     params.set('targetPath', query.targetPath);

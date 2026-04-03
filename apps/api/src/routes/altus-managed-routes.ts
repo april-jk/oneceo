@@ -42,6 +42,14 @@ function parseMetadata(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
+function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+    return { status: 401, message };
+  }
+  return null;
+}
+
 function runManagedUploadMiddleware(req: express.Request, res: express.Response) {
   return new Promise<void>((resolve, reject) => {
     managedAttachmentUpload.array('files', TASK_ATTACHMENT_MAX_COUNT)(req, res, (error) => {
@@ -94,10 +102,11 @@ router.post('/inputs', async (req, res) => {
       },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('[ALTUS_MANAGED_INPUT_FAILED]', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '提交 Altus managed 输入失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '提交 Altus managed 输入失败'),
     });
   }
 });
@@ -124,10 +133,11 @@ router.post('/sessions/:sessionId/runs', async (req, res) => {
       data: run,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('[ALTUS_MANAGED_START_FAILED]', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '启动 Altus managed run 失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '启动 Altus managed run 失败'),
     });
   }
 });
@@ -142,16 +152,18 @@ router.get('/sessions/:sessionId/runs/latest', async (req, res) => {
       data: run,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('[ALTUS_MANAGED_LATEST_FAILED]', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '获取 Altus managed run 失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '获取 Altus managed run 失败'),
     });
   }
 });
 
 router.get('/runs/:runId/stream', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const runId = asText(req.params.runId);
     const run = await taskSessionRunDAO.getRun(runId);
     if (!run) {
@@ -160,24 +172,25 @@ router.get('/runs/:runId/stream', async (req, res) => {
         error: 'managed run 不存在',
       });
     }
-    const queryUserId = asText(req.query.userId);
-    if (!queryUserId) {
-      return res.status(401).json({
-        success: false,
-        error: '缺少 userId，无法订阅 managed run stream',
-      });
-    }
     const session = await taskCreationSessionDAO.getSession(run.sessionId);
-    if (!session?.userId || session.userId !== queryUserId) {
+    if (!session?.userId || session.userId !== currentUser.userId) {
       return res.status(403).json({
         success: false,
         error: '当前用户无权订阅该 Altus managed run',
       });
     }
     const afterSequence = Number(req.query.afterSequence);
-    await altusManagedRunService.streamRun(runId, res, {
+    await altusManagedRunService.streamRun(
+      {
+        runId,
+        sessionId: run.sessionId,
+        userId: currentUser.userId,
+      },
+      res,
+      {
       afterSequence: Number.isFinite(afterSequence) && afterSequence > 0 ? Math.floor(afterSequence) : null,
-    });
+      }
+    );
   } catch (error: any) {
     console.error('[ALTUS_MANAGED_STREAM_FAILED]', error);
     if (!res.headersSent) {
@@ -200,10 +213,11 @@ router.post('/runs/:runId/stop', async (req, res) => {
       data: run,
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
     console.error('[ALTUS_MANAGED_STOP_FAILED]', error);
-    return res.status(400).json({
+    return res.status(authError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(error?.message || '停止 Altus managed run 失败'),
+      error: getPublicErrorMessage(authError?.message || error?.message || '停止 Altus managed run 失败'),
     });
   }
 });

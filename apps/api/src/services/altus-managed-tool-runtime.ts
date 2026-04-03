@@ -1,16 +1,20 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
-import type { ManagedCompletionAttachment } from './altus-managed-shared';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
+import { osacAgentService } from './osac-agent-service';
+import {
+  asText,
+  buildManagedMcpToolName,
+  type ManagedCompletionAttachment,
+  type ManagedMcpProvider,
+  type ManagedSkillContext,
+} from './altus-managed-shared';
 
 type ManagedToolResult =
   | { type: 'result'; content: string }
   | { type: 'ask_user'; question: string; options?: string[] }
   | { type: 'complete'; summary: string; verification?: string[]; attachments?: ManagedCompletionAttachment[] };
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
 
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
@@ -58,10 +62,65 @@ export class AltusManagedToolRuntime {
 
   constructor(
     private readonly input: {
+      sessionId: string;
       sandboxId: string;
       workspaceRoot: string;
+      activeSkills: ManagedSkillContext[];
+      mcpProviders: ManagedMcpProvider[];
     }
   ) {}
+
+  private buildMcpToolMap() {
+    const providers = Array.isArray(this.input.mcpProviders) ? this.input.mcpProviders : [];
+    const entries = providers.flatMap((provider) =>
+      (Array.isArray(provider.tools) ? provider.tools : []).map((tool) => [
+        buildManagedMcpToolName(provider.providerId, tool.toolName),
+        {
+          providerId: provider.providerId,
+          toolName: tool.toolName,
+          displayName: tool.title || tool.toolName,
+          connectorKey: asText(provider.connectorKey) || null,
+        },
+      ])
+    );
+    return new Map(
+      entries as Array<
+        [
+          string,
+          { providerId: string; toolName: string; displayName: string; connectorKey: string | null }
+        ]
+      >
+    );
+  }
+
+  private normalizeMcpFailureMessage(input: {
+    connectorKey?: string | null;
+    toolName: string;
+    error: string;
+  }) {
+    const raw = asText(input.error) || 'mcp_tool_failed';
+    const normalized = raw.toLowerCase();
+    if (asText(input.connectorKey) === 'github') {
+      if (normalized.includes('没有任何可用安装') || normalized.includes('未安装到任何账号')) {
+        return '当前 GitHub App 只有用户授权，没有安装到任何账号或组织。请先完成 GitHub App 安装或批准安装更新，再重新连接。';
+      }
+      if (normalized.includes('resource not accessible by integration')) {
+        return [
+          'GitHub App 当前没有执行该操作所需权限，或安装尚未批准最新权限。',
+          '请检查 GitHub App 的 `Permissions & events`，确认 `Administration` 已设置为 `Read and write`；',
+          '然后到 App 安装页批准新的权限，并确认安装覆盖了目标账号或目标组织。',
+          '如果目标是组织仓库，还需要确认组织允许该 App 创建仓库。',
+        ].join('');
+      }
+      if (normalized.includes('mcp provider not found')) {
+        return 'GitHub 连接器运行态已丢失，当前正在重新恢复，请稍后重试。';
+      }
+      if (normalized.includes('no github installation found for repo')) {
+        return '当前 GitHub App 安装未覆盖目标仓库，请在 GitHub App 安装页将该仓库纳入安装范围后重试。';
+      }
+    }
+    return raw;
+  }
 
   private ensureNotAborted(signal?: AbortSignal) {
     if (signal?.aborted) {
@@ -146,6 +205,36 @@ export class AltusManagedToolRuntime {
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    const mcpTool = this.buildMcpToolMap().get(toolName);
+    if (mcpTool) {
+      const response = await osacAgentService.callSessionMcpTool(this.input.sandboxId, {
+        providerId: mcpTool.providerId,
+        toolName: mcpTool.toolName,
+        arguments: rawArgs,
+      });
+      this.ensureNotAborted(signal);
+      if (response.isError) {
+        const rawError =
+          typeof response.result === 'string'
+            ? response.result
+            : JSON.stringify(response.result || { error: 'mcp_tool_failed' });
+        throw new Error(
+          this.normalizeMcpFailureMessage({
+            connectorKey: mcpTool.connectorKey,
+            toolName: mcpTool.toolName,
+            error: rawError,
+          })
+        );
+      }
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          providerId: response.providerId,
+          toolName: response.toolName,
+          result: response.result,
+        }),
+      };
+    }
 
     if (toolName === 'shell_execute') {
       const command = asText(rawArgs.command);
@@ -329,6 +418,38 @@ export class AltusManagedToolRuntime {
             rawContent: this.compactSearchContent(item.rawContent, 2200),
             images: this.compactImageList(item.images, 6),
           })),
+        }),
+      };
+    }
+
+    if (toolName === 'load_skill_resource') {
+      const skillId = asText(rawArgs.skillId);
+      const revisionId = asText(rawArgs.revisionId);
+      const resourcePath = asText(rawArgs.resourcePath);
+      if (!skillId || !revisionId || !resourcePath) {
+        throw new Error('load_skill_resource_missing_arguments');
+      }
+      const activeSkill = this.input.activeSkills.find(
+        (item) => item.skillId === skillId && item.revisionId === revisionId
+      );
+      if (!activeSkill) {
+        throw new Error('load_skill_resource_skill_not_active');
+      }
+      const result = await sandboxSkillSyncService.syncResolvedSkillResource({
+        taskSessionId: this.input.sessionId,
+        orchestratorSessionId: this.input.sandboxId,
+        skill: activeSkill,
+        resourcePath,
+      });
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          skillId: result.skillId,
+          revisionId: result.revisionId,
+          slug: result.slug,
+          resourcePath: result.resourcePath,
+          resourceType: result.resourceType,
+          skillResourcePath: result.skillResourcePath,
         }),
       };
     }

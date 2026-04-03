@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Cloud,
   Download,
@@ -30,18 +30,21 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ATTACHMENT_ACCEPT, tagSkillAttachmentFile } from "@/lib/task-attachments";
+import { ATTACHMENT_ACCEPT } from "@/lib/task-attachments";
+import {
+  openSettingsDialog,
+  TASK_CREATION_SKILLS_UPDATED_EVENT,
+} from "@/lib/settings-dialog-events";
 import {
   fetchRemoteTaskAttachment,
+  listTaskCreationSkills,
   type RemoteAttachmentProvider,
+  type TaskCreationPlatformSkill,
 } from "@/lib/task-creation-client";
-import {
-  SKILL_ATTACHMENT_TEMPLATES,
-  type SkillAttachmentTemplate,
-} from "@/lib/skill-attachment-templates";
 
 type AttachmentPickerButtonProps = {
   onSelectFiles: (files: File[]) => void | Promise<void>;
+  onSelectSkills?: (skills: TaskCreationPlatformSkill[]) => void | Promise<void>;
   disabled?: boolean;
 };
 
@@ -67,24 +70,21 @@ const CLOUD_PROVIDER_ITEMS: Array<{
   },
 ];
 
-function buildSkillAttachment(template: SkillAttachmentTemplate): File {
-  const file = new File([template.content], `skill-${template.id}.md`, {
-    type: "text/markdown",
-    lastModified: Date.now(),
-  });
-  return tagSkillAttachmentFile(file, {
-    templateId: template.id,
-    templateName: template.name,
-    content: template.content,
-  });
-}
-
 function getProviderLabel(provider: RemoteAttachmentProvider): string {
   return CLOUD_PROVIDER_ITEMS.find((item) => item.provider === provider)?.label || provider;
 }
 
+function formatSkillResourceSummary(skill: TaskCreationPlatformSkill): string {
+  const summary = skill.resourceSummary;
+  if (!summary || summary.totalCount <= 0) {
+    return "无额外资源";
+  }
+  return `${summary.referenceCount} 个参考 + ${summary.templateCount} 个模板`;
+}
+
 export default function AttachmentPickerButton({
   onSelectFiles,
+  onSelectSkills,
   disabled = false,
 }: AttachmentPickerButtonProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -93,6 +93,9 @@ export default function AttachmentPickerButton({
   const [dialogProvider, setDialogProvider] = useState<RemoteAttachmentProvider | null>(null);
   const [remoteUrl, setRemoteUrl] = useState("");
   const [isImportingRemote, setIsImportingRemote] = useState(false);
+  const [skills, setSkills] = useState<TaskCreationPlatformSkill[]>([]);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
 
   const dialogCopy = useMemo(() => {
     if (!dialogProvider) return null;
@@ -121,13 +124,46 @@ export default function AttachmentPickerButton({
     await Promise.resolve(onSelectFiles(files));
   };
 
-  const handleSkillImport = async (template: SkillAttachmentTemplate) => {
+  const refreshSkills = useCallback(async () => {
+    if (!onSelectSkills) return;
+    setSkillsLoading(true);
+    try {
+      const data = await listTaskCreationSkills();
+      setSkills(data);
+      setSkillsLoaded(true);
+    } catch (error) {
+      console.warn("[AttachmentPickerButton] load skills failed:", error);
+      setSkills([]);
+      setSkillsLoaded(true);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, [onSelectSkills]);
+
+  useEffect(() => {
+    if (!onSelectSkills) return;
+    const handleSkillsUpdated = () => {
+      void refreshSkills();
+    };
+    window.addEventListener(TASK_CREATION_SKILLS_UPDATED_EVENT, handleSkillsUpdated);
+    return () => {
+      window.removeEventListener(TASK_CREATION_SKILLS_UPDATED_EVENT, handleSkillsUpdated);
+    };
+  }, [onSelectSkills, refreshSkills]);
+
+  useEffect(() => {
+    if (!onSelectSkills || !menuOpen) return;
+    void refreshSkills();
+  }, [menuOpen, onSelectSkills, refreshSkills]);
+
+  const handleSkillImport = async (skill: TaskCreationPlatformSkill) => {
+    if (!onSelectSkills) return;
     try {
       setMenuOpen(false);
-      await handleLocalSelect([buildSkillAttachment(template)]);
-      toast.success(`已添加技能附件：${template.name}`);
+      await Promise.resolve(onSelectSkills([skill]));
+      toast.success(`已添加技能：${skill.name}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "技能附件添加失败";
+      const message = error instanceof Error ? error.message : "技能添加失败";
       toast.error(message);
     }
   };
@@ -232,32 +268,62 @@ export default function AttachmentPickerButton({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
 
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="rounded-xl px-3 py-2">
-              <Sparkles className="h-4 w-4" />
-              <div className="flex min-w-0 flex-1 flex-col items-start">
-                <span className="text-sm font-medium">使用技能</span>
-                <span className="text-xs text-muted-foreground">附加预设技能说明，指导后续执行</span>
-              </div>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-72 rounded-2xl border-border/70 p-2 shadow-xl">
-              {SKILL_ATTACHMENT_TEMPLATES.map((item) => (
-                <DropdownMenuItem
-                  key={item.id}
-                  className="rounded-xl px-3 py-2"
-                  onSelect={() => {
-                    void handleSkillImport(item);
-                  }}
-                >
-                  <Wrench className="h-4 w-4" />
-                  <div className="flex min-w-0 flex-1 flex-col items-start">
-                    <span className="text-sm font-medium">{item.name}</span>
-                    <span className="text-xs text-muted-foreground">{item.description}</span>
-                  </div>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          {onSelectSkills ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="rounded-xl px-3 py-2">
+                <Sparkles className="h-4 w-4" />
+                <div className="flex min-w-0 flex-1 flex-col items-start">
+                  <span className="text-sm font-medium">使用技能</span>
+                  <span className="text-xs text-muted-foreground">选择你已启用的 skills 并同步到 sandbox</span>
+                </div>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-72 rounded-2xl border-border/70 p-2 shadow-xl">
+                {skills.length > 0 ? (
+                  skills.map((item) => (
+                    <DropdownMenuItem
+                      key={`${item.skillId}:${item.revisionId}`}
+                      className="rounded-xl px-3 py-2"
+                      onSelect={() => {
+                        void handleSkillImport(item);
+                      }}
+                    >
+                      <Wrench className="h-4 w-4" />
+                      <div className="flex min-w-0 flex-1 flex-col items-start">
+                        <span className="text-sm font-medium">{item.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {item.sourceType === "custom" ? "自定义" : "平台模板"} · {item.description} ·{" "}
+                          {formatSkillResourceSummary(item)}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                ) : (
+                  <DropdownMenuItem
+                    className="rounded-xl px-3 py-2"
+                    disabled={skillsLoading}
+                    onSelect={(event) => {
+                      if (skillsLoading) return;
+                      event.preventDefault();
+                      setMenuOpen(false);
+                      openSettingsDialog({ tab: "skills" });
+                    }}
+                  >
+                    <Wrench className="h-4 w-4" />
+                    <div className="flex min-w-0 flex-1 flex-col items-start">
+                      <span className="text-sm font-medium">
+                        {skillsLoading || !skillsLoaded ? "正在加载技能" : "暂无可用技能"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {skillsLoading || !skillsLoaded
+                          ? "正在同步用户当前已启用的 skills"
+                          : "前往 设置 > Skills 管理 启用平台模板或创建自定义 skills"}
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
 
           <DropdownMenuItem
             className="rounded-xl px-3 py-2"

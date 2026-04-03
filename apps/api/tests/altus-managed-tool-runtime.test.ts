@@ -173,3 +173,60 @@ test('mcp tool call is blocked until active connector guide is loaded', async ()
   assert.equal(mcpMock.mock.callCount(), 0);
   assert.equal(guideMock.mock.callCount(), 1);
 });
+
+test('vercel mcp tool call is blocked until active vercel connector guide is loaded', async () => {
+  const managedToolName = buildManagedMcpToolName('provider-vercel', 'list_projects');
+  const guideMock = mock.method(connectorGuideService, 'getActiveGuideForConnector', async (_sessionId, connectorKey) => {
+    if (connectorKey !== 'vercel') return null;
+    return {
+      connectorKey: 'vercel',
+      policyId: 'policy-vercel',
+      revisionId: 'rev-vercel-1',
+      triggerMode: 'on_attach',
+      serverInstructionsMarkdown: 'Inspect vercel project target first.',
+      guideReminderMarkdown: 'Vercel guide active.',
+      blockingRulesMarkdown: 'Do not touch production without explicit target.',
+    };
+  });
+  const mcpMock = mock.method(osacAgentService, 'callSessionMcpTool', async () => ({
+    providerId: 'provider-vercel',
+    toolName: 'list_projects',
+    result: { ok: true },
+    isError: false,
+  }));
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-vercel',
+    sandboxId: 'sandbox-vercel',
+    workspaceRoot: '/workspace/session-vercel',
+    activeSkills: [],
+    mcpProviders: [
+      {
+        connectorKey: 'vercel',
+        providerId: 'provider-vercel',
+        tools: [{ providerId: 'provider-vercel', toolName: 'list_projects' }],
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute(managedToolName, {
+      teamId: 'team_123',
+    }),
+    /connector_guide_blocked:vercel/
+  );
+
+  const guideResult = await runtime.execute('load_connector_guide', {
+    connectorKey: 'vercel',
+  });
+  assert.equal(guideResult.type, 'result');
+  const guidePayload = JSON.parse(guideResult.content);
+  assert.equal(guidePayload.connectorKey, 'vercel');
+
+  const toolResult = await runtime.execute(managedToolName, {
+    teamId: 'team_123',
+  });
+  assert.equal(toolResult.type, 'result');
+  assert.equal(mcpMock.mock.callCount(), 1);
+  assert.ok(guideMock.mock.callCount() >= 3);
+});

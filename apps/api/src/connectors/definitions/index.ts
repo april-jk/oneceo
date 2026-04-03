@@ -5,7 +5,7 @@ import { buildPostgresDefinition } from './postgres';
 import { buildSlackDefinition, resolveSlackOauthProvider } from './slack';
 import { buildSupabaseDefinition } from './supabase';
 import type { ConnectorDefinition, ConnectorKey, ConnectorOauthProvider } from './types';
-import { buildVercelDefinition } from './vercel';
+import { buildVercelDefinition, resolveVercelOauthProvider } from './vercel';
 
 export type { ConnectorDefinition, ConnectorKey, ConnectorOauthProvider } from './types';
 
@@ -35,5 +35,6 @@ export function resolveOauthProvider(connectorKey: ConnectorKey): ConnectorOauth
   if (connectorKey === 'github') return resolveGithubOauthProvider();
   if (connectorKey === 'notion') return resolveNotionOauthProvider();
   if (connectorKey === 'slack') return resolveSlackOauthProvider();
+  if (connectorKey === 'vercel') return resolveVercelOauthProvider();
   return undefined;
 }

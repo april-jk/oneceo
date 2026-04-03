@@ -246,3 +246,17 @@
 - 计划如何解决：
   - 先将阻塞原因和后续动作沉淀到 TODO 与 issue。
   - 等拿到 `client_id / client_secret` 后，再恢复该方案实施。
+
+## 2026-04-03 #18 Altus managed 首轮反馈链路补强
+
+- 做了什么：
+  - 在 `apps/api/src/services/altus-run-coordinator.ts` 增加了首轮 `run_status(starting)` 事件，并把上游流式文本增量显式转成 `assistant_delta` run event。
+  - 将 managed assistant 流式增量与最终 `assistant_message` 收口到同一个稳定 `messageKey`，避免前端把首包与最终消息渲染成两条重复 assistant。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 补了本地首轮 `run_ack` 种入逻辑，并修正 managed `assistant_delta` 的前端合并策略，保证同 key 按增量拼接、最终消息再覆盖收口。
+  - 新增 focused tests：`apps/api/tests/altus-run-first-feedback.test.ts`、`apps/web/client/src/tests/managed-message-stream-identity.test.ts`。
+- 遇到什么：
+  - `apps/api` 全量 `type-check` 目前存在一批仓库内既有错误，和本次改动无关，不能作为 `#18` 的有效回归门禁。
+  - `apps/api/tests/altus-run-coordinator.test.ts` 与 `apps/api/tests/altus-managed-run-entry.service.test.ts` 仍混有 DB / recovery 依赖，直接跑全文件会被无关问题干扰。
+- 计划如何解决：
+  - 先以 focused tests 锁住 `#18` 的首轮反馈语义：`run_ack` 可见、`run_status(starting -> running)` 连续、`assistant_delta -> assistant_message` 同 key 收口。
+  - 等后续继续推进 `#20/#21/#22` 时，再回到更大范围的 managed 全链路联调与刷新恢复验证。

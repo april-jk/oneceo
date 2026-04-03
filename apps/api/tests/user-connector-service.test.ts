@@ -94,6 +94,45 @@ test('saveUserConnector rejects invalid GitHub token before persisting', async (
   assert.equal(createMock.mock.callCount(), 0);
 });
 
+test('createProfile allows Supabase token-only save with empty profile/display names', async () => {
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
+  let capturedCreate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'create', async (input: any) => {
+    capturedCreate = input;
+    return {
+      ...input,
+      id: 'profile-supabase-1',
+      connectorKey: 'supabase',
+      updatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      metadataJson: {},
+      configJson: {},
+      lastAuthAt: new Date('2026-04-03T00:00:00.000Z'),
+      lastError: null,
+      isDefault: true,
+    } as any;
+  });
+
+  const saved = await userConnectorService.createProfile('user-1', 'supabase', {
+    credentials: {
+      accessToken: 'sbp-token-only',
+    },
+  });
+
+  assert.equal(saved.profileName, 'Supabase Default');
+  assert.equal(saved.displayName, null);
+  assert.equal(saved.authStatus, 'authorized');
+  assert.equal(capturedCreate?.profileName, 'Supabase Default');
+  assert.equal(capturedCreate?.displayName, null);
+  assert.equal(
+    connectorSecretService.decryptJson<{ accessToken?: string }>(
+      String(capturedCreate?.secretCiphertext || '')
+    )?.accessToken,
+    'sbp-token-only'
+  );
+});
+
 test('startOAuthForProfile generates PKCE challenge for vercel oauth', async () => {
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';

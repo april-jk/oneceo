@@ -371,6 +371,13 @@ function buildGithubProfileName(displayName?: string | null): string {
   return resolved ? `GitHub · ${resolved}` : 'GitHub';
 }
 
+function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string): string {
+  if (connectorKey === 'supabase') {
+    return 'Supabase Default';
+  }
+  return `${catalogName} Default`;
+}
+
 export class UserConnectorService {
   async listCatalog() {
     return connectorRegistry.listVisibleCatalog();
@@ -493,7 +500,7 @@ export class UserConnectorService {
       asText(existing?.profileName) ||
       (connectorKey === 'github'
         ? buildGithubProfileName(resolvedDisplayName)
-        : `${catalogItem.name} Default`);
+        : buildDefaultProfileName(connectorKey, catalogItem.name));
     const profileName =
       connectorKey === 'github'
         ? profileNameCandidate || buildGithubProfileName(resolvedDisplayName)

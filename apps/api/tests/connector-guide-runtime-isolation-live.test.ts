@@ -101,9 +101,7 @@ async function createSupabaseProfile(userId: string, suffix: string): Promise<Se
     displayName: `supabase-${suffix}`,
     authMode: 'token',
     authStatus: 'authorized',
-    configJson: {
-      projectRef: `project-${suffix}`,
-    },
+    configJson: {},
     secretCiphertext: connectorSecretService.encrypt({
       accessToken: `token-${suffix}`,
     }),

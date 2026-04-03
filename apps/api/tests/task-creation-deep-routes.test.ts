@@ -758,6 +758,30 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
   }
 });
 
+test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attach returns 504 on osac timeout', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => {
+    throw new Error('OSAC 请求超时');
+  };
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-10-timeout/connectors/supabase/attach`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-user-id': 'owner-user',
+      },
+      body: JSON.stringify({ profileId: 'profile-timeout' }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 504);
+    assert.equal(payload.error, 'OSAC 请求超时');
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/detach detaches for owner', async () => {
   const server = await startServer();
   sessionConnectorAny.assertSessionOwnership = async () => undefined;

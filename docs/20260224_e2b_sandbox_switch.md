@@ -28,7 +28,9 @@
 - `E2B_CONNECT_TIMEOUT_MS`：E2B API 连接超时（默认 30000ms）
 - `E2B_INSECURE_TLS`：企业代理场景下允许忽略 TLS 校验（默认 false）
 - `E2B_TLS_CA_FILE`：自定义 CA 文件路径（如企业根证书）
-- `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`：若需通过代理访问 E2B API，可在环境变量中配置
+- `ONECEO_PROXY_ENABLED`：API 主进程全局 HTTP 出站代理总开关
+- `E2B_PROXY_ENABLED`：仅用于未经过 API 全局环境初始化、直接加载 `e2b-connector` 的独立场景
+- `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`：若需配置平台代理地址，可在环境变量中配置；API 主进程内是否生效由 `ONECEO_PROXY_ENABLED` 决定
 - `OPENCODE_SERVER_PORT`：OpenCode 端口（默认 4096）
 - `OPENCODE_SERVER_HOST`：OpenCode 监听地址（默认 0.0.0.0）
 - `OPENCODE_PROMPT_TIMEOUT_MS`：OpenCode `/message` 请求超时（默认 120000ms）

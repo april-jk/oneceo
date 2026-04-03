@@ -27,6 +27,7 @@ import { connectorStorageBootstrap } from './services/connector-storage-bootstra
 import { connectorGuideService } from './services/connector-guide-service';
 import { appAuthMiddleware } from './middleware/app-auth-middleware';
 import { adminAuthService } from './services/admin-auth-service';
+import { getProxyEnv, isGlobalProxyEnabled } from './config/proxy';
 
 function mergeNoProxy(entries: string[], current?: string): string {
   const normalized = (current || '')
@@ -40,14 +41,10 @@ function mergeNoProxy(entries: string[], current?: string): string {
   return Array.from(set).join(',');
 }
 
-const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
-  .trim()
-  .toLowerCase();
-const proxyToggleEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
+const { httpProxy, httpsProxy } = getProxyEnv();
 const proxyEnabled =
-  proxyToggleEnabled &&
-  (Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
-    Boolean(process.env.HTTPS_PROXY || process.env.https_proxy));
+  isGlobalProxyEnabled() &&
+  (Boolean(httpProxy) || Boolean(httpsProxy));
 
 if (proxyEnabled) {
   const bypass = [

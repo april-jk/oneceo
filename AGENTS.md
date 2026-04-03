@@ -83,6 +83,13 @@
 - 用户端能力必须绑定真实 `app_users.id`，不能继续依赖匿名 `X-User-Id` 作为长期身份源。
 - 会话、Skills、连接器 profile、Altus run、Sandbox 运行时都必须按用户归属隔离。
 
+## Redis 使用规则（强制）
+
+- 只有在环境变量显式配置 `ONECEO_REDIS_ENABLED=true` 且同时提供有效 `REDIS_URL` 时，才允许启用 Redis。
+- 只配置 `REDIS_URL` 但未显式开启 `ONECEO_REDIS_ENABLED`，等同于未启用 Redis；主流程必须继续走现有 DB / 内存路径，不能偷偷写入或读取 Redis。
+- 生产代码中的 Redis 访问必须统一经过 `apps/api/src/services/redis-client-service.ts`，禁止在业务代码直接创建 `ioredis` 客户端或绕过开关判断。
+- 新增任何 Redis 缓存、stream、协调状态时，必须同时验证“显式启用时可用”和“未显式启用时完全不生效”两种行为，避免 DB 与 Redis 混用。
+
 ## 变更记录要求
 
 - 任何影响主流程的变更需保留说明性文档（提交记录或 docs 说明）。

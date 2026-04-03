@@ -3906,6 +3906,8 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
         ? 401
         : normalized.includes('未授权') || normalized.includes('尚未完成授权')
           ? 409
+          : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
+            ? 504
           : 400;
     return res.status(status).json({
       success: false,

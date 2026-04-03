@@ -227,7 +227,6 @@ function buildRemoteHeaders(
   item: ConnectorCatalogItem,
   input: {
     accessToken?: string;
-    projectRef?: string;
     teamId?: string;
   }
 ): Record<string, string> {
@@ -235,12 +234,10 @@ function buildRemoteHeaders(
     ? parseHeadersTemplate(process.env[item.runtime.headersEnv])
     : {};
   const accessToken = asText(input.accessToken);
-  const projectRef = asText(input.projectRef);
   const teamId = asText(input.teamId);
   if (Object.keys(template).length > 0) {
     return renderHeaders(template, {
       token: accessToken,
-      projectRef,
       teamId,
     });
   }
@@ -266,7 +263,6 @@ function buildRemoteUrl(
   item: ConnectorCatalogItem,
   input: {
     connectorKey: ConnectorKey;
-    projectRef?: string;
     teamId?: string;
   }
 ): string {
@@ -276,13 +272,6 @@ function buildRemoteUrl(
     throw new Error(`${item.name} MCP remote URL 未配置`);
   }
   const url = new URL(baseUrl);
-  if (input.connectorKey === 'supabase') {
-    const projectRef = asText(input.projectRef);
-    if (!projectRef) {
-      throw new Error('Supabase 连接器缺少 project ref');
-    }
-    url.searchParams.set('project_ref', projectRef);
-  }
   if (input.connectorKey === 'vercel') {
     const teamId = asText(input.teamId);
     if (teamId) {
@@ -365,12 +354,10 @@ export class ConnectorRegistry {
     }
     const url = buildRemoteUrl(item, {
       connectorKey,
-      projectRef: asText(configJson.projectRef),
       teamId: asText(configJson.teamId),
     });
     const headers = buildRemoteHeaders(connectorKey, item, {
       accessToken,
-      projectRef: asText(configJson.projectRef),
       teamId: asText(configJson.teamId),
     });
     return {

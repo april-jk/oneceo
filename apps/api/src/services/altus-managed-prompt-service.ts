@@ -236,6 +236,8 @@ export class AltusManagedPromptService {
       '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
       '- Do not ask the user to manually create a GitHub repository or do other fallback steps unless the current run has produced a fresh connector/tool failure for that exact action.',
       '- Treat any connector failure that predates `last_authorized_at` as stale. If a connector shows a recent `last_authorized_at`, retry the real tool first and only trust the new result.',
+      '- If `# Connector MCP Instructions` or `# Relevant Connector Guides` shows an active connector guide, call `load_connector_guide` for that connector before the first MCP tool call for that connector in the current run.',
+      '- If a connector MCP tool is blocked because the guide was not loaded yet, immediately call `load_connector_guide`, read the returned rules, then retry the connector MCP tool.',
       '- Prefer read/search tools before editing or making assumptions.',
       '- Keep edits minimal and directly tied to the user request.',
       '- For complex tasks, use your todo as the execution contract: complete one step, validate it, then move to the next step.',

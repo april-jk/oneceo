@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import Redis from 'ioredis';
 import { AltusRunRedisStateService } from '../src/services/altus-run-redis-state-service';
 import { RedisClientService } from '../src/services/redis-client-service';
-import { redisKeyspace } from '../src/services/redis-keyspace';
+import { hashRedisKeyPart, redisKeyspace } from '../src/services/redis-keyspace';
+import { TaskSessionRedisCacheService } from '../src/services/task-session-redis-cache-service';
 
 function getRedisUrl() {
   return String(process.env.REDIS_URL || '').trim();
@@ -148,4 +149,90 @@ test('live redis integration writes run state and stream entries', async (t) => 
   assert.ok(terminalStateRaw);
   const terminalState = JSON.parse(terminalStateRaw) as { status: string };
   assert.equal(terminalState.status, 'completed');
+});
+
+test('live redis integration writes session workspace cache, recent page and session-event stream', async (t) => {
+  process.env.ONECEO_REDIS_ENABLED = 'true';
+  const redisUrl = getRedisUrl();
+  if (!redisUrl) {
+    t.skip('REDIS_URL 未设置，跳过 live redis 集成测试');
+    return;
+  }
+
+  const raw = new Redis(redisUrl, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+  });
+  await raw.connect();
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const userId = `live-session-user-${suffix}`;
+  const sessionId = `live-session-${suffix}`;
+  const tenantKey = userId;
+  t.after(async () => {
+    const keys = await raw.keys(`oneceo:v1:tenant:${tenantKey}*`);
+    if (keys.length > 0) {
+      await raw.del(...keys);
+    }
+    raw.disconnect();
+  });
+
+  const commandPort = new RedisClientService();
+  const service = new TaskSessionRedisCacheService(commandPort);
+  t.after(async () => {
+    await commandPort.disconnect?.();
+  });
+
+  await service.setWorkspaceTree({
+    userId,
+    sessionId,
+    payload: {
+      root: '/workspace',
+      items: [{ path: 'src', type: 'dir' }],
+    },
+  });
+  await service.setRecentMessagesPage({
+    userId,
+    sessionId,
+    payload: {
+      messages: [{ id: 'm-1', role: 'user', content: 'hello redis' }],
+      source: 'recent_cache',
+    },
+  });
+  await service.appendSessionEvent({
+    userId,
+    sessionId,
+    eventType: 'status_update',
+    messageType: 'status_update',
+    eventId: 501,
+    createdAt: new Date().toISOString(),
+    messageKey: `session-event:${sessionId}:501`,
+    content: 'processing',
+    metadata: { sessionEventSeq: 501 },
+  });
+
+  const treeKey = redisKeyspace.workspaceTree({
+    tenantKey,
+    sessionId,
+    pathHash: hashRedisKeyPart('root'),
+  });
+  const recentKey = redisKeyspace.messagesRecent({
+    tenantKey,
+    sessionId,
+  });
+  const eventStreamKey = redisKeyspace.sessionEventsStream({
+    tenantKey,
+    sessionId,
+  });
+
+  const treeRaw = await raw.get(treeKey);
+  const recentRaw = await raw.get(recentKey);
+  const streamRows = await raw.xrange(eventStreamKey, '-', '+');
+
+  assert.ok(treeRaw);
+  assert.ok(recentRaw);
+  assert.ok(streamRows.length >= 1);
+
+  const recent = JSON.parse(recentRaw) as { source: string; messages: Array<{ content: string }> };
+  assert.equal(recent.source, 'recent_cache');
+  assert.equal(recent.messages[0]?.content, 'hello redis');
 });

@@ -22,6 +22,7 @@ export type RedisCommandPort = {
   delete(key: string): Promise<void>;
   addSetMember(key: string, member: string): Promise<void>;
   removeSetMember(key: string, member: string): Promise<void>;
+  deleteByPrefix(prefix: string): Promise<number>;
   appendStream(
     key: string,
     fields: Record<string, RedisValue>,
@@ -152,6 +153,27 @@ export class RedisClientService implements RedisCommandPort {
 
   async removeSetMember(key: string, member: string) {
     await this.withClient('srem', (client) => client.srem(key, member), 0);
+  }
+
+  async deleteByPrefix(prefix: string) {
+    return this.withClient(
+      'delete_by_prefix',
+      async (client) => {
+        const normalizedPrefix = String(prefix || '').trim();
+        if (!normalizedPrefix) return 0;
+        let cursor = '0';
+        let deleted = 0;
+        do {
+          const [nextCursor, keys] = await client.scan(cursor, 'MATCH', `${normalizedPrefix}*`, 'COUNT', 100);
+          cursor = nextCursor;
+          if (Array.isArray(keys) && keys.length > 0) {
+            deleted += await client.del(...keys);
+          }
+        } while (cursor !== '0');
+        return deleted;
+      },
+      0
+    );
   }
 
   async appendStream(

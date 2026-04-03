@@ -49,6 +49,7 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
+import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
 import {
   inferFilenameFromResponse,
   resolveRemoteAttachmentTarget,
@@ -1170,6 +1171,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   });
   await syncTaskSessionSandboxBinding(sessionId, provision.sessionId, workspaceRoot);
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+  await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
 
   const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
@@ -3265,16 +3267,29 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
     const { sessionId } = req.params;
     await requireOwnedTaskSession(sessionId, currentUser.userId);
     const session = await resolveTaskSessionMeta(sessionId);
+    const tenantKey = resolveTenantKey(currentUser);
+    const shouldPreferOpencodeNativeHistory =
+      asText(session?.mode) === 'sandbox' &&
+      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+    if (!shouldPreferOpencodeNativeHistory) {
+      const redisCachedPage = await taskSessionRedisCacheService.getRecentMessagesPage({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+      });
+      if (redisCachedPage) {
+        return res.json({
+          success: true,
+          data: redisCachedPage,
+        });
+      }
+    }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
     const recentMessages = filterLegacyTimelineNoise(
       injectRuntimeGenerationBoundaries(
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
-    const shouldPreferOpencodeNativeHistory =
-      asText(session?.mode) === 'sandbox' &&
-      (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
-
     const shouldHydrateFromNativeHistory =
       shouldPreferOpencodeNativeHistory &&
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
@@ -3313,14 +3328,21 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         resolvedRecentMessages.length >= 50 ||
         asText(session?.runtime?.opencodeSessionId).length > 0 ||
         asText(session?.executor) === 'opencode';
+      const responsePayload = {
+        ...page,
+        hasOlderHistory: mayHaveOlderHistory,
+        source: 'resolved_recent',
+      };
+      await taskSessionRedisCacheService.setRecentMessagesPage({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+        payload: responsePayload,
+      });
 
       return res.json({
         success: true,
-        data: {
-          ...page,
-          hasOlderHistory: mayHaveOlderHistory,
-          source: 'resolved_recent',
-        },
+        data: responsePayload,
       });
     }
 
@@ -3333,14 +3355,21 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       recentMessages.length >= 50 ||
       asText(session?.runtime?.opencodeSessionId).length > 0 ||
       asText(session?.executor) === 'opencode';
+    const responsePayload = {
+      ...page,
+      hasOlderHistory: mayHaveOlderHistory,
+      source: 'recent_cache',
+    };
+    await taskSessionRedisCacheService.setRecentMessagesPage({
+      sessionId,
+      userId: currentUser.userId,
+      tenantKey,
+      payload: responsePayload,
+    });
 
-    res.json({
+    return res.json({
       success: true,
-      data: {
-        ...page,
-        hasOlderHistory: mayHaveOlderHistory,
-        source: 'recent_cache',
-      },
+      data: responsePayload,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -3388,8 +3417,16 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
         : fullTimeline;
     const pageMessages = olderMessages.slice(Math.max(olderMessages.length - limit, 0));
     const page = buildTimelinePage(pageMessages);
+    await taskSessionRedisCacheService.setHistoryCursor({
+      sessionId,
+      userId: currentUser.userId,
+      tenantKey: resolveTenantKey(currentUser),
+      beforeCursor,
+      oldestCursor: page.oldestCursor,
+      newestCursor: page.newestCursor,
+    });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         ...page,
@@ -4661,6 +4698,23 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       limit,
       includeIgnored,
     });
+    const redisCachedPage = !parseRefreshFlag(req.query.refresh)
+      ? asWorkspaceDirectoryCachePayload(
+          await taskSessionRedisCacheService.getWorkspaceDir({
+            sessionId,
+            userId: currentUser.userId,
+            tenantKey,
+            cacheKey: dirCacheKey,
+          })
+        )
+      : null;
+    if (redisCachedPage) {
+      return res.json({
+        success: true,
+        data: redisCachedPage,
+        cache: { hit: true, source: 'redis_workspace_cache' },
+      });
+    }
     const codexCachedRow =
       isE2bWorkspaceExecutor(workspaceExecutor)
         ? await taskSessionWorkspaceCacheDAO.get({
@@ -4720,6 +4774,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
           const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
           if (restored) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
             nodes = await listWorkspaceNodes();
           }
         } catch (restoreError) {
@@ -4802,6 +4857,13 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
+      await taskSessionRedisCacheService.setWorkspaceDir({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+        cacheKey: dirCacheKey,
+        payload: livePage,
+      });
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
         tenantKey,
@@ -4844,6 +4906,25 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
     if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
+      const redisCached = await taskSessionRedisCacheService.getWorkspaceDir({
+        sessionId,
+        userId: currentUser.userId || tenantKey,
+        tenantKey,
+        cacheKey: buildWorkspaceDirCacheKey({
+          path: dirPath,
+          cursor,
+          limit,
+          includeIgnored,
+        }),
+      });
+      const normalizedRedisCached = asWorkspaceDirectoryCachePayload(redisCached);
+      if (normalizedRedisCached) {
+        return res.json({
+          success: true,
+          data: normalizedRedisCached,
+          cache: { hit: true, stale: true, source: 'redis_workspace_cache' },
+        });
+      }
       const cached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
         tenantKey,
@@ -4895,12 +4976,16 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const cached = await taskCreationCacheStore.getWorkspaceTree(tenantKey, sessionId);
-      if (cached) {
+      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+      });
+      if (redisCached) {
         return res.json({
           success: true,
-          data: cached.data,
-          cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
+          data: redisCached,
+          cache: { hit: true, source: 'redis_workspace_cache' },
         });
       }
       if (isE2bWorkspaceExecutor(workspaceExecutor)) {
@@ -4996,6 +5081,12 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       60000
     );
     await taskCreationCacheStore.setWorkspaceTree(tenantKey, sessionId, parsed, ttlMs);
+    await taskSessionRedisCacheService.setWorkspaceTree({
+      sessionId,
+      userId: currentUser.userId,
+      tenantKey,
+      payload: parsed as Record<string, unknown>,
+    });
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
@@ -5023,6 +5114,20 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (tenantKey && currentUser) {
+      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+      });
+      if (redisCached) {
+        return res.json({
+          success: true,
+          data: redisCached,
+          cache: { hit: true, stale: true, source: 'redis_workspace_cache' },
+        });
+      }
+    }
     if (tenantKey && isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
@@ -5087,12 +5192,17 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const cached = await taskCreationCacheStore.getWorkspaceFile(tenantKey, sessionId, normalizedPath);
-      if (cached) {
+      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+        path: normalizedPath,
+      });
+      if (redisCached) {
         return res.json({
           success: true,
-          data: cached.data,
-          cache: { hit: true, ageMs: cached.ageMs, stale: cached.stale },
+          data: redisCached,
+          cache: { hit: true, source: 'redis_workspace_cache' },
         });
       }
       if (isE2bWorkspaceExecutor(workspaceExecutor)) {
@@ -5269,6 +5379,13 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
+    await taskSessionRedisCacheService.setWorkspaceFile({
+      sessionId,
+      userId: currentUser.userId,
+      tenantKey,
+      path: normalizedPath,
+      payload: parsed as Record<string, unknown>,
+    });
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       await taskSessionWorkspaceCacheDAO.upsert({
         sessionId,
@@ -5297,6 +5414,21 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (tenantKey && currentUser) {
+      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+        sessionId,
+        userId: currentUser.userId,
+        tenantKey,
+        path: String(req.query.path || '').trim().replace(/\\/g, '/'),
+      });
+      if (redisCached) {
+        return res.json({
+          success: true,
+          data: redisCached,
+          cache: { hit: true, stale: true, source: 'redis_workspace_cache' },
+        });
+      }
+    }
     if (isSandboxNotFoundError(error)) {
       const orchestratorSessionId = session?.runtime?.orchestratorSessionId;
       if (orchestratorSessionId) {
@@ -5457,8 +5589,9 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
 router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   const { sessionId } = req.params;
   let session: FileSessionRecord | null = null;
+  let currentUser: ReturnType<typeof currentUserResolver.require> | null = null;
   try {
-    const currentUser = currentUserResolver.require(req);
+    currentUser = currentUserResolver.require(req);
     await requireOwnedTaskSession(sessionId, currentUser.userId);
   } catch (error) {
     const authError = resolveCurrentUserError(error);
@@ -5639,8 +5772,30 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   if (replayCursor) {
     try {
-      const history = await taskCreationFileMemoryStore.getMessages(sessionId);
-      const pickCursorFromItem = (item: any) => {
+      const redisHistory = await taskSessionRedisCacheService.listSessionEvents({
+        sessionId,
+        userId: currentUser?.userId || '',
+        tenantKey: currentUser ? resolveTenantKey(currentUser) : '',
+        afterEventId: replayCursor,
+      });
+      if (redisHistory.length > 0) {
+        for (const item of redisHistory) {
+          writeSse(res, {
+            sessionId,
+            type: item.messageType,
+            content: item.content,
+            metadata: {
+              ...pickRecord(item.metadata),
+              messageKey: item.messageKey,
+            },
+            messageKey: item.messageKey,
+            createdAt: item.createdAt,
+          }, undefined, item.eventId);
+          updateSseClientCursor(activeConnection.key, item.eventId);
+        }
+      } else {
+        const history = await taskCreationFileMemoryStore.getMessages(sessionId);
+        const pickCursorFromItem = (item: any) => {
         const meta = pickRecord(item?.metadata);
         const sessionEventSeq = asPositiveInt(meta.sessionEventSeq);
         const seq = Number(meta.seq);
@@ -5653,84 +5808,86 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
           if (Number.isFinite(seq) && seq > 0) return seq;
           return 0;
         }
+        if (sessionEventSeq !== null) return sessionEventSeq;
         if (Number.isFinite(seq) && seq > 0) return seq;
         if (Number.isFinite(tsMeta) && tsMeta > fallbackReplayTs) return tsMeta;
         if (Number.isFinite(tsCreated) && tsCreated > fallbackReplayTs) return tsCreated;
         return 0;
       };
-      const filtered = history
-        .filter((item) =>
-          item.messageType === 'opencode_event' ||
-          item.messageType === 'opencode_error' ||
-          item.messageType === 'status_update'
-        )
-        .filter((item) => {
-          const cursor = pickCursorFromItem(item);
-          if (!Number.isFinite(cursor) || cursor <= 0) return false;
-          return cursor > replayCursor;
-        })
-        .filter((item) => {
-          if (!filterSessionId) return true;
-          const metadata = pickRecord(item.metadata);
-          const msgOpencodeSessionId = asText(metadata.opencodeSessionId);
-          if (!msgOpencodeSessionId) return false;
-          return msgOpencodeSessionId === filterSessionId;
-        })
-        .sort((a, b) => {
-          const ma = pickRecord(a?.metadata);
-          const mb = pickRecord(b?.metadata);
-          const ta = asTimelineCursor(ma.timestamp);
-          const tb = asTimelineCursor(mb.timestamp);
-          if (ta !== null && tb !== null && ta !== tb) {
-            return ta - tb;
-          }
-          if (ta !== null && tb === null) return -1;
-          if (ta === null && tb !== null) return 1;
-          const ca = a.createdAt ? Date.parse(a.createdAt) : null;
-          const cb = b.createdAt ? Date.parse(b.createdAt) : null;
-          if (ca !== null && cb !== null && ca !== cb) {
-            return ca - cb;
-          }
-          if (ca !== null && cb === null) return -1;
-          if (ca === null && cb !== null) return 1;
-          const sa = asPositiveInt(ma.seq);
-          const sb = asPositiveInt(mb.seq);
-          if (sa !== null && sb !== null) {
-            return sa - sb;
-          }
-          return 0;
-        })
-        .slice(-500);
-      for (const item of filtered) {
-        const meta = pickRecord(item.metadata);
-        const sessionEventSeq = asPositiveInt(meta.sessionEventSeq);
-        const timestampEventId = Number(meta.timestamp);
-        const createdAtEventId = item.createdAt ? Date.parse(item.createdAt) : NaN;
-        const seqEventId = Number(meta.seq);
-        const eventId =
-          (sessionEventSeq !== null ? sessionEventSeq : undefined) ??
-          (Number.isFinite(timestampEventId) && timestampEventId > 0 ? timestampEventId : undefined) ??
-          (Number.isFinite(createdAtEventId) && createdAtEventId > 0 ? createdAtEventId : undefined) ??
-          (Number.isFinite(seqEventId) && seqEventId > 0 ? seqEventId : undefined);
-        const messageKey = buildTimelineMessageKey({
-          id: item.id,
-          messageType: item.messageType,
-          metadata: item.metadata,
-          createdAt: item.createdAt,
-        });
-        writeSse(res, {
-          sessionId,
-          type: item.messageType,
-          content: item.content,
-          metadata: {
-            ...pickRecord(item.metadata),
+        const filtered = history
+          .filter((item) =>
+            item.messageType === 'opencode_event' ||
+            item.messageType === 'opencode_error' ||
+            item.messageType === 'status_update'
+          )
+          .filter((item) => {
+            const cursor = pickCursorFromItem(item);
+            if (!Number.isFinite(cursor) || cursor <= 0) return false;
+            return cursor > replayCursor;
+          })
+          .filter((item) => {
+            if (!filterSessionId) return true;
+            const metadata = pickRecord(item.metadata);
+            const msgOpencodeSessionId = asText(metadata.opencodeSessionId);
+            if (!msgOpencodeSessionId) return false;
+            return msgOpencodeSessionId === filterSessionId;
+          })
+          .sort((a, b) => {
+            const ma = pickRecord(a?.metadata);
+            const mb = pickRecord(b?.metadata);
+            const ta = asTimelineCursor(ma.timestamp);
+            const tb = asTimelineCursor(mb.timestamp);
+            if (ta !== null && tb !== null && ta !== tb) {
+              return ta - tb;
+            }
+            if (ta !== null && tb === null) return -1;
+            if (ta === null && tb !== null) return 1;
+            const ca = a.createdAt ? Date.parse(a.createdAt) : null;
+            const cb = b.createdAt ? Date.parse(b.createdAt) : null;
+            if (ca !== null && cb !== null && ca !== cb) {
+              return ca - cb;
+            }
+            if (ca !== null && cb === null) return -1;
+            if (ca === null && cb !== null) return 1;
+            const sa = asPositiveInt(ma.seq);
+            const sb = asPositiveInt(mb.seq);
+            if (sa !== null && sb !== null) {
+              return sa - sb;
+            }
+            return 0;
+          })
+          .slice(-500);
+        for (const item of filtered) {
+          const meta = pickRecord(item.metadata);
+          const sessionEventSeq = asPositiveInt(meta.sessionEventSeq);
+          const timestampEventId = Number(meta.timestamp);
+          const createdAtEventId = item.createdAt ? Date.parse(item.createdAt) : NaN;
+          const seqEventId = Number(meta.seq);
+          const eventId =
+            (sessionEventSeq !== null ? sessionEventSeq : undefined) ??
+            (Number.isFinite(timestampEventId) && timestampEventId > 0 ? timestampEventId : undefined) ??
+            (Number.isFinite(createdAtEventId) && createdAtEventId > 0 ? createdAtEventId : undefined) ??
+            (Number.isFinite(seqEventId) && seqEventId > 0 ? seqEventId : undefined);
+          const messageKey = buildTimelineMessageKey({
+            id: item.id,
+            messageType: item.messageType,
+            metadata: item.metadata,
+            createdAt: item.createdAt,
+          });
+          writeSse(res, {
+            sessionId,
+            type: item.messageType,
+            content: item.content,
+            metadata: {
+              ...pickRecord(item.metadata),
+              messageKey,
+            },
             messageKey,
-          },
-          messageKey,
-          createdAt: item.createdAt,
-        }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
-        if (Number.isFinite(eventId as number) && (eventId as number) > 0) {
-          updateSseClientCursor(activeConnection.key, eventId as number);
+            createdAt: item.createdAt,
+          }, undefined, Number.isFinite(eventId as number) ? (eventId as number) : undefined);
+          if (Number.isFinite(eventId as number) && (eventId as number) > 0) {
+            updateSseClientCursor(activeConnection.key, eventId as number);
+          }
         }
       }
     } catch (error) {

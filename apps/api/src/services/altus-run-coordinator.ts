@@ -241,6 +241,7 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
@@ -273,6 +274,7 @@ export class AltusRunCoordinator {
         response,
         signal: input.signal,
         onToolCallDelta: input.onToolCallDelta,
+        onAssistantTextDelta: input.onAssistantTextDelta,
       });
     }
 
@@ -292,6 +294,7 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
@@ -400,6 +403,7 @@ export class AltusRunCoordinator {
     response: Response;
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
   }) {
     const decoder = new TextDecoder();
     let buffer = '';
@@ -421,6 +425,9 @@ export class AltusRunCoordinator {
 
       if (typeof delta?.content === 'string' && delta.content) {
         assistantContent += delta.content;
+        if (input.onAssistantTextDelta) {
+          await input.onAssistantTextDelta(delta.content, assistantContent);
+        }
       }
 
       if (Array.isArray(delta?.tool_calls)) {
@@ -520,6 +527,7 @@ export class AltusRunCoordinator {
       compositeSystemPrompt
     );
     let plainTextRecoveryUsed = false;
+    const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
 
     for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
       if (signal.aborted) {
@@ -545,6 +553,19 @@ export class AltusRunCoordinator {
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        onAssistantTextDelta: async (deltaText, fullText) => {
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'assistant_delta',
+            {
+              content: deltaText,
+              fullContent: fullText,
+              messageKey: assistantStreamMessageKey,
+            }
+          );
+        },
         onToolCallDelta: async (toolCall) => {
           const toolName = asText(toolCall?.function?.name);
           const toolCallId = asText(toolCall?.id);
@@ -658,7 +679,7 @@ export class AltusRunCoordinator {
                 verification: result.verification,
                 deliverables,
               },
-              messageKey: `managed:${state.input.runId}:assistant_final`,
+              messageKey: assistantStreamMessageKey,
             });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
@@ -688,7 +709,7 @@ export class AltusRunCoordinator {
               'assistant_message',
               {
               content: finalContent,
-              messageKey: `managed:${state.input.runId}:assistant_final`,
+              messageKey: assistantStreamMessageKey,
               deliverables,
               }
             );
@@ -746,6 +767,16 @@ export class AltusRunCoordinator {
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      await this.eventWriter.appendRunEvent(
+        state.input.runId,
+        state.input.sessionId,
+        state.input.userId,
+        'run_status',
+        {
+          status: 'starting',
+          content: '正在准备 sandbox 与运行环境',
+        }
+      );
       const sandbox = await this.setupService.ensureSandbox(
         state.input.sessionId,
         state.input.sessionTitle

@@ -7,6 +7,7 @@ import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory
 import { ensureDatabaseConnection } from '../config/database';
 import { touchSandbox } from './sandbox-activity-service';
 import { sessionConnectorService } from './session-connector-service';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 
 function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
@@ -413,6 +414,63 @@ export class OpencodeEventStreamService {
       sessionId,
       mode,
       updatedAt: Date.now(),
+    });
+  }
+
+  private shouldSkipRedisSessionReplayEvent(eventType: string, event: Record<string, unknown>) {
+    if (eventType !== 'message.part.updated' && eventType !== 'message.part.delta') {
+      return false;
+    }
+    const properties =
+      event.properties && typeof event.properties === 'object'
+        ? (event.properties as Record<string, unknown>)
+        : {};
+    const part =
+      properties.part && typeof properties.part === 'object'
+        ? (properties.part as Record<string, unknown>)
+        : {};
+    const partType = (asTrimmedText(part.type) || asTrimmedText(properties.type)).trim().toLowerCase();
+    return partType === 'text' || partType === 'reasoning';
+  }
+
+  private async appendRedisSessionReplayEvent(input: {
+    orchestratorSessionId: string;
+    opencodeSessionId?: string;
+    eventType: string;
+    event: Record<string, unknown>;
+    seq: number;
+    timestamp: number;
+    sessionEventSeq?: number;
+  }) {
+    if (this.shouldSkipRedisSessionReplayEvent(input.eventType, input.event)) {
+      return;
+    }
+    const binding = this.sessionBindings.get(input.orchestratorSessionId);
+    const sessionId = String(binding?.sessionId || '').trim();
+    if (!sessionId) {
+      return;
+    }
+    const projected = this.projectForClient(input);
+    const eventId =
+      (typeof input.sessionEventSeq === 'number' && Number.isFinite(input.sessionEventSeq) && input.sessionEventSeq > 0
+        ? Math.floor(input.sessionEventSeq)
+        : undefined) ??
+      (typeof input.timestamp === 'number' && Number.isFinite(input.timestamp) && input.timestamp > 0
+        ? Math.floor(input.timestamp)
+        : undefined) ??
+      (typeof input.seq === 'number' && Number.isFinite(input.seq) && input.seq > 0 ? Math.floor(input.seq) : undefined) ??
+      Date.now();
+    const createdAt = new Date(input.timestamp || Date.now()).toISOString();
+    const messageKey = `session-event:${sessionId}:${eventId}:${projected.type}`;
+    await taskSessionRedisCacheService.appendSessionEventForSessionId({
+      sessionId,
+      eventType: input.eventType,
+      messageType: projected.type,
+      eventId,
+      createdAt,
+      messageKey,
+      content: projected.content,
+      metadata: projected.metadata,
     });
   }
 
@@ -1245,6 +1303,15 @@ export class OpencodeEventStreamService {
                   input.orchestratorSessionId,
                   fastEvent
                 );
+                await this.appendRedisSessionReplayEvent({
+                  orchestratorSessionId: input.orchestratorSessionId,
+                  opencodeSessionId,
+                  eventType: fastPayload.eventType,
+                  event: fastPayload.event,
+                  seq: fastPayload.seq,
+                  timestamp: fastPayload.timestamp,
+                  sessionEventSeq: fastPayload.sessionEventSeq,
+                });
                 await this.enqueuePersist(input.orchestratorSessionId, fastPayload);
                 this.emitFast(input.orchestratorSessionId, fastPayload);
                 osacConnectionManager.emitExternalMessage(input.orchestratorSessionId, message);

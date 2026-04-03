@@ -20,6 +20,7 @@ import {
 } from '../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
@@ -1155,6 +1156,7 @@ export class SandboxAgentProvisionService {
           const restored = await restoreWorkspaceIfArchived(sessionId);
           if (restored && taskSessionId) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
+            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
           }
         }
 

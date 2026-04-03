@@ -1,0 +1,25 @@
+# auto report 2026-04-03
+
+- 做了什么：已回看 `AGENTS.md`、`docs/AGENTS_GUIDE/CODEX_PROMPT.md`、`#10` 已采用 Redis 规范，以及 `#11` issue《设计会话缓存与事件流迁移方案到 Redis》。
+- 做了什么：已认领 GitHub issue `#11`，并重新梳理当前代码现状，确认目前真正接入 Redis 的仍只有 Altus managed run；`workspace`、`messages/recent`、`messages/history`、`session-events` 还未迁入 Redis。
+- 做了什么：已核对 `task-creation-routes.ts`、`task-creation-cache-store.ts`、`task-session-workspace-cache.dao.ts`、`task-creation-session.dao.ts`、`opencode-event-stream-service.ts` 的现状，明确当前分别依赖本地文件缓存、DB recent/fallback、以及进程内 SSE 订阅。
+- 做了什么：新增设计稿 `docs/agent研发文档/20260403_会话缓存与事件流迁移到Redis设计_[尚未采用].md`，把 `#11` 范围收紧为四块：`workspace dir/tree/file`、`messages/recent`、`messages/history`、`session-events`，并明确 DB 继续作为事实来源、Redis 只做热层与短窗口回放。
+- 做了什么：按你的要求再次参照仓库内已有的 `Suna` 研究文档和当前已落 Redis 能力，重新收紧 `#11` 设计稿；这次明确只吸收 `Suna` 的两点：`Redis stream -> SSE replay`、`Redis 做热层而 DB 继续做事实存储`。
+- 做了什么：已把过度开发部分从文档中删掉，尤其去掉了 `history` 的 Redis 热页方案，改为只保留 `cursor:history`；同时也明确本次不引入 `StreamHub`、consumer group、统一事件总线、完整 `Suna` 风格运行平台。
+- 做了什么：你已确认开始写代码，`#11` 设计文档已切换为 `[20260403-1125已采用]`，后续实现将严格以这版收紧范围为准。
+- 做了什么：已新增 `apps/api/src/services/task-session-redis-cache-service.ts`，把 session 级 `workspace dir/tree/file`、`messages/recent`、`cursor:history`、`stream:session-events` 的 Redis 读写统一收口到一个最小 service，直接复用 `#10` 已落的 key/TTL 规范。
+- 做了什么：`task-creation-routes.ts` 已接入第一批 Redis 读写：`workspace dir/tree/file` 改为 Redis first，`messages/recent` 会在非 opencode 优先路径下直接命中 Redis，`messages/history` 成功后会刷新 `cursor:history`；`opencode-events` SSE replay 现在优先从 Redis `stream:session-events` 回放，空时再回退当前 DB replay。
+- 做了什么：`opencode-event-stream-service.ts` 已在现有 fast event 链路中追加 `session-events` Redis stream 写入；同时把 `sandbox-agent-provision-service.ts`、`opencode-remote-service.ts`、`task-creation-routes.ts` 中已有的 workspace 失效入口同步接到了 Redis 删除，避免 workspace cache 长时间残留旧值。
+- 做了什么：已新增 `apps/api/tests/task-session-redis-cache-service.test.ts`，并扩展 `apps/api/tests/redis-keyspace.test.ts`、`apps/api/tests/redis-live.test.ts`；本轮已通过 fake Redis 单测和真实 Redis 集成验证，覆盖 workspace cache、recent page、history cursor、session-events stream 的新能力。
+- 做了什么：继续补了接口级回归 `apps/api/tests/task-creation-deep-routes.test.ts`，新增了 `messages/recent` Redis 命中、`workspace/tree` Redis 命中、`workspace/file` Redis 命中、以及 `opencode/events` 从 Redis `session-events` replay 的验证。
+- 做了什么：在补测试过程中抓到并修复了一个真实 bug：`task-creation-routes.ts` 的 `opencode/events` 路由里，Redis replay 分支使用了超出作用域的 `currentUser`，会导致运行时报 `ReferenceError`；现在已改成外层持有并安全透传。
+- 做了什么：已继续把 `task-creation` 路由级 Redis 回归补完整，覆盖了 `messages/history -> cursor:history`、`workspace dir/tree/file -> Redis first`、`opencode/events -> Redis replay / DB fallback` 两条 SSE 重连路径。
+- 做了什么：这轮又修掉了一个真实回放缺口：`opencode/events` 的 DB fallback 在非 timestamp 游标模式下只看 `seq`，没有把 `sessionEventSeq` 当作有效 replay cursor，导致历史 `status_update` 事件会被错误过滤；现在已改为优先使用 `sessionEventSeq`，对应路由级回归已通过。
+- 做了什么：已收口 `task-creation-deep-routes.test.ts` 的 SSE 测试句柄问题。测试基建现在会强制关闭每个临时 HTTP server 的连接，并在 `after` 阶段显式断开 Redis client 与数据库连接池，整套 21 条路由级用例现在可以自然退出，不再卡在进程尾部。
+- 做了什么：按“真实接口触发 + 直接检查 Redis”补了新的 live 校验文件 `apps/api/tests/task-creation-redis-route-live.test.ts`。这次不再只看 mock 行为，而是逐个触发当前 `task-creation` 实际接入 Redis 的 6 条接口：`messages/recent`、`messages/history`、`workspace/dir`、`workspace/tree`、`workspace/file`、`opencode/events`。
+- 做了什么：新 live 校验会在本机 `redis://127.0.0.1:6379/15` 上逐条验证对应 key：`cache:messages:recent`、`cursor:history`、`cache:workspace:dir/tree/file`、`stream:session-events`，并直接断言 Redis 中存下来的 JSON/stream entry 与接口返回一致。
+- 做了什么：已把同样的方法扩到 `altus-managed`，新增 `apps/api/tests/altus-managed-redis-route-live.test.ts`。这轮纳入 live Redis 校验的接口是：`POST /api/altus-managed/sessions/:sessionId/runs`、`GET /api/altus-managed/runs/:runId/stream`、`POST /api/altus-managed/runs/:runId/stop`。
+- 做了什么：`altus-managed` 这组 live 校验会直接检查 Redis 中的 `run:state`、`run:owner`、`run:heartbeat`、`ops:runs:active`、`run:stream`、`run:stop`。`GET /sessions/:sessionId/runs/latest` 仅做 DB 汇总读取，不直接触发 Redis 写入；`POST /inputs` 是对 `startRun` 的组合包装，本轮不单独重复做一套等价 Redis 存储校验。
+- 做了什么：已把 `task-creation + altus-managed` 的“接口 -> Redis key -> 验证方式 -> 当前状态”总表补回 `docs/agent研发文档/20260403_会话缓存与事件流迁移到Redis设计_[20260403-1125已采用].md`，并把当前 live 验证命令和 `9/9 pass` 结果写进文档，作为 `#11` 当前验收基线。
+- 遇到什么：现有缓存实现分散在本地文件、DB fallback、进程内内存三套路径里，迁移时如果不先收口边界，很容易把 Redis 扩成过大的平台缓存工程。
+- 计划如何解决：下一步整理这批 `#11` 第一批实现的提交与 issue 进展；若你继续让我推进，我会开始收口剩余 route 级验收并准备提交。

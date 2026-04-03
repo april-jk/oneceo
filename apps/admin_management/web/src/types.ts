@@ -298,6 +298,208 @@ export interface ConversationSessionDetailResponse {
   };
 }
 
+export interface ConnectorGuidePolicy {
+  id: string;
+  connectorKey: string;
+  status: 'draft' | 'active' | 'archived' | string;
+  triggerMode: 'on_attach' | 'on_active_use' | 'on_attach_and_active_use' | string;
+  description: string;
+  publishedRevisionId: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectorGuideRevision {
+  id: string;
+  policyId: string;
+  versionNumber: number;
+  status: 'draft' | 'published' | 'archived' | string;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+  notes: string;
+  createdBy?: string | null;
+  createdAt: string;
+  publishedAt?: string | null;
+}
+
+export interface ConnectorGuidePolicyDetail extends ConnectorGuidePolicy {
+  publishedRevision?: ConnectorGuideRevision | null;
+  revisions: ConnectorGuideRevision[];
+}
+
+export interface ConnectorGuideValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface SkillSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  publishedRevisionNumber: number | null;
+  publishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface SkillDetail {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  status: 'active' | 'archived';
+  publishedRevisionId: string | null;
+  latestBodyMarkdown: string;
+  renderedSkillMarkdown: string | null;
+  resourceSummary?: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources?: Array<{
+    id: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    createdAt: string;
+  }>;
+  updatedAt: string;
+}
+
+export interface SkillRevision {
+  id: string;
+  revisionNumber: number;
+  createdAt: string;
+  createdBy?: string | null;
+  publishedAt?: string | null;
+  isPublished: boolean;
+}
+
+export interface SkillRenderedRevision {
+  skillId: string;
+  revisionId: string;
+  revisionNumber: number;
+  slug: string;
+  renderedMarkdown: string;
+  signature: string;
+}
+
+export interface SkillRevisionResources {
+  skill: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  revision: {
+    id: string;
+    revisionNumber: number;
+  };
+  resourceSummary: {
+    totalCount: number;
+    referenceCount: number;
+    templateCount: number;
+    paths: string[];
+  };
+  resources: Array<{
+    id: string;
+    resourceKey: string;
+    resourcePath: string;
+    resourceType: 'reference' | 'template';
+    title: string;
+    summary: string;
+    contentStorage: 'database' | 'object_storage';
+    mimeType: string;
+    storagePath: string | null;
+    storageLocatorJson: Record<string, unknown> | null;
+    loadStage: string;
+    sortOrder: number;
+    contentMarkdown: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
+export interface SkillValidationResult {
+  sessionId: string;
+  skillId: string;
+  revisionId: string;
+  slug: string | null;
+  skillPath: string | null;
+  signature: string;
+  restartTriggered: boolean;
+  syncedAt: string;
+}
+
+export interface SkillImportPreview {
+  rootFolderName: string;
+  slug: string;
+  name: string;
+  discoveryDescription: string;
+  activationSummary: string;
+  entry: {
+    entryName: string;
+    entryDescription: string;
+    bodyMarkdown: string;
+  };
+  files: Array<{
+    relativePath: string;
+    nodeType: 'file';
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending';
+    sizeBytes: number;
+  }>;
+  resources: Array<{
+    resourceKey: string;
+    resourcePath: string;
+    resourceKind: 'reference' | 'template' | 'example' | 'script';
+    title: string;
+    summary: string;
+    contentFormat: 'markdown' | 'text' | 'json';
+    contentMode: 'inline' | 'chunked';
+    fullTextHash: string;
+    contentSize: number;
+    chunks: Array<{
+      chunkIndex: number;
+      chunkRole: 'summary' | 'body';
+      chunkSummary: string;
+      contentText: string;
+      tokenEstimate: number;
+    }>;
+  }>;
+  warnings: string[];
+}
+
+export interface SkillImportResult {
+  mode: 'create' | 'revision';
+  preview: SkillImportPreview;
+  skill: SkillDetail;
+  revision: SkillRevision;
+}
+
+export interface SkillImportJob {
+  jobId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+  preview: SkillImportPreview;
+  files: Array<{
+    relativePath: string;
+    storageTarget: 'database' | 'object_storage';
+    processingState: 'pending' | 'processing' | 'success' | 'failed';
+    error?: string | null;
+  }>;
+  result?: SkillImportResult | null;
+  error?: string | null;
+}
+
 export interface ConversationTraceEvent {
   id: string;
   timestamp?: string;
@@ -576,3 +778,41 @@ export type E2bTemplateWithBuilds = {
 
 export type E2bTemplateBuildInfo = Record<string, unknown>;
 export type E2bTemplateBuildLogsResponse = Record<string, unknown>;
+
+export interface OsacRelease {
+  id: string;
+  artifactType: string;
+  platform: string;
+  arch: string;
+  version: string;
+  channel: string;
+  status: 'uploaded' | 'validated' | 'published' | 'archived' | string;
+  bucket: string;
+  objectKey: string;
+  manifestKey: string;
+  sha256: string;
+  sizeBytes: number;
+  releaseNotes: string;
+  sourceCommit?: string | null;
+  uploadedBy?: string | null;
+  publishedBy?: string | null;
+  uploadedAt: string;
+  publishedAt?: string | null;
+  archivedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  metadataJson?: Record<string, unknown> | null;
+}
+
+export interface OsacReleaseListResponse {
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+  channel: string;
+  items: OsacRelease[];
+}
+
+export interface OsacReleaseDetailResponse {
+  release: OsacRelease;
+  currentPublishedReleaseId: string | null;
+  currentPublishedVersion: string | null;
+}

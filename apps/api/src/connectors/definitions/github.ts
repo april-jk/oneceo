@@ -21,14 +21,17 @@ export function resolveGithubOauthProvider(): ConnectorOauthProvider | undefined
     provider: 'github',
     clientId,
     clientSecret,
-    authorizationUrl:
-      asText(process.env.GITHUB_CONNECTOR_AUTHORIZE_URL) ||
-      'https://github.com/login/oauth/authorize',
+    authorizationUrl: 'https://github.com/login/oauth/authorize',
     tokenUrl:
       asText(process.env.GITHUB_CONNECTOR_TOKEN_URL) ||
       'https://github.com/login/oauth/access_token',
     scopeParam: 'scope',
-    scopes: parseScopes(process.env.GITHUB_CONNECTOR_SCOPES, ['repo', 'read:user']),
+    // 对于 GitHub App，不需要请求 OAuth App 的 repo scope。如果环境变量没传，则默认为空。
+    scopes: parseScopes(process.env.GITHUB_CONNECTOR_SCOPES, []),
+    authorizationExtraParams: {
+      // 保持与 Manus 等平台一致的行为，有些通用 OAuth 客户端会要求此参数
+      access_type: 'offline',
+    },
     tokenRequestBodyFormat: 'form',
     tokenClientAuth: 'body',
   };

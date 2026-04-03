@@ -89,15 +89,17 @@ import {
   getWorkspaceRawFileUrl,
   uploadTaskCreationAttachment,
   type TaskCreationDeliverableArtifact,
+  type TaskCreationPlatformSkill,
+  type TaskCreationUploadedAttachment as UploadedTaskAttachment,
 } from "@/lib/task-creation-client";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
+  mergePendingPlatformSkills,
   partitionPendingAttachments,
   type PendingAttachment,
-  type UploadedTaskAttachment,
 } from "@/lib/task-attachments";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
@@ -397,10 +399,9 @@ export default function Home() {
   }, [isConnected]);
 
   useEffect(() => {
-    const pendingFiles = consumePendingDraftAttachments();
-    if (!pendingFiles.length) return;
-    const merged = mergePendingAttachments([], pendingFiles);
-    setAttachments(merged.attachments);
+    const pendingAttachments = consumePendingDraftAttachments();
+    if (!pendingAttachments.length) return;
+    setAttachments(pendingAttachments);
   }, []);
 
   useEffect(() => {
@@ -457,6 +458,10 @@ export default function Home() {
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
+    setAttachments((current) => mergePendingPlatformSkills(current, skills));
   };
 
   const removeAttachment = (id: string) => {
@@ -541,7 +546,7 @@ export default function Home() {
     }
 
     try {
-      const { uploadableAttachments, inlinePromptAttachments } =
+      const { uploadableAttachments, selectedSkills } =
         partitionPendingAttachments(attachmentDrafts);
       let activeSessionId = (sessionId || "").trim();
       if (altusMode !== "managed" && uploadableAttachments.length > 0 && !activeSessionId) {
@@ -560,14 +565,12 @@ export default function Home() {
       exitHistoryView();
       if (altusMode === "managed") {
         await sendChatInput(
-          appendAttachmentsToPrompt(baseText, inlinePromptAttachments),
+          baseText,
           {
             sessionId: activeSessionId || undefined,
             metadata: hasAttachments
               ? {
-                  ...(inlinePromptAttachments.length
-                    ? { attachments: inlinePromptAttachments }
-                    : {}),
+                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                   originalInput: displayText,
                 }
               : undefined,
@@ -575,17 +578,14 @@ export default function Home() {
           },
         );
       } else {
-        const promptAttachments = [
-          ...uploadedAttachments,
-          ...inlinePromptAttachments,
-        ];
         await sendChatInput(
-          appendAttachmentsToPrompt(baseText, promptAttachments),
+          appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId || undefined,
-            metadata: promptAttachments.length
+            metadata: uploadedAttachments.length || selectedSkills.length
               ? {
-                  attachments: promptAttachments,
+                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
+                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                   originalInput: displayText,
                 }
               : undefined,
@@ -594,12 +594,14 @@ export default function Home() {
       }
     } catch (error) {
       if (hasAttachments) {
-        setAttachments((current) =>
-          mergePendingAttachments(
-            current,
-            attachmentDrafts.map((item) => item.file),
-          ).attachments,
-        );
+        const draftFiles = attachmentDrafts
+          .filter((item) => item.kind === "file")
+          .map((item) => item.file);
+        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        setAttachments((current) => {
+          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          return mergePendingPlatformSkills(mergedFiles, draftSkills);
+        });
       }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
@@ -646,10 +648,12 @@ export default function Home() {
     }
 
     try {
+      const { uploadableAttachments, selectedSkills } =
+        partitionPendingAttachments(attachmentDrafts);
       let uploadedAttachments: UploadedTaskAttachment[] = [];
-      if (altusMode !== "managed" && hasAttachments && activeSessionId) {
+      if (altusMode !== "managed" && uploadableAttachments.length > 0 && activeSessionId) {
         uploadedAttachments = await Promise.all(
-          attachmentDrafts.map((item) =>
+          uploadableAttachments.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
           ),
         );
@@ -661,19 +665,23 @@ export default function Home() {
           sessionId: activeSessionId,
           metadata: hasAttachments
             ? {
+                ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                 originalInput: displayText,
               }
             : undefined,
-          files: hasAttachments ? attachmentDrafts.map((item) => item.file) : undefined,
+          files: uploadableAttachments.length
+            ? uploadableAttachments.map((item) => item.file)
+            : undefined,
         });
       } else {
         await answerQuestion(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId,
-            metadata: uploadedAttachments.length
+            metadata: uploadedAttachments.length || selectedSkills.length
               ? {
-                  attachments: uploadedAttachments,
+                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
+                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
                   originalInput: displayText,
                 }
               : undefined,
@@ -682,12 +690,14 @@ export default function Home() {
       }
     } catch (error) {
       if (hasAttachments) {
-        setAttachments((current) =>
-          mergePendingAttachments(
-            current,
-            attachmentDrafts.map((item) => item.file),
-          ).attachments,
-        );
+        const draftFiles = attachmentDrafts
+          .filter((item) => item.kind === "file")
+          .map((item) => item.file);
+        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        setAttachments((current) => {
+          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          return mergePendingPlatformSkills(mergedFiles, draftSkills);
+        });
       }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
@@ -1075,6 +1085,7 @@ export default function Home() {
                     <div className="flex items-center gap-1">
                       <AttachmentPickerButton
                         onSelectFiles={handleAttachmentSelect}
+                        onSelectSkills={handleSkillSelect}
                       />
 
                       <ConnectorDialog sessionId={sessionId} />
@@ -1295,6 +1306,7 @@ export default function Home() {
                           <div className="flex items-center gap-1">
                             <AttachmentPickerButton
                               onSelectFiles={handleAttachmentSelect}
+                              onSelectSkills={handleSkillSelect}
                             />
 
                             <ConnectorDialog sessionId={sessionId} />

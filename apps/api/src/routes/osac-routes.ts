@@ -1,9 +1,6 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
 import { osacAgentService } from '../services/osac-agent-service';
 import { getPublicErrorMessage } from '../utils/error-response';
-import { osacBootstrapConfig } from '../config/osac-bootstrap-config';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
 
 const router = express.Router();
@@ -14,24 +11,6 @@ function handleError(res: express.Response, error: unknown, fallback: string) {
     success: false,
     error: getPublicErrorMessage(message || fallback),
   });
-}
-
-function resolveBinaryPath(requested: 'osac' | 'opencode') {
-  return requested === 'osac'
-    ? osacBootstrapConfig.osacBinaryPath
-    : osacBootstrapConfig.opencodeBinaryPath;
-}
-
-function assertBinaryAccess(req: express.Request, res: express.Response): boolean {
-  if (!osacBootstrapConfig.binaryAuthToken) {
-    return true;
-  }
-  const token = req.header('X-OSAC-BINARY-TOKEN');
-  if (token === osacBootstrapConfig.binaryAuthToken) {
-    return true;
-  }
-  res.status(401).json({ success: false, error: getPublicErrorMessage('未授权的下载请求') });
-  return false;
 }
 
 router.post('/provision', async (req, res) => {
@@ -50,31 +29,10 @@ router.post('/provision', async (req, res) => {
 });
 
 router.get('/binaries/:name', async (req, res) => {
-  try {
-    if (!assertBinaryAccess(req, res)) {
-      return;
-    }
-    const name = req.params.name === 'osac' ? 'osac' : req.params.name === 'opencode' ? 'opencode' : null;
-    if (!name) {
-      return res.status(404).json({ success: false, error: getPublicErrorMessage('未找到二进制文件') });
-    }
-
-    const filePath = resolveBinaryPath(name);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, error: getPublicErrorMessage('文件不存在') });
-    }
-
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
-
-    const stream = fs.createReadStream(filePath);
-    stream.on('error', () => {
-      res.status(500).json({ success: false, error: getPublicErrorMessage('读取文件失败') });
-    });
-    stream.pipe(res);
-  } catch (error) {
-    return handleError(res, error, '下载二进制文件失败');
-  }
+  return res.status(410).json({
+    success: false,
+    error: getPublicErrorMessage('OSAC 本地二进制下载链路已废弃，请通过已发布的 R2 artifact 获取运行时版本'),
+  });
 });
 
 router.post('/:sessionId/execute', async (req, res) => {
@@ -164,6 +122,98 @@ router.delete('/:sessionId/mcp/:serverName', async (req, res) => {
     return res.json({ success: true, data: result });
   } catch (error) {
     return handleError(res, error, 'OSAC 移除 MCP 失败');
+  }
+});
+
+router.post('/:sessionId/mcp/providers', async (req, res) => {
+  try {
+    const { providerId, taskSessionId, connectorKey, providerLabel, transport, overwrite } = req.body || {};
+    if (!providerId || !transport) {
+      return res.status(400).json({ success: false, error: getPublicErrorMessage('缺少 providerId 或 transport') });
+    }
+    const result = await osacAgentService.registerMcpProvider(req.params.sessionId, {
+      providerId,
+      taskSessionId,
+      connectorKey,
+      providerLabel,
+      transport,
+      overwrite,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 注册 MCP provider 失败');
+  }
+});
+
+router.post('/:sessionId/mcp/providers/:providerId/env', async (req, res) => {
+  try {
+    const result = await osacAgentService.updateMcpProviderEnv(req.params.sessionId, {
+      providerId: req.params.providerId,
+      env: req.body?.env || {},
+      restartPolicy: req.body?.restartPolicy,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 更新 MCP provider 环境失败');
+  }
+});
+
+router.post('/:sessionId/mcp/providers/:providerId/attach', async (req, res) => {
+  try {
+    const result = await osacAgentService.attachMcpProviderToSession(req.params.sessionId, {
+      providerId: req.params.providerId,
+      taskSessionId: req.body?.taskSessionId,
+      enabledTools: Array.isArray(req.body?.enabledTools)
+        ? req.body.enabledTools.map((item: unknown) => String(item))
+        : [],
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 挂载 MCP provider 失败');
+  }
+});
+
+router.delete('/:sessionId/mcp/providers/:providerId/attach', async (req, res) => {
+  try {
+    const result = await osacAgentService.detachMcpProviderFromSession(req.params.sessionId, req.params.providerId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 卸载 MCP provider 失败');
+  }
+});
+
+router.delete('/:sessionId/mcp/providers/:providerId', async (req, res) => {
+  try {
+    const result = await osacAgentService.removeMcpProvider(req.params.sessionId, req.params.providerId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 删除 MCP provider 失败');
+  }
+});
+
+router.get('/:sessionId/mcp/tools', async (req, res) => {
+  try {
+    const result = await osacAgentService.listSessionMcpTools(req.params.sessionId);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 获取 session MCP tools 失败');
+  }
+});
+
+router.post('/:sessionId/mcp/tools/call', async (req, res) => {
+  try {
+    const { providerId, toolName, arguments: callArguments } = req.body || {};
+    if (!providerId || !toolName) {
+      return res.status(400).json({ success: false, error: getPublicErrorMessage('缺少 providerId 或 toolName') });
+    }
+    const result = await osacAgentService.callSessionMcpTool(req.params.sessionId, {
+      providerId,
+      toolName,
+      arguments: callArguments || {},
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return handleError(res, error, 'OSAC 调用 MCP tool 失败');
   }
 });
 

@@ -9,9 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Plug, Settings2, SlidersHorizontal, UserRound, X } from 'lucide-react';
+import { Plug, Settings2, SlidersHorizontal, UserRound, Wrench, X } from 'lucide-react';
 import { ConnectorCenterPanel } from '@/components/ConnectorCenterPanel';
+import { UserSkillSettingsPanel } from '@/components/UserSkillSettingsPanel';
 import { getCodexRuntimeConfig, updateCodexRuntimeConfig } from '@/lib/task-creation-client';
+import { toast } from 'sonner';
 import {
   OPEN_SETTINGS_DIALOG_EVENT,
   type OpenSettingsDialogDetail,
@@ -35,7 +37,7 @@ type SettingsPanelProps = {
   highlightedConnector?: ConnectorKey | null;
 };
 
-const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'connectors'];
+const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'skills', 'connectors'];
 const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
 const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
 const DEFAULT_CODEX_API_KEY = 'sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555';
@@ -257,6 +259,15 @@ export function SettingsPanel({
                       <Settings2 className="h-4 w-4" />
                     </span>
                     <span className="truncate">{t('settings.settingsTab')}</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="skills"
+                    className="flex px-2 py-2.5 items-center text-[14px] leading-5 text-foreground max-md:whitespace-nowrap md:h-9 md:gap-2 md:self-stretch md:px-4 md:rounded-lg hover:bg-muted/60 data-[state=active]:bg-muted/60 data-[state=active]:font-medium max-md:border-b-2 max-md:border-foreground"
+                  >
+                    <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
+                      <Wrench className="h-4 w-4" />
+                    </span>
+                    <span className="truncate">Skills 管理</span>
                   </TabsTrigger>
                   <TabsTrigger
                     value="connectors"
@@ -568,6 +579,10 @@ export function SettingsPanel({
                     {t('account.deleteAccount')}
                   </Button>
                 </div>
+              </TabsContent>
+
+              <TabsContent value="skills" className="space-y-8 mt-0">
+                <UserSkillSettingsPanel onError={(message) => toast.error(message)} />
               </TabsContent>
 
               <TabsContent value="connectors" className="mt-0 h-full">

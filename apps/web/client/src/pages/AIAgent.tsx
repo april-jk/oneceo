@@ -29,9 +29,11 @@ import {
 import {
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
+  mergePendingPlatformSkills,
   stashPendingDraftAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 
 export default function AIAgent() {
   const [, setLocation] = useLocation();
@@ -42,7 +44,7 @@ export default function AIAgent() {
   const handleSend = () => {
     const value = message.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!value) return;
-    stashPendingDraftAttachments(attachments.map((item) => item.file));
+    stashPendingDraftAttachments(attachments);
     setLocation(`/new-task?q=${encodeURIComponent(value)}`);
   };
 
@@ -50,6 +52,10 @@ export default function AIAgent() {
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
+    setAttachments((current) => mergePendingPlatformSkills(current, skills));
   };
 
   const removeAttachment = (id: string) => {
@@ -121,7 +127,10 @@ export default function AIAgent() {
                 <div className="flex items-center justify-between pt-2">
                   {/* Left Side Actions */}
                   <div className="flex items-center gap-1">
-                    <AttachmentPickerButton onSelectFiles={handleAttachmentSelect} />
+                    <AttachmentPickerButton
+                      onSelectFiles={handleAttachmentSelect}
+                      onSelectSkills={handleSkillSelect}
+                    />
 
                     <ConnectorDialog />
 

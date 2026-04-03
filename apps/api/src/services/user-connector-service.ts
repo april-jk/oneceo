@@ -234,6 +234,82 @@ async function resolveGithubProfile(accessToken: string): Promise<{ displayName?
   };
 }
 
+async function resolveGithubInstallationCount(accessToken: string): Promise<number> {
+  const payload = await fetchJson('https://api.github.com/user/installations', {
+    method: 'GET',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${accessToken}`,
+      'User-Agent': 'oneceo-connectors',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  const totalCount = Number(payload.total_count || 0);
+  if (!Number.isFinite(totalCount)) {
+    throw new Error('GitHub 安装状态返回格式无效');
+  }
+  return totalCount;
+}
+
+async function revokeGithubOauthGrant(accessToken: string): Promise<void> {
+  const provider = connectorRegistry.getOauthProvider('github');
+  if (!provider) {
+    throw new Error('GitHub OAuth provider 未配置');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.github.com/applications/${encodeURIComponent(provider.clientId)}/grant`,
+      {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Basic ${Buffer.from(
+            `${provider.clientId}:${provider.clientSecret}`,
+            'utf8'
+          ).toString('base64')}`,
+          'Content-Type': 'application/json',
+          'User-Agent': 'oneceo-connectors',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        body: JSON.stringify({
+          access_token: accessToken,
+        }),
+        signal: AbortSignal.timeout(3000),
+      }
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      throw new Error('GitHub 撤销授权超时，请稍后重试');
+    }
+    throw error;
+  }
+
+  if (response.status === 204) {
+    return;
+  }
+
+  const text = await response.text();
+  let payload: Record<string, unknown> = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      payload = { raw: text };
+    }
+  }
+  const message =
+    asText(payload.message) ||
+    asText(payload.error_description) ||
+    asText(payload.error) ||
+    `GitHub revoke grant failed: ${response.status}`;
+  if (response.status === 404) {
+    return;
+  }
+  throw new Error(message);
+}
+
 async function resolveDisplayNameForSave(input: {
   connectorKey: ConnectorKey;
   secret: ConnectorAccountSecret | null;
@@ -482,6 +558,20 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('连接器 profile 不存在');
     }
+    let remoteGrantRevoked = true;
+    let remoteGrantError: string | null = null;
+    if (existing.connectorKey === 'github' && existing.secretCiphertext) {
+      const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(existing.secretCiphertext);
+      const accessToken = asText(secret?.accessToken);
+      if (accessToken) {
+        try {
+          await revokeGithubOauthGrant(accessToken);
+        } catch (error) {
+          remoteGrantRevoked = false;
+          remoteGrantError = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
     const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
     const saved = await userConnectorProfileDAO.update(profileId, userId, {
       authMode: catalogItem.authMode,
@@ -492,6 +582,36 @@ export class UserConnectorService {
     } as any);
     if (!saved) {
       throw new Error('断开连接器授权失败');
+    }
+    return {
+      profile: buildProfileView(saved as any),
+      remoteGrantRevoked,
+      remoteGrantError,
+    };
+  }
+
+  async markProfileNeedsAuth(
+    userId: string,
+    profileId: string,
+    input?: {
+      lastError?: string | null;
+      clearSecret?: boolean;
+    }
+  ) {
+    await connectorStorageBootstrap.ensureReady();
+    const existing = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    if (!existing) {
+      throw new Error('连接器 profile 不存在');
+    }
+    const catalogItem = connectorRegistry.getCatalogItem(existing.connectorKey);
+    const saved = await userConnectorProfileDAO.update(profileId, userId, {
+      authMode: catalogItem.authMode,
+      authStatus: catalogItem.available ? 'needs_auth' : 'unavailable',
+      secretCiphertext: input?.clearSecret === false ? existing.secretCiphertext : null,
+      lastError: asText(input?.lastError) || '授权已失效，需要重新授权',
+    } as any);
+    if (!saved) {
+      throw new Error('更新连接器授权状态失败');
     }
     return buildProfileView(saved as any);
   }
@@ -612,14 +732,6 @@ export class UserConnectorService {
         '';
       let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
 
-      if (connectorKey === 'github') {
-        const githubProfile = await resolveGithubProfile(accessToken);
-        displayName = githubProfile.displayName || displayName;
-        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
-          profileName = buildGithubProfileName(displayName);
-        }
-      }
-
       const secret: ConnectorAccountSecret = {
         accessToken,
         refreshToken: asText(tokenPayload.refresh_token) || undefined,
@@ -627,15 +739,38 @@ export class UserConnectorService {
         scope: asText(tokenPayload.scope) || undefined,
       };
 
+      let authStatus: ConnectorAuthStatus = 'authorized';
+      let lastError: string | null = null;
+      let secretCiphertext = connectorSecretService.encrypt(secret);
+      let lastAuthAt: Date | null = new Date();
+
+      if (connectorKey === 'github') {
+        const [githubProfile, installationCount] = await Promise.all([
+          resolveGithubProfile(accessToken),
+          resolveGithubInstallationCount(accessToken),
+        ]);
+        displayName = githubProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'GitHub Default' || profile.profileName === 'GitHub') {
+          profileName = buildGithubProfileName(displayName);
+        }
+        if (installationCount <= 0) {
+          authStatus = 'needs_auth';
+          lastError =
+            'GitHub App 已授权，但当前账号下没有任何可用安装。请先在 GitHub 安装该 App 或批准安装更新后，再重新连接。';
+          secretCiphertext = null;
+          lastAuthAt = null;
+        }
+      }
+
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
       const saved = await userConnectorProfileDAO.update(profileId, userId, {
         profileName,
         authMode: 'oauth',
-        authStatus: 'authorized',
+        authStatus,
         displayName: displayName || profile.displayName || null,
-        secretCiphertext: connectorSecretService.encrypt(secret),
-        lastAuthAt: new Date(),
-        lastError: null,
+        secretCiphertext,
+        lastAuthAt,
+        lastError,
       } as any);
       if (!saved) {
         throw new Error('OAuth 结果保存失败');
@@ -670,7 +805,11 @@ export class UserConnectorService {
       throw new Error('连接器 profile 不存在');
     }
     const cleared = await this.clearProfileAuth(userId, existing.profileId);
-    return summarizeProfiles(connectorRegistry.getCatalogItem(connectorKey), [cleared]);
+    return {
+      account: summarizeProfiles(connectorRegistry.getCatalogItem(connectorKey), [cleared.profile]),
+      remoteGrantRevoked: cleared.remoteGrantRevoked,
+      remoteGrantError: cleared.remoteGrantError,
+    };
   }
 
   async startOAuth(userId: string, connectorKey: ConnectorKey, input: StartOauthInput) {

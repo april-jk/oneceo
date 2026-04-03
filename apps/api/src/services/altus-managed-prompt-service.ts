@@ -1,3 +1,4 @@
+import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
 import type { SessionConnectorStatus } from './session-connector-service';
 
 function asText(value: unknown): string {
@@ -169,9 +170,14 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
       if (profile) {
         parts.push(`profile=${profile}`);
       }
+      const lastAuthAt = asText(item.selectedProfileLastAuthAt);
+      if (lastAuthAt) {
+        parts.push(`last_authorized_at=${lastAuthAt}`);
+      }
       const repos = Array.isArray(item.authorizedRepositories) ? item.authorizedRepositories : [];
       if (repos.length > 0) {
-        parts.push(`repositories=${repos.join(', ')}`);
+        parts.push(`authorized_repositories=${repos.join(', ')}`);
+        parts.push('scope=only_these_repositories');
       }
       return `- ${parts.join(' | ')}`;
     })
@@ -184,6 +190,10 @@ export class AltusManagedPromptService {
     sessionTitle?: string | null;
     workspaceRoot: string;
     connectors: SessionConnectorStatus[];
+    connectorGuideSections?: {
+      instructionsSection?: string;
+      reminderSection?: string;
+    };
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
@@ -218,8 +228,14 @@ export class AltusManagedPromptService {
       '',
       '# Session connectors',
       formatConnectors(input.connectors),
+      input.connectorGuideSections?.instructionsSection || '',
+      input.connectorGuideSections?.reminderSection || '',
       '',
       '# Tool usage rules',
+      '- Never treat a connector/tool failure from an earlier turn as proof that the connector still fails now.',
+      '- If the user says they reconnected, reauthorized, or wants to retry a connector action, you must call the connector tool again in the current run before concluding it still fails.',
+      '- Do not ask the user to manually create a GitHub repository or do other fallback steps unless the current run has produced a fresh connector/tool failure for that exact action.',
+      '- Treat any connector failure that predates `last_authorized_at` as stale. If a connector shows a recent `last_authorized_at`, retry the real tool first and only trust the new result.',
       '- Prefer read/search tools before editing or making assumptions.',
       '- Keep edits minimal and directly tied to the user request.',
       '- For complex tasks, use your todo as the execution contract: complete one step, validate it, then move to the next step.',
@@ -297,6 +313,61 @@ export class AltusManagedPromptService {
       '- complete_task.attachments must be a real JSON array of attachment objects. Never wrap the attachments array as a string.',
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',
       '- Do not emit hidden chain-of-thought or internal planning text.',
+    ].join('\n');
+  }
+
+  buildSkillContextPrompt(skills: ManagedSkillContext[]) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    const sections = skills.map((skill) => {
+      const header = [
+        `## ${skill.name}`,
+        `- source: ${skill.sourceType}`,
+        `- slug: ${skill.slug}`,
+        `- revision: ${skill.revisionNumber ?? '-'}`,
+        `- resources: ${
+          skill.resourceSummary && skill.resourceSummary.totalCount > 0
+            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
+            : 'no extra resources'
+        }`,
+      ].join('\n');
+      return `${header}\n\n${skill.renderedMarkdown}`;
+    });
+
+    return [
+      '# Active skills',
+      '- The user explicitly selected these skills for the current run.',
+      '- These skills are already synced into the sandbox and must be followed when relevant.',
+      '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
+      '',
+      ...sections,
+    ].join('\n');
+  }
+
+  buildSkillCatalogPrompt(skills: ManagedSkillCatalogEntry[]) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    const lines = skills.map((skill) => {
+      const resourceSummary = skill.resourceSummary;
+      const resourceLabel =
+        resourceSummary && resourceSummary.totalCount > 0
+          ? `${resourceSummary.referenceCount} references, ${resourceSummary.templateCount} templates`
+          : 'no extra resources';
+      return `- ${skill.slug}: ${skill.description || skill.name} | category=${skill.category} | revision=${skill.revisionNumber ?? '-'} | resources=${resourceLabel}`;
+    });
+
+    return [
+      '# Available skills catalog',
+      '- This is the metadata catalog of skills the current user can use.',
+      '- Do not assume the full skill body is loaded from this list alone.',
+      '- If the user explicitly selected a skill, its full body appears in the Active skills section.',
+      '- If an active skill lists extra resources and you need one, call `load_skill_resource` with the exact `skillId`, `revisionId`, and `resourcePath`.',
+      '',
+      ...lines,
     ].join('\n');
   }
 }

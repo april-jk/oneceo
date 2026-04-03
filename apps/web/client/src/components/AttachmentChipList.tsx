@@ -1,7 +1,11 @@
 import { useRef } from "react";
-import { FileText, X } from "lucide-react";
+import { FileText, Wrench, X } from "lucide-react";
 
-import type { PendingAttachment, UploadedTaskAttachment } from "@/lib/task-attachments";
+import type {
+  PendingAttachment,
+  PendingPlatformSkill,
+} from "@/lib/task-attachments";
+import type { TaskCreationUploadedAttachment as UploadedTaskAttachment } from "@/lib/task-creation-client";
 import { formatAttachmentSize } from "@/lib/task-attachments";
 import { cn } from "@/lib/utils";
 
@@ -104,9 +108,15 @@ export default function AttachmentChipList({
         }}
       >
         {attachments.map((attachment, index) => {
+          const size =
+            typeof (attachment as { size?: unknown }).size === "number"
+              ? (attachment as { size: number }).size
+              : 0;
           const id = "id" in attachment && typeof attachment.id === "string"
             ? attachment.id
-            : `${attachment.name}:${attachment.size}:${index}`;
+            : `${attachment.name}:${size}:${index}`;
+          const isSkill = "kind" in attachment && attachment.kind === "skill";
+          const skillAttachment = attachment as PendingPlatformSkill;
           return (
             <div
               key={id}
@@ -115,11 +125,21 @@ export default function AttachmentChipList({
                 baseTone
               )}
             >
-              <FileText className="h-3.5 w-3.5 shrink-0" />
+              {isSkill ? (
+                <Wrench className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <FileText className="h-3.5 w-3.5 shrink-0" />
+              )}
               <span className="max-w-[160px] truncate font-medium">{attachment.name}</span>
-              <span className={cn("shrink-0 text-[11px]", metaTone)}>
-                {formatAttachmentSize(attachment.size)}
-              </span>
+              {isSkill ? (
+                <span className={cn("shrink-0 text-[11px]", metaTone)}>
+                  rev.{skillAttachment.revisionNumber}
+                </span>
+              ) : (
+                <span className={cn("shrink-0 text-[11px]", metaTone)}>
+                  {formatAttachmentSize(size)}
+                </span>
+              )}
               {onRemove ? (
                 <button
                   type="button"

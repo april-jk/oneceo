@@ -11,13 +11,22 @@ import sandboxRoutes from './routes/sandbox-routes';
 import osacRoutes from './routes/osac-routes';
 import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
+import authRoutes from './routes/auth-routes';
+import internalSkillRoutes from './routes/internal-skill-routes';
+import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
+import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-routes';
+import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
 import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
+import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
+import { connectorGuideService } from './services/connector-guide-service';
+import { appAuthMiddleware } from './middleware/app-auth-middleware';
+import { adminAuthService } from './services/admin-auth-service';
 
 function mergeNoProxy(entries: string[], current?: string): string {
   const normalized = (current || '')
@@ -61,6 +70,11 @@ const llmProxyBodyLimitMb = Number.isFinite(llmProxyBodyLimitMbRaw)
   ? Math.min(128, Math.max(1, Math.floor(llmProxyBodyLimitMbRaw)))
   : 64;
 const llmProxyBodyLimit = `${llmProxyBodyLimitMb}mb`;
+const jsonBodyLimitMbRaw = Number(process.env.API_JSON_BODY_LIMIT_MB || 16);
+const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
+  ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
+  : 16;
+const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -72,10 +86,27 @@ const io = new Server(httpServer, {
 // 中间件
 // ============================================================================
 
-app.use(cors());
+const allowedOrigins = String(process.env.FRONTEND_URL || 'http://localhost:3000')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
+    credentials: true,
+  })
+);
 // LLM proxy uses raw body for streaming compatibility
 app.use('/api/llm-proxy', express.raw({ type: '*/*', limit: llmProxyBodyLimit }));
-app.use(express.json());
+app.use(express.json({ limit: jsonBodyLimit }));
+app.use(appAuthMiddleware);
 
 // 请求日志
 app.use((req, res, next) => {
@@ -117,12 +148,17 @@ app.post('/api/projects', (req, res) => {
 });
 
 // 任务创建相关 API
+app.use('/api/auth', authRoutes);
 app.use('/api/task-creation', taskCreationRoutes);
 app.use('/api/altus-managed', altusManagedRoutes);
 app.use('/api/sandbox', sandboxRoutes);
 app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
 app.use('/api/connectors', connectorRoutes);
+app.use('/api/internal', internalSkillRoutes);
+app.use('/api/internal', internalConnectorGuideRoutes);
+app.use('/api/internal', internalRuntimeArtifactRoutes);
+app.use('/api/internal', internalAdminAuthRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -267,6 +303,10 @@ async function shutdown(signal: string, exitCode = 0) {
   process.exit(exitCode);
 }
 
+adminAuthService.ensureBootstrapAdmin().catch((error) => {
+  console.error('[ADMIN_AUTH_BOOTSTRAP_FAILED]', error);
+});
+
 httpServer.on('error', (error: any) => {
   if (error?.code === 'EADDRINUSE' && !isListening && !shuttingDown) {
     if (listenAttempts < maxListenRetries) {
@@ -301,6 +341,7 @@ osacLlmProxyBridgeService.initialize();
 
 async function startServer() {
   await connectorStorageBootstrap.ensureReady();
+  await connectorGuideService.ensureBuiltinPolicies();
 
   httpServer.listen(PORT, () => {
     isListening = true;
@@ -318,6 +359,10 @@ async function startServer() {
     void testDatabaseConnection({ retries: 5, delayMs: 1500 });
     // API 重启后恢复最近 ready session 的持久 OSAC 桥接连接
     void osacPersistentRecoveryService.recoverReadySessions();
+    // API 重启后恢复积压的 session MCP reconcile 任务
+    void sessionMcpRecoveryService
+      .recoverBacklog()
+      .catch((error) => console.error('[SESSION_MCP_RECOVERY_BACKLOG_FAILED]', error));
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
     

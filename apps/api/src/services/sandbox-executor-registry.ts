@@ -10,6 +10,7 @@ export type SandboxExecutorInput = {
   workspacePath?: string;
   source?: 'user' | 'agent';
   clientMessageKey?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type SandboxExecutorAccepted = {

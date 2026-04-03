@@ -1,11 +1,11 @@
 import type express from 'express';
 
-export type CurrentUserSource = 'auth_context' | 'x-user-id' | 'tenant';
+export type CurrentUserSource = 'auth_context' | 'x-user-id';
 
 export type CurrentUserContext = {
   userId: string;
   source: CurrentUserSource;
-  tenantKey?: string;
+  tenantKey: string;
 };
 
 function pickString(value: unknown): string {
@@ -19,6 +19,7 @@ function pickFromObject(value: unknown, key: string): string {
 
 export class CurrentUserResolver {
   resolve(req: express.Request): CurrentUserContext | null {
+    const explicitTenantKey = pickString(req.header('X-Tenant-Id') || req.query.tenantId);
     const authUser =
       pickFromObject((req as any).user, 'id') ||
       pickFromObject((req as any).user, 'userId') ||
@@ -29,7 +30,7 @@ export class CurrentUserResolver {
       return {
         userId: authUser,
         source: 'auth_context',
-        tenantKey: pickString(req.header('X-Tenant-Id') || req.query.tenantId),
+        tenantKey: explicitTenantKey || authUser,
       };
     }
 
@@ -38,18 +39,7 @@ export class CurrentUserResolver {
       return {
         userId: headerUser,
         source: 'x-user-id',
-        tenantKey: pickString(req.header('X-Tenant-Id') || req.query.tenantId),
-      };
-    }
-
-    const tenantKey =
-      pickString(req.header('X-Tenant-Id')) ||
-      pickString(req.query.tenantId);
-    if (tenantKey) {
-      return {
-        userId: tenantKey,
-        source: 'tenant',
-        tenantKey,
+        tenantKey: explicitTenantKey || headerUser,
       };
     }
 

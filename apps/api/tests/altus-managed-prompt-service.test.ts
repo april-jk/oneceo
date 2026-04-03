@@ -86,3 +86,56 @@ test('managed prompt instructs direct multimodal image analysis instead of OCR-f
   assert.match(prompt, /do not start with shell file probes, OCR libraries, Pillow, or other local image-processing tools/i);
   assert.match(prompt, /do not ask the user to describe an uploaded image/i);
 });
+
+test('managed prompt builds minimal skill catalog index without full body', () => {
+  const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建、改写或重组专业演示文稿',
+      category: 'office',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 1,
+        templateCount: 1,
+        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /available skills catalog/i);
+  assert.match(prompt, /office-ppt: 创建、改写或重组专业演示文稿/);
+  assert.match(prompt, /resources=1 references, 1 templates/);
+  assert.match(prompt, /call `load_skill_resource`/i);
+  assert.doesNotMatch(prompt, /compatibility:\s*opencode/i);
+});
+
+test('managed prompt shows active skill resource summary alongside full body', () => {
+  const prompt = altusManagedPromptService.buildSkillContextPrompt([
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建、改写或重组专业演示文稿',
+      category: 'office',
+      renderedMarkdown: '# Skill Brief\n\nDo the work.',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 1,
+        templateCount: 1,
+        paths: ['references/slide-structure-guide.md', 'templates/business-deck-outline.md'],
+      },
+    },
+  ]);
+
+  assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /resources: 1 references, 1 templates/);
+  assert.match(prompt, /# Skill Brief/);
+});

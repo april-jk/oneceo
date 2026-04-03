@@ -37,6 +37,7 @@ import type {
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
+  SandboxArchiveHistoryEntry,
   VmDetailResponse,
   VmIpInfo,
   VmListResponse,
@@ -68,9 +69,23 @@ export type AdminUser = {
 const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = RequestInit & {
+  timeoutMs?: number;
+  abortMessage?: string;
+};
+
+function toRequestError(error: unknown, fallbackMessage: string) {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return new Error(fallbackMessage);
+  }
+  return error instanceof Error ? error : new Error(fallbackMessage);
+}
+
+async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timeoutMs = init?.timeoutMs ?? API_TIMEOUT_MS;
+  const abortMessage = init?.abortMessage || '请求超时，请稍后重试';
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -80,6 +95,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       'content-type': 'application/json',
       ...(init?.headers || {}),
     },
+  }).catch((error) => {
+    throw toRequestError(error, abortMessage);
   }).finally(() => {
     clearTimeout(timer);
   });
@@ -97,15 +114,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload.data;
 }
 
-async function requestForm<T>(path: string, formData: FormData): Promise<T> {
+async function requestForm<T>(
+  path: string,
+  formData: FormData,
+  options?: Pick<RequestOptions, 'timeoutMs' | 'abortMessage'>
+): Promise<T> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timeoutMs = options?.timeoutMs ?? API_TIMEOUT_MS;
+  const abortMessage = options?.abortMessage || '请求超时，请稍后重试';
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
     credentials: 'include',
     signal: controller.signal,
     body: formData,
+  }).catch((error) => {
+    throw toRequestError(error, abortMessage);
   }).finally(() => {
     clearTimeout(timer);
   });
@@ -549,9 +574,19 @@ export const api = {
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
   getSandboxRuntimeRegistry: (limit = 100) =>
-    request<SandboxRuntimeRegistry>(`/api/sandbox-management/runtime-registry?limit=${limit}`),
+    request<SandboxRuntimeRegistry>(`/api/sandbox-management/runtime-registry?limit=${limit}`, {
+      timeoutMs: 30000,
+      abortMessage: '加载 Sandbox Runtime 列表超时，请稍后重试',
+    }),
   getSandboxRuntimeDetail: (sandboxId: string) =>
-    request<SandboxRuntimeDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/runtime-detail`),
+    request<SandboxRuntimeDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/runtime-detail`, {
+      timeoutMs: 30000,
+      abortMessage: '加载 Sandbox 详情超时，请稍后重试',
+    }),
+  getSandboxArchiveHistory: (sandboxId: string) =>
+    request<SandboxArchiveHistoryEntry[]>(
+      `/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/archive-history`
+    ),
   getSandboxEnvironment: (sandboxId: string) =>
     request<E2bSandboxDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}`),
   getSandboxFullInfo: (sandboxId: string) =>
@@ -576,6 +611,14 @@ export const api = {
     }),
   archiveSandboxEnvironment: (sandboxId: string) =>
     request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/archive`, {
+      method: 'POST',
+    }),
+  openSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/open`, {
+      method: 'POST',
+    }),
+  restartSandboxEnvironment: (sandboxId: string) =>
+    request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/restart`, {
       method: 'POST',
     }),
   restoreSandboxEnvironment: (sandboxId: string) =>

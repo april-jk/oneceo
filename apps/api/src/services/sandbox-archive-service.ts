@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { e2bConnector } from '../connectors/e2b-connector';
-import { downloadFromR2, existsInR2, uploadToR2 } from './r2-client';
+import { downloadFromR2, existsInR2, listR2Keys, uploadToR2 } from './r2-client';
 import {
   resolveLegacyOpencodeStatePath,
   resolveOpencodeStatePath,
@@ -53,10 +53,23 @@ type ArchiveManifest = {
   reason: string;
 };
 
+export type SandboxArchiveHistoryEntry = {
+  snapshotKey: string;
+  archiveKey?: string | null;
+  metadataKey?: string | null;
+  archivedAt: string | null;
+  sizeBytes?: number | null;
+  sha256?: string | null;
+  reason?: string | null;
+  status?: string | null;
+  isCurrent: boolean;
+};
+
 type SandboxArchiveServiceDeps = {
   e2bConnector: typeof e2bConnector;
   downloadFromR2: typeof downloadFromR2;
   existsInR2: typeof existsInR2;
+  listR2Keys: typeof listR2Keys;
   uploadToR2: typeof uploadToR2;
   resolveOpencodeWorkspacePath: typeof resolveOpencodeWorkspacePath;
   resolveOpencodeStatePath: typeof resolveOpencodeStatePath;
@@ -70,6 +83,7 @@ const defaultSandboxArchiveServiceDeps: SandboxArchiveServiceDeps = {
   e2bConnector,
   downloadFromR2,
   existsInR2,
+  listR2Keys,
   uploadToR2,
   resolveOpencodeWorkspacePath,
   resolveOpencodeStatePath,
@@ -119,6 +133,13 @@ function buildSnapshotKey(taskSessionId: string | null, sandboxId: string, archi
     return `sessions/${taskSessionId}/snapshots/${stamp}-${sandboxId}.tar.gz`;
   }
   return `sandboxes/${sandboxId}/snapshots/${stamp}.tar.gz`;
+}
+
+function buildSnapshotPrefix(taskSessionId: string | null, sandboxId: string): string {
+  if (taskSessionId) {
+    return `sessions/${taskSessionId}/snapshots/`;
+  }
+  return `sandboxes/${sandboxId}/snapshots/`;
 }
 
 function buildMetadataKey(taskSessionId: string | null, sandboxId: string): string {
@@ -217,6 +238,15 @@ function parseManifest(raw: Buffer): Partial<ArchiveManifest> {
   } catch {
     return {};
   }
+}
+
+function inferArchivedAtFromSnapshotKey(snapshotKey: string): string | null {
+  const matched = snapshotKey.match(/\/snapshots\/(\d{14})/);
+  if (!matched) return null;
+  const stamp = matched[1];
+  const iso = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(8, 10)}:${stamp.slice(10, 12)}:${stamp.slice(12, 14)}.000Z`;
+  const parsed = Date.parse(iso);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
 function listRestoreCandidates(
@@ -571,4 +601,53 @@ export async function resolveTaskSessionIdBySandbox(sandboxId: string): Promise<
     sandboxId
   );
   return found?.id || null;
+}
+
+export async function listSandboxArchiveHistory(sandboxId: string): Promise<SandboxArchiveHistoryEntry[]> {
+  const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
+  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const taskSessionId = extractTaskSessionId(metadata) || (await resolveTaskSessionIdBySandbox(sandboxId));
+  const metadataKey = asText((metadata as any).r2ArchiveMetadataKey) || buildMetadataKey(taskSessionId, sandboxId);
+
+  let manifest: Partial<ArchiveManifest> = {};
+  if (metadataKey && await sandboxArchiveServiceDeps.existsInR2(metadataKey)) {
+    try {
+      manifest = parseManifest(await sandboxArchiveServiceDeps.downloadFromR2(metadataKey));
+    } catch (error) {
+      console.warn('[SANDBOX_ARCHIVE] read history metadata failed', metadataKey, error);
+    }
+  }
+
+  const snapshotPrefix = buildSnapshotPrefix(taskSessionId, sandboxId);
+  const snapshotKeys = await sandboxArchiveServiceDeps.listR2Keys(snapshotPrefix, 200).catch(() => []);
+  const rows = snapshotKeys
+    .filter((key) => key.endsWith('.tar.gz'))
+    .map<SandboxArchiveHistoryEntry>((key) => ({
+      snapshotKey: key,
+      archiveKey: manifest.snapshotKey === key ? manifest.archiveKey || null : null,
+      metadataKey: manifest.snapshotKey === key ? metadataKey || null : null,
+      archivedAt: manifest.snapshotKey === key ? manifest.archivedAt || null : inferArchivedAtFromSnapshotKey(key),
+      sizeBytes: manifest.snapshotKey === key ? manifest.sizeBytes || null : null,
+      sha256: manifest.snapshotKey === key ? manifest.sha256 || null : null,
+      reason: manifest.snapshotKey === key ? manifest.reason || null : null,
+      status: manifest.snapshotKey === key ? asText((metadata as any).archiveStatus) || 'archived' : 'archived',
+      isCurrent: manifest.snapshotKey === key,
+    }))
+    .sort((a, b) => Date.parse(b.archivedAt || '1970-01-01') - Date.parse(a.archivedAt || '1970-01-01'));
+
+  if (manifest.snapshotKey && !rows.some((item) => item.snapshotKey === manifest.snapshotKey)) {
+    rows.unshift({
+      snapshotKey: manifest.snapshotKey,
+      archiveKey: manifest.archiveKey || null,
+      metadataKey: metadataKey || null,
+      archivedAt: manifest.archivedAt || null,
+      sizeBytes: manifest.sizeBytes || null,
+      sha256: manifest.sha256 || null,
+      reason: manifest.reason || null,
+      status: asText((metadata as any).archiveStatus) || 'archived',
+      isCurrent: true,
+    });
+  }
+
+  return rows;
 }

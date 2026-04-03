@@ -75,6 +75,14 @@ function formatBytes(value?: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function skillStatusLabel(status?: string | null) {
+  if (status === 'active') return '启用';
+  if (status === 'archived') return '已归档';
+  if (status === 'draft') return '草稿';
+  if (status === 'published') return '已发布';
+  return status || '-';
+}
+
 function storageLabel(value?: string | null) {
   return value === 'object_storage' ? '存储桶' : '数据库';
 }
@@ -479,7 +487,7 @@ export function SkillManagementSection({ onError }: Props) {
       <section className="panel fade-in">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Skill Registry</p>
+            <p className="eyebrow">技能注册表</p>
             <h2>技能管理</h2>
             <p className="subtitle">维护平台注册 skills、revision 与 sandbox 验证。</p>
           </div>
@@ -579,8 +587,8 @@ export function SkillManagementSection({ onError }: Props) {
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
             <option value="all">全部状态</option>
-            <option value="active">active</option>
-            <option value="archived">archived</option>
+            <option value="active">启用</option>
+            <option value="archived">已归档</option>
           </select>
           <select
             className="control-input"
@@ -606,7 +614,7 @@ export function SkillManagementSection({ onError }: Props) {
                 <th>技能</th>
                 <th>分类</th>
                 <th>状态</th>
-                <th>Published</th>
+                <th>发布版本</th>
               </tr>
             </thead>
             <tbody>
@@ -629,7 +637,7 @@ export function SkillManagementSection({ onError }: Props) {
                     </td>
                     <td>{item.category}</td>
                     <td>
-                      <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                      <span className={`status-pill status-${item.status}`}>{skillStatusLabel(item.status)}</span>
                     </td>
                     <td>{item.publishedRevisionNumber ? `rev.${item.publishedRevisionNumber}` : '-'}</td>
                   </tr>
@@ -650,7 +658,7 @@ export function SkillManagementSection({ onError }: Props) {
           >
             <div className="modal-header">
               <div>
-                <p className="section-tag">Skill Inspector</p>
+                <p className="section-tag">技能详情</p>
                 <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
                 <p className="cell-subtle">
                   {isCreating
@@ -907,7 +915,7 @@ export function SkillManagementSection({ onError }: Props) {
                           onClick={() => setSelectedRevisionId(item.id)}
                         >
                           <span>rev.{item.revisionNumber}</span>
-                          <span>{item.isPublished ? 'published' : 'draft'}</span>
+                          <span>{item.isPublished ? '已发布' : '草稿'}</span>
                           <span>{formatDateTime(item.createdAt)}</span>
                         </button>
                       ))}

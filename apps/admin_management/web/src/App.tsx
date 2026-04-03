@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   Bar,
@@ -35,6 +35,8 @@ import type {
   E2bTemplateBuildLogsResponse,
   E2bTemplateWithBuilds,
   HostListResponse,
+  SandboxArchiveHistoryEntry,
+  SandboxEnvironmentItem,
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
@@ -53,11 +55,11 @@ type HostTrendPoint = {
 const NAV_ITEMS: Array<{ key: SectionKey; label: string; subtitle: string; tag: string }> = [
   { key: 'kvm', label: 'KVM 管理', subtitle: '虚拟机与资源', tag: 'KVM' },
   { key: 'conversation', label: '对话管理', subtitle: '任务创建会话', tag: 'MSG' },
-  { key: 'agent', label: '智能体管理', subtitle: 'Agent 运行状态', tag: 'AGT' },
+  { key: 'agent', label: '智能体管理', subtitle: '智能体运行状态', tag: 'AGT' },
   { key: 'skill', label: '技能管理', subtitle: '平台技能与 revision', tag: 'SKL' },
-  { key: 'connectorGuide', label: '连接器 Guide', subtitle: '隐式 guide 与发布', tag: 'CGD' },
-  { key: 'osacRelease', label: 'OSAC 版本', subtitle: '工件发布与 latest', tag: 'OSA' },
-  { key: 'sandbox', label: '执行环境管理', subtitle: 'Sandbox 与 OSAC', tag: 'SBX' },
+  { key: 'connectorGuide', label: '连接器 Guide', subtitle: '隐式引导与发布', tag: 'CGD' },
+  { key: 'osacRelease', label: 'OSAC 版本', subtitle: '工件发布与当前版本', tag: 'OSA' },
+  { key: 'sandbox', label: '执行环境管理', subtitle: '执行环境与 OSAC', tag: 'SBX' },
   { key: 'audit', label: '审计日志', subtitle: '操作追踪', tag: 'LOG' },
 ];
 
@@ -67,6 +69,9 @@ const VM_STATE_COLORS: Record<string, string> = {
   paused: '#f59e0b',
   error: '#dc2626',
 };
+
+const SANDBOX_RUNTIME_PAGE_SIZE = 80;
+const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -80,6 +85,18 @@ function formatValue(value: string | number | undefined | null, suffix = '') {
   return `${value}${suffix}`;
 }
 
+function truncateMiddle(value: string | null | undefined, head = 8, tail = 6) {
+  if (!value) return '-';
+  if (value.length <= head + tail + 1) return value;
+  return `${value.slice(0, head)}...${value.slice(-tail)}`;
+}
+
+function toTimestamp(value?: string | null) {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function stateClassName(state: string) {
   return `status-pill status-${state}`;
 }
@@ -90,6 +107,96 @@ function statusLabel(status: string) {
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
   return status;
+}
+
+function adminRoleLabel(role?: string | null) {
+  if (role === 'super_admin') return '超级管理员';
+  if (role === 'admin') return '管理员';
+  return role || '-';
+}
+
+function adminDisplayNameLabel(displayName?: string | null, loginName?: string | null) {
+  if (displayName === 'Platform Admin') return '平台管理员';
+  return displayName || loginName || '-';
+}
+
+function capabilityStatusLabel(status?: string | null) {
+  if (status === 'available') return '可用';
+  if (status === 'planned') return '规划中';
+  if (status === 'draft') return '草稿';
+  if (status === 'active') return '启用';
+  if (status === 'archived') return '已归档';
+  return status || '-';
+}
+
+function archiveStatusLabel(status?: string | null) {
+  if (status === 'up_to_date') return '已同步';
+  if (status === 'archived') return '已归档';
+  if (status === 'in_progress') return '进行中';
+  if (status === 'failed') return '失败';
+  if (status === 'none') return '无';
+  if (status === 'unknown') return '未知';
+  return status || '-';
+}
+
+function sandboxSourceLabel(source?: string | null) {
+  if (source === 'tracked') return '已纳管';
+  if (source === 'live_only') return '仅在线';
+  return source || '-';
+}
+
+function sandboxDedupeReasonLabel(reason?: string | null) {
+  if (reason === 'task_runtime_rebound') return '同任务新实例已接管';
+  return reason || '已被新实例接管';
+}
+
+function sandboxJumpLabel(sandboxId?: string | null) {
+  return sandboxId ? truncateMiddle(sandboxId, 8, 6) : '-';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function recordString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function environmentMetadataRecord(environment?: SandboxEnvironmentItem | null) {
+  return asRecord(environment?.metadata);
+}
+
+function environmentSandboxId(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  const e2b = asRecord(metadata?.e2b);
+  return recordString(e2b, 'sandboxId') || environment?.orchestratorSessionId || environment?.sessionId || null;
+}
+
+function environmentTaskSessionId(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  return recordString(metadata, 'taskSessionId');
+}
+
+function environmentExecutor(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  return recordString(metadata, 'sandboxExecutor') || recordString(metadata, 'executor');
+}
+
+function environmentArchiveStatus(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  return recordString(metadata, 'archiveStatus');
+}
+
+function environmentReplacementSandboxId(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  return recordString(metadata, 'dedupeReplacementSandboxId');
+}
+
+function environmentDedupeReason(environment?: SandboxEnvironmentItem | null): string | null {
+  const metadata = environmentMetadataRecord(environment);
+  return recordString(metadata, 'dedupeReason');
 }
 
 function hostStatusLabel(status: string) {
@@ -294,7 +401,6 @@ export default function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
-  const [kvmMode, setKvmMode] = useState<'kvm' | 'sandbox'>('sandbox');
 
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
@@ -306,6 +412,8 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
+  const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
+  const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
@@ -315,11 +423,19 @@ export default function App() {
   const [sandboxRuntimeRegistry, setSandboxRuntimeRegistry] = useState<SandboxRuntimeRegistry | null>(null);
   const [sandboxRuntimeDetail, setSandboxRuntimeDetail] = useState<SandboxRuntimeDetail | null>(null);
   const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
+  const [sandboxArchiveHistory, setSandboxArchiveHistory] = useState<SandboxArchiveHistoryEntry[]>([]);
   const [sandboxModalOpen, setSandboxModalOpen] = useState(false);
   const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>('runtime');
+  const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState('');
+  const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState('all');
+  const [sandboxStatusFilter, setSandboxStatusFilter] = useState('all');
+  const [sandboxRiskFilter, setSandboxRiskFilter] = useState('all');
+  const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
+  const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxDetailTab, setSandboxDetailTab] = useState<'overview' | 'connectivity' | 'archive' | 'metrics' | 'advanced'>('overview');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [sandboxMetrics, setSandboxMetrics] = useState<E2bSandboxMetricPoint[]>([]);
+  const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
   const [sandboxToolAction, setSandboxToolAction] = useState('command.run');
   const [sandboxToolPayload, setSandboxToolPayload] = useState('{"cmd":"ls"}');
@@ -336,6 +452,7 @@ export default function App() {
   const [sandboxCreatePayload, setSandboxCreatePayload] = useState(
     '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
   );
+  const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
 
   const [templates, setTemplates] = useState<E2bTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -351,6 +468,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sandboxSectionRequestRef = useRef<Promise<void> | null>(null);
+  const sandboxRegistryLimitRef = useRef(SANDBOX_RUNTIME_PAGE_SIZE);
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -464,13 +583,44 @@ export default function App() {
   }, []);
 
   const loadSandboxSection = useCallback(async () => {
-    const [overview, registry] = await Promise.all([
-      api.getSandboxManagementOverview(80),
-      api.getSandboxRuntimeRegistry(120),
-    ]);
-    setSandboxOverview(overview);
-    setSandboxRuntimeRegistry(registry);
+    if (sandboxSectionRequestRef.current) {
+      return sandboxSectionRequestRef.current;
+    }
+
+    const request = (async () => {
+      const [overview, registry] = await Promise.all([
+        api.getSandboxManagementOverview(80),
+        api.getSandboxRuntimeRegistry(sandboxRegistryLimitRef.current),
+      ]);
+      setSandboxOverview(overview);
+      setSandboxRuntimeRegistry(registry);
+    })();
+
+    sandboxSectionRequestRef.current = request;
+    try {
+      await request;
+    } finally {
+      sandboxSectionRequestRef.current = null;
+    }
   }, []);
+
+  const loadMoreSandboxRuntime = useCallback(async () => {
+    const previousLimit = sandboxRegistryLimitRef.current;
+    const nextLimit = previousLimit + SANDBOX_RUNTIME_LOAD_MORE_STEP;
+    sandboxRegistryLimitRef.current = nextLimit;
+    setSandboxRegistryLimit(nextLimit);
+    setSandboxRegistryLoadingMore(true);
+    try {
+      await loadSandboxSection();
+      setError(null);
+    } catch (requestError) {
+      sandboxRegistryLimitRef.current = previousLimit;
+      setSandboxRegistryLimit(previousLimit);
+      setError(requestError instanceof Error ? requestError.message : '加载更多 Runtime 失败');
+    } finally {
+      setSandboxRegistryLoadingMore(false);
+    }
+  }, [loadSandboxSection]);
 
   const loadTemplates = useCallback(async () => {
     const result = await api.listTemplates();
@@ -483,8 +633,15 @@ export default function App() {
   }, []);
 
   const loadSandboxRuntimeDetail = useCallback(async (sandboxId: string) => {
-    const result = await api.getSandboxRuntimeDetail(sandboxId);
-    setSandboxRuntimeDetail(result);
+    const [result, archiveHistory] = await Promise.all([
+      api.getSandboxRuntimeDetail(sandboxId),
+      api.getSandboxArchiveHistory(sandboxId).catch(() => []),
+    ]);
+    setSandboxRuntimeDetail({
+      ...result,
+      archiveHistory,
+    });
+    setSandboxArchiveHistory(archiveHistory);
     setSandboxDetail(result.liveSandboxDetail);
     setSandboxFullInfo(result.liveSandboxFullInfo);
     setSandboxMetrics(result.metrics);
@@ -510,15 +667,20 @@ export default function App() {
 
   const openSandboxDetail = useCallback(
     async (sandboxId: string) => {
-      await loadSandboxRuntimeDetail(sandboxId);
-      setSandboxDetailTab('overview');
-      setSandboxConnectivityResult(null);
-      setSandboxToolResult(null);
-      setSandboxTerminalOutput('');
-      setSandboxFileItems([]);
-      setSandboxProcessResult(null);
-      setSandboxPortResult(null);
-      setSandboxModalOpen(true);
+      try {
+        setError(null);
+        await loadSandboxRuntimeDetail(sandboxId);
+        setSandboxDetailTab('overview');
+        setSandboxConnectivityResult(null);
+        setSandboxToolResult(null);
+        setSandboxTerminalOutput('');
+        setSandboxFileItems([]);
+        setSandboxProcessResult(null);
+        setSandboxPortResult(null);
+        setSandboxModalOpen(true);
+      } catch (detailError) {
+        setError(detailError instanceof Error ? detailError.message : '加载 Sandbox 详情失败');
+      }
     },
     [loadSandboxRuntimeDetail]
   );
@@ -531,11 +693,38 @@ export default function App() {
     setTemplateModalOpen(false);
   }, []);
 
+  const copyRuntimeField = useCallback(async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setError(null);
+    } catch {
+      setError(`复制${label}失败`);
+    }
+  }, []);
+
+  const openConversationSessionFromSandbox = useCallback((taskSessionId?: string | null) => {
+    if (!taskSessionId) return;
+    setError(null);
+    setSandboxModalOpen(false);
+    setConversationDetail(null);
+    setSelectedSessionId(taskSessionId);
+    setActiveSection('conversation');
+  }, []);
+
+  const openSandboxFromConversation = useCallback((sandboxId?: string | null) => {
+    if (!sandboxId) return;
+    setError(null);
+    setPendingSandboxJumpId(sandboxId);
+    setActiveSection('sandbox');
+  }, []);
+
   const closeSandbox = useCallback(
     async (sandboxId: string) => {
+      setError(null);
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
         await api.closeSandboxEnvironment(sandboxId);
+        setError(null);
         if (sandboxRuntimeDetail?.runtime.sandboxId === sandboxId) {
           const refreshed = await api.getSandboxRuntimeDetail(sandboxId).catch(() => null);
           setSandboxRuntimeDetail(refreshed);
@@ -552,9 +741,11 @@ export default function App() {
 
   const pauseSandbox = useCallback(
     async (sandboxId: string) => {
+      setError(null);
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
         await api.pauseSandboxEnvironment(sandboxId);
+        setError(null);
         await loadSandboxSection();
         if (sandboxRuntimeDetail?.runtime.sandboxId === sandboxId) {
           const refreshed = await api.getSandboxRuntimeDetail(sandboxId).catch(() => null);
@@ -571,9 +762,11 @@ export default function App() {
 
   const resumeSandbox = useCallback(
     async (sandboxId: string) => {
+      setError(null);
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
         await api.resumeSandboxEnvironment(sandboxId);
+        setError(null);
         await loadSandboxSection();
         if (sandboxRuntimeDetail?.runtime.sandboxId === sandboxId) {
           const refreshed = await api.getSandboxRuntimeDetail(sandboxId).catch(() => null);
@@ -586,6 +779,46 @@ export default function App() {
       }
     },
     [loadSandboxSection, sandboxRuntimeDetail?.runtime.sandboxId]
+  );
+
+  const openSandbox = useCallback(
+    async (sandboxId: string) => {
+      setError(null);
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+      try {
+        await api.openSandboxEnvironment(sandboxId);
+        setError(null);
+        await loadSandboxSection();
+        if (sandboxRuntimeDetail?.runtime.sandboxId === sandboxId) {
+          await loadSandboxRuntimeDetail(sandboxId);
+        }
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '开机失败');
+      } finally {
+        setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+      }
+    },
+    [loadSandboxRuntimeDetail, loadSandboxSection, sandboxRuntimeDetail?.runtime.sandboxId]
+  );
+
+  const restartSandbox = useCallback(
+    async (sandboxId: string) => {
+      setError(null);
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+      try {
+        await api.restartSandboxEnvironment(sandboxId);
+        setError(null);
+        await loadSandboxSection();
+        if (sandboxRuntimeDetail?.runtime.sandboxId === sandboxId) {
+          await loadSandboxRuntimeDetail(sandboxId);
+        }
+      } catch (actionError) {
+        setError(actionError instanceof Error ? actionError.message : '重启 Sandbox 失败');
+      } finally {
+        setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+      }
+    },
+    [loadSandboxRuntimeDetail, loadSandboxSection, sandboxRuntimeDetail?.runtime.sandboxId]
   );
 
   const runSandboxTool = useCallback(async () => {
@@ -714,10 +947,12 @@ export default function App() {
 
   const createSandbox = useCallback(async () => {
     try {
+      setError(null);
       const payload = sandboxCreatePayload.trim()
         ? (JSON.parse(sandboxCreatePayload) as Record<string, unknown>)
         : {};
       await api.createSandboxEnvironment(payload);
+      setSandboxCreateDrawerOpen(false);
       await loadSandboxSection();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : '创建 Sandbox 失败');
@@ -726,11 +961,12 @@ export default function App() {
 
   const runSandboxArchive = useCallback(
     async (sandboxId: string) => {
+      setError(null);
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
         await api.archiveSandboxEnvironment(sandboxId);
-        const refreshed = await api.getSandboxRuntimeDetail(sandboxId).catch(() => null);
-        setSandboxRuntimeDetail(refreshed);
+        setError(null);
+        await loadSandboxRuntimeDetail(sandboxId);
         await loadSandboxSection();
       } catch (actionError) {
         setError(actionError instanceof Error ? actionError.message : '触发归档失败');
@@ -738,7 +974,7 @@ export default function App() {
         setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
       }
     },
-    [loadSandboxSection]
+    [loadSandboxRuntimeDetail, loadSandboxSection]
   );
 
   const runSandboxRestore = useCallback(
@@ -746,8 +982,7 @@ export default function App() {
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
         await api.restoreSandboxEnvironment(sandboxId);
-        const refreshed = await api.getSandboxRuntimeDetail(sandboxId).catch(() => null);
-        setSandboxRuntimeDetail(refreshed);
+        await loadSandboxRuntimeDetail(sandboxId);
         await loadSandboxSection();
       } catch (actionError) {
         setError(actionError instanceof Error ? actionError.message : '恢复归档失败');
@@ -755,7 +990,7 @@ export default function App() {
         setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
       }
     },
-    [loadSandboxSection]
+    [loadSandboxRuntimeDetail, loadSandboxSection]
   );
 
   const runSandboxConnectivityCheck = useCallback(async (sandboxId: string) => {
@@ -847,15 +1082,7 @@ export default function App() {
 
       try {
         if (section === 'kvm') {
-          if (kvmMode === 'sandbox') {
-            if (sandboxTab === 'templates') {
-              await loadTemplates();
-            } else {
-              await loadSandboxSection();
-            }
-          } else {
-            await Promise.all([loadKvmSection(), loadAuditSection()]);
-          }
+          await Promise.all([loadKvmSection(), loadAuditSection()]);
         } else if (section === 'conversation') {
           await loadConversationSessions();
         } else if (section === 'agent') {
@@ -878,7 +1105,6 @@ export default function App() {
       }
     },
     [
-      kvmMode,
       sandboxTab,
       loadAgentSection,
       loadAuditSection,
@@ -894,6 +1120,10 @@ export default function App() {
   }, [bootstrapAdminSession]);
 
   useEffect(() => {
+    sandboxRegistryLimitRef.current = sandboxRegistryLimit;
+  }, [sandboxRegistryLimit]);
+
+  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
@@ -901,36 +1131,44 @@ export default function App() {
   }, [activeSection, authStatus, loadSection]);
 
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
-    if (activeSection !== 'kvm') return;
-    void loadSection('kvm');
-  }, [activeSection, authStatus, kvmMode, sandboxTab, loadSection]);
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (activeSection !== 'sandbox' || !pendingSandboxJumpId) {
+      return;
+    }
+
+    const targetSandboxId = pendingSandboxJumpId;
+    void openSandboxDetail(targetSandboxId).finally(() => {
+      setPendingSandboxJumpId((current) => (current === targetSandboxId ? null : current));
+    });
+  }, [activeSection, authStatus, openSandboxDetail, pendingSandboxJumpId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (activeSection !== 'kvm') {
+    if (activeSection !== 'kvm' && activeSection !== 'sandbox') {
       return;
     }
 
     const timer = window.setInterval(() => {
-      if (kvmMode === 'sandbox') {
+      if (activeSection === 'sandbox') {
         const refresh = sandboxTab === 'templates' ? loadTemplates : loadSandboxSection;
         void refresh().catch((requestError) => {
           setError(requestError instanceof Error ? requestError.message : 'Sandbox 自动刷新失败');
         });
-      } else {
-        void loadKvmSection().catch((requestError) => {
-          setError(requestError instanceof Error ? requestError.message : 'KVM 自动刷新失败');
-        });
+        return;
       }
+      void loadKvmSection().catch((requestError) => {
+        setError(requestError instanceof Error ? requestError.message : 'KVM 自动刷新失败');
+      });
     }, 15000);
 
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, authStatus, kvmMode, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -973,7 +1211,13 @@ export default function App() {
     setTransitionView('timeline');
     setTransitionQuery('');
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+    setConversationGovernanceFilter(null);
+    setConversationEnvironmentGroupFilter(null);
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    setConversationEnvironmentGroupFilter(null);
+  }, [conversationGovernanceFilter]);
 
   const handleAdminLogin = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
@@ -1015,7 +1259,7 @@ export default function App() {
       <div className="auth-shell">
         <div className="auth-background" aria-hidden="true" />
         <section className="admin-auth-card">
-          <p className="eyebrow">Oneceo Admin</p>
+          <p className="eyebrow">Oneceo 管理后台</p>
           <h1>正在校验管理员身份...</h1>
           <p className="admin-auth-copy">后台管理入口会先验证独立的管理员会话，不与用户态身份共表。</p>
         </section>
@@ -1029,7 +1273,7 @@ export default function App() {
         <div className="auth-background" aria-hidden="true" />
         <div className="admin-auth-layout">
           <section className="admin-auth-hero">
-            <p className="eyebrow">Oneceo Admin</p>
+            <p className="eyebrow">Oneceo 管理后台</p>
             <h1>管理员后台与用户态彻底分离。</h1>
             <p className="admin-auth-copy">
               后台使用独立的 <code>admin_users</code> 和 <code>admin_user_sessions</code>，不会复用普通用户登录态。
@@ -1192,7 +1436,6 @@ export default function App() {
     };
   })();
 
-  const kvmShowsSandbox = activeSection === 'kvm' && kvmMode === 'sandbox';
   const breadcrumbTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || '管理后台';
   const sandboxApi = sandboxOverview?.sandboxApi ?? null;
   const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
@@ -1212,22 +1455,22 @@ export default function App() {
           ? true
           : activeSection === 'osacRelease'
             ? true
-      : activeSection === 'sandbox' || kvmShowsSandbox
+      : activeSection === 'sandbox'
         ? sandboxApi?.online
         : kvmOverview?.orchestrator.online;
   const activeServiceLabel =
     activeSection === 'agent'
-      ? 'Agent 服务'
+      ? '智能体服务'
       : activeSection === 'skill'
-        ? 'Oneceo API'
+        ? '平台接口'
         : activeSection === 'connectorGuide'
-          ? 'Oneceo API'
+          ? '平台接口'
           : activeSection === 'osacRelease'
-            ? 'Oneceo API'
-      : activeSection === 'sandbox' || kvmShowsSandbox
+            ? '平台接口'
+      : activeSection === 'sandbox'
         ? 'Sandbox 服务'
         : 'KVM 服务';
-  const updatedAtLabel = kvmShowsSandbox
+  const updatedAtLabel = activeSection === 'sandbox'
     ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
     : kvmOverview?.updatedAt;
 
@@ -1554,7 +1797,7 @@ export default function App() {
         <article className="panel aside-panel">
           <div className="panel-header panel-header-stack">
             <div>
-              <p className="section-tag">当前选中</p>
+              <p className="section-tag">当前会话</p>
               <h2>{conversationDetail?.session.title || conversationDetail?.session.id || '未选择会话'}</h2>
             </div>
           </div>
@@ -1568,7 +1811,7 @@ export default function App() {
               <strong>{conversationDetail?.session.stage || '-'}</strong>
             </div>
             <div>
-              <span>OpenCode Session</span>
+              <span>OpenCode 会话</span>
               <strong className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</strong>
             </div>
           </div>
@@ -1619,6 +1862,93 @@ export default function App() {
             <p className="empty">请选择左侧会话查看详情。</p>
           ) : (
             <div className="conversation-detail">
+              {(() => {
+                const primaryEnvironment = conversationDetail.trace?.sandbox.primaryEnvironment ?? null;
+                const relatedEnvironments = (conversationDetail.trace?.sandbox.relatedEnvironments || []).filter(
+                  (environment) => environment.id !== primaryEnvironment?.id
+                );
+                const primaryEnvironmentSandboxId = environmentSandboxId(primaryEnvironment);
+                const primaryEnvironmentTaskSessionId = environmentTaskSessionId(primaryEnvironment);
+                const primaryEnvironmentExecutor = environmentExecutor(primaryEnvironment);
+                const primaryEnvironmentArchiveStatus = environmentArchiveStatus(primaryEnvironment);
+                const primaryEnvironmentReplacementId = environmentReplacementSandboxId(primaryEnvironment);
+                const governanceGroups = Object.values(
+                  relatedEnvironments.reduce<Record<string, {
+                    key: string;
+                    reason: string;
+                    items: SandboxEnvironmentItem[];
+                    latestUpdatedAt: string;
+                  }>>((groups, environment) => {
+                    const reason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
+                    const existing = groups[reason];
+                    if (existing) {
+                      existing.items.push(environment);
+                      if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
+                        existing.latestUpdatedAt = environment.updatedAt;
+                      }
+                      return groups;
+                    }
+                    groups[reason] = {
+                      key: reason,
+                      reason,
+                      items: [environment],
+                      latestUpdatedAt: environment.updatedAt,
+                    };
+                    return groups;
+                  }, {})
+                ).sort((left, right) => {
+                  if (right.items.length !== left.items.length) {
+                    return right.items.length - left.items.length;
+                  }
+                  return toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt);
+                });
+                const relatedEnvironmentGroups = Object.values(
+                  relatedEnvironments.reduce<Record<string, {
+                    key: string;
+                    status: string;
+                    executor: string;
+                    archiveStatus: string;
+                    governanceReason: string;
+                    items: SandboxEnvironmentItem[];
+                    latestUpdatedAt: string;
+                  }>>((groups, environment) => {
+                    const executor = environmentExecutor(environment) || '-';
+                    const archiveStatus = environmentArchiveStatus(environment) || '-';
+                    const governanceReason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
+                    const key = `${environment.status}__${executor}__${archiveStatus}__${governanceReason}`;
+                    const existing = groups[key];
+                    if (existing) {
+                      existing.items.push(environment);
+                      if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
+                        existing.latestUpdatedAt = environment.updatedAt;
+                      }
+                      return groups;
+                    }
+                    groups[key] = {
+                      key,
+                      status: environment.status,
+                      executor,
+                      archiveStatus,
+                      governanceReason,
+                      items: [environment],
+                      latestUpdatedAt: environment.updatedAt,
+                    };
+                    return groups;
+                  }, {})
+                ).sort((left, right) => {
+                  if (right.items.length !== left.items.length) {
+                    return right.items.length - left.items.length;
+                  }
+                  return toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt);
+                });
+                const visibleRelatedEnvironmentGroups = conversationGovernanceFilter
+                  ? relatedEnvironmentGroups.filter((group) => group.governanceReason === conversationGovernanceFilter)
+                  : relatedEnvironmentGroups;
+                const finalVisibleRelatedEnvironmentGroups = conversationEnvironmentGroupFilter
+                  ? visibleRelatedEnvironmentGroups.filter((group) => group.key === conversationEnvironmentGroupFilter)
+                  : visibleRelatedEnvironmentGroups;
+                return (
+                  <>
               <div className="detail-grid detail-grid-wide summary-grid">
                 <div>
                   <p className="kpi-title">会话 ID</p>
@@ -1634,10 +1964,20 @@ export default function App() {
                 </div>
                 <div>
                   <p className="kpi-title">编排 Session</p>
-                  <p className="mono">{conversationDetail.runtime?.orchestratorSessionId || '-'}</p>
+                  {conversationDetail.runtime?.orchestratorSessionId ? (
+                    <button
+                      type="button"
+                      className="link-btn sandbox-jump-btn mono"
+                      onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}
+                    >
+                      {conversationDetail.runtime.orchestratorSessionId}
+                    </button>
+                  ) : (
+                    <p className="mono">-</p>
+                  )}
                 </div>
                 <div>
-                  <p className="kpi-title">OpenCode Session</p>
+                  <p className="kpi-title">OpenCode 会话</p>
                   <p className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</p>
                 </div>
                 <div>
@@ -2108,12 +2448,202 @@ export default function App() {
 
                 <article className="sub-panel">
                   <h3>Sandbox 环境记录</h3>
-                  <pre className="json-block">
-                    {toJsonText({
-                      primaryEnvironment: conversationDetail.trace?.sandbox.primaryEnvironment,
-                      relatedEnvironments: conversationDetail.trace?.sandbox.relatedEnvironments,
-                    })}
-                  </pre>
+                  <div className="detail-grid detail-grid-wide summary-grid">
+                    <div>
+                      <p className="kpi-title">主记录状态</p>
+                      <p>{primaryEnvironment?.status || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="kpi-title">主记录 Sandbox</p>
+                      {primaryEnvironmentSandboxId ? (
+                        <button
+                          type="button"
+                          className="link-btn sandbox-jump-btn mono"
+                          onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}
+                        >
+                          {primaryEnvironmentSandboxId}
+                        </button>
+                      ) : (
+                        <p className="mono">-</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="kpi-title">主记录 Task Session</p>
+                      {primaryEnvironmentTaskSessionId ? (
+                        <button
+                          type="button"
+                          className="link-btn sandbox-jump-btn mono"
+                          onClick={() => openConversationSessionFromSandbox(primaryEnvironmentTaskSessionId)}
+                        >
+                          {primaryEnvironmentTaskSessionId}
+                        </button>
+                      ) : (
+                        <p className="mono">-</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="kpi-title">Executor</p>
+                      <p>{primaryEnvironmentExecutor || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="kpi-title">归档状态</p>
+                      <p>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</p>
+                    </div>
+                    <div>
+                      <p className="kpi-title">关联记录数</p>
+                      <p>{relatedEnvironments.length}</p>
+                    </div>
+                  </div>
+                  {primaryEnvironmentReplacementId ? (
+                    <p className="session-meta">
+                      已由{' '}
+                      <button
+                        type="button"
+                        className="link-btn sandbox-jump-btn mono"
+                        onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}
+                      >
+                        {primaryEnvironmentReplacementId}
+                      </button>{' '}
+                      接管
+                    </p>
+                  ) : null}
+                  {relatedEnvironments.length ? (
+                    <div className="conversation-sandbox-list">
+                      <div className="conversation-sandbox-governance-grid">
+                        {governanceGroups.map((group) => (
+                          <button
+                            key={group.key}
+                            type="button"
+                            className={`sub-panel conversation-sandbox-card conversation-sandbox-governance-card conversation-sandbox-governance-filter ${conversationGovernanceFilter === group.reason ? 'active' : ''}`}
+                            onClick={() =>
+                              setConversationGovernanceFilter((prev) => (prev === group.reason ? null : group.reason))
+                            }
+                          >
+                            <div className="trace-head">
+                              <strong>{group.reason}</strong>
+                              <span className="session-status session-status-governance">治理聚合</span>
+                            </div>
+                            <p className="trace-meta">
+                              共 {group.items.length} 条 · 最近更新时间 {formatDateTime(group.latestUpdatedAt)}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="panel-subtitle panel-subtitle-row">
+                        <span>
+                          {conversationGovernanceFilter
+                            ? `当前仅显示治理原因：${conversationGovernanceFilter}（${finalVisibleRelatedEnvironmentGroups.length} / ${visibleRelatedEnvironmentGroups.length} 组）`
+                            : `当前显示全部实例分组（${finalVisibleRelatedEnvironmentGroups.length} / ${visibleRelatedEnvironmentGroups.length} 组）`}
+                        </span>
+                        {conversationGovernanceFilter || conversationEnvironmentGroupFilter ? (
+                          <div className="panel-subtitle-actions">
+                            {conversationEnvironmentGroupFilter ? (
+                              <button
+                                type="button"
+                                className="secondary-btn"
+                                onClick={() => setConversationEnvironmentGroupFilter(null)}
+                              >
+                                清除实例组筛选
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="secondary-btn"
+                              onClick={() => setConversationGovernanceFilter(null)}
+                            >
+                              清除治理筛选
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                      {finalVisibleRelatedEnvironmentGroups.map((group) => {
+                        const groupSelected = conversationEnvironmentGroupFilter === group.key;
+                        return (
+                          <article
+                            key={group.key}
+                            className={`sub-panel conversation-sandbox-card conversation-sandbox-group-filter ${groupSelected ? 'active' : ''}`}
+                          >
+                            <button
+                              type="button"
+                              className="conversation-sandbox-group-head"
+                              onClick={() =>
+                                setConversationEnvironmentGroupFilter((prev) => (prev === group.key ? null : group.key))
+                              }
+                            >
+                              <div className="trace-head">
+                                <strong>
+                                  {group.status} · {group.executor}
+                                </strong>
+                                <span className="mono">{formatDateTime(group.latestUpdatedAt)}</span>
+                              </div>
+                              <p className="trace-meta">
+                                归档: {archiveStatusLabel(group.archiveStatus)} · 治理原因: {group.governanceReason} · 共 {group.items.length} 条
+                              </p>
+                            </button>
+                            <details open={groupSelected}>
+                              <summary>{groupSelected ? '收起该组实例' : '查看该组实例'}</summary>
+                              <strong>
+                                {group.status} · {group.executor}
+                              </strong>
+                              <div className="conversation-sandbox-list">
+                                {group.items.map((environment) => {
+                                  const sandboxId = environmentSandboxId(environment);
+                                  const taskSessionId = environmentTaskSessionId(environment);
+                                  return (
+                                    <article key={environment.id} className="sub-panel conversation-sandbox-card">
+                                      <div className="trace-head">
+                              <strong>{environment.status}</strong>
+                                        <span className="mono">{formatDateTime(environment.updatedAt)}</span>
+                                      </div>
+                                      <p className="trace-meta">
+                                        Sandbox：{' '}
+                                        {sandboxId ? (
+                                          <button
+                                            type="button"
+                                            className="link-btn sandbox-jump-btn mono"
+                                            onClick={() => openSandboxFromConversation(sandboxId)}
+                                          >
+                                            {sandboxId}
+                                          </button>
+                                        ) : (
+                                          '-'
+                                        )}
+                                      </p>
+                                      <p className="trace-meta">
+                                        任务会话：{' '}
+                                        {taskSessionId ? (
+                                          <button
+                                            type="button"
+                                            className="link-btn sandbox-jump-btn mono"
+                                            onClick={() => openConversationSessionFromSandbox(taskSessionId)}
+                                          >
+                                            {taskSessionId}
+                                          </button>
+                                        ) : (
+                                          '-'
+                                        )}
+                                      </p>
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            </details>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="empty">当前没有额外关联的 Sandbox 环境记录。</p>
+                  )}
+                  <details>
+                    <summary>查看 Sandbox 原始环境记录</summary>
+                    <pre className="json-block">
+                      {toJsonText({
+                        primaryEnvironment,
+                        relatedEnvironments,
+                      })}
+                    </pre>
+                  </details>
                 </article>
               </div>
 
@@ -2166,6 +2696,9 @@ export default function App() {
                   })
                 )}
               </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </article>
@@ -2180,10 +2713,10 @@ export default function App() {
           <div className="panel-header panel-header-stack">
             <div>
               <p className="section-tag">服务健康</p>
-              <h2>统一查看 Oneceo API、Agent API 和能力发布状态</h2>
+              <h2>统一查看平台接口、智能体服务和能力发布状态</h2>
             </div>
             <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
-              {agentOverview?.agentApi.online ? 'Agent API 在线' : 'Agent API 离线'}
+              {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
             </span>
           </div>
           <div className="hero-metrics">
@@ -2228,24 +2761,24 @@ export default function App() {
 
       <section className="kpi-grid fade-in">
         <article className="kpi-card">
-          <p className="kpi-title">Oneceo API</p>
+          <p className="kpi-title">平台接口</p>
           <p className="kpi-value">{agentOverview?.oneceoApi.online ? '在线' : '离线'}</p>
           <p className="kpi-meta">{formatDateTime(agentOverview?.oneceoApi.timestamp)}</p>
         </article>
         <article className="kpi-card">
-          <p className="kpi-title">Agent API</p>
+          <p className="kpi-title">智能体服务</p>
           <p className="kpi-value">{agentOverview?.agentApi.online ? '在线' : '离线'}</p>
           <p className="kpi-meta">{agentOverview?.agentApi.message || '-'}</p>
         </article>
         <article className="kpi-card">
           <p className="kpi-title">任务会话总数</p>
           <p className="kpi-value">{agentOverview?.taskCreationSessions.total ?? 0}</p>
-          <p className="kpi-meta">来自 task-creation sessions</p>
+          <p className="kpi-meta">来自任务创建会话</p>
         </article>
         <article className="kpi-card">
           <p className="kpi-title">待确认会话</p>
           <p className="kpi-value">{agentOverview?.taskCreationSessions.waitingUser ?? 0}</p>
-          <p className="kpi-meta">状态 waiting_user</p>
+          <p className="kpi-meta">状态为待用户确认</p>
         </article>
       </section>
 
@@ -2296,32 +2829,120 @@ export default function App() {
       memory: point.memoryUsagePercent ?? 0,
       disk: point.diskUsagePercent ?? 0,
     }));
-    const riskyItems = sandboxRegistryItems.filter((item) => item.riskTags.length > 0).slice(0, 6);
-    const runtimeItems = sandboxRegistryItems;
-    const archiveRows = sandboxRuntimeDetail
-      ? [
-          {
-            id: sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveKey || 'snapshot-current',
-            timestamp:
-              sandboxRuntimeDetail.archive.restoredAt ||
-              sandboxRuntimeDetail.archive.archivePendingSince ||
-              sandboxRuntimeDetail.runtime.updatedAt ||
-              sandboxRuntimeDetail.runtime.createdAt,
-            type: sandboxRuntimeDetail.archive.archiveDirty ? 'dirty' : 'snapshot',
-            size: sandboxDetail ? `${sandboxDetail.diskSizeMB} MB` : '-',
-            hash: sandboxRuntimeDetail.archive.metadataKey || sandboxRuntimeDetail.archive.archiveKey || '-',
-            status: sandboxRuntimeDetail.archive.archiveStatus || 'unknown',
-          },
-          {
-            id: sandboxRuntimeDetail.archive.archiveKey || 'archive-key',
-            timestamp: sandboxRuntimeDetail.runtime.createdAt,
-            type: 'archive',
-            size: sandboxDetail ? `${sandboxDetail.memoryMB} MB` : '-',
-            hash: sandboxRuntimeDetail.archive.snapshotKey || '-',
-            status: sandboxRuntimeDetail.archive.pendingArchiveUpdate ? 'pending_update' : 'recorded',
-          },
+    const riskyItems = sandboxRegistryItems
+      .filter((item) => item.riskTags.length > 0)
+      .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
+      .slice(0, 6);
+    const riskGroupMap = new Map<string, {
+      label: string;
+      count: number;
+      lastSeenAt: string | null;
+      item: typeof sandboxRegistryItems[number];
+    }>();
+    sandboxRegistryItems.forEach((item) => {
+      item.riskTags.forEach((risk) => {
+        const previous = riskGroupMap.get(risk);
+        const candidateTime = item.lastActiveAt || item.updatedAt || item.createdAt || null;
+        if (!previous) {
+          riskGroupMap.set(risk, {
+            label: risk,
+            count: 1,
+            lastSeenAt: candidateTime,
+            item,
+          });
+          return;
+        }
+        previous.count += 1;
+        if (toTimestamp(candidateTime) > toTimestamp(previous.lastSeenAt)) {
+          previous.lastSeenAt = candidateTime;
+          previous.item = item;
+        }
+      });
+    });
+    const riskGroups = Array.from(riskGroupMap.values()).sort(
+      (a, b) => b.count - a.count || toTimestamp(b.lastSeenAt) - toTimestamp(a.lastSeenAt) || a.label.localeCompare(b.label)
+    );
+    const executorOptions = Array.from(new Set(sandboxRegistryItems.map((item) => item.executor).filter(Boolean))).sort();
+    const statusOptions = Array.from(
+      new Set(sandboxRegistryItems.map((item) => item.sandboxState || item.status).filter(Boolean))
+    ).sort();
+    const riskOptions = riskGroups.map((item) => item.label);
+    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
+    const runtimeItems = sandboxRegistryItems
+      .filter((item) => {
+        const query = sandboxRuntimeQuery.trim().toLowerCase();
+        if (!query) return true;
+        return [
+          item.taskSessionId,
+          item.sandboxId,
+          item.taskTitle,
+          item.template,
+          item.executor,
         ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query));
+      })
+      .filter((item) => sandboxExecutorFilter === 'all' || item.executor === sandboxExecutorFilter)
+      .filter((item) => sandboxStatusFilter === 'all' || (item.sandboxState || item.status) === sandboxStatusFilter)
+      .filter((item) => sandboxRiskFilter === 'all' || item.riskTags.includes(sandboxRiskFilter))
+      .sort((a, b) => {
+        const riskDelta = b.riskTags.length - a.riskTags.length;
+        if (riskDelta !== 0) return riskDelta;
+        return toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt) - toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt);
+      });
+    const archiveRows = sandboxRuntimeDetail
+      ? ((sandboxArchiveHistory.length > 0
+          ? sandboxArchiveHistory.map((item) => ({
+              id: item.snapshotKey,
+              timestamp: item.archivedAt,
+              type: item.isCurrent ? 'current' : 'snapshot',
+              size: item.sizeBytes ? `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB` : '-',
+              hash: item.sha256 || item.archiveKey || '-',
+              status: item.status || 'archived',
+              reason: item.reason || '-',
+            }))
+          : [
+              {
+                id: sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveKey || 'snapshot-current',
+                timestamp:
+                  sandboxRuntimeDetail.archive.restoredAt ||
+                  sandboxRuntimeDetail.archive.archivePendingSince ||
+                  sandboxRuntimeDetail.runtime.updatedAt ||
+                  sandboxRuntimeDetail.runtime.createdAt,
+                type: sandboxRuntimeDetail.archive.archiveDirty ? 'dirty' : 'snapshot',
+                size: sandboxDetail ? `${sandboxDetail.diskSizeMB} MB` : '-',
+                hash: sandboxRuntimeDetail.archive.metadataKey || sandboxRuntimeDetail.archive.archiveKey || '-',
+                status: sandboxRuntimeDetail.archive.archiveStatus || 'unknown',
+                reason: sandboxRuntimeDetail.archive.lastDirtyReason || '-',
+              },
+            ]))
       : [];
+    const archiveTimelineRows = [
+      ...archiveRows.map((row) => ({
+        id: `archive-${row.id}`,
+        timestamp: row.timestamp,
+        kind: 'archive',
+        title: row.type === 'current' ? '当前归档快照' : '历史归档快照',
+        status: row.status,
+        summary: `${row.reason} · ${row.size}`,
+        detail: row.hash,
+      })),
+      ...(sandboxRuntimeDetail?.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail?.runtime.dedupeReplacedAt
+        ? [
+            {
+              id: `governance-${sandboxRuntimeDetail.runtime.sandboxId}`,
+              timestamp: sandboxRuntimeDetail.runtime.dedupeReplacedAt || sandboxRuntimeDetail.runtime.closedAt || null,
+              kind: 'governance',
+              title: sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason),
+              status: 'deduped',
+              summary: sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId
+                ? `已由 ${truncateMiddle(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId, 8, 6)} 接管`
+                : '已由同任务的新运行实例接管',
+              detail: sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || '-',
+            },
+          ]
+        : []),
+    ].sort((a, b) => toTimestamp(b.timestamp) - toTimestamp(a.timestamp));
 
     return (
       <>
@@ -2329,12 +2950,12 @@ export default function App() {
           <section className="panel hero-panel fade-in sandbox-console-header">
             <div className="panel-header panel-header-stack">
               <div>
-                <p className="section-tag">Sandbox Runtime Console</p>
-                <h2>围绕 task session、executor、archive 与 connectivity 管理运行态</h2>
+                <p className="section-tag">Sandbox 运行态控制台</p>
+                <h2>围绕任务会话、执行器、归档与连通性管理运行态</h2>
               </div>
               <div className="action-inline">
                 <span className={`service-state ${sandboxApi?.online ? 'ok' : 'down'}`}>
-                  {sandboxApi?.online ? 'Sandbox API 在线' : 'Sandbox API 离线'}
+                  {sandboxApi?.online ? 'Sandbox 服务在线' : 'Sandbox 服务离线'}
                 </span>
                 <span className="updated-at">{formatDateTime(sandboxApi?.timestamp)}</span>
               </div>
@@ -2362,7 +2983,7 @@ export default function App() {
                   {sandboxTab === 'overview'
                     ? '运行总览'
                     : sandboxTab === 'runtime'
-                      ? 'Runtime Registry'
+                      ? '运行环境登记表'
                       : '模板治理'}
                 </strong>
                 <p className="session-meta">
@@ -2378,8 +2999,17 @@ export default function App() {
 
           <section className="panel fade-in">
             <div className="panel-header">
-              <h2>Sandbox 工作区</h2>
-              <span className="panel-caption">主工作区切换</span>
+              <div>
+                <h2>Sandbox 工作区</h2>
+                <span className="panel-caption">主工作区切换</span>
+              </div>
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => setSandboxCreateDrawerOpen(true)}
+              >
+                新建 Runtime
+              </button>
             </div>
             <div className="button-grid button-grid-three">
               <button
@@ -2387,21 +3017,21 @@ export default function App() {
                 className={`secondary-btn ${sandboxTab === 'overview' ? 'active' : ''}`}
                 onClick={() => setSandboxTab('overview')}
               >
-                Overview
+                总览
               </button>
               <button
                 type="button"
                 className={`secondary-btn ${sandboxTab === 'runtime' ? 'active' : ''}`}
                 onClick={() => setSandboxTab('runtime')}
               >
-                Runtime
+                运行环境
               </button>
               <button
                 type="button"
                 className={`secondary-btn ${sandboxTab === 'templates' ? 'active' : ''}`}
                 onClick={() => setSandboxTab('templates')}
               >
-                Templates
+                模板
               </button>
             </div>
           </section>
@@ -2410,22 +3040,22 @@ export default function App() {
             <>
               <section className="kpi-grid fade-in">
                 <article className="kpi-card">
-                  <p className="kpi-title">Sandbox API</p>
+                  <p className="kpi-title">Sandbox 服务</p>
                   <p className="kpi-value">{sandboxApi?.online ? '在线' : '离线'}</p>
                   <p className="kpi-meta">{sandboxApi?.service || '-'}</p>
                 </article>
                 <article className="kpi-card">
-                  <p className="kpi-title">Pending Archive</p>
+                  <p className="kpi-title">待归档</p>
                   <p className="kpi-value">{summary?.pendingArchive ?? 0}</p>
                   <p className="kpi-meta">待归档更新</p>
                 </article>
                 <article className="kpi-card">
-                  <p className="kpi-title">Archive Failed</p>
+                  <p className="kpi-title">归档失败</p>
                   <p className="kpi-value">{summary?.archiveFailed ?? 0}</p>
                   <p className="kpi-meta">归档失败</p>
                 </article>
                 <article className="kpi-card">
-                  <p className="kpi-title">Risky Runtime</p>
+                  <p className="kpi-title">高风险运行环境</p>
                   <p className="kpi-value">{summary?.risky ?? 0}</p>
                   <p className="kpi-meta">需人工排查</p>
                 </article>
@@ -2475,82 +3105,240 @@ export default function App() {
           ) : null}
 
           {sandboxTab === 'runtime' ? (
-            <section className="sandbox-runtime-layout fade-in">
+            <section className="sandbox-runtime-workspace fade-in">
+              <article className="panel">
+                <div className="panel-header">
+                  <div>
+                    <h2>风险聚合</h2>
+                    <span className="panel-caption">先判断哪类问题最值得处理，再进入具体 Runtime</span>
+                  </div>
+                  <span className="session-status">{riskGroups.length} 类风险</span>
+                </div>
+                <div className="risk-group-grid">
+                  {riskGroups.length === 0 ? (
+                    <p className="empty">当前没有高风险 runtime。</p>
+                  ) : (
+                    riskGroups.map((group) => (
+                      <article key={group.label} className="risk-group-card">
+                        <div className="risk-group-head">
+                          <strong>{group.label}</strong>
+                          <span className="session-status">{group.count}</span>
+                        </div>
+                        <p className="session-meta">最近出现：{formatDateTime(group.lastSeenAt)}</p>
+                        <div className="action-inline">
+                          <button
+                            type="button"
+                            className="secondary-btn"
+                            onClick={() => {
+                              setSandboxTab('runtime');
+                              setSandboxRiskFilter(group.label);
+                            }}
+                          >
+                            筛选实例
+                          </button>
+                          <button
+                            type="button"
+                            className="table-btn"
+                            onClick={() => void openSandboxDetail(group.item.sandboxId)}
+                          >
+                            打开最新实例
+                          </button>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </article>
+
               <article className="panel sandbox-runtime-main">
                 <div className="panel-header">
                   <div>
-                    <h2>Runtime Registry</h2>
-                    <span className="panel-caption">主表保留在首屏，优先浏览运行态与操作</span>
+                    <h2>运行环境登记表</h2>
+                    <span className="panel-caption">
+                      风险优先排序，已加载 {sandboxRegistryItems.length} 条，当前筛选命中 {runtimeItems.length} 条
+                    </span>
                   </div>
-                  <span className="session-status">{runtimeItems.length} items</span>
+                  <span className="session-status">
+                    {runtimeItems.length} / {sandboxRegistryItems.length}
+                  </span>
+                </div>
+                <div className="runtime-filter-grid">
+                  <label className="state-filter-field">
+                    <span>搜索 Runtime</span>
+                    <input
+                      type="text"
+                      value={sandboxRuntimeQuery}
+                      placeholder="sessionId / sandboxId / template"
+                      onChange={(event) => setSandboxRuntimeQuery(event.target.value)}
+                    />
+                  </label>
+                  <label className="state-filter-field">
+                    <span>Executor</span>
+                    <select value={sandboxExecutorFilter} onChange={(event) => setSandboxExecutorFilter(event.target.value)}>
+                      <option value="all">全部</option>
+                      {executorOptions.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>状态</span>
+                    <select value={sandboxStatusFilter} onChange={(event) => setSandboxStatusFilter(event.target.value)}>
+                      <option value="all">全部</option>
+                      {statusOptions.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="state-filter-field">
+                    <span>风险标签</span>
+                    <select value={sandboxRiskFilter} onChange={(event) => setSandboxRiskFilter(event.target.value)}>
+                      <option value="all">全部</option>
+                      {riskOptions.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
                 <div className="table-wrap table-wrap-runtime">
                   <table className="runtime-table">
                     <thead>
                       <tr>
-                        <th>Task Session</th>
+                        <th>任务会话</th>
                         <th>Sandbox</th>
                         <th>Executor</th>
                         <th>状态</th>
-                        <th>Archive</th>
+                        <th>风险摘要</th>
                         <th>最近活跃</th>
-                        <th>风险</th>
                         <th>操作</th>
                       </tr>
                     </thead>
                     <tbody>
                       {runtimeItems.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="empty">
-                            暂无 runtime 记录
+                          <td colSpan={7} className="empty">
+                            当前筛选条件下没有 runtime 记录
                           </td>
                         </tr>
                       ) : (
                         runtimeItems.map((item) => (
                           <tr key={item.sandboxId} className={sandboxRuntimeDetail?.runtime.sandboxId === item.sandboxId ? 'selected-row' : undefined}>
                             <td>
-                              <div>
-                                <strong>{item.taskSessionId || '-'}</strong>
+                              <div className="runtime-primary-cell">
+                                <div className="runtime-id-row">
+                                  {item.taskSessionId ? (
+                                    <button
+                                      type="button"
+                                      className="link-btn sandbox-jump-btn mono"
+                                      title={item.taskSessionId}
+                                      onClick={() => openConversationSessionFromSandbox(item.taskSessionId)}
+                                    >
+                                      {truncateMiddle(item.taskSessionId, 8, 6)}
+                                    </button>
+                                  ) : (
+                                    <strong title="-">-</strong>
+                                  )}
+                                  {item.taskSessionId ? (
+                                    <button
+                                      type="button"
+                                      className="copy-btn"
+                                      onClick={() => void copyRuntimeField('任务会话', item.taskSessionId!)}
+                                    >
+                                      复制
+                                    </button>
+                                  ) : null}
+                                </div>
                                 <p className="session-meta">{item.taskTitle || item.taskStatus || '-'}</p>
                               </div>
                             </td>
                             <td>
-                              <div className="mono">{item.sandboxId}</div>
-                              <p className="session-meta">{item.template || '-'}</p>
+                              <div className="runtime-primary-cell">
+                                <div className="runtime-id-row">
+                                  <span className="mono mono-truncate" title={item.sandboxId}>{truncateMiddle(item.sandboxId, 8, 6)}</span>
+                                  <button
+                                    type="button"
+                                    className="copy-btn"
+                                    onClick={() => void copyRuntimeField('Sandbox ID', item.sandboxId)}
+                                  >
+                                    复制
+                                  </button>
+                                </div>
+                                <p className="session-meta" title={item.template || '-'}>{item.template || '-'}</p>
+                              </div>
                             </td>
                             <td>
                               <strong>{item.executor}</strong>
                               <p className="session-meta">{item.codexExecutionMode || '-'}</p>
                             </td>
                             <td>
-                              <div className="action-inline">
-                                <span className={stateClassName(item.sandboxState || item.status)}>{item.sandboxState || item.status}</span>
-                                {item.taskStatus ? <span className={stateClassName(item.taskStatus)}>{statusLabel(item.taskStatus)}</span> : null}
+                              <div className="runtime-status-stack">
+                                <div className="action-inline">
+                                  <span className={stateClassName(item.sandboxState || item.status)}>{item.sandboxState || item.status}</span>
+                                  {item.taskStatus ? <span className={stateClassName(item.taskStatus)}>{statusLabel(item.taskStatus)}</span> : null}
+                                  {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
+                                    <span className="session-status session-status-governance">已收口</span>
+                                  ) : null}
+                                </div>
+                                <p className="session-meta">
+                                  归档 {archiveStatusLabel(item.archiveStatus || 'none')}
+                                  {item.pendingArchiveUpdate ? ' · 有待同步变更' : ''}
+                                </p>
+                                {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
+                                  <div className="runtime-governance-note">
+                                    <p className="session-meta">{sandboxDedupeReasonLabel(item.dedupeReason)}</p>
+                                    <p className="session-meta">
+                                      {item.dedupeReplacementSandboxId ? (
+                                        <>
+                                          已由{' '}
+                                          <button
+                                            type="button"
+                                            className="link-btn sandbox-jump-btn"
+                                            onClick={() => {
+                                              const replacementSandboxId = item.dedupeReplacementSandboxId;
+                                              if (!replacementSandboxId) return;
+                                              void openSandboxDetail(replacementSandboxId);
+                                            }}
+                                          >
+                                            {sandboxJumpLabel(item.dedupeReplacementSandboxId)}
+                                          </button>{' '}
+                                          接管
+                                        </>
+                                      ) : (
+                                        '已由同任务的新运行实例接管'
+                                      )}
+                                      {item.dedupeReplacedAt ? ` · ${formatDateTime(item.dedupeReplacedAt)}` : ''}
+                                    </p>
+                                  </div>
+                                ) : null}
                               </div>
                             </td>
                             <td>
-                              <div className="action-inline">
-                                <span className={stateClassName(item.archiveStatus || 'stopped')}>{item.archiveStatus || 'none'}</span>
-                                {item.pendingArchiveUpdate ? <span className="session-status">dirty</span> : null}
-                              </div>
+                              {item.riskTags.length === 0 ? (
+                                <span className="session-status">正常</span>
+                              ) : (
+                                <div className="runtime-risk-cell">
+                                  <div className="runtime-risk-list">
+                                    {item.riskTags.slice(0, 2).map((risk) => (
+                                      <span key={risk} className="session-status">{risk}</span>
+                                    ))}
+                                    {item.riskTags.length > 2 ? <span className="session-status">+{item.riskTags.length - 2}</span> : null}
+                                  </div>
+                                  <p className="session-meta">{item.riskTags.length} 个风险标签</p>
+                                </div>
+                              )}
                             </td>
                             <td>
                               <div>{formatDateTime(item.lastActiveAt || item.updatedAt)}</div>
                               <p className="session-meta">{item.lastActiveReason || '-'}</p>
                             </td>
                             <td>
-                              {item.riskTags.length === 0 ? (
-                                <span className="session-status">clean</span>
-                              ) : (
-                                <div className="runtime-risk-list">
-                                  {item.riskTags.slice(0, 2).map((risk) => (
-                                    <span key={risk} className="session-status">{risk}</span>
-                                  ))}
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <div className="action-inline">
+                              <div className="action-inline runtime-actions">
                                 <button type="button" className="table-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
                                   详情
                                 </button>
@@ -2568,11 +3356,37 @@ export default function App() {
                                     type="button"
                                     className="secondary-btn"
                                     disabled={sandboxBusyIds[item.sandboxId]}
-                                    onClick={() => void resumeSandbox(item.sandboxId)}
+                                    onClick={() => void openSandbox(item.sandboxId)}
                                   >
-                                    恢复
+                                    开机
                                   </button>
                                 )}
+                                {item.sandboxState === 'running' || item.sandboxState === 'paused' ? (
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
+                                    disabled={sandboxBusyIds[item.sandboxId]}
+                                    onClick={() => void closeSandbox(item.sandboxId)}
+                                  >
+                                    关机
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="secondary-btn"
+                                  disabled={sandboxBusyIds[item.sandboxId] || !item.taskSessionId}
+                                  onClick={() => void restartSandbox(item.sandboxId)}
+                                >
+                                  重启
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-btn"
+                                  disabled={sandboxBusyIds[item.sandboxId]}
+                                  onClick={() => void runSandboxArchive(item.sandboxId)}
+                                >
+                                  归档
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -2581,53 +3395,23 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+                {canLoadMoreRuntime ? (
+                  <div className="runtime-load-more">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      disabled={sandboxRegistryLoadingMore || refreshing}
+                      onClick={() => void loadMoreSandboxRuntime()}
+                    >
+                      {sandboxRegistryLoadingMore ? '加载更多中...' : `查看更多运行环境（+${SANDBOX_RUNTIME_LOAD_MORE_STEP}）`}
+                    </button>
+                    <p className="session-meta">
+                      当前已加载 {sandboxRegistryItems.length} 条运行记录，筛选后剩余 {runtimeItems.length} 条。
+                    </p>
+                  </div>
+                ) : null}
               </article>
 
-              <aside className="sandbox-runtime-side">
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>风险队列</h2>
-                    <span className="panel-caption">优先处理异常运行态</span>
-                  </div>
-                  <div className="compact-list sandbox-side-list">
-                    {riskyItems.length === 0 ? (
-                      <p className="empty">当前没有高风险 runtime。</p>
-                    ) : (
-                      riskyItems.map((item) => (
-                        <div key={item.sandboxId} className="compact-item compact-item-stack">
-                          <div>
-                            <strong>{item.taskSessionId || item.sandboxId}</strong>
-                            <p className="session-meta">{item.executor} · {item.sandboxState || item.status}</p>
-                            <p className="session-meta">{item.riskTags.join(' / ')}</p>
-                          </div>
-                          <button type="button" className="secondary-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
-                            打开
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>新建 Runtime</h2>
-                    <span className="panel-caption">手工创建或调试环境</span>
-                  </div>
-                  <div className="form-stack">
-                    <p className="muted">通过 E2B create / betaCreate 建立调试环境，建议只保留必要字段。</p>
-                    <textarea
-                      className="input-area"
-                      rows={8}
-                      value={sandboxCreatePayload}
-                      onChange={(event) => setSandboxCreatePayload(event.target.value)}
-                    />
-                    <button type="button" className="primary-btn" onClick={() => void createSandbox()}>
-                      创建 Sandbox
-                    </button>
-                  </div>
-                </article>
-              </aside>
             </section>
           ) : null}
 
@@ -2747,8 +3531,8 @@ export default function App() {
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">Inspector</p>
-                  <h2>Runtime Inspector</h2>
+                  <p className="section-tag">运行态详情</p>
+                  <h2>运行环境详情</h2>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
                   关闭
@@ -2761,7 +3545,7 @@ export default function App() {
                   onClick={() => setSandboxDetailTab('overview')}
                 >
                   <span className="inspector-tab-card-key mono">01</span>
-                  <span className="inspector-tab-card-label">Overview</span>
+                  <span className="inspector-tab-card-label">总览</span>
                 </button>
                 <button
                   type="button"
@@ -2769,7 +3553,7 @@ export default function App() {
                   onClick={() => setSandboxDetailTab('connectivity')}
                 >
                   <span className="inspector-tab-card-key mono">02</span>
-                  <span className="inspector-tab-card-label">Connectivity</span>
+                  <span className="inspector-tab-card-label">连通性</span>
                 </button>
                 <button
                   type="button"
@@ -2777,7 +3561,7 @@ export default function App() {
                   onClick={() => setSandboxDetailTab('archive')}
                 >
                   <span className="inspector-tab-card-key mono">03</span>
-                  <span className="inspector-tab-card-label">Archive</span>
+                  <span className="inspector-tab-card-label">归档</span>
                 </button>
                 <button
                   type="button"
@@ -2785,7 +3569,7 @@ export default function App() {
                   onClick={() => setSandboxDetailTab('metrics')}
                 >
                   <span className="inspector-tab-card-key mono">04</span>
-                  <span className="inspector-tab-card-label">Metrics</span>
+                  <span className="inspector-tab-card-label">指标</span>
                 </button>
                 <button
                   type="button"
@@ -2793,7 +3577,7 @@ export default function App() {
                   onClick={() => setSandboxDetailTab('advanced')}
                 >
                   <span className="inspector-tab-card-key mono">05</span>
-                  <span className="inspector-tab-card-label">Advanced</span>
+                  <span className="inspector-tab-card-label">高级调试</span>
                 </button>
               </div>
 
@@ -2802,19 +3586,29 @@ export default function App() {
                 <div className="inspector-page-stack">
                   <section className="inspector-stat-grid">
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Sandbox State</span>
+                      <span className="inspector-stat-label">运行状态</span>
                       <strong>{sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status}</strong>
                       <span className={stateClassName(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}>
                         {sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status}
                       </span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Task Status</span>
+                      <span className="inspector-stat-label">任务状态</span>
                       <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
-                      <span className="session-meta">{sandboxRuntimeDetail.runtime.taskSessionId || 'no task session'}</span>
+                      {sandboxRuntimeDetail.runtime.taskSessionId ? (
+                        <button
+                          type="button"
+                          className="link-btn sandbox-jump-btn session-meta mono"
+                          onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
+                        >
+                          {sandboxRuntimeDetail.runtime.taskSessionId}
+                        </button>
+                      ) : (
+                        <span className="session-meta">未绑定任务会话</span>
+                      )}
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Last Active</span>
+                      <span className="inspector-stat-label">最近活跃</span>
                       <strong>{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</strong>
                       <span className="session-meta">{sandboxRuntimeDetail.runtime.lastActiveReason || '-'}</span>
                     </article>
@@ -2823,21 +3617,162 @@ export default function App() {
                   <section className="inspector-main-grid">
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
-                        <h3>Sandbox Base Info</h3>
+                        <h3>Sandbox 基础信息</h3>
                         <span className="session-status">{sandboxRuntimeDetail.runtime.executor}</span>
                       </div>
                       <div className="inspector-kv-grid">
-                        <div><span>Sandbox ID</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
-                        <div><span>Task Session</span><strong className="mono">{sandboxRuntimeDetail.runtime.taskSessionId || '-'}</strong></div>
-                        <div><span>Executor</span><strong>{sandboxRuntimeDetail.runtime.executor}</strong></div>
-                        <div><span>Execution Mode</span><strong>{sandboxRuntimeDetail.runtime.codexExecutionMode || '-'}</strong></div>
-                        <div><span>Template</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
-                        <div><span>Sandbox Domain</span><strong>{sandboxFullInfo?.sandboxDomain || '-'}</strong></div>
+                        <div><span>Sandbox 标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
+                        <div>
+                          <span>任务会话</span>
+                          {sandboxRuntimeDetail.runtime.taskSessionId ? (
+                            <button
+                              type="button"
+                              className="link-btn sandbox-jump-btn mono"
+                              onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
+                            >
+                              {sandboxRuntimeDetail.runtime.taskSessionId}
+                            </button>
+                          ) : (
+                            <strong className="mono">-</strong>
+                          )}
+                        </div>
+                        <div><span>执行器</span><strong>{sandboxRuntimeDetail.runtime.executor}</strong></div>
+                        <div><span>执行模式</span><strong>{sandboxRuntimeDetail.runtime.codexExecutionMode || '-'}</strong></div>
+                        <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
+                        <div><span>Sandbox 域名</span><strong>{sandboxFullInfo?.sandboxDomain || '-'}</strong></div>
                       </div>
                     </article>
                     <article className="inspector-card">
                       <div className="inspector-card-header">
-                        <h3>Debug Snapshot</h3>
+                        <h3>会话绑定</h3>
+                      </div>
+                      <div className="inspector-kv-grid">
+                        <div><span>任务标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
+                        <div><span>任务状态</span><strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : (sandboxRuntimeDetail.runtime.taskStatus || '-')}</strong></div>
+                        <div>
+                          <span>任务会话</span>
+                          {sandboxRuntimeDetail.runtime.taskSessionId ? (
+                            <button
+                              type="button"
+                              className="link-btn sandbox-jump-btn mono"
+                              onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
+                            >
+                              {sandboxRuntimeDetail.runtime.taskSessionId}
+                            </button>
+                          ) : (
+                            <strong className="mono">-</strong>
+                          )}
+                        </div>
+                        <div><span>编排会话</span><strong className="mono">{sandboxRuntimeDetail.runtime.orchestratorSessionId || '-'}</strong></div>
+                      </div>
+                    </article>
+                  </section>
+
+                  <section className="inspector-main-grid">
+                    <article className="inspector-card inspector-card-large">
+                      <div className="inspector-card-header">
+                        <h3>治理时间线</h3>
+                        {sandboxRuntimeDetail.runtime.status === 'closed' &&
+                        (sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail.runtime.dedupeReplacedAt) ? (
+                          <span className="session-status session-status-governance">已收口</span>
+                        ) : (
+                          <span className="panel-caption">当前无收口事件</span>
+                        )}
+                      </div>
+                      {sandboxRuntimeDetail.runtime.status === 'closed' &&
+                      (sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail.runtime.dedupeReplacedAt) ? (
+                        <div className="inspector-governance-list">
+                          <article className="inspector-governance-event">
+                            <div className="inspector-governance-head">
+                              <strong>{sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason)}</strong>
+                              <span className="session-meta">{formatDateTime(sandboxRuntimeDetail.runtime.dedupeReplacedAt)}</span>
+                            </div>
+                            <p className="session-meta">
+                              该 Sandbox 已结束活体绑定，后续运行态由新的接管实例继续承接。
+                            </p>
+                            <div className="inspector-kv-grid">
+                              <div>
+                                <span>接管实例</span>
+                                {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId ? (
+                                  <button
+                                    type="button"
+                                    className="link-btn sandbox-jump-btn mono"
+                                    onClick={() => void openSandboxDetail(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId!)}
+                                  >
+                                    {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId}
+                                  </button>
+                                ) : (
+                                  <strong className="mono">-</strong>
+                                )}
+                              </div>
+                              <div>
+                                <span>收口原因</span>
+                                <strong>{sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason)}</strong>
+                              </div>
+                            </div>
+                          </article>
+                        </div>
+                      ) : (
+                        <p className="empty">当前记录没有自动收口或替换接管事件。</p>
+                      )}
+                    </article>
+                    <article className="inspector-card">
+                      <div className="inspector-card-header">
+                        <h3>生命周期备注</h3>
+                      </div>
+                      <div className="inspector-kv-grid">
+                        <div><span>最近活跃原因</span><strong>{sandboxRuntimeDetail.runtime.lastActiveReason || '-'}</strong></div>
+                        <div><span>归档状态</span><strong>{archiveStatusLabel(sandboxRuntimeDetail.runtime.archiveStatus)}</strong></div>
+                        <div><span>更新时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.updatedAt)}</strong></div>
+                        <div><span>关闭时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.closedAt)}</strong></div>
+                      </div>
+                    </article>
+                  </section>
+
+                  <section className="inspector-main-grid">
+                    <article className="inspector-card inspector-card-large">
+                      <div className="inspector-card-header">
+                        <h3>机器动作</h3>
+                        <span className="panel-caption">开机/关机/重启/归档</span>
+                      </div>
+                      <div className="action-inline">
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                          onClick={() => void openSandbox(sandboxRuntimeDetail.runtime.sandboxId)}
+                        >
+                          开机
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                          onClick={() => void closeSandbox(sandboxRuntimeDetail.runtime.sandboxId)}
+                        >
+                          关机
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                          onClick={() => void restartSandbox(sandboxRuntimeDetail.runtime.sandboxId)}
+                        >
+                          重启
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                        >
+                          归档
+                        </button>
+                      </div>
+                    </article>
+                    <article className="inspector-card">
+                      <div className="inspector-card-header">
+                        <h3>调试快照</h3>
                       </div>
                       <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.debug || { message: '暂无调试快照' })}</pre>
                     </article>
@@ -2849,27 +3784,27 @@ export default function App() {
                 <div className="inspector-page-stack">
                   <section className="inspector-stat-grid">
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Handshake Status</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.osacConfigured ? 'OK' : 'Missing'}</strong>
+                      <span className="inspector-stat-label">握手状态</span>
+                      <strong>{sandboxRuntimeDetail.connectivity.osacConfigured ? '正常' : '缺失'}</strong>
                       <span className="session-meta">{sandboxRuntimeDetail.runtime.osacEndpoint || 'osacEndpoint 未配置'}</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Registry Connection</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.opencodeConfigured ? 'Connected' : 'Missing'}</strong>
+                      <span className="inspector-stat-label">注册连接</span>
+                      <strong>{sandboxRuntimeDetail.connectivity.opencodeConfigured ? '已连接' : '缺失'}</strong>
                       <span className="session-meta">{sandboxRuntimeDetail.runtime.opencodeBaseUrl || 'opencodeBaseUrl 未配置'}</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Auth Token State</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.trafficAccessTokenPresent ? 'Valid' : 'Missing'}</strong>
-                      <span className="session-meta">traffic access token</span>
+                      <span className="inspector-stat-label">鉴权令牌</span>
+                      <strong>{sandboxRuntimeDetail.connectivity.trafficAccessTokenPresent ? '有效' : '缺失'}</strong>
+                      <span className="session-meta">访问令牌</span>
                     </article>
                   </section>
 
                   <article className="inspector-card">
                     <div className="inspector-card-header">
-                      <h3>Configuration Endpoint Map</h3>
+                      <h3>配置端点映射</h3>
                       <button type="button" className="primary-btn" onClick={() => void runSandboxConnectivityCheck(sandboxRuntimeDetail.runtime.sandboxId)}>
-                        Run Connectivity Check
+                        执行连通性检查
                       </button>
                     </div>
                     <div className="inspector-endpoint-list">
@@ -2889,7 +3824,7 @@ export default function App() {
 
                   <article className="inspector-log-shell">
                     <div className="inspector-card-header">
-                      <h3>Check Result Log</h3>
+                      <h3>检查结果日志</h3>
                     </div>
                     <pre className="inspector-log-body">{toJsonText(
                       sandboxConnectivityResult || {
@@ -2907,25 +3842,65 @@ export default function App() {
                 <div className="inspector-page-stack">
                   <section className="inspector-stat-grid">
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">archiveStatus</span>
-                      <strong>{sandboxRuntimeDetail.archive.archiveStatus || '-'}</strong>
-                      <span className="session-meta">archive ledger state</span>
+                      <span className="inspector-stat-label">归档状态</span>
+                      <strong>{archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus)}</strong>
+                      <span className="session-meta">归档台账状态</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">archiveDirty</span>
-                      <strong>{sandboxRuntimeDetail.archive.archiveDirty ? 'True' : 'False'}</strong>
-                      <span className="session-meta">workspace dirty flag</span>
+                      <span className="inspector-stat-label">工作区脏标记</span>
+                      <strong>{sandboxRuntimeDetail.archive.archiveDirty ? '是' : '否'}</strong>
+                      <span className="session-meta">工作区变更标记</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">pendingArchiveUpdate</span>
-                      <strong>{sandboxRuntimeDetail.archive.pendingArchiveUpdate ? 'Pending' : 'None'}</strong>
-                      <span className="session-meta">archive queue state</span>
+                      <span className="inspector-stat-label">待归档更新</span>
+                      <strong>{sandboxRuntimeDetail.archive.pendingArchiveUpdate ? '待处理' : '无'}</strong>
+                      <span className="session-meta">归档队列状态</span>
                     </article>
                   </section>
 
                   <article className="inspector-card">
                     <div className="inspector-card-header">
-                      <h3>Historical Snapshots</h3>
+                      <h3>归档与治理时间线</h3>
+                    </div>
+                    <div className="inspector-governance-list">
+                      {archiveTimelineRows.length === 0 ? (
+                        <p className="empty">当前没有归档或治理轨迹。</p>
+                      ) : (
+                        archiveTimelineRows.map((row) => (
+                          <article key={row.id} className="inspector-governance-event">
+                            <div className="inspector-governance-head">
+                              <strong>{row.title}</strong>
+                              <span className="session-meta">{formatDateTime(row.timestamp)}</span>
+                            </div>
+                            <div className="action-inline">
+                              <span className={`session-status ${row.kind === 'governance' ? 'session-status-governance' : ''}`}>
+                                {row.kind === 'governance' ? '治理事件' : '归档事件'}
+                              </span>
+                              <span className={stateClassName(row.status)}>{archiveStatusLabel(row.status)}</span>
+                            </div>
+                            <p className="session-meta">{row.summary}</p>
+                            {row.kind === 'governance' && sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId ? (
+                              <p className="session-meta">
+                                <button
+                                  type="button"
+                                  className="link-btn sandbox-jump-btn mono"
+                                  onClick={() => void openSandboxDetail(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId!)}
+                                >
+                                  {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId}
+                                </button>
+                              </p>
+                            ) : (
+                              <p className="session-meta mono">{row.detail}</p>
+                            )}
+                          </article>
+                        ))
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="inspector-card">
+                    <div className="inspector-card-header">
+                      <h3>历史快照</h3>
                       <div className="action-inline">
                         <button
                           type="button"
@@ -2933,7 +3908,7 @@ export default function App() {
                           disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
                           onClick={() => void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId)}
                         >
-                          Manual Restore
+                          手动恢复
                         </button>
                         <button
                           type="button"
@@ -2941,7 +3916,7 @@ export default function App() {
                           disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
                           onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
                         >
-                          Manual Archive
+                          手动归档
                         </button>
                       </div>
                     </div>
@@ -2949,12 +3924,13 @@ export default function App() {
                       <table>
                         <thead>
                           <tr>
-                            <th>Snapshot ID</th>
-                            <th>Timestamp</th>
-                            <th>Type</th>
-                            <th>Size</th>
-                            <th>Hash</th>
-                            <th>Status</th>
+                            <th>快照标识</th>
+                            <th>时间</th>
+                            <th>类型</th>
+                            <th>大小</th>
+                            <th>哈希</th>
+                            <th>原因</th>
+                            <th>状态</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2965,6 +3941,7 @@ export default function App() {
                               <td><span className="session-status">{row.type}</span></td>
                               <td>{row.size}</td>
                               <td className="mono">{row.hash}</td>
+                              <td>{row.reason}</td>
                               <td><span className={stateClassName(row.status)}>{row.status}</span></td>
                             </tr>
                           ))}
@@ -2975,7 +3952,7 @@ export default function App() {
 
                   <article className="inspector-card">
                     <div className="inspector-card-header">
-                      <h3>Archive Metadata</h3>
+                      <h3>归档元数据</h3>
                     </div>
                     <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.archive)}</pre>
                   </article>
@@ -3246,7 +4223,7 @@ export default function App() {
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">Inspector</p>
+                  <p className="section-tag">详情查看</p>
                   <h2>模板详情</h2>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
@@ -3340,6 +4317,57 @@ export default function App() {
             </div>
           </div>
         ) : null}
+        {sandboxCreateDrawerOpen ? (
+          <div
+            className="modal-backdrop drawer-backdrop"
+            onClick={() => setSandboxCreateDrawerOpen(false)}
+            role="presentation"
+          >
+            <aside
+              className="runtime-create-drawer"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="runtime-create-drawer-title"
+            >
+              <div className="drawer-header">
+                <div>
+                  <p className="section-tag">Runtime Create</p>
+                  <h2 id="runtime-create-drawer-title">手工创建 Runtime</h2>
+                  <p className="panel-caption">低频调试动作通过抽屉承载，不再占用首屏排障区域。</p>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => setSandboxCreateDrawerOpen(false)}
+                >
+                  关闭
+                </button>
+              </div>
+              <div className="drawer-body">
+                <p className="muted">通过 E2B create / betaCreate 建立调试环境，建议只保留必要字段。</p>
+                <textarea
+                  className="input-area"
+                  rows={12}
+                  value={sandboxCreatePayload}
+                  onChange={(event) => setSandboxCreatePayload(event.target.value)}
+                />
+              </div>
+              <div className="drawer-actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => setSandboxCreateDrawerOpen(false)}
+                >
+                  取消
+                </button>
+                <button type="button" className="primary-btn" onClick={() => void createSandbox()}>
+                  创建 Sandbox
+                </button>
+              </div>
+            </aside>
+          </div>
+        ) : null}
       </>
     );
   };
@@ -3416,7 +4444,7 @@ const renderAuditSection = () => (
       return <main className="loading-state">正在加载 {breadcrumbTitle} ...</main>;
     }
 
-    if (activeSection === 'kvm') return kvmMode === 'sandbox' ? renderSandboxSection() : renderKvmSection();
+    if (activeSection === 'kvm') return renderKvmSection();
     if (activeSection === 'conversation') return renderConversationSection();
     if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
@@ -3434,7 +4462,7 @@ const renderAuditSection = () => (
           <div className="sidebar-brand">
             <div className="sidebar-brand-row">
               <div>
-                <p className="eyebrow">Oneceo Admin</p>
+                <p className="eyebrow">Oneceo 管理后台</p>
                 <p className="sidebar-title">管理面板</p>
               </div>
               <span className="env-badge">OPS</span>
@@ -3463,7 +4491,7 @@ const renderAuditSection = () => (
           <header className="top-header fade-in">
             <div className="header-main">
               <p className="eyebrow">控制台 / {breadcrumbTitle}</p>
-              <h1>{kvmShowsSandbox ? `${breadcrumbTitle} · Sandbox` : breadcrumbTitle}</h1>
+              <h1>{breadcrumbTitle}</h1>
               <p className="subtitle">面向运行态观测、资源调度和问题排查的统一控制台。</p>
             </div>
             <div className="header-tools">
@@ -3473,28 +4501,10 @@ const renderAuditSection = () => (
                 </span>
                 <p className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</p>
                 <p className="updated-at">
-                  {adminUser?.displayName || adminUser?.loginName} · {adminUser?.role || 'admin'}
+                  {adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)} · {adminRoleLabel(adminUser?.role)}
                 </p>
               </div>
               <div className="header-actions">
-                {activeSection === 'kvm' ? (
-                  <div className="toggle-group" role="group" aria-label="KVM 切换">
-                    <button
-                      type="button"
-                      className={`toggle-btn ${kvmMode === 'kvm' ? 'active' : ''}`}
-                      onClick={() => setKvmMode('kvm')}
-                    >
-                      自建 KVM
-                    </button>
-                    <button
-                      type="button"
-                      className={`toggle-btn ${kvmMode === 'sandbox' ? 'active' : ''}`}
-                      onClick={() => setKvmMode('sandbox')}
-                    >
-                      Sandbox
-                    </button>
-                  </div>
-                ) : null}
                 <button
                   type="button"
                   className="primary-btn"

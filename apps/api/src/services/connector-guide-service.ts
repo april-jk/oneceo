@@ -438,6 +438,7 @@ export class ConnectorGuideService {
   async ensureBuiltinPolicies() {
     const createdPolicies: string[] = [];
     const createdRevisions: string[] = [];
+    const touchedConnectorKeys = new Set<SupportedConnectorKey>();
 
     for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
       const builtin = BUILTIN_CONNECTOR_GUIDES[connectorKey];
@@ -452,6 +453,7 @@ export class ConnectorGuideService {
           createdBy: 'system_builtin',
         });
         createdPolicies.push(connectorKey);
+        touchedConnectorKeys.add(connectorKey);
       }
 
       const revisions = await connectorGuideDAO.listRevisions(policy.id);
@@ -469,17 +471,21 @@ export class ConnectorGuideService {
         });
         createdRevisions.push(`${connectorKey}:1`);
         await connectorGuideDAO.publishRevision(policy.id, revision.id);
+        touchedConnectorKeys.add(connectorKey);
       }
-    }
-
-    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
-      await this.recomputeSessionsForConnector(connectorKey);
     }
 
     return {
       createdPolicies,
       createdRevisions,
+      touchedConnectorKeys: Array.from(touchedConnectorKeys),
     };
+  }
+
+  async recomputeBuiltinPolicySessions() {
+    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
+      await this.recomputeSessionsForConnector(connectorKey);
+    }
   }
 
   private async recomputeSessionsForConnector(connectorKey: string) {

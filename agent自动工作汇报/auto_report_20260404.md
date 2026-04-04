@@ -58,3 +58,17 @@
   - 当前这一轮修复后，浏览器真实链路已经满足核心验收：
     - managed 发送 `你好` 后，不刷新页面即可直接看到 assistant 文本流入。
   - 如果继续收尾，可再补一条更强的浏览器自动化断言，锁住“assistant 首包出现于 processing 结束前也必须实时可见”。
+
+## 2026-04-04 #25 Altus 最终交付文件返回体验优化
+
+- 做了什么：
+  - 将 `apps/api/src/services/task-session-deliverable-service.ts` 中 deliverable 读取与上传改为按附件并行执行，减少最终交付物持久化的串行等待。
+  - 在 `apps/web/client/src/pages/Home.tsx` 增加 `buildManagedCompletionCardItem(...)`，只要 managed `assistant_message` 或 `status_update` metadata 已携带 `deliverables`，就立即渲染 `managed_deliverable_card`，不再硬等 `run_completed`。
+  - 保留 `run_completed -> managed_artifact_card` 的网页类产物兜底逻辑，避免影响现有 web preview 卡片语义。
+  - 新增 `apps/web/client/src/tests/managed-deliverable-card-timing.test.ts`，锁住“deliverable 卡片提前于 run_completed 出现”的前端展示时序。
+  - 补充测试文档 `docs/单元测试文档/20260404_#25_Altus_交付文件返回体验优化测试.md`。
+- 遇到什么：
+  - 真实浏览器链路里，用自然语言 prompt 触发“稳定生成 deliverable 并在固定时间窗内完成”并不稳定，不适合作为这轮的唯一验收门槛。
+- 计划如何解决：
+  - 当前先以 focused tests 和代码链路验证收口本轮优化。
+  - 下一步如果继续深挖，可补一条更可控的 smoke prompt 或测试工装，专门稳定触发 markdown/txt deliverable，用于浏览器级体验对比。

@@ -87,3 +87,23 @@
   - 先跑 focused tests 验证这套事件链闭环。
   - 如果浏览器级 smoke 仍有波动，再补一条更可控的固定交付 prompt，把 `deliverables_ready` 的真实页面出现时机也锁住。
   - 本轮补做浏览器 smoke 时，当前本地 dev 环境仍存在 `oneceo.ai:3000 -> oneceo.ai:4000` 的 CORS / WebSocket 握手问题，页面没有进入可测业务态，因此这次浏览器结果不作为 `#25` 验收结论。
+
+## 2026-04-04 #25 Playwright 全链路交付稳定性验收补充
+
+- 做了什么：
+  - 新增 Playwright 真实浏览器脚本 `apps/web/client/src/tests/managed-deliverable-stability.playwright.spec.ts`，覆盖固定 prompt 触发、实时交付卡片、下载、刷新恢复、同浏览器重进、fresh context 重进。
+  - 新增测试文档 `docs/单元测试文档/20260404_#25_Altus_交付稳定性_Playwright测试.md`，把验收口径收敛为：
+    - realtime 必须看到 `deliverables_ready`
+    - latest run 必须最终 `completed`
+    - 持久化消息必须满足 `deliverables_ready -> run_completed`
+    - 交付卡片在 reload / re-entry 后必须可恢复
+  - 通过真实 Playwright 失败样本定位根因：`/api/task-creation/sessions/:id/messages/history` 返回前的 `sanitizeTimelineMetadataForClient(...)` 把 managed 交付恢复所需的 `runId / sessionId / executionMode / deliverables / verification` 裁掉了。
+  - 更新 `apps/api/src/routes/task-creation-routes.ts`，恢复上述 metadata 白名单。
+  - 在 `apps/api/tests/task-creation-deep-routes.test.ts` 新增两条回归，锁住 `/messages/recent` 和 `/messages/history` 都必须保留 managed deliverable metadata。
+  - 重新启动本地 API 并带上原仓库 `apps/.env` 的完整有效环境后，完成 Playwright 真实链路复验，结果通过。
+- 遇到什么：
+  - worktree 内没有被跟踪的 `apps/.env`，直接重启 API 会缺运行时变量，导致 managed run 卡在执行阶段。
+  - 原始 `apps/.env` 带 CRLF 和注释噪音，不能直接 `source`；需要按合法 `KEY=VALUE` 行逐条导出。
+- 计划如何解决：
+  - 当前 `#25` 的交付稳定性主链已经通过 Playwright 验收。
+  - 下一步如果继续做增强，可把这个 Playwright 用例接进稳定的测试入口，减少每次手动拉起本地环境的成本。

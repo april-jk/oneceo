@@ -226,6 +226,139 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
 });
 
+test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {
+  const state = createState('run-coordinator-deliverables', 'session-coordinator-deliverables');
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deliverable-1',
+      workspaceRoot: '/workspace/session-coordinator-deliverables',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return {
+        sequence: eventCalls.length,
+        payload,
+      };
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  const deliverables = [
+    {
+      id: 'deliverable-1',
+      runId: state.input.runId,
+      path: 'outputs/final.docx',
+      name: 'final.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: 1024,
+      downloadPath: '/api/task-creation/sessions/session-coordinator-deliverables/deliverables/deliverable-1/download',
+    },
+  ];
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-ready',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已完成最终文档交付。',
+                      verification: ['已输出 final.docx'],
+                      attachments: ['outputs/final.docx'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: '已完成最终文档交付。',
+    verification: ['已输出 final.docx'],
+    attachments: ['outputs/final.docx'],
+  }));
+
+  const deliverableService = {
+    persistManagedRunDeliverables: mock.fn(async () => deliverables),
+  };
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+    deliverableService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.deepEqual(
+    eventCalls.map((entry) => entry.eventType),
+    ['run_status', 'run_status', 'tool_call_started', 'deliverables_ready', 'tool_call_completed', 'assistant_message']
+  );
+  assert.deepEqual(eventCalls[3]?.payload.deliverables, deliverables);
+
+  const deliverablesReadyTimeline = setupCalls.find(
+    (entry) => (entry as any).input?.messageKey === `managed:${state.input.runId}:deliverables_ready`
+  ) as any;
+  assert.ok(deliverablesReadyTimeline);
+  assert.equal(deliverablesReadyTimeline.input.messageType, 'status_update');
+  assert.equal(deliverablesReadyTimeline.input.content, '交付文件已生成');
+
+  const assistantTimeline = setupCalls.find(
+    (entry) => (entry as any).input?.messageType === 'assistant_message'
+  ) as any;
+  assert.ok(assistantTimeline);
+  assert.equal(assistantTimeline.input.content, '已完成最终文档交付。\n\n验证:\n- 已输出 final.docx');
+});
+
 test('execute injects skill catalog prompt before active skill body', async () => {
   const state = new AltusRunState({
     runId: 'run-coordinator-skills',

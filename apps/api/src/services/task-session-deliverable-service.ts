@@ -107,44 +107,39 @@ export class TaskSessionDeliverableService {
       throw new Error('deliverable_storage_unconfigured');
     }
 
+    const uniqueAttachments: ManagedCompletionAttachment[] = [];
     const seenPaths = new Set<string>();
-    const preparedRecords: Array<{
-      sessionId: string;
-      runId: string;
-      sandboxId: string;
-      sourcePath: string;
-      displayName: string;
-      mimeType: string;
-      sizeBytes: number;
-      sha256: string;
-      storageKey: string;
-    }> = [];
-
     for (const attachment of input.attachments) {
       const relativePath = normalizeRelativePath(asText(attachment.path));
       if (seenPaths.has(relativePath)) continue;
       seenPaths.add(relativePath);
-
-      const absolutePath = this.posix.join(input.workspaceRoot, relativePath);
-      const bytes = Buffer.from(await e2bConnector.readFile(input.sandboxId, absolutePath));
-      const displayName = asText(attachment.name) || this.posix.basename(relativePath);
-      const mimeType = resolveMimeType(relativePath, attachment.mimeType);
-      const sha256 = createHash('sha256').update(bytes).digest('hex');
-      const storageKey = this.buildStorageKey(input.sessionId, input.runId, displayName);
-
-      await uploadToR2(storageKey, bytes);
-      preparedRecords.push({
-        sessionId: input.sessionId,
-        runId: input.runId,
-        sandboxId: input.sandboxId,
-        sourcePath: relativePath,
-        displayName,
-        mimeType,
-        sizeBytes: bytes.length,
-        sha256,
-        storageKey,
-      });
+      uniqueAttachments.push(attachment);
     }
+
+    const preparedRecords = await Promise.all(
+      uniqueAttachments.map(async (attachment) => {
+        const relativePath = normalizeRelativePath(asText(attachment.path));
+        const absolutePath = this.posix.join(input.workspaceRoot, relativePath);
+        const bytes = Buffer.from(await e2bConnector.readFile(input.sandboxId, absolutePath));
+        const displayName = asText(attachment.name) || this.posix.basename(relativePath);
+        const mimeType = resolveMimeType(relativePath, attachment.mimeType);
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        const storageKey = this.buildStorageKey(input.sessionId, input.runId, displayName);
+
+        await uploadToR2(storageKey, bytes);
+        return {
+          sessionId: input.sessionId,
+          runId: input.runId,
+          sandboxId: input.sandboxId,
+          sourcePath: relativePath,
+          displayName,
+          mimeType,
+          sizeBytes: bytes.length,
+          sha256,
+          storageKey,
+        };
+      })
+    );
 
     const created = await taskSessionDeliverableArtifactDAO.createMany(preparedRecords);
     return created

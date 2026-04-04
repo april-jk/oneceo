@@ -956,6 +956,8 @@ CREATE INDEX IF NOT EXISTS idx_search_records_session_id ON search_records(sessi
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sandbox_execution_environments(session_id);
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_created_at ON sandbox_execution_environments(created_at);
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_task_session_created_at
+  ON sandbox_execution_environments(((metadata ->> 'taskSessionId')), created_at);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_id ON task_session_runs(session_id);

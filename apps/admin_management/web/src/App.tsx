@@ -1092,7 +1092,11 @@ export default function App() {
         } else if (section === 'connectorGuide') {
           setError(null);
         } else if (section === 'sandbox') {
-          await loadSandboxSection();
+          if (sandboxTab === 'templates') {
+            await loadTemplates();
+          } else {
+            await loadSandboxSection();
+          }
         } else {
           await loadAuditSection();
         }

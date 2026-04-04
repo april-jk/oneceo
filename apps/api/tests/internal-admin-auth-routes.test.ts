@@ -61,8 +61,31 @@ function createAdmin(id: string) {
   };
 }
 
-test('POST /api/internal/admin-auth/login returns 403 without internal token', async () => {
+test('POST /api/internal/admin-auth/login returns 401 when token is configured but request is missing it', async () => {
   const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/internal/admin-auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        loginName: 'admin',
+        password: 'password123',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '未授权的内部请求');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/internal/admin-auth/login returns 403 when internal token is not configured', async () => {
+  const server = await startServer();
+  process.env.ONECEO_INTERNAL_TOKEN = '';
 
   try {
     const response = await fetch(`${server.origin}/api/internal/admin-auth/login`, {
@@ -77,7 +100,7 @@ test('POST /api/internal/admin-auth/login returns 403 without internal token', a
 
     assert.equal(response.status, 403);
     assert.equal(payload.success, false);
-    assert.equal(payload.error, '无权访问内部管理员认证接口');
+    assert.equal(payload.error, '管理员认证内部接口未启用');
   } finally {
     await server.close();
   }

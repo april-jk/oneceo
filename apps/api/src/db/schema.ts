@@ -639,6 +639,10 @@ export const sandboxExecutionEnvironments = pgTable(
     sessionIdIdx: index('idx_sandbox_execution_environments_session_id').on(table.sessionId),
     statusIdx: index('idx_sandbox_execution_environments_status').on(table.status),
     createdAtIdx: index('idx_sandbox_execution_environments_created_at').on(table.createdAt),
+    taskSessionCreatedAtIdx: index('idx_sandbox_execution_environments_task_session_created_at').on(
+      sql`((metadata ->> 'taskSessionId'))`,
+      table.createdAt
+    ),
   })
 );
 

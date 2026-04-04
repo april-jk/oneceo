@@ -4,6 +4,7 @@ import { platformSkillService } from '../services/platform-skill-service';
 import { platformSkillImportService } from '../services/platform-skill-import-service';
 import { platformSkillImportJobService } from '../services/platform-skill-import-job-service';
 import { sandboxSkillSyncService } from '../services/sandbox-skill-sync-service';
+import { createRequireInternalToken } from './internal-auth-middleware';
 
 const router = express.Router();
 
@@ -22,24 +23,9 @@ function parseResources(input: unknown) {
     .filter((item) => asText(item.resourcePath) && asText(item.contentMarkdown));
 }
 
-function requireInternalToken(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const configured = asText(process.env.ONECEO_INTERNAL_TOKEN);
-  if (!configured) {
-    next();
-    return;
-  }
-  const incoming = asText(req.header('x-oneceo-internal-token'));
-  if (incoming !== configured) {
-    res.status(401).json({
-      success: false,
-      error: getPublicErrorMessage('未授权的内部请求'),
-    });
-    return;
-  }
-  next();
-}
-
-router.use(requireInternalToken);
+router.use(createRequireInternalToken({
+  disabledMessage: 'skills 内部接口未启用',
+}));
 
 router.post('/skills/import/folder-preview', async (req, res) => {
   try {

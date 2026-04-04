@@ -1990,6 +1990,16 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     }
 
     if (message.type === "agent_message") {
+      const managedCompletionCard = buildManagedCompletionCardItem({
+        message,
+        managedArtifactsByRun,
+        emittedManagedCompletionRuns,
+      });
+      if (managedCompletionCard) {
+        flushProgress();
+        items.push(managedCompletionCard);
+      }
+
       const parsed = extractCapsule(message.content || "");
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
@@ -2026,45 +2036,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "status_update") {
       const metadata = toRecord(message.metadata);
-      if (isManagedExecutionEvent(metadata)) {
-        const managedEventType = asText(metadata.eventType).toLowerCase();
-        const runId = asText(metadata.runId);
-        const sessionIdForArtifact =
-          asText(message.sessionId) || asText(metadata.sessionId);
-        if (
-          managedEventType === "run_completed" &&
-          runId &&
-          sessionIdForArtifact &&
-          !emittedManagedCompletionRuns.has(runId)
-        ) {
-          const deliverables = extractManagedDeliverables(metadata);
-          if (deliverables.length > 0) {
-            flushProgress();
-            items.push({
-              kind: "managed_deliverable_card",
-              sessionId: sessionIdForArtifact,
-              runId,
-              deliverables,
-              messageKey: `managed:${runId}:deliverable_card`,
-            });
-            emittedManagedCompletionRuns.add(runId);
-          } else {
-            const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
-              (artifact) => artifact.previewType === "web",
-            );
-            if (artifacts.length > 0) {
-              flushProgress();
-              items.push({
-                kind: "managed_artifact_card",
-                sessionId: sessionIdForArtifact,
-                runId,
-                artifacts,
-                messageKey: `managed:${runId}:artifact_card`,
-              });
-              emittedManagedCompletionRuns.add(runId);
-            }
-          }
-        }
+      const managedCompletionCard = buildManagedCompletionCardItem({
+        message,
+        managedArtifactsByRun,
+        emittedManagedCompletionRuns,
+      });
+      if (managedCompletionCard) {
+        flushProgress();
+        items.push(managedCompletionCard);
       }
       const label = message.content || "状态更新";
       if (isCodexControlStatusLabel(label)) {
@@ -5185,6 +5164,57 @@ function extractManagedDeliverables(
     });
   }
   return Array.from(unique.values());
+}
+
+export function buildManagedCompletionCardItem(input: {
+  message: AgentMessage;
+  managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
+  emittedManagedCompletionRuns: Set<string>;
+}): ChatItem | null {
+  const { message, managedArtifactsByRun, emittedManagedCompletionRuns } = input;
+  const metadata = toRecord(message.metadata);
+  if (!isManagedExecutionEvent(metadata)) {
+    return null;
+  }
+
+  const runId = asText(metadata.runId);
+  const sessionId = asText(message.sessionId) || asText(metadata.sessionId);
+  if (!runId || !sessionId || emittedManagedCompletionRuns.has(runId)) {
+    return null;
+  }
+
+  const deliverables = extractManagedDeliverables(metadata);
+  if (deliverables.length > 0) {
+    emittedManagedCompletionRuns.add(runId);
+    return {
+      kind: "managed_deliverable_card",
+      sessionId,
+      runId,
+      deliverables,
+      messageKey: `managed:${runId}:deliverable_card`,
+    };
+  }
+
+  const eventType = asText(metadata.eventType).toLowerCase();
+  if (message.type !== "status_update" || eventType !== "run_completed") {
+    return null;
+  }
+
+  const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
+    (artifact) => artifact.previewType === "web",
+  );
+  if (artifacts.length === 0) {
+    return null;
+  }
+
+  emittedManagedCompletionRuns.add(runId);
+  return {
+    kind: "managed_artifact_card",
+    sessionId,
+    runId,
+    artifacts,
+    messageKey: `managed:${runId}:artifact_card`,
+  };
 }
 
 function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {

@@ -640,8 +640,24 @@ export const sandboxExecutionEnvironments = pgTable(
     statusIdx: index('idx_sandbox_execution_environments_status').on(table.status),
     createdAtIdx: index('idx_sandbox_execution_environments_created_at').on(table.createdAt),
     taskSessionCreatedAtIdx: index('idx_sandbox_execution_environments_task_session_created_at').on(
-      sql`((metadata ->> 'taskSessionId'))`,
-      table.createdAt
+      sql`((${table.metadata} ->> 'taskSessionId'))`,
+      table.createdAt,
+      table.updatedAt
+    ),
+    taskSessionCanonicalIdx: index('idx_sandbox_execution_environments_task_session_canonical').on(
+      sql`((${table.metadata} ->> 'taskSessionId'))`,
+      sql`(
+        case
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'ready' then 5
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'creating' then 4
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'closing' then 3
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} <> 'closed' then 2
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'closed' then 1
+          else 0
+        end
+      )`,
+      table.createdAt,
+      table.updatedAt
     ),
   })
 );

@@ -50,6 +50,16 @@ function resolveCurrentUserError(error: unknown): { status: number; message: str
   return null;
 }
 
+function resolveManagedStreamUserId(req: express.Request) {
+  const resolved = currentUserResolver.resolve(req);
+  const queryUserId = asText(req.query.userId);
+  return {
+    authUserId: resolved?.userId || '',
+    queryUserId,
+    effectiveUserId: resolved?.userId || queryUserId,
+  };
+}
+
 function runManagedUploadMiddleware(req: express.Request, res: express.Response) {
   return new Promise<void>((resolve, reject) => {
     managedAttachmentUpload.array('files', TASK_ATTACHMENT_MAX_COUNT)(req, res, (error) => {
@@ -163,7 +173,6 @@ router.get('/sessions/:sessionId/runs/latest', async (req, res) => {
 
 router.get('/runs/:runId/stream', async (req, res) => {
   try {
-    const currentUser = currentUserResolver.require(req);
     const runId = asText(req.params.runId);
     const run = await taskSessionRunDAO.getRun(runId);
     if (!run) {
@@ -173,7 +182,21 @@ router.get('/runs/:runId/stream', async (req, res) => {
       });
     }
     const session = await taskCreationSessionDAO.getSession(run.sessionId);
-    if (!session?.userId || session.userId !== currentUser.userId) {
+    const sessionUserId = asText(session?.userId);
+    const { authUserId, queryUserId, effectiveUserId } = resolveManagedStreamUserId(req);
+    if (!sessionUserId || !effectiveUserId) {
+      return res.status(401).json({
+        success: false,
+        error: '无法识别当前用户，请先登录或提供 userId',
+      });
+    }
+    if (authUserId && authUserId !== sessionUserId) {
+      return res.status(403).json({
+        success: false,
+        error: '当前用户无权订阅该 Altus managed run',
+      });
+    }
+    if (queryUserId && queryUserId !== sessionUserId) {
       return res.status(403).json({
         success: false,
         error: '当前用户无权订阅该 Altus managed run',
@@ -184,7 +207,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
       {
         runId,
         sessionId: run.sessionId,
-        userId: currentUser.userId,
+        userId: sessionUserId,
       },
       res,
       {

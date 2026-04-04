@@ -7,6 +7,7 @@ import { AltusRunState } from '../src/services/altus-run-state';
 import { buildManagedMcpToolName } from '../src/services/altus-managed-shared';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
+import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 
 const originalFetch = global.fetch;
 
@@ -336,6 +337,9 @@ test('execute injects skill catalog prompt before active skill body', async () =
     type: 'complete' as const,
     summary: 'done',
   }));
+  mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    changed: true,
+  }) as any);
 
   const coordinator = new AltusRunCoordinator(
     setupService as any,
@@ -345,6 +349,118 @@ test('execute injects skill catalog prompt before active skill body', async () =
 
   await coordinator.execute(state, new AbortController());
   assert.equal((setupService.buildConversationMessages as any).mock.callCount(), 1);
+});
+
+test('execute syncs resolved skills after sandbox becomes ready', async () => {
+  const state = new AltusRunState({
+    runId: 'run-coordinator-skill-sync',
+    sessionId: 'session-coordinator-skill-sync',
+    userId: 'user-1',
+    model: 'altus-model',
+    userInput: '帮我做一个演示文稿',
+    sessionTitle: 'Build PPT',
+    connectors: [],
+    mcpProviders: [],
+    skillCatalog: [],
+    skills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'office-ppt',
+        name: 'PPT 办公',
+        description: '创建专业演示文稿',
+        category: 'office',
+        renderedMarkdown: '# office-ppt',
+        revisionNumber: 3,
+        resourceSummary: {
+          totalCount: 1,
+          referenceCount: 1,
+          templateCount: 0,
+          paths: ['references/slide-structure-guide.md'],
+        },
+      },
+    ],
+  });
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-skill-sync',
+      workspaceRoot: '/workspace/session-coordinator-skill-sync',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async () => [
+      { role: 'system', content: 'You are Altus' },
+      { role: 'user', content: '帮我做一个演示文稿' },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async () => ({ sequence: 1, payload: {} })),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => undefined),
+    markWaitingUser: mock.fn(async () => undefined),
+    markCompleted: mock.fn(async () => undefined),
+    markFailed: mock.fn(async () => undefined),
+    markStopped: mock.fn(async () => undefined),
+  };
+
+  const syncSkillsMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
+    changed: true,
+  }) as any);
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '演示文稿已完成。',
+                      verification: ['已生成大纲'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: '演示文稿已完成。',
+    verification: ['已生成大纲'],
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(syncSkillsMock.mock.callCount(), 1);
+  assert.deepEqual(syncSkillsMock.mock.calls[0]?.arguments[0], {
+    taskSessionId: 'session-coordinator-skill-sync',
+    orchestratorSessionId: 'sandbox-skill-sync',
+    skills: state.input.skills,
+  });
 });
 
 test('execute does not complete on plain assistant text and continues until complete_task', async () => {

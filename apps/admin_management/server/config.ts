@@ -26,6 +26,14 @@ function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function requiredNonEmptyText(name: string) {
+  return z
+    .string()
+    .default('')
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, `${name} is required for admin_management`);
+}
+
 function parseCommaSeparatedList(value: string) {
   return value
     .split(',')
@@ -53,7 +61,7 @@ const envSchema = z.object({
   HOST_METRICS_CACHE_MS: z.coerce.number().int().min(10000).max(900000).default(90000),
   HOST_METRICS_CONCURRENCY: z.coerce.number().int().min(1).max(12).default(4),
   ONECEO_API_URL: z.string().url().default('http://127.0.0.1:4000'),
-  ONECEO_INTERNAL_TOKEN: z.string().default(''),
+  ONECEO_INTERNAL_TOKEN: requiredNonEmptyText('ONECEO_INTERNAL_TOKEN'),
   ONECEO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   ONECEO_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(1),
   ADMIN_MANAGEMENT_CORS_ORIGIN: z.string().default('http://localhost:5174'),

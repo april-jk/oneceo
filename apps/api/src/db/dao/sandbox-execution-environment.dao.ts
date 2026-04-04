@@ -24,6 +24,23 @@ function canonicalTaskSessionEnvironmentScore(
   return 0;
 }
 
+function taskSessionIdSql() {
+  return sql<string>`${sandboxExecutionEnvironments.metadata} ->> 'taskSessionId'`;
+}
+
+function canonicalTaskSessionEnvironmentScoreSql() {
+  return sql<number>`
+    case
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'ready' then 5
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'creating' then 4
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'closing' then 3
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} <> 'closed' then 2
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'closed' then 1
+      else 0
+    end
+  `;
+}
+
 export function pickCanonicalTaskSessionEnvironment<T extends {
   status: string;
   metadata?: Record<string, unknown> | null;
@@ -84,17 +101,29 @@ export class SandboxExecutionEnvironmentDAO {
   }
 
   async listByTaskSessionId(taskSessionId: string, limit: number = 200) {
+    const taskSessionIdExpr = taskSessionIdSql();
     return db
       .select()
       .from(sandboxExecutionEnvironments)
-      .where(sql`${sandboxExecutionEnvironments.metadata} ->> 'taskSessionId' = ${taskSessionId}`)
-      .orderBy(desc(sandboxExecutionEnvironments.updatedAt), desc(sandboxExecutionEnvironments.createdAt))
+      .where(sql`${taskSessionIdExpr} = ${taskSessionId}`)
+      .orderBy(desc(sandboxExecutionEnvironments.createdAt), desc(sandboxExecutionEnvironments.updatedAt))
       .limit(limit);
   }
 
   async findCanonicalByTaskSessionId(taskSessionId: string) {
-    const environments = await this.listByTaskSessionId(taskSessionId, 200);
-    return pickCanonicalTaskSessionEnvironment(environments);
+    const taskSessionIdExpr = taskSessionIdSql();
+    const canonicalScoreExpr = canonicalTaskSessionEnvironmentScoreSql();
+    const [row] = await db
+      .select()
+      .from(sandboxExecutionEnvironments)
+      .where(sql`${taskSessionIdExpr} = ${taskSessionId}`)
+      .orderBy(
+        desc(canonicalScoreExpr),
+        desc(sandboxExecutionEnvironments.createdAt),
+        desc(sandboxExecutionEnvironments.updatedAt)
+      )
+      .limit(1);
+    return row || null;
   }
 
   async listRecentRegistry(limit: number = 20) {

@@ -372,9 +372,7 @@ export class OneceoApiConnector {
             method,
             headers: {
               'content-type': 'application/json',
-              ...(config.oneceoInternalToken
-                ? { 'x-oneceo-internal-token': config.oneceoInternalToken }
-                : {}),
+              'x-oneceo-internal-token': config.oneceoInternalToken,
               ...(options?.headers || {}),
             },
             body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,

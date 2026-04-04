@@ -181,7 +181,33 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
-  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'm-managed-recent',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        runId: 'run-managed-1',
+        sessionId: 's-3',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-1',
+            runId: 'run-managed-1',
+            path: 'deliverable.md',
+            name: 'deliverable.md',
+            mimeType: 'text/markdown',
+            size: 128,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-3/messages/recent`, {
@@ -192,6 +218,9 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
     assert.ok(Array.isArray(payload.data.messages));
+    assert.equal(payload.data.messages[0]?.metadata?.runId, 'run-managed-1');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(payload.data.messages[0]?.metadata?.deliverables?.[0]?.name, 'deliverable.md');
   } finally {
     await server.close();
   }
@@ -330,6 +359,62 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
     assert.equal(cursorPayload?.sessionId, 's-history-cursor');
     assert.ok(typeof cursorPayload?.oldestCursor === 'number' || cursorPayload?.oldestCursor === null);
     assert.ok(typeof cursorPayload?.newestCursor === 'number' || cursorPayload?.newestCursor === null);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages/history preserves managed deliverable metadata', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'altus',
+    executor: 'altus',
+  });
+  fileStoreAny.getMessages = async () => [
+    {
+      id: 'm-h-managed-1',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        sessionEventSeq: 1,
+        runId: 'run-managed-history-1',
+        sessionId: 's-history-managed',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-history-1',
+            runId: 'run-managed-history-1',
+            path: 'deliverable-history.md',
+            name: 'deliverable-history.md',
+            mimeType: 'text/markdown',
+            size: 256,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-history-managed/messages/history?limit=20`, {
+      headers: { 'x-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.source, 'resolved_history');
+    assert.equal(payload.data.messages[0]?.metadata?.runId, 'run-managed-history-1');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(
+      payload.data.messages[0]?.metadata?.deliverables?.[0]?.name,
+      'deliverable-history.md'
+    );
   } finally {
     await server.close();
   }

@@ -21,6 +21,8 @@ import {
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
 
+const DELIVERABLES_READY_TEXT = '交付文件已生成';
+
 type StreamedToolCallDelta = {
   index?: number;
   id?: string;
@@ -669,6 +671,35 @@ export class AltusRunCoordinator {
             });
             state.deliverables = deliverables;
             const finalContent = this.buildCompletionMessage(result.summary, result.verification);
+            if (deliverables.length > 0) {
+              await this.setupService.persistTimelineMessage({
+                sessionId: state.input.sessionId,
+                role: 'system',
+                messageType: 'status_update',
+                content: DELIVERABLES_READY_TEXT,
+                metadata: {
+                  stage: 'reviewing',
+                  tone: 'review',
+                  eventType: 'deliverables_ready',
+                  runId: state.input.runId,
+                  sessionId: state.input.sessionId,
+                  executor: 'altus',
+                  executionMode: 'managed',
+                  deliverables,
+                },
+                messageKey: `managed:${state.input.runId}:deliverables_ready`,
+              });
+              await this.eventWriter.appendRunEvent(
+                state.input.runId,
+                state.input.sessionId,
+                state.input.userId,
+                'deliverables_ready',
+                {
+                  content: DELIVERABLES_READY_TEXT,
+                  deliverables,
+                }
+              );
+            }
             await this.setupService.persistTimelineMessage({
               sessionId: state.input.sessionId,
               role: 'agent',

@@ -72,3 +72,18 @@
 - 计划如何解决：
   - 当前先以 focused tests 和代码链路验证收口本轮优化。
   - 下一步如果继续深挖，可补一条更可控的 smoke prompt 或测试工装，专门稳定触发 markdown/txt deliverable，用于浏览器级体验对比。
+
+## 2026-04-04 #25 Altus 交付稳定性继续优化
+
+- 做了什么：
+  - 在 `apps/api/src/services/altus-run-coordinator.ts` 增加独立的 `deliverables_ready` 阶段：deliverable 持久化完成后，先写一条 `status_update` timeline，再发一条 `deliverables_ready` run event，之后才继续最终 assistant summary。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 把 `deliverables_ready` 接入 managed SSE 事件名单、系统事件 key 生成和 UI 状态消费，确保实时流可直接把“文件已就绪”渲染出来。
+  - 在 `apps/api/tests/altus-run-coordinator.test.ts` 新增回归，锁住 `deliverables_ready -> tool_call_completed -> assistant_message` 的顺序。
+  - 在 `apps/web/client/src/tests/managed-deliverable-card-timing.test.ts` 新增回归，锁住前端可从 `deliverables_ready` 直接生成 `managed_deliverable_card`。
+  - 同步更新 `07_前端对话页与交互状态.md`、`20260327_交付物出Sandbox闭环_实现与验证.md` 和 `20260404_#25_Altus_交付文件返回体验优化测试.md`，把“交付就绪”定义为独立的一等事件。
+- 遇到什么：
+  - 现有链路虽然已经支持从 assistant metadata 提前展示交付卡片，但“交付文件真正可下载”缺少单独事件，实时流、history 和刷新恢复只能从 assistant 或 completed 间接推断，语义不够稳定。
+- 计划如何解决：
+  - 先跑 focused tests 验证这套事件链闭环。
+  - 如果浏览器级 smoke 仍有波动，再补一条更可控的固定交付 prompt，把 `deliverables_ready` 的真实页面出现时机也锁住。
+  - 本轮补做浏览器 smoke 时，当前本地 dev 环境仍存在 `oneceo.ai:3000 -> oneceo.ai:4000` 的 CORS / WebSocket 握手问题，页面没有进入可测业务态，因此这次浏览器结果不作为 `#25` 验收结论。

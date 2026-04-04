@@ -53,6 +53,36 @@ describe('managed deliverable card timing', () => {
     expect(emittedRuns.has('run-1')).toBe(true);
   });
 
+  it('emits deliverable card from deliverables_ready status update before run completion', () => {
+    const emittedRuns = new Set<string>();
+    const artifactsByRun = new Map();
+    const item = buildManagedCompletionCardItem({
+      message: createManagedMessage({
+        type: 'status_update',
+        eventType: 'deliverables_ready',
+        runId: 'run-ready-1',
+        deliverables: [
+          {
+            id: 'artifact-ready-1',
+            runId: 'run-ready-1',
+            name: 'final.pdf',
+            path: 'outputs/final.pdf',
+            mimeType: 'application/pdf',
+            sizeBytes: 2048,
+          },
+        ],
+      }),
+      managedArtifactsByRun: artifactsByRun,
+      emittedManagedCompletionRuns: emittedRuns,
+    });
+
+    expect(item?.kind).toBe('managed_deliverable_card');
+    expect((item as Extract<ChatItem, { kind: 'managed_deliverable_card' }>)?.deliverables[0]?.name).toBe(
+      'final.pdf'
+    );
+    expect(emittedRuns.has('run-ready-1')).toBe(true);
+  });
+
   it('still falls back to artifact card on run completed when no deliverables exist', () => {
     const emittedRuns = new Set<string>();
     const artifactsByRun = new Map([

@@ -1434,6 +1434,7 @@ function isManagedSystemEventType(eventType: string): boolean {
   return (
     eventType === 'run_ack' ||
     eventType === 'run_status' ||
+    eventType === 'deliverables_ready' ||
     eventType === 'run_completed' ||
     eventType === 'run_failed' ||
     eventType === 'run_stopped' ||
@@ -2837,6 +2838,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         'heartbeat',
         'run_ack',
         'run_status',
+        'deliverables_ready',
         'assistant_delta',
         'assistant_message',
         'tool_call_started',
@@ -3002,6 +3004,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             streamDelta: eventType === 'assistant_delta',
           },
         };
+      } else if (eventType === 'deliverables_ready') {
+        nextSessionStatus = 'in_progress';
+        if (sessionKey) {
+          writeManagedRunRecoveryState({
+            sessionId: sessionKey,
+            runId,
+            status: 'in_progress',
+            processing: true,
+          });
+        }
+        nextMessage = {
+          type: 'status_update',
+          content: content || '交付文件已生成',
+          message: content || '交付文件已生成',
+          stage: 'reviewing',
+          tone: 'review',
+          sessionId: sessionKey,
+          metadata: baseMetadata,
+        };
       } else if (eventType === 'clarification_requested') {
         nextSessionStatus = 'waiting_user';
         const question = content || asText(payload.question) || asText(envelope.question);
@@ -3164,6 +3185,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (
         eventType === 'assistant_delta' ||
         eventType === 'assistant_message' ||
+        eventType === 'deliverables_ready' ||
         eventType === 'tool_call_started' ||
         eventType === 'tool_call_progress' ||
         eventType === 'tool_call_completed' ||

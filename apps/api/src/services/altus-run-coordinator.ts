@@ -14,6 +14,7 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   TaskSessionDeliverableService,
@@ -781,6 +782,19 @@ export class AltusRunCoordinator {
         state.input.sessionId,
         state.input.sessionTitle
       );
+      if (state.input.skills.length > 0) {
+        await sandboxSkillSyncService.syncResolvedSkills({
+          taskSessionId: state.input.sessionId,
+          orchestratorSessionId: sandbox.sandboxId,
+          skills: state.input.skills,
+        });
+        writeConnectorDebugLog('[ALTUS_RUN_SKILL_SYNC_READY]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          orchestratorSessionId: sandbox.sandboxId,
+          resolvedSkillCount: state.input.skills.length,
+        });
+      }
       state.markRunning({
         sandboxId: sandbox.sandboxId,
         workspaceRoot: sandbox.workspaceRoot,

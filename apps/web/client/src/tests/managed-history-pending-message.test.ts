@@ -5,6 +5,7 @@ import {
   reconcileHistoryWithPendingLocalMessages,
   readPersistedManagedRunRecoveryState,
   readPersistedHistoryViewCache,
+  shouldAwaitManagedRunRecoveryRunId,
   type AgentMessage,
 } from '@/hooks/useTaskCreationAgent';
 
@@ -125,5 +126,27 @@ describe('managed history reconciliation', () => {
     expect(persisted?.processing).toBe(true);
     expect(cached?.status).toBe('starting');
     expect(cached?.runId).toBe('run-managed-1');
+  });
+
+  it('keeps waiting for managed recovery when processing run id is not known yet', () => {
+    const persisted = primeManagedRunRecoveryState({
+      sessionId: 'session-managed-pending',
+      runId: null,
+      status: 'starting',
+      processing: true,
+    });
+
+    expect(shouldAwaitManagedRunRecoveryRunId(persisted)).toBe(true);
+  });
+
+  it('does not wait for managed recovery once run id is known', () => {
+    const persisted = primeManagedRunRecoveryState({
+      sessionId: 'session-managed-ready',
+      runId: 'run-managed-2',
+      status: 'running',
+      processing: true,
+    });
+
+    expect(shouldAwaitManagedRunRecoveryRunId(persisted)).toBe(false);
   });
 });

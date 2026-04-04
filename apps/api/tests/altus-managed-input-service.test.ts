@@ -3,7 +3,6 @@ import { afterEach, mock, test } from 'node:test';
 import { taskSessionRunDAO } from '../src/db/dao';
 import { e2bConnector } from '../src/connectors/e2b-connector';
 import { AltusManagedInputService } from '../src/services/altus-managed-input-service';
-import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { userSkillService } from '../src/services/user-skill-service';
 
 afterEach(() => {
@@ -49,9 +48,6 @@ test('submit uploads attachments, persists context metadata, and starts managed 
       },
     },
   ] as any);
-  const syncSkillsMock = mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({
-    changed: true,
-  }) as any);
   const mkdirMock = mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: '',
     stderr: '',
@@ -99,7 +95,6 @@ test('submit uploads attachments, persists context metadata, and starts managed 
   assert.equal(result.sessionId, 'session-1');
   assert.equal(setupService.ensureSessionOwnership.mock.callCount(), 1);
   assert.equal(setupService.ensureSandbox.mock.callCount(), 1);
-  assert.equal(syncSkillsMock.mock.callCount(), 1);
   assert.equal(mkdirMock.mock.callCount(), 1);
   assert.equal(writeFileMock.mock.callCount(), 1);
   assert.equal(touchMock.mock.callCount(), 1);
@@ -126,7 +121,6 @@ test('submit uploads image attachments to managed image bucket and persists exte
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(userSkillService, 'listAvailableSkills', async () => []);
   mock.method(userSkillService, 'resolveSelectionsForSession', async () => []);
-  mock.method(sandboxSkillSyncService, 'syncResolvedSkills', async () => ({ changed: false }) as any);
   mock.method(e2bConnector, 'runCommand', async () => ({
     stdout: '',
     stderr: '',
@@ -185,4 +179,83 @@ test('submit uploads image attachments to managed image bucket and persists exte
     startRunCall?.arguments[2]?.metadata?.attachments?.[0]?.externalObjectKey,
     'managed-images/session-1/msg-1/1710000000-screenshot.png'
   );
+});
+
+test('submit text-only managed input starts run without waiting for sandbox bootstrap', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 1,
+        referenceCount: 1,
+        templateCount: 0,
+        paths: ['references/slide-structure-guide.md'],
+      },
+    },
+  ] as any);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-1',
+      revisionId: 'rev-1',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      renderedMarkdown: '# office-ppt',
+      revisionNumber: 3,
+      resourceSummary: {
+        totalCount: 1,
+        referenceCount: 1,
+        templateCount: 0,
+        paths: ['references/slide-structure-guide.md'],
+      },
+    },
+  ] as any);
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  const result = await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '你好',
+    messageKey: 'msg-plain',
+    metadata: {
+      source: 'chat',
+      skills: [{ sourceType: 'platform', skillId: 'skill-1', revisionId: 'rev-1' }],
+    },
+  });
+
+  assert.equal(result.sessionId, 'session-1');
+  assert.equal(setupService.ensureSandbox.mock.callCount(), 0);
+  assert.equal(touchMock.mock.callCount(), 0);
+
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.equal(startRunCall?.arguments[2]?.content, '你好');
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillCatalog?.length, 1);
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext?.length, 1);
 });

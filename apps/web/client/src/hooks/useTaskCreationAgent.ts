@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useSearch } from 'wouter';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   createTaskCreationSession,
   createTaskCreationDraftSession,
@@ -118,6 +119,54 @@ export function resolveChatInputSessionId(input: {
   const path = asText(input.locationPath);
   const pathMatch = path.match(/^\/session\/([^/?#]+)/);
   return pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+}
+
+export function resolveSessionRouteState(input: {
+  locationPath?: string | null;
+  search?: string | null;
+}) {
+  const search = typeof input.search === 'string' ? input.search : '';
+  const params = new URLSearchParams(search);
+  const querySessionId = params.get('sessionId')?.trim() || '';
+  const createNewToken = params.get('new')?.trim() || '';
+  const locationPath = asText(input.locationPath);
+  const pathMatch = locationPath.match(/^\/session\/([^/?#]+)/);
+  const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+  return {
+    querySessionId,
+    createNewToken,
+    pathSessionId,
+    resolvedSessionId: pathSessionId || querySessionId || '',
+  };
+}
+
+export function shouldDeferPendingSessionRouteSync(input: {
+  pendingSessionId?: string | null;
+  locationPath?: string | null;
+  search?: string | null;
+}): boolean {
+  const pendingSessionId = asText(input.pendingSessionId);
+  if (!pendingSessionId) return false;
+  const route = resolveSessionRouteState({
+    locationPath: input.locationPath,
+    search: input.search,
+  });
+  if (route.createNewToken) {
+    return true;
+  }
+  if (!route.resolvedSessionId) {
+    return true;
+  }
+  if (route.resolvedSessionId !== pendingSessionId) {
+    return true;
+  }
+  if (route.pathSessionId !== pendingSessionId) {
+    return true;
+  }
+  if (route.querySessionId) {
+    return true;
+  }
+  return false;
 }
 
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
@@ -2108,6 +2157,15 @@ export function readPersistedManagedRunRecoveryState(sessionId: string): Persist
   return readManagedRunRecoveryState(sessionId);
 }
 
+export function shouldAwaitManagedRunRecoveryRunId(
+  recovery: PersistedManagedRunRecovery | null | undefined
+): boolean {
+  if (!recovery?.processing) {
+    return false;
+  }
+  return !asText(recovery.runId);
+}
+
 export function primeManagedRunRecoveryState(input: {
   sessionId: string;
   runId?: string | null;
@@ -2339,6 +2397,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();
   const search = useSearch();
+  const { user } = useAuth();
 
   const wsRef = useRef<WebSocket | null>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -2360,6 +2419,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const managedRunSequenceRef = useRef<number>(0);
   const managedRunReconnectTimerRef = useRef<number | null>(null);
   const managedRunReconnectAttemptRef = useRef(0);
+  const managedRunRefreshPollTimerRef = useRef<number | null>(null);
   const openManagedRunStreamRef = useRef<(targetRunId: string) => void>(() => {});
   const closeManagedRunStreamRef = useRef<(options?: { preserveSequence?: boolean }) => void>(() => {});
   const handleManagedRunStreamEventRef = useRef<
@@ -2386,6 +2446,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const olderHistoryRequestRef = useRef<{ sessionId: string; before: number } | null>(null);
   const isLoadingOlderHistoryRef = useRef(false);
   const loadHistoryRequestRef = useRef<{ sessionId: string; promise: Promise<void> } | null>(null);
+  const loadHistoryRef = useRef<
+    (
+      historySessionId: string,
+      options?: { reason?: 'initial' | 'replay' | 'reconcile' | 'managed_recovery' }
+    ) => Promise<void> | undefined
+  >(() => undefined);
   const historyExpandedRef = useRef(false);
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
   const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
@@ -2597,12 +2663,21 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(search);
-    const querySessionId = params.get('sessionId')?.trim();
-    const createNewToken = params.get('new')?.trim();
-    const pathMatch = location.match(/^\/session\/([^/?#]+)/);
-    const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
-    const resolvedSessionId = pathSessionId || querySessionId || '';
+    const routeState = resolveSessionRouteState({
+      locationPath: location,
+      search,
+    });
+    const { querySessionId, createNewToken, resolvedSessionId } = routeState;
+
+    if (
+      shouldDeferPendingSessionRouteSync({
+        pendingSessionId: pendingSessionSyncRef.current,
+        locationPath: location,
+        search,
+      })
+    ) {
+      return;
+    }
 
     if (createNewToken) {
       pendingSessionSyncRef.current = null;
@@ -2628,10 +2703,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [location, search, sessionId, messages.length, resetConversationState]);
 
   useEffect(() => {
-    if (pendingSessionSyncRef.current && pendingSessionSyncRef.current === sessionId) {
+    if (
+      pendingSessionSyncRef.current &&
+      pendingSessionSyncRef.current === sessionId &&
+      !shouldDeferPendingSessionRouteSync({
+        pendingSessionId: pendingSessionSyncRef.current,
+        locationPath: location,
+        search,
+      })
+    ) {
       pendingSessionSyncRef.current = null;
     }
-  }, [sessionId]);
+  }, [location, search, sessionId]);
 
   useEffect(() => {
     setRuntimeEnabled(autoRuntime);
@@ -2672,6 +2755,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     if (managedRunReconnectTimerRef.current) {
       window.clearTimeout(managedRunReconnectTimerRef.current);
       managedRunReconnectTimerRef.current = null;
+    }
+  }, []);
+
+  const clearManagedRunRefreshPollTimer = useCallback(() => {
+    if (managedRunRefreshPollTimerRef.current) {
+      window.clearTimeout(managedRunRefreshPollTimerRef.current);
+      managedRunRefreshPollTimerRef.current = null;
     }
   }, []);
 
@@ -2731,6 +2821,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       const url = getTaskCreationManagedRunStreamUrl(runId, {
         afterSequence,
         clientId: sseClientIdRef.current,
+        userId: user?.id || null,
       });
       const source = new EventSource(url, { withCredentials: true });
       managedRunStreamRef.current = source;
@@ -2785,6 +2876,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       clearManagedRunReconnectTimer,
       closeManagedRunStream,
       scheduleManagedRunReconnect,
+      user?.id,
     ]
   );
 
@@ -3019,6 +3111,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setIsProcessing(false);
         setManagedRunStreaming(false);
         setManagedRunStatus('waiting_user');
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3035,6 +3130,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunStatus('completed');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3045,6 +3143,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunError(content || 'managed run failed');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3054,6 +3155,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunStatus('stopped');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3922,7 +4026,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistory = useCallback(async (
     historySessionId: string,
     options?: {
-      reason?: 'initial' | 'replay' | 'reconcile';
+      reason?: 'initial' | 'replay' | 'reconcile' | 'managed_recovery';
     }
   ) => {
     const reason = options?.reason ?? 'initial';
@@ -4019,6 +4123,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
     return task;
   }, [applyHistoryState, normalizeHistoryMessages, syncQuestionAndRuntimeState]);
+
+  useEffect(() => {
+    loadHistoryRef.current = loadHistory;
+  }, [loadHistory]);
 
   const loadOlderHistory = useCallback(async () => {
     const historySessionId = (sessionId || '').trim();
@@ -4148,7 +4256,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [runtimeStarting, sessionId, runtimeEnabled, runtimeReady, syncRuntime]);
 
   const refreshManagedRun = useCallback(
-    async (targetSessionId?: string) => {
+    async (
+      targetSessionId?: string,
+      options?: {
+        preservePendingRecovery?: boolean;
+      }
+    ) => {
       const sid = (targetSessionId || sessionId || '').trim();
       if (!sid || !isManagedAltusMode()) {
         setManagedRunId(null);
@@ -4162,6 +4275,19 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       try {
         const latest = await getLatestTaskCreationManagedRun(sid);
         if (!latest?.id) {
+          const persisted = readManagedRunRecoveryState(sid);
+          if (options?.preservePendingRecovery || shouldAwaitManagedRunRecoveryRunId(persisted)) {
+            const persistedRunId = asText(persisted?.runId) || null;
+            const persistedStatus = normalizeManagedRunStatus(persisted?.status);
+            setManagedRunId(persistedRunId);
+            managedRunIdRef.current = persistedRunId;
+            setManagedRunStatus(persistedStatus);
+            managedRunStatusRef.current = persistedStatus;
+            setManagedRunStreaming(false);
+            setManagedRunError(null);
+            setIsProcessing(Boolean(persisted?.processing));
+            return;
+          }
           setManagedRunId(null);
           setManagedRunStatus(null);
           setManagedRunStreaming(false);
@@ -4193,6 +4319,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         } else {
           setManagedRunStreaming(false);
           closeManagedRunStreamRef.current();
+          if (
+            nextStatus === 'waiting_user' ||
+            nextStatus === 'completed' ||
+            nextStatus === 'failed' ||
+            nextStatus === 'stopped'
+          ) {
+            void loadHistory(sid, { reason: 'managed_recovery' });
+          }
           if (nextStatus === 'completed' || nextStatus === 'failed' || nextStatus === 'stopped') {
             clearManagedRunRecoveryState(sid);
           }
@@ -4204,7 +4338,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         console.warn('[TaskCreationAgent] 获取 managed run 状态失败:', error);
       }
     },
-    [sessionId]
+    [loadHistory, sessionId]
   );
 
   useEffect(() => {
@@ -4340,6 +4474,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       setManagedRunError(null);
       closeManagedRunStreamRef.current();
       clearManagedRunReconnectTimer();
+      clearManagedRunRefreshPollTimer();
       return;
     }
 
@@ -4356,11 +4491,39 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
     }
 
-    void refreshManagedRun(sessionId);
+    void refreshManagedRun(sessionId, {
+      preservePendingRecovery: shouldAwaitManagedRunRecoveryRunId(persisted),
+    });
     return () => {
       clearManagedRunReconnectTimer();
+      clearManagedRunRefreshPollTimer();
     };
-  }, [clearManagedRunReconnectTimer, refreshManagedRun, sessionId]);
+  }, [clearManagedRunReconnectTimer, clearManagedRunRefreshPollTimer, refreshManagedRun, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !isManagedAltusMode() || managedRunId) {
+      clearManagedRunRefreshPollTimer();
+      return;
+    }
+
+    const persisted = readManagedRunRecoveryState(sessionId);
+    if (!shouldAwaitManagedRunRecoveryRunId(persisted)) {
+      clearManagedRunRefreshPollTimer();
+      return;
+    }
+
+    const tick = () => {
+      void refreshManagedRun(sessionId, { preservePendingRecovery: true });
+      managedRunRefreshPollTimerRef.current = window.setTimeout(tick, 1000);
+    };
+
+    clearManagedRunRefreshPollTimer();
+    managedRunRefreshPollTimerRef.current = window.setTimeout(tick, 1000);
+
+    return () => {
+      clearManagedRunRefreshPollTimer();
+    };
+  }, [clearManagedRunRefreshPollTimer, managedRunId, refreshManagedRun, sessionId]);
 
   useEffect(() => {
     if (isManagedAltusMode()) {

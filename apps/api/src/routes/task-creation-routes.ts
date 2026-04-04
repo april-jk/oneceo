@@ -516,8 +516,7 @@ function normalizeLiveSessionStage(
 }
 
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
-  const environments = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 200);
-  return environments[0] || null;
+  return sandboxExecutionEnvironmentDAO.findCanonicalByTaskSessionId(taskSessionId);
 }
 
 async function reconcileTaskSessionDuplicateEnvironments(

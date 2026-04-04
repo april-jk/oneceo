@@ -1,25 +1,15 @@
 import express from 'express';
 import { adminAuthService } from '../services/admin-auth-service';
 import { getPublicErrorMessage } from '../utils/error-response';
+import { createRequireInternalToken } from './internal-auth-middleware';
 
 const router = express.Router();
-
-function asText(value: unknown) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function requireInternalToken(req: express.Request) {
-  const configured = asText(process.env.ONECEO_INTERNAL_TOKEN);
-  if (!configured) return;
-  const incoming = asText(req.header('x-oneceo-internal-token'));
-  if (!incoming || incoming !== configured) {
-    throw new Error('forbidden');
-  }
-}
+router.use(createRequireInternalToken({
+  disabledMessage: '管理员认证内部接口未启用',
+}));
 
 router.post('/admin-auth/login', async (req, res) => {
   try {
-    requireInternalToken(req);
     const result = await adminAuthService.login(
       {
         loginName: req.body?.loginName,
@@ -35,34 +25,30 @@ router.post('/admin-auth/login', async (req, res) => {
       },
     });
   } catch (error: any) {
-    const forbidden = error?.message === 'forbidden';
-    return res.status(forbidden ? 403 : 400).json({
+    return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(forbidden ? '无权访问内部管理员认证接口' : error?.message || '管理员登录失败'),
+      error: getPublicErrorMessage(error?.message || '管理员登录失败'),
     });
   }
 });
 
 router.post('/admin-auth/logout', async (req, res) => {
   try {
-    requireInternalToken(req);
     await adminAuthService.logout(req.body?.sessionToken || '');
     return res.json({
       success: true,
       data: { ok: true },
     });
   } catch (error: any) {
-    const forbidden = error?.message === 'forbidden';
-    return res.status(forbidden ? 403 : 400).json({
+    return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(forbidden ? '无权访问内部管理员认证接口' : error?.message || '管理员退出失败'),
+      error: getPublicErrorMessage(error?.message || '管理员退出失败'),
     });
   }
 });
 
 router.post('/admin-auth/resolve', async (req, res) => {
   try {
-    requireInternalToken(req);
     const resolved = await adminAuthService.resolveAdminBySessionToken(req.body?.sessionToken || '');
     if (!resolved?.adminUser) {
       return res.status(401).json({
@@ -77,10 +63,9 @@ router.post('/admin-auth/resolve', async (req, res) => {
       },
     });
   } catch (error: any) {
-    const forbidden = error?.message === 'forbidden';
-    return res.status(forbidden ? 403 : 400).json({
+    return res.status(400).json({
       success: false,
-      error: getPublicErrorMessage(forbidden ? '无权访问内部管理员认证接口' : error?.message || '管理员会话解析失败'),
+      error: getPublicErrorMessage(error?.message || '管理员会话解析失败'),
     });
   }
 });

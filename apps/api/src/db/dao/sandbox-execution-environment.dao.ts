@@ -2,6 +2,54 @@ import { db } from '../../config/database';
 import { sandboxExecutionEnvironments, type NewSandboxExecutionEnvironment } from '../schema';
 import { eq, desc, sql } from 'drizzle-orm';
 
+type SandboxExecutionEnvironmentRecord = Awaited<ReturnType<SandboxExecutionEnvironmentDAO['getBySessionId']>>;
+
+function asText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function canonicalTaskSessionEnvironmentScore(
+  environment: SandboxExecutionEnvironmentRecord | undefined | null
+) {
+  if (!environment) return -1;
+
+  const metadata = (environment.metadata || {}) as Record<string, unknown>;
+  const replacementSandboxId = asText(metadata.dedupeReplacementSandboxId);
+
+  if (environment.status === 'ready' && !replacementSandboxId) return 5;
+  if (environment.status === 'creating' && !replacementSandboxId) return 4;
+  if (environment.status === 'closing' && !replacementSandboxId) return 3;
+  if (environment.status !== 'closed' && !replacementSandboxId) return 2;
+  if (environment.status === 'closed' && !replacementSandboxId) return 1;
+  return 0;
+}
+
+export function pickCanonicalTaskSessionEnvironment<T extends {
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+}>(environments: T[]): T | null {
+  const items = Array.isArray(environments) ? environments : [];
+  if (items.length === 0) return null;
+
+  return (
+    [...items].sort((left, right) => {
+      const scoreDelta =
+        canonicalTaskSessionEnvironmentScore(right as SandboxExecutionEnvironmentRecord) -
+        canonicalTaskSessionEnvironmentScore(left as SandboxExecutionEnvironmentRecord);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      const createdDelta =
+        new Date(right.createdAt || 0).getTime() -
+        new Date(left.createdAt || 0).getTime();
+      if (createdDelta !== 0) return createdDelta;
+
+      return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
+    })[0] || null
+  );
+}
+
 export class SandboxExecutionEnvironmentDAO {
   async createEnvironment(data: NewSandboxExecutionEnvironment) {
     const [row] = await db.insert(sandboxExecutionEnvironments).values(data).returning();
@@ -42,6 +90,11 @@ export class SandboxExecutionEnvironmentDAO {
       .where(sql`${sandboxExecutionEnvironments.metadata} ->> 'taskSessionId' = ${taskSessionId}`)
       .orderBy(desc(sandboxExecutionEnvironments.updatedAt), desc(sandboxExecutionEnvironments.createdAt))
       .limit(limit);
+  }
+
+  async findCanonicalByTaskSessionId(taskSessionId: string) {
+    const environments = await this.listByTaskSessionId(taskSessionId, 200);
+    return pickCanonicalTaskSessionEnvironment(environments);
   }
 
   async listRecentRegistry(limit: number = 20) {

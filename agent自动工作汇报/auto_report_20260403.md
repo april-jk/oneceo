@@ -260,3 +260,30 @@
 - 计划如何解决：
   - 先以 focused tests 锁住 `#18` 的首轮反馈语义：`run_ack` 可见、`run_status(starting -> running)` 连续、`assistant_delta -> assistant_message` 同 key 收口。
   - 等后续继续推进 `#20/#21/#22` 时，再回到更大范围的 managed 全链路联调与刷新恢复验证。
+
+## 2026-04-03 #20 Altus managed 新会话首轮 session 绑定竞态收口
+
+- 做了什么：
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 新增 route-state helper，把 `location/search` 对 session 的解析与“是否需要继续 defer pending sync”收口成可测逻辑。
+  - 修正 `pendingSessionSyncRef` 的释放时机：不再在 `sessionId state` 一致后立刻清除，而是等 URL 真正落到 `/session/:id` 且不再携带 `?new` / `?sessionId` 之后再释放。
+  - 调整 location/search 同步 effect，在 pending sync 尚未落稳时禁止触发 `resetConversationState(...)`，避免新建任务首轮跳转时把 optimistic user message 和 managed recovery 状态清空。
+  - 在 `apps/web/client/src/tests/managed-session-resolution.test.ts` 补了 pending route sync 相关断言。
+- 遇到什么：
+  - 当前问题本质不是单独的 `bindSessionId()` 或单独的 `loadHistory()`，而是两者之间夹着一个“URL 尚未稳定、但 pending sync 已过早释放”的时间窗。
+- 计划如何解决：
+  - 下一步若继续推进 `#21/#22`，优先把 `latest run` 恢复与 history/recent 回放也收敛到同一套首轮 session 初始化状态机中，减少 managed mode 里这种“状态先后各自正确、组合后却竞态”的问题。
+
+## 2026-04-03 #20 Altus managed 新会话首轮跳转竞态浏览器与接口验证
+
+- 做了什么：
+  - 按测试规范先补了 `docs/单元测试文档/20260403_#20_Altus_managed_新会话首轮跳转竞态测试.md`，明确单元级、浏览器级和接口级验收项。
+  - 先执行了 `managed-session-resolution / managed-history-pending-message / managed-message-stream-identity` 三组 focused tests，确认 route defer、消息 identity 和刷新恢复相关断言通过。
+  - 发现本地 web dev 默认从 `apps/.env` 读取 `VITE_API_BASE_URL=http://oneceo.ai:4000`，导致浏览器没有真正命中本地 API；随后将 web dev 改为显式覆盖本地 API/WS 地址后继续联调。
+  - 用 Playwright 跑通真实浏览器链路：注册用户 -> 当前 `new-task` 页面切 `managed` -> 发送首条消息 -> 跳转 `/session/:id` -> 刷新当前会话页。
+  - 对同一真实用户再调用 session detail 与 history 接口，确认首轮 `user_input`、assistant message 与 `run_completed` 已落库，且 `status/stage=completed`。
+- 遇到什么：
+  - 浏览器日志里仍有与本次修复无关的噪声：`umami` 请求指向 `oneceo.ai:3000` 被拦截，Vite HMR 仍尝试连接 `ws://localhost:3000`。
+  - 注册成功后若再次主动导航到新的 `/new-task?new=...`，当前认证链路偶发跳回登录页；这属于独立问题，不是本次 `#20` session 绑定竞态修复范围。
+- 计划如何解决：
+  - `#20` 本身已经通过真实浏览器和接口双重验证，可以作为已验收结果保留。
+  - 若继续推进后续任务，优先处理独立的认证/重新进入 `new-task?new=` 问题，并把它与 managed route sync 修复拆开追踪，避免混淆回归结论。

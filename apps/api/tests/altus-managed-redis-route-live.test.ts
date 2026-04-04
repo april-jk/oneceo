@@ -407,6 +407,101 @@ test('live route: GET /runs/:runId/stream replays redis run stream before db fal
   }
 });
 
+test('live route: GET /runs/:runId/stream accepts query userId when EventSource cannot send auth header', async () => {
+  const server = await startServer();
+  const ids = buildIds('eeeeeeeeeeee');
+  const scope = buildScope(ids.sessionId, ids.runId, ids.userId);
+  runDaoAny.getRun = async () => ({
+    id: ids.runId,
+    sessionId: ids.sessionId,
+    status: 'running',
+    mode: 'managed',
+    model: 'test-model',
+    stopReason: null,
+    startedAt: new Date(),
+    completedAt: null,
+    updatedAt: new Date(),
+  });
+  sessionDaoAny.getSession = async () => sessionRecord(ids.sessionId, ids.userId);
+
+  await altusRunRedisStateService.registerRun({
+    runId: ids.runId,
+    sessionId: ids.sessionId,
+    userId: ids.userId,
+    model: 'test-model',
+    status: 'running',
+  });
+  await altusRunRedisStateService.appendRunEvent({
+    runId: ids.runId,
+    sessionId: ids.sessionId,
+    userId: ids.userId,
+    eventId: 'event-query-user',
+    eventType: 'assistant_message',
+    sequence: 4,
+    payload: {
+      content: 'from query user id auth',
+    },
+  });
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?afterSequence=3&userId=${ids.userId}`
+    );
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        text += decoder.decode(chunk.value, { stream: true });
+        if (text.includes('from query user id auth')) {
+          break;
+        }
+      }
+    } finally {
+      await response.body?.cancel().catch(() => undefined);
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+
+    assert.match(text, /from query user id auth/);
+    assert.match(text, /event: assistant_message/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('live route: GET /runs/:runId/stream rejects mismatched query userId', async () => {
+  const server = await startServer();
+  const ids = buildIds('ffffffffffff');
+  runDaoAny.getRun = async () => ({
+    id: ids.runId,
+    sessionId: ids.sessionId,
+    status: 'running',
+    mode: 'managed',
+    model: 'test-model',
+    stopReason: null,
+    startedAt: new Date(),
+    completedAt: null,
+    updatedAt: new Date(),
+  });
+  sessionDaoAny.getSession = async () => sessionRecord(ids.sessionId, ids.userId);
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?userId=other-user`
+    );
+    assert.equal(response.status, 403);
+  } finally {
+    await server.close();
+  }
+});
+
 test('live route: POST /runs/:runId/stop writes redis stop request', async () => {
   const server = await startServer();
   const ids = buildIds('cccccccccccc');

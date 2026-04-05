@@ -11,7 +11,20 @@ function asText(value: unknown): string {
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  if (value && typeof value === "object") {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return {};
+    try {
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 function parseAttachmentLine(line: string): TaskCreationUploadedAttachment | null {
@@ -194,24 +207,37 @@ export function resolveUserMessageReferences(input: {
   skills: TaskCreationPlatformSkill[];
 } {
   const record = toRecord(input.metadata);
+  const nestedReferences = toRecord(record.references);
   const fallbackContent = String(input.content || "");
   const originalInput = asText(record.originalInput);
   const baseText = originalInput || fallbackContent;
 
   const metadataAttachments = (
-    Array.isArray(record.attachments) ? record.attachments : []
+    Array.isArray(record.attachments)
+      ? record.attachments
+      : Array.isArray(nestedReferences.attachments)
+        ? nestedReferences.attachments
+        : []
   )
     .map(normalizeAttachment)
     .filter((item): item is TaskCreationUploadedAttachment => Boolean(item));
   const markerAttachments = parseAttachmentReferencesFromText(fallbackContent);
 
   const metadataSkills = (
-    Array.isArray(record.skills) ? record.skills : []
+    Array.isArray(record.skills)
+      ? record.skills
+      : Array.isArray(nestedReferences.skills)
+        ? nestedReferences.skills
+        : []
   )
     .map(normalizeSkill)
     .filter((item): item is TaskCreationPlatformSkill => Boolean(item));
   const managedSkills = (
-    Array.isArray(record.managedSkillContext) ? record.managedSkillContext : []
+    Array.isArray(record.managedSkillContext)
+      ? record.managedSkillContext
+      : Array.isArray(nestedReferences.managedSkillContext)
+        ? nestedReferences.managedSkillContext
+        : []
   )
     .map(normalizeSkill)
     .filter((item): item is TaskCreationPlatformSkill => Boolean(item));

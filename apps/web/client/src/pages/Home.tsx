@@ -5,7 +5,7 @@
  * - 支持对话模式和任务创建智能体
  */
 
-import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, useMemo, type KeyboardEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,10 +24,12 @@ import {
   FileDiff,
   FolderSearch2,
   Search,
+  Plug,
   Terminal,
   ChevronDown,
   ChevronRight,
   Trash2,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -57,6 +59,7 @@ import {
 import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
+import MessageAttachmentReference from "@/components/MessageAttachmentReference";
 import TaskRuntimeDrawer from "@/components/TaskRuntimeDrawer";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AltusArtifactPreviewCard, {
@@ -87,11 +90,19 @@ import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
   deployTaskCreationSession,
   getWorkspaceRawFileUrl,
+  listTaskCreationSkills,
   uploadTaskCreationAttachment,
   type TaskCreationDeliverableArtifact,
   type TaskCreationPlatformSkill,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
 } from "@/lib/task-creation-client";
+import { getMyConnectorAccounts } from "@/lib/connectors-client";
+import {
+  buildSlashText,
+  parseTrailingSlashQuery,
+  stripTrailingSlashQuery,
+  type SlashReferenceKind,
+} from "@/lib/slash-references";
 import {
   appendAttachmentsToPrompt,
   consumePendingDraftAttachments,
@@ -110,6 +121,27 @@ type PersistedMessageScrollAnchor = {
   anchorOffsetTop: number;
   scrollTop: number;
   savedAt: number;
+};
+
+type ComposerReferenceToken = {
+  id: string;
+  kind: SlashReferenceKind;
+  label: string;
+  queryText: string;
+  skill?: TaskCreationPlatformSkill;
+  mcp?: {
+    key: string;
+    name: string;
+    category: string;
+  };
+};
+
+type SlashSuggestion = {
+  id: string;
+  kind: SlashReferenceKind;
+  label: string;
+  subLabel: string;
+  token: ComposerReferenceToken;
 };
 
 function escapeMessageKeySelector(value: string): string {
@@ -182,6 +214,21 @@ export default function Home() {
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [composerReferences, setComposerReferences] = useState<
+    ComposerReferenceToken[]
+  >([]);
+  const [slashSkillCatalog, setSlashSkillCatalog] = useState<
+    TaskCreationPlatformSkill[]
+  >([]);
+  const [slashMcpCatalog, setSlashMcpCatalog] = useState<
+    Array<{ key: string; name: string; category: string }>
+  >(
+    [],
+  );
+  const [slashCatalogLoaded, setSlashCatalogLoaded] = useState(false);
+  const [slashCatalogLoading, setSlashCatalogLoading] = useState(false);
+  const [slashCatalogError, setSlashCatalogError] = useState<string | null>(null);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [altusReplayOpen, setAltusReplayOpen] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
@@ -327,6 +374,130 @@ export default function Home() {
     },
   });
 
+  const slashQuery = useMemo(() => parseTrailingSlashQuery(message), [message]);
+
+  useEffect(() => {
+    if (!slashQuery || slashCatalogLoaded || slashCatalogLoading) {
+      return;
+    }
+    let cancelled = false;
+    setSlashCatalogLoading(true);
+    setSlashCatalogError(null);
+    void (async () => {
+      try {
+        const [skills, connectorAccounts] = await Promise.all([
+          listTaskCreationSkills(),
+          getMyConnectorAccounts(),
+        ]);
+        if (cancelled) return;
+        const nextSkills = Array.isArray(skills) ? skills : [];
+        const catalog = Array.isArray(connectorAccounts.catalog)
+          ? connectorAccounts.catalog.filter(
+              (item): item is (typeof connectorAccounts.catalog)[number] =>
+                Boolean(item && typeof item === "object" && "key" in item),
+            )
+          : [];
+        const accounts = Array.isArray(connectorAccounts.accounts)
+          ? connectorAccounts.accounts.filter(
+              (item): item is (typeof connectorAccounts.accounts)[number] =>
+                Boolean(item && typeof item === "object" && "connectorKey" in item),
+            )
+          : [];
+        const catalogByKey = new Map(
+          catalog.map((item) => [item.key, item] as const),
+        );
+        const nextMcpCatalog = accounts
+          .filter((item) => {
+            if (item.authStatus !== "authorized") return false;
+            const catalogItem = catalogByKey.get(item.connectorKey);
+            return Boolean(catalogItem?.available) && catalogItem?.category === "custom_mcp";
+          })
+          .map((item) => ({
+            key: item.connectorKey,
+            name: catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
+            category: "custom_mcp",
+          }));
+        setSlashSkillCatalog(nextSkills);
+        setSlashMcpCatalog(nextMcpCatalog);
+        setSlashCatalogLoaded(true);
+      } catch (error) {
+        if (cancelled) return;
+        setSlashSkillCatalog([]);
+        setSlashMcpCatalog([]);
+        setSlashCatalogLoaded(false);
+        setSlashCatalogError(
+          error instanceof Error && error.message
+            ? error.message
+            : "引用项加载失败",
+        );
+      } finally {
+        if (cancelled) return;
+        setSlashCatalogLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slashCatalogLoaded, slashQuery]);
+
+  const slashSuggestions = useMemo<SlashSuggestion[]>(() => {
+    if (!slashQuery) return [];
+    const keyword = slashQuery.keyword.trim().toLowerCase();
+    const allowSkill = slashQuery.kind === "all" || slashQuery.kind === "skill";
+    const allowMcp = slashQuery.kind === "all" || slashQuery.kind === "mcp";
+    const list: SlashSuggestion[] = [];
+
+    if (allowSkill) {
+      for (const skill of slashSkillCatalog) {
+        const name = (skill.name || "").toLowerCase();
+        const slug = (skill.slug || "").toLowerCase();
+        if (keyword && !name.includes(keyword) && !slug.includes(keyword)) continue;
+        const id = `skill:${skill.skillId}:${skill.revisionId}`;
+        list.push({
+          id,
+          kind: "skill",
+          label: skill.name,
+          subLabel: `skills · ${skill.slug || skill.skillId}`,
+          token: {
+            id,
+            kind: "skill",
+            label: skill.name,
+            queryText: buildSlashText("skill", skill.slug || skill.name),
+            skill,
+          },
+        });
+      }
+    }
+
+    if (allowMcp) {
+      for (const item of slashMcpCatalog) {
+        const name = (item.name || "").toLowerCase();
+        const key = (item.key || "").toLowerCase();
+        if (keyword && !name.includes(keyword) && !key.includes(keyword)) continue;
+        const id = `mcp:${item.key}`;
+        list.push({
+          id,
+          kind: "mcp",
+          label: item.name,
+          subLabel: `mcp · ${item.key}`,
+          token: {
+            id,
+            kind: "mcp",
+            label: item.name,
+            queryText: buildSlashText("mcp", item.key || item.name),
+            mcp: item,
+          },
+        });
+      }
+    }
+
+    return list.slice(0, 8);
+  }, [slashMcpCatalog, slashQuery, slashSkillCatalog]);
+
+  useEffect(() => {
+    setSlashActiveIndex(0);
+  }, [message, slashSuggestions.length]);
+
   // 自动滚动到最新消息
   useEffect(() => {
     const container = messageScrollRef.current;
@@ -468,6 +639,82 @@ export default function Home() {
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
+  const removeComposerReference = (token: ComposerReferenceToken) => {
+    setComposerReferences((prev) => prev.filter((item) => item.id !== token.id));
+    setMessage((prev) => `${prev}${prev.endsWith(" ") || !prev ? "" : " "}${token.queryText} `);
+  };
+
+  const applySlashSuggestion = (suggestion: SlashSuggestion) => {
+    setMessage((prev) => stripTrailingSlashQuery(prev));
+    setComposerReferences((prev) => {
+      if (prev.some((item) => item.id === suggestion.id)) return prev;
+      return [...prev, suggestion.token];
+    });
+  };
+
+  const handleComposerInputChange = (nextValue: string) => {
+    setMessage(nextValue);
+  };
+
+  const handleComposerKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement>,
+    options?: { submit?: () => void },
+  ) => {
+    const canUseSlash = Boolean(slashQuery) && slashSuggestions.length > 0;
+    const suggestionCount = slashSuggestions.length;
+    if (slashQuery && event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      const current = slashSuggestions[Math.max(0, slashActiveIndex)];
+      if (current) applySlashSuggestion(current);
+      return;
+    }
+    if (canUseSlash) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSlashActiveIndex((prev) =>
+          suggestionCount > 0 ? (prev + 1) % suggestionCount : 0,
+        );
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashActiveIndex((prev) =>
+          suggestionCount > 0 ? (prev - 1 + suggestionCount) % suggestionCount : 0,
+        );
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const current = slashSuggestions[Math.max(0, slashActiveIndex)];
+        if (current) applySlashSuggestion(current);
+        return;
+      }
+      if (event.key === " ") {
+        const current = slashSuggestions[Math.max(0, slashActiveIndex)];
+        if (current) {
+          event.preventDefault();
+          applySlashSuggestion(current);
+          return;
+        }
+      }
+    }
+
+    if (event.key === "Backspace" && !message && composerReferences.length > 0) {
+      event.preventDefault();
+      const last = composerReferences[composerReferences.length - 1];
+      if (last) {
+        setComposerReferences((prev) => prev.slice(0, -1));
+        setMessage(last.queryText);
+      }
+      return;
+    }
+
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      options?.submit?.();
+    }
+  };
+
   const restorePrependedHistoryScroll = async () => {
     const snapshot = prependRestoreRef.current;
     if (!snapshot) return;
@@ -534,20 +781,70 @@ export default function Home() {
   async function submitPrompt(rawInput: string) {
     const trimmed = rawInput.trim();
     const attachmentDrafts = [...attachments];
+    const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
+    const hasReferences = referenceDrafts.length > 0;
+    const displayText = trimmed || (hasAttachments || hasReferences ? "已添加引用" : "");
     const baseText =
-      trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+      trimmed ||
+      (hasAttachments
+        ? DEFAULT_ATTACHMENT_PROMPT
+        : hasReferences
+          ? "请基于我刚刚引用的能力继续处理。"
+          : "");
     if (!baseText) return;
     const altusMode = readAltusMode();
 
     if (hasAttachments) {
       setAttachments([]);
     }
+    if (hasReferences) {
+      setComposerReferences([]);
+    }
 
     try {
       const { uploadableAttachments, selectedSkills } =
         partitionPendingAttachments(attachmentDrafts);
+      const referencedSkills = referenceDrafts
+        .filter((item) => item.kind === "skill")
+        .map((item) => item.skill)
+        .filter((item): item is TaskCreationPlatformSkill => Boolean(item))
+        .map((item) => ({
+          sourceType: item.sourceType,
+          skillId: item.skillId,
+          revisionId: item.revisionId,
+          slug: item.slug,
+          name: item.name,
+          description: item.description,
+          category: item.category,
+          revisionNumber: item.revisionNumber,
+          resourceSummary: item.resourceSummary,
+        }));
+      const mergedSkills = [...selectedSkills, ...referencedSkills].filter(
+        (item, index, list) =>
+          list.findIndex(
+            (current) =>
+              current.skillId === item.skillId &&
+              current.revisionId === item.revisionId,
+          ) === index,
+      );
+      const selectedMcp = referenceDrafts
+        .filter((item) => item.kind === "mcp")
+        .map((item) => item.mcp)
+        .filter(
+          (
+            item,
+          ): item is {
+            key: string;
+            name: string;
+            category: string;
+          } => Boolean(item),
+        )
+        .map((item) => ({
+          key: item.key,
+          name: item.name,
+          category: item.category,
+        }));
       let activeSessionId = (sessionId || "").trim();
       if (altusMode !== "managed" && uploadableAttachments.length > 0 && !activeSessionId) {
         activeSessionId = await ensureSession(displayText || "新建任务会话");
@@ -570,10 +867,16 @@ export default function Home() {
             sessionId: activeSessionId || undefined,
             metadata: hasAttachments
               ? {
-                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
                   originalInput: displayText,
                 }
-              : undefined,
+              : selectedMcp.length
+                ? {
+                    mcpReferences: selectedMcp,
+                    originalInput: displayText,
+                  }
+                : undefined,
             files: uploadableAttachments.map((item) => item.file),
           },
         );
@@ -582,13 +885,19 @@ export default function Home() {
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId || undefined,
-            metadata: uploadedAttachments.length || selectedSkills.length
+            metadata: uploadedAttachments.length || mergedSkills.length
               ? {
                   ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
                   originalInput: displayText,
                 }
-              : undefined,
+              : selectedMcp.length
+                ? {
+                    mcpReferences: selectedMcp,
+                    originalInput: displayText,
+                  }
+                : undefined,
           },
         );
       }
@@ -603,12 +912,15 @@ export default function Home() {
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
       }
+      if (hasReferences) {
+        setComposerReferences(referenceDrafts);
+      }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
   }
 
   const handleSend = () => {
-    if (!message.trim() && attachments.length === 0) return;
+    if (!message.trim() && attachments.length === 0 && composerReferences.length === 0) return;
     setMode("chat");
     void submitPrompt(message);
     setMessage("");
@@ -634,10 +946,17 @@ export default function Home() {
   async function submitQuestionAnswer(rawInput: string) {
     const trimmed = rawInput.trim();
     const attachmentDrafts = [...attachments];
+    const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments ? "已添加附件" : "");
+    const hasReferences = referenceDrafts.length > 0;
+    const displayText = trimmed || (hasAttachments || hasReferences ? "已添加引用" : "");
     const baseText =
-      trimmed || (hasAttachments ? DEFAULT_ATTACHMENT_PROMPT : "");
+      trimmed ||
+      (hasAttachments
+        ? DEFAULT_ATTACHMENT_PROMPT
+        : hasReferences
+          ? "请基于我刚刚引用的能力继续处理。"
+          : "");
     if (!baseText) return;
 
     const altusMode = readAltusMode();
@@ -646,10 +965,53 @@ export default function Home() {
     if (hasAttachments) {
       setAttachments([]);
     }
+    if (hasReferences) {
+      setComposerReferences([]);
+    }
 
     try {
       const { uploadableAttachments, selectedSkills } =
         partitionPendingAttachments(attachmentDrafts);
+      const referencedSkills = referenceDrafts
+        .filter((item) => item.kind === "skill")
+        .map((item) => item.skill)
+        .filter((item): item is TaskCreationPlatformSkill => Boolean(item))
+        .map((item) => ({
+          sourceType: item.sourceType,
+          skillId: item.skillId,
+          revisionId: item.revisionId,
+          slug: item.slug,
+          name: item.name,
+          description: item.description,
+          category: item.category,
+          revisionNumber: item.revisionNumber,
+          resourceSummary: item.resourceSummary,
+        }));
+      const mergedSkills = [...selectedSkills, ...referencedSkills].filter(
+        (item, index, list) =>
+          list.findIndex(
+            (current) =>
+              current.skillId === item.skillId &&
+              current.revisionId === item.revisionId,
+          ) === index,
+      );
+      const selectedMcp = referenceDrafts
+        .filter((item) => item.kind === "mcp")
+        .map((item) => item.mcp)
+        .filter(
+          (
+            item,
+          ): item is {
+            key: string;
+            name: string;
+            category: string;
+          } => Boolean(item),
+        )
+        .map((item) => ({
+          key: item.key,
+          name: item.name,
+          category: item.category,
+        }));
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (altusMode !== "managed" && uploadableAttachments.length > 0 && activeSessionId) {
         uploadedAttachments = await Promise.all(
@@ -665,10 +1027,16 @@ export default function Home() {
           sessionId: activeSessionId,
           metadata: hasAttachments
             ? {
-                ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+                ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
                 originalInput: displayText,
               }
-            : undefined,
+            : selectedMcp.length
+              ? {
+                  mcpReferences: selectedMcp,
+                  originalInput: displayText,
+                }
+              : undefined,
           files: uploadableAttachments.length
             ? uploadableAttachments.map((item) => item.file)
             : undefined,
@@ -678,13 +1046,19 @@ export default function Home() {
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId,
-            metadata: uploadedAttachments.length || selectedSkills.length
+            metadata: uploadedAttachments.length || mergedSkills.length
               ? {
                   ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
                   originalInput: displayText,
                 }
-              : undefined,
+              : selectedMcp.length
+                ? {
+                    mcpReferences: selectedMcp,
+                    originalInput: displayText,
+                  }
+                : undefined,
           },
         );
       }
@@ -698,6 +1072,9 @@ export default function Home() {
           const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
+      }
+      if (hasReferences) {
+        setComposerReferences(referenceDrafts);
       }
       toast.error(error instanceof Error ? error.message : "附件发送失败");
     }
@@ -720,8 +1097,123 @@ export default function Home() {
     [messages],
   );
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
-  const hasSendDraft = Boolean(message.trim()) || attachments.length > 0;
+  const hasSendDraft =
+    Boolean(message.trim()) || attachments.length > 0 || composerReferences.length > 0;
   const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
+  const slashSkillSuggestions = useMemo(
+    () => slashSuggestions.filter((item) => item.kind === "skill"),
+    [slashSuggestions],
+  );
+  const slashMcpSuggestions = useMemo(
+    () => slashSuggestions.filter((item) => item.kind === "mcp"),
+    [slashSuggestions],
+  );
+  const suggestionIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    slashSuggestions.forEach((item, index) => map.set(item.id, index));
+    return map;
+  }, [slashSuggestions]);
+  const composerReferenceTokens = composerReferences.length ? (
+    <div className="flex flex-wrap gap-2">
+      {composerReferences.map((token) => (
+        <button
+          key={token.id}
+          type="button"
+          onClick={() => removeComposerReference(token)}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
+            token.kind === "skill"
+              ? "border-[#34D399]/70 bg-[#ECFDF5] text-[#1E293B]"
+              : "border-[#60A5FA]/70 bg-[#EFF6FF] text-[#1E293B]"
+          }`}
+        >
+          <span className="font-medium">
+            {token.kind === "skill" ? "skill" : "mcp"}
+          </span>
+          <span className="max-w-[180px] truncate">{token.label}</span>
+          <X className="h-3 w-3 text-muted-foreground" />
+        </button>
+      ))}
+    </div>
+  ) : null;
+  const slashSuggestionPanel = slashQuery ? (
+    slashSuggestions.length ? (
+      <div className="space-y-2 rounded-2xl border border-[#CBD5E1] bg-[#FFFFFF] p-2 shadow-[0_12px_40px_rgba(15,23,42,0.08)]">
+        {slashSkillSuggestions.length ? (
+          <div className="space-y-1">
+            <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-[#64748B]">
+              Skills
+            </div>
+            {slashSkillSuggestions.map((item) => {
+              const itemIndex = suggestionIndexById.get(item.id) ?? -1;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => applySlashSuggestion(item)}
+                  className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm transition-colors ${
+                    itemIndex === slashActiveIndex
+                      ? "bg-[#DBEAFE] text-[#1D4ED8]"
+                      : "text-[#0F172A] hover:bg-[#F1F5F9]"
+                  }`}
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#F1F5F9]">
+                    <Terminal className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{item.label}</span>
+                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {slashMcpSuggestions.length ? (
+          <div className="space-y-1">
+            {slashSkillSuggestions.length ? (
+              <div className="mx-2 h-px bg-[#F1F5F9]" />
+            ) : null}
+            <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-[#64748B]">
+              Connectors
+            </div>
+            {slashMcpSuggestions.map((item) => {
+              const itemIndex = suggestionIndexById.get(item.id) ?? -1;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => applySlashSuggestion(item)}
+                  className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left text-sm transition-colors ${
+                    itemIndex === slashActiveIndex
+                      ? "bg-[#DBEAFE] text-[#1D4ED8]"
+                      : "text-[#0F172A] hover:bg-[#F1F5F9]"
+                  }`}
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#F1F5F9]">
+                    <Plug className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{item.label}</span>
+                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    ) : (
+      <div className="px-1.5 py-1 text-xs text-[#64748B]">
+        {slashCatalogLoading
+          ? "正在加载引用项..."
+          : slashCatalogError
+            ? `引用项加载失败：${slashCatalogError}`
+            : `未找到可引用项（skills: ${slashSkillCatalog.length}，connectors: ${slashMcpCatalog.length}），试试 /xxx-skills 或先在连接器里完成 MCP 授权`}
+      </div>
+    )
+  ) : null;
 
   const normalizePath = (value: string) =>
     value
@@ -1050,30 +1542,35 @@ export default function Home() {
           className="mt-auto shrink-0 border-t border-border/70 bg-background/95 backdrop-blur"
         >
           <div className="px-6 py-3">
-            <div className="w-full rounded-3xl border-2 border-border bg-card shadow-lg transition-all duration-200 hover:shadow-xl">
+            {slashSuggestionPanel ? (
+              <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+            ) : null}
+            <div className="w-full rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)]">
               <div className="space-y-3 p-4">
                 <Textarea
                   placeholder={
                     currentQuestion ? "请输入问题回答..." : "继续对话..."
                   }
                   value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      if (currentQuestion) {
-                        handleAnswerQuestion(message);
-                        setMessage("");
-                      } else if (showStopButton) {
-                        handleStop();
-                      } else {
-                        handleSend();
-                      }
-                    }
-                  }}
-                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base focus-visible:ring-0"
+                  onChange={(e) => handleComposerInputChange(e.target.value)}
+                  onKeyDown={(e) =>
+                    handleComposerKeyDown(e, {
+                      submit: () => {
+                        if (currentQuestion) {
+                          handleAnswerQuestion(message);
+                          setMessage("");
+                        } else if (showStopButton) {
+                          handleStop();
+                        } else {
+                          handleSend();
+                        }
+                      },
+                    })
+                  }
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0"
                   rows={2}
                 />
+                {composerReferenceTokens}
 
                 <AttachmentChipList
                   attachments={attachments}
@@ -1097,7 +1594,7 @@ export default function Home() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-muted"
+                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-[#F1F5F9]"
                               >
                                 <Sparkles className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm text-muted-foreground">
@@ -1151,7 +1648,7 @@ export default function Home() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 rounded-xl transition-colors hover:bg-muted"
+                            className="h-9 w-9 rounded-full transition-colors hover:bg-[#F1F5F9]"
                           >
                             <Mic className="w-4 h-4 text-muted-foreground" />
                           </Button>
@@ -1183,7 +1680,7 @@ export default function Home() {
                                   : !message.trim() && attachments.length === 0)
                             }
                             size="icon"
-                            className="h-9 w-9 rounded-xl bg-foreground transition-colors hover:bg-foreground/90 disabled:opacity-50"
+                            className="h-9 w-9 rounded-full bg-[#0F172A] transition-colors hover:bg-[#1E293B] disabled:opacity-50"
                           >
                             {showStopButton ? (
                               <Square className="w-4 h-4" />
@@ -1275,24 +1772,27 @@ export default function Home() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3, duration: 0.4 }}
-                    className="bg-card border-2 border-border rounded-3xl shadow-lg hover:shadow-xl transition-all duration-200"
+                    className="relative"
                   >
+                    {slashSuggestionPanel ? (
+                      <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+                    ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div className="p-4 space-y-3">
+                    <div className="rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)] space-y-3">
                       {/* Textarea */}
                       <Textarea
                         placeholder="Type your message here..."
                         value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSend();
-                          }
-                        }}
-                        className="border-0 bg-transparent focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
+                        onChange={(e) => handleComposerInputChange(e.target.value)}
+                        onKeyDown={(e) =>
+                          handleComposerKeyDown(e, {
+                            submit: () => handleSend(),
+                          })
+                        }
+                        className="border-0 bg-transparent text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
                         rows={4}
                       />
+                      {composerReferenceTokens}
 
                       <AttachmentChipList
                         attachments={attachments}
@@ -1319,7 +1819,7 @@ export default function Home() {
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
+                                      className="h-9 px-3 rounded-xl hover:bg-[#F1F5F9] transition-colors gap-2"
                                     >
                                       <Sparkles className="w-4 h-4 text-muted-foreground" />
                                       <span className="text-sm text-muted-foreground">
@@ -1384,7 +1884,7 @@ export default function Home() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
+                                  className="h-9 w-9 rounded-full hover:bg-[#F1F5F9] transition-colors"
                                 >
                                   <Mic className="w-4 h-4 text-muted-foreground" />
                                 </Button>
@@ -1400,10 +1900,12 @@ export default function Home() {
                                 <Button
                                   onClick={handleSend}
                                   disabled={
-                                    !message.trim() && attachments.length === 0
+                                    !message.trim() &&
+                                    attachments.length === 0 &&
+                                    composerReferences.length === 0
                                   }
                                   size="icon"
-                                  className="h-9 w-9 rounded-xl bg-foreground hover:bg-foreground/90 transition-colors disabled:opacity-50"
+                                  className="h-9 w-9 rounded-full bg-[#0F172A] hover:bg-[#1E293B] transition-colors disabled:opacity-50"
                                 >
                                   <Send className="w-4 h-4" />
                                 </Button>
@@ -1556,6 +2058,7 @@ export type ChatItem =
   | {
       kind: "user";
       text: string;
+      skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
@@ -1619,6 +2122,7 @@ export type ChatItem =
   | {
       kind: "opencode_turn";
       userText: string;
+      skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
       userMessageKey?: string;
       assistantParts: OpencodeTurnPart[];
@@ -1778,11 +2282,18 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
   const pushUser = (
     text: string,
+    skills?: TaskCreationPlatformSkill[],
     attachments?: UploadedTaskAttachment[],
     messageKey?: string,
   ) => {
     const normalized = normalizeForDedup(text);
-    if (!normalized && (!attachments || attachments.length === 0)) return;
+    if (
+      !normalized &&
+      (!skills || skills.length === 0) &&
+      (!attachments || attachments.length === 0)
+    ) {
+      return;
+    }
     const last = items[items.length - 1];
     if (messageKey && last?.messageKey === messageKey) {
       return;
@@ -1790,6 +2301,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (
       last?.kind === "user" &&
       normalizeForDedup(last.text) === normalized &&
+      JSON.stringify(last.skills || []) === JSON.stringify(skills || []) &&
       JSON.stringify(last.attachments || []) ===
         JSON.stringify(attachments || [])
     ) {
@@ -1798,9 +2310,38 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     items.push({
       kind: "user",
       text,
+      skills,
       attachments,
       messageKey,
     });
+  };
+
+  const extractUserSkills = (
+    metadata: unknown,
+  ): TaskCreationPlatformSkill[] => {
+    const record = toRecord(metadata);
+    const raw = Array.isArray(record.skills) ? record.skills : [];
+    return raw
+      .map((item) => toRecord(item))
+      .map((item) => ({
+        sourceType: (
+          asText(item.sourceType) === "custom" ? "custom" : "platform"
+        ) as "custom" | "platform",
+        skillId: asText(item.skillId),
+        revisionId: asText(item.revisionId),
+        slug: asText(item.slug),
+        name: asText(item.name),
+        description: asText(item.description),
+        category: asText(item.category),
+        revisionNumber:
+          typeof item.revisionNumber === "number" && Number.isFinite(item.revisionNumber)
+            ? item.revisionNumber
+            : item.revisionNumber === null
+              ? null
+              : Number(String(item.revisionNumber || "")) || null,
+        resourceSummary: null,
+      }))
+      .filter((item) => item.skillId && item.revisionId && item.name);
   };
 
   const extractUserAttachments = (
@@ -1983,6 +2524,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       const metadata = toRecord(message.metadata);
       pushUser(
         asText(metadata.originalInput) || message.content || "",
+        extractUserSkills(metadata),
         extractUserAttachments(metadata),
         message.messageKey,
       );
@@ -2630,6 +3172,7 @@ function collapseRepeatedChatAuthors(items: ChatItem[]): ChatItem[] {
 
 type DirectTurnDraft = {
   userText: string;
+  skills?: TaskCreationPlatformSkill[];
   attachments?: UploadedTaskAttachment[];
   userMessageKey?: string;
   assistantParts: OpencodeTurnPart[];
@@ -2658,6 +3201,34 @@ function extractUserAttachmentsFromMetadata(
       uploadedAt: asText(item.uploadedAt) || undefined,
     }))
     .filter((item) => item.name || item.path);
+}
+
+function extractUserSkillsFromMetadata(
+  metadata: unknown,
+): TaskCreationPlatformSkill[] {
+  const record = toRecord(metadata);
+  const raw = Array.isArray(record.skills) ? record.skills : [];
+  return raw
+    .map((item) => toRecord(item))
+    .map((item) => ({
+      sourceType: (
+        asText(item.sourceType) === "custom" ? "custom" : "platform"
+      ) as "custom" | "platform",
+      skillId: asText(item.skillId),
+      revisionId: asText(item.revisionId),
+      slug: asText(item.slug),
+      name: asText(item.name),
+      description: asText(item.description),
+      category: asText(item.category),
+      revisionNumber:
+        typeof item.revisionNumber === "number" && Number.isFinite(item.revisionNumber)
+          ? item.revisionNumber
+          : item.revisionNumber === null
+            ? null
+            : Number(String(item.revisionNumber || "")) || null,
+      resourceSummary: null,
+    }))
+    .filter((item) => item.skillId && item.revisionId && item.name);
 }
 
 function cleanHeadingText(value: string) {
@@ -2721,11 +3292,13 @@ function resolveOpencodeEventMessageId(metadata: Record<string, unknown>) {
 
 function createDirectTurnDraft(
   userText = "",
+  skills?: TaskCreationPlatformSkill[],
   attachments?: UploadedTaskAttachment[],
   userMessageKey?: string,
 ): DirectTurnDraft {
   return {
     userText,
+    skills,
     attachments,
     userMessageKey,
     assistantParts: [],
@@ -2928,6 +3501,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       directTurns.push(
         createDirectTurnDraft(
           message.content || "",
+          extractUserSkillsFromMetadata(message.metadata),
           extractUserAttachmentsFromMetadata(message.metadata),
           message.messageKey,
         ),
@@ -3092,6 +3666,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     items.push({
       kind: "opencode_turn",
       userText: turn.userText,
+      skills: turn.skills,
       attachments: turn.attachments,
       userMessageKey: turn.userMessageKey,
       assistantParts,
@@ -3293,11 +3868,15 @@ function MessageBubble({
       >
         <div className="w-full flex justify-end" data-message-key={item.userMessageKey}>
           <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+            {item.skills?.length || item.attachments?.length ? (
+              <MessageAttachmentReference
+                skills={item.skills}
+                attachments={item.attachments}
+                tone="inverse"
+              />
+            ) : null}
             {item.userText ? (
               <span className="whitespace-pre-wrap break-words">{item.userText}</span>
-            ) : null}
-            {item.attachments?.length ? (
-              <AttachmentChipList attachments={item.attachments} tone="inverse" />
             ) : null}
           </div>
         </div>
@@ -3410,11 +3989,15 @@ function MessageBubble({
         data-message-key={item.messageKey}
       >
         <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+          {item.skills?.length || item.attachments?.length ? (
+            <MessageAttachmentReference
+              skills={item.skills}
+              attachments={item.attachments}
+              tone="inverse"
+            />
+          ) : null}
           {item.text ? (
             <span className="whitespace-pre-wrap break-words">{item.text}</span>
-          ) : null}
-          {item.attachments?.length ? (
-            <AttachmentChipList attachments={item.attachments} tone="inverse" />
           ) : null}
         </div>
       </motion.div>

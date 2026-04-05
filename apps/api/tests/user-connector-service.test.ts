@@ -295,6 +295,24 @@ test('getMeSnapshot loads from db on miss and writes redis cache', async () => {
   assert.equal(Array.isArray(setMePayload?.profiles), true);
 });
 
+test('getMeSnapshot falls back to db when redis get throws', async () => {
+  mock.method(connectorRedisCacheService, 'isEnabled', () => true);
+  mock.method(connectorRedisCacheService, 'getMe', async () => {
+    throw new Error('redis injected fault');
+  });
+  const setMeMock = mock.method(connectorRedisCacheService, 'setMe', async () => {});
+  mock.method(userConnectorService as any, 'listCatalog', async () => [{ key: 'github' }]);
+  mock.method(userConnectorService as any, 'listUserProfiles', async () => [{ profileId: 'profile-fallback' }]);
+
+  const snapshot = await userConnectorService.getMeSnapshot('user-redis-fault');
+
+  assert.equal(snapshot.cache.hit, false);
+  assert.equal(snapshot.cache.source, 'db');
+  assert.equal(snapshot.catalog.length, 1);
+  assert.equal(snapshot.profiles.length, 1);
+  assert.equal(setMeMock.mock.callCount(), 0);
+});
+
 test('createProfile invalidates connectors me cache after persistence', async () => {
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);

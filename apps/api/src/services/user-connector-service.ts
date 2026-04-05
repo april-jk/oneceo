@@ -423,8 +423,15 @@ export class UserConnectorService {
   }
 
   private async invalidateMeCache(userId: string) {
-    await connectorRedisCacheService.invalidateMe(userId);
-    console.info('[connector_cache_invalidate]', { userId });
+    try {
+      await connectorRedisCacheService.invalidateMe(userId);
+      console.info('[connector_cache_invalidate]', { userId });
+    } catch (error) {
+      console.warn('[connector_cache_invalidate_failed]', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async getMeSnapshot(userId: string): Promise<ConnectorMeSnapshot> {
@@ -434,7 +441,17 @@ export class UserConnectorService {
       return this.loadMeSnapshotFromDb(userId);
     }
 
-    const cached = await connectorRedisCacheService.getMe(userId);
+    let cached: Awaited<ReturnType<typeof connectorRedisCacheService.getMe>> = null;
+    try {
+      cached = await connectorRedisCacheService.getMe(userId);
+    } catch (error) {
+      console.warn('[connector_cache_get_failed]', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      console.info('[connector_cache_fallback_db]', { userId, reason: 'redis_get_failed' });
+      return this.loadMeSnapshotFromDb(userId);
+    }
     if (cached && Array.isArray(cached.catalog) && Array.isArray(cached.profiles)) {
       console.info('[connector_cache_hit]', { userId });
       return {
@@ -456,11 +473,18 @@ export class UserConnectorService {
 
     const loadPromise = (async () => {
       const snapshot = await this.loadMeSnapshotFromDb(userId);
-      await connectorRedisCacheService.setMe(userId, {
-        catalog: snapshot.catalog,
-        profiles: snapshot.profiles,
-      });
-      console.info('[connector_cache_set]', { userId });
+      try {
+        await connectorRedisCacheService.setMe(userId, {
+          catalog: snapshot.catalog,
+          profiles: snapshot.profiles,
+        });
+        console.info('[connector_cache_set]', { userId });
+      } catch (error) {
+        console.warn('[connector_cache_set_failed]', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return snapshot;
     })();
     this.inFlightMeLoads.set(userId, loadPromise);

@@ -4,6 +4,7 @@ import type {
 } from "@/lib/task-creation-client";
 
 const ATTACHED_LINE_REGEX = /^\[Attached:\s*(.*?)\s*->\s*(.*?)\]$/i;
+const MOJIBAKE_HINT_REGEX = /[Ãâåçéèêëìíîïðñòóôõöøùúûüýþÿ]/;
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -16,30 +17,65 @@ function toRecord(value: unknown): Record<string, unknown> {
 function parseAttachmentLine(line: string): TaskCreationUploadedAttachment | null {
   const match = line.match(ATTACHED_LINE_REGEX);
   if (!match) return null;
-  const name = asText(match[1]);
+  const name = normalizeAttachmentName(asText(match[1]), asText(match[2]));
   const path = asText(match[2]);
   if (!name && !path) return null;
   return {
-    name: name || path.split("/").pop() || "",
+    name: name || extractReadableNameFromPath(path),
     path: path || name,
-    size: 0,
+    size: Number.NaN,
   };
+}
+
+function extractReadableNameFromPath(path: string): string {
+  const base = asText(path).split("/").pop() || "";
+  if (!base) return "";
+  return base.replace(/^\d{10,}-[a-f0-9]{6,}-/i, "");
+}
+
+function looksLikeMojibake(value: string): boolean {
+  if (!value) return false;
+  if (/[\u4e00-\u9fff]/.test(value)) return false;
+  return MOJIBAKE_HINT_REGEX.test(value);
+}
+
+function decodeUtf8Mojibake(value: string): string {
+  try {
+    const bytes = Uint8Array.from(value, (char) => char.charCodeAt(0) & 0xff);
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+    return decoded || value;
+  } catch {
+    return value;
+  }
+}
+
+function normalizeAttachmentName(name: string, path: string): string {
+  const trimmed = asText(name);
+  if (!trimmed) return extractReadableNameFromPath(path);
+  const decoded = looksLikeMojibake(trimmed) ? decodeUtf8Mojibake(trimmed) : trimmed;
+  if (decoded && !looksLikeMojibake(decoded)) {
+    return decoded;
+  }
+  const fallback = extractReadableNameFromPath(path);
+  return fallback || decoded || trimmed;
 }
 
 function normalizeAttachment(
   value: unknown,
 ): TaskCreationUploadedAttachment | null {
   const item = toRecord(value);
-  const name = asText(item.name);
   const path = asText(item.path);
+  const name = normalizeAttachmentName(asText(item.name), path);
   if (!name && !path) return null;
+  const hasSize = Object.prototype.hasOwnProperty.call(item, "size");
+  const parsedSize =
+    typeof item.size === "number" && Number.isFinite(item.size)
+      ? item.size
+      : Number(String(item.size || ""));
   return {
-    name: name || path.split("/").pop() || "",
+    name: name || extractReadableNameFromPath(path),
     path: path || name,
-    size:
-      typeof item.size === "number" && Number.isFinite(item.size)
-        ? item.size
-        : Number(String(item.size || 0)) || 0,
+    size: hasSize && Number.isFinite(parsedSize) ? parsedSize : Number.NaN,
     mimeType: asText(item.mimeType) || undefined,
     uploadedAt: asText(item.uploadedAt) || undefined,
     attachmentKind: "uploaded_file",

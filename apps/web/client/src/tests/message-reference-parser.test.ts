@@ -90,4 +90,46 @@ describe("message-reference-parser", () => {
     expect(resolved.skills[0]?.revisionId).toBe("skill-legacy");
     expect(resolved.skills[0]?.name).toBe("Legacy Skill");
   });
+
+  it("parses skills from stringified metadata", () => {
+    const resolved = resolveUserMessageReferences({
+      content: "执行技能",
+      metadata: JSON.stringify({
+        originalInput: "执行技能",
+        skills: [
+          {
+            skillId: "skill-json",
+            revisionId: "rev-json",
+            slug: "json-skill",
+            name: "JSON Skill",
+          },
+        ],
+      }),
+    });
+
+    expect(resolved.text).toBe("执行技能");
+    expect(resolved.skills).toHaveLength(1);
+    expect(resolved.skills[0]?.skillId).toBe("skill-json");
+  });
+
+  it("parses references from nested references object", () => {
+    const resolved = resolveUserMessageReferences({
+      content: "引用测试",
+      metadata: {
+        references: {
+          managedSkillContext: [
+            {
+              skillId: "skill-nested",
+              revisionId: "rev-nested",
+              slug: "nested-skill",
+              name: "Nested Skill",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(resolved.skills).toHaveLength(1);
+    expect(resolved.skills[0]?.skillId).toBe("skill-nested");
+  });
 });

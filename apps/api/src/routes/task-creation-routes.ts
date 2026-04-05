@@ -2268,12 +2268,36 @@ async function resolveRenderableTimelineMessages(
   const shouldPreferOpencodeNativeHistory =
     asText(session?.mode) === 'sandbox' &&
     (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+  const shouldPreferDatabaseTimelineForManaged =
+    asText(session?.mode) === 'altus' ||
+    asText(session?.executor) === 'altus' ||
+    asText(session?.runtime?.executionMode) === 'managed' ||
+    asText(session?.runtime?.executor) === 'altus';
 
-  let persistedMessages: TimelineMessage[] | null = null;
-  const loadPersistedMessages = async () => {
-    if (persistedMessages) return persistedMessages;
-    persistedMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
-    return persistedMessages;
+  let fileStoreMessages: TimelineMessage[] | null = null;
+  const loadFileStoreMessages = async () => {
+    if (fileStoreMessages) return fileStoreMessages;
+    fileStoreMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
+    return fileStoreMessages;
+  };
+
+  let dbMessages: TimelineMessage[] | null = null;
+  const loadDatabaseMessages = async () => {
+    if (dbMessages) return dbMessages;
+    dbMessages = mapStoredMessagesToTimeline(await taskCreationSessionDAO.getMessages(sessionId));
+    return dbMessages;
+  };
+
+  const loadPrimaryTimelineMessages = async () => {
+    if (!shouldPreferDatabaseTimelineForManaged) {
+      return loadFileStoreMessages();
+    }
+    const primaryDbMessages = await loadDatabaseMessages();
+    if (primaryDbMessages.length === 0) {
+      return loadFileStoreMessages();
+    }
+    const fallbackFileMessages = await loadFileStoreMessages();
+    return mergeUserReferenceMetadataFromPersisted(primaryDbMessages, fallbackFileMessages);
   };
 
   let messages: TimelineMessage[] | null = null;
@@ -2283,7 +2307,7 @@ async function resolveRenderableTimelineMessages(
     });
     const normalizedNativeMessages = nativeMessages ? attachTimelineMessageKeys(nativeMessages) : null;
     if (normalizedNativeMessages && normalizedNativeMessages.length > 0) {
-      const fallbackMessages = await loadPersistedMessages();
+      const fallbackMessages = await loadPrimaryTimelineMessages();
       const mergedNativeMessages = mergeUserReferenceMetadataFromPersisted(
         normalizedNativeMessages,
         fallbackMessages
@@ -2297,7 +2321,7 @@ async function resolveRenderableTimelineMessages(
   }
 
   if (!messages || messages.length === 0) {
-    messages = await loadPersistedMessages();
+    messages = await loadPrimaryTimelineMessages();
   }
   if (!messages || messages.length === 0) {
     const fallback = await taskCreationSessionDAO.getMessages(sessionId);

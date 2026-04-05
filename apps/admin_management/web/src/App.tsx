@@ -1263,9 +1263,9 @@ export default function App() {
       <div className="auth-shell">
         <div className="auth-background" aria-hidden="true" />
         <section className="admin-auth-card">
-          <p className="eyebrow">Oneceo 管理后台</p>
-          <h1>正在校验管理员身份...</h1>
-          <p className="admin-auth-copy">后台管理入口会先验证独立的管理员会话，不与用户态身份共表。</p>
+          <p className="eyebrow">ONECEO 管理控制台</p>
+          <h1>正在验证管理员会话</h1>
+          <p className="admin-auth-loading-copy">请稍候，系统正在检查当前登录状态。</p>
         </section>
       </div>
     );
@@ -1277,21 +1277,19 @@ export default function App() {
         <div className="auth-background" aria-hidden="true" />
         <div className="admin-auth-layout">
           <section className="admin-auth-hero">
-            <p className="eyebrow">Oneceo 管理后台</p>
-            <h1>管理员后台与用户态彻底分离。</h1>
-            <p className="admin-auth-copy">
-              后台使用独立的 <code>admin_users</code> 和 <code>admin_user_sessions</code>，不会复用普通用户登录态。
-            </p>
+            <p className="eyebrow">ONECEO 管理控制台</p>
+            <h1>平台管理与运维控制台</h1>
+            <p className="admin-auth-copy">用于访问平台治理、运行状态与配置管理能力。仅限已授权管理员登录。</p>
             <div className="admin-auth-badges">
-              <span>独立管理员表</span>
-              <span>独立 Cookie</span>
-              <span>统一治理入口</span>
+              <span>平台治理</span>
+              <span>运行监控</span>
+              <span>配置管理</span>
             </div>
           </section>
 
           <section className="admin-auth-card">
-            <p className="eyebrow">管理员登录</p>
-            <h2>进入治理控制台</h2>
+            <p className="eyebrow">管理员入口</p>
+            <h2>管理员登录</h2>
             <form className="admin-auth-form" onSubmit={handleAdminLogin}>
               <label>
                 <span>登录名</span>
@@ -1307,8 +1305,8 @@ export default function App() {
                 />
               </label>
               {authError ? <div className="auth-error-banner">{authError}</div> : null}
-              <button type="submit" className="primary-btn" disabled={authSubmitting}>
-                {authSubmitting ? '登录中...' : '登录后台'}
+              <button type="submit" className="primary-btn admin-auth-submit-btn" disabled={authSubmitting}>
+                {authSubmitting ? '登录中...' : '登录'}
               </button>
             </form>
           </section>

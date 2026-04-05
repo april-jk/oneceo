@@ -83,11 +83,41 @@ function normalizeAttachment(
 }
 
 function normalizeSkill(value: unknown): TaskCreationPlatformSkill | null {
+  if (typeof value === "string") {
+    const name = asText(value);
+    if (!name) return null;
+    const fallbackId = `legacy:${name}`;
+    return {
+      sourceType: "platform",
+      skillId: fallbackId,
+      revisionId: fallbackId,
+      slug: name.toLowerCase().replace(/[^a-z0-9-_]+/g, "-"),
+      name,
+      description: "",
+      category: "general",
+      revisionNumber: null,
+      resourceSummary: null,
+    };
+  }
+
   const item = toRecord(value);
-  const skillId = asText(item.skillId);
-  const revisionId = asText(item.revisionId);
-  const name = asText(item.name);
-  if (!skillId || !revisionId || !name) return null;
+  const skillId =
+    asText(item.skillId) ||
+    asText(item.skill_id) ||
+    asText(item.id) ||
+    asText(item.slug);
+  const revisionId =
+    asText(item.revisionId) ||
+    asText(item.revision_id) ||
+    asText(item.publishedRevisionId) ||
+    skillId;
+  const name =
+    asText(item.name) ||
+    asText(item.title) ||
+    asText(item.displayName) ||
+    asText(item.slug) ||
+    skillId;
+  if (!skillId || !name) return null;
   return {
     sourceType: asText(item.sourceType) === "custom" ? "custom" : "platform",
     skillId,
@@ -124,7 +154,7 @@ function dedupeSkills(skills: TaskCreationPlatformSkill[]): TaskCreationPlatform
   const seen = new Set<string>();
   const result: TaskCreationPlatformSkill[] = [];
   for (const item of skills) {
-    const key = `${item.skillId}|${item.revisionId}`;
+    const key = `${asText(item.skillId)}|${asText(item.revisionId) || asText(item.skillId)}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
     result.push(item);

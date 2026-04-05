@@ -39,6 +39,8 @@
 | M10 | `11_Altus与Suna调度架构差异整改清单.md` | Altus 当前实现与 Suna 在 run 调度、state、manager、execution engine、前端消息适配上的差异清单与代码级整改索引 |
 | M11 | `12_Suna预览卡片与Altus产物预览对齐设计.md` | Suna 的过程预览、完成卡片、HTML iframe 预览，以及 `Actions / Files / replay` 查看器与 oneceo Altus 对齐设计 |
 | M12 | `13_Suna流式执行链路与SSE事件流研究.md` | Suna 的 run 级 SSE、流式模型执行、tool output stream、前端重组机制，以及其与 oneceo 当前 `upstream_timeout` 问题的直接对照研究 |
+| M13 | `14_对话消息附加内容引用样式优化_[20260404-2307已采用].md` | 对话消息中 `Skills / 附件` 的消息级引用样式优化方案，聚焦附加内容归属表达与统一视觉结构 |
+| M14 | `15_输入框斜线引用与Token化交互优化_[20260405-1738已采用].md` | 输入框内 `/xxxx` 斜线引用、确认后 token 渲染、删除回退文本的交互方案，覆盖 skills 与 mcp |
 
 除 `M9-M12` 的专题研究外，`M0-M8` 每篇文档末尾也必须提供对应的 `Suna 代码参照`，开发时优先按该模块末尾列出的源码入口回查，不允许只依据概念描述实现。
 

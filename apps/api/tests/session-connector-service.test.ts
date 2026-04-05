@@ -38,7 +38,7 @@ function buildProfile(connectorKey: 'supabase' | 'vercel') {
   } as any;
 }
 
-test('buildProviderTransport injects proxy env for supabase remote transport', () => {
+test('buildProviderTransport injects proxy env for supabase local bridge transport', () => {
   process.env.ONECEO_PROXY_ENABLED = 'true';
   process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
   process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
@@ -47,7 +47,11 @@ test('buildProviderTransport injects proxy env for supabase remote transport', (
   const serviceAny = sessionConnectorService as any;
   const result = serviceAny.buildProviderTransport('supabase', buildProfile('supabase'), null);
 
-  assert.equal(result.transport.type, 'remote_sse');
+  assert.equal(result.transport.type, 'local_stdio');
+  assert.equal(result.transport.command[0], 'node');
+  assert.equal(result.transport.command[1], '-e');
+  assert.match(result.transport.command[2], /SUPABASE_MCP_URL/);
+  assert.equal(result.transport.env.SUPABASE_ACCESS_TOKEN, 'supabase-token');
   assert.equal(result.transport.env.HTTP_PROXY, 'http://127.0.0.1:7890');
   assert.equal(result.transport.env.HTTPS_PROXY, 'http://127.0.0.1:7890');
   assert.equal(result.transport.env.NO_PROXY, 'localhost,127.0.0.1');

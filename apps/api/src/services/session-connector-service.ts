@@ -162,10 +162,25 @@ function mapRuntimeStatus(value: unknown): ConnectorRuntimeStatus {
   if (text === 'pending_recover') return 'unknown';
   if (text === 'recovering') return 'connecting';
   if (text === 'needs_auth') return 'needs_auth';
+  if (text === 'failed_to_attach' || text === 'attach_failed') return 'failed';
   if (text === 'failed' || text === 'error') return 'failed';
   if (text === 'disabled') return 'disabled';
   if (text === 'disconnected') return 'disconnected';
   return 'unknown';
+}
+
+type HandledProviderAttachError = Error & {
+  providerAttachHandled?: boolean;
+};
+
+function createHandledProviderAttachError(message: string): HandledProviderAttachError {
+  const error = new Error(message) as HandledProviderAttachError;
+  error.providerAttachHandled = true;
+  return error;
+}
+
+function isHandledProviderAttachError(error: unknown): error is HandledProviderAttachError {
+  return error instanceof Error && (error as HandledProviderAttachError).providerAttachHandled === true;
 }
 
 function pickToolName(event: Record<string, unknown>): string {
@@ -639,6 +654,24 @@ export class SessionConnectorService {
     const providerId = providerIdFor(taskSessionId, connectorKey, profileId);
     const runtimeEnvVersion = Number(existingBinding?.runtimeEnvVersion || 0) + 1;
     const providerConfig = this.buildProviderTransport(connectorKey, profileMaterial, normalizedSessionConfig);
+    if (connectorKey === 'supabase') {
+      const runtimeEnv =
+        providerConfig.transport && typeof providerConfig.transport === 'object' && 'env' in providerConfig.transport
+          ? (providerConfig.transport.env as Record<string, string> | undefined)
+          : undefined;
+      const proxyKeys = runtimeEnv
+        ? Object.keys(runtimeEnv).filter((key) => key.toLowerCase().includes('proxy'))
+        : [];
+      writeConnectorDebugLog('[CONNECTOR_ATTACH_SUPABASE_PROXY_ENV]', {
+        taskSessionId,
+        connectorKey,
+        providerId,
+        transport: providerConfig.transportName,
+        bridgeMode: providerConfig.transportName,
+        proxyEnvInjected: proxyKeys.length > 0,
+        proxyEnvKeys: proxyKeys,
+      });
+    }
     if (!runtime) {
       await taskSessionConnectorBindingDAO.upsert({
         taskSessionId,
@@ -817,11 +850,42 @@ export class SessionConnectorService {
         providerId,
         payload: this.asPayloadRecord(attachReply),
       });
+      const attachPayload = this.asPayloadRecord(attachReply);
+      const attachStatus = asText(attachPayload.status) || 'unknown';
+      const mappedAttachStatus = mapRuntimeStatus(attachStatus);
+      const attachErrorMessage =
+        asText(attachPayload.errorMessage) ||
+        asText(attachPayload.error) ||
+        asText(attachPayload.message) ||
+        null;
+      if (mappedAttachStatus !== 'connected') {
+        const failureMessage = attachErrorMessage || `MCP provider attach failed: ${attachStatus}`;
+        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+          runtimeStatus: 'failed',
+          runtimeProviderId: providerId,
+          runtimeEnvVersion,
+          runtimeTransport: providerConfig.transportName,
+          runtimeAttachedToolsJson: [],
+          recoveryQueuedAt: new Date(),
+          lastError: failureMessage,
+        });
+        await taskSessionRunDAO.appendConnectorRuntimeEvent({
+          sessionId: taskSessionId,
+          bindingId: binding.id,
+          providerId,
+          eventType: 'provider_attach_failed',
+          payloadJson: {
+            runtimeStatus: attachStatus,
+            error: failureMessage,
+          },
+        });
+        throw createHandledProviderAttachError(failureMessage);
+      }
       const attachedProviders = this.normalizeSessionMcpProviders({
         ...attachReply,
         payload: {
-          ...this.asPayloadRecord(attachReply),
-          providers: [this.asPayloadRecord(attachReply)],
+          ...attachPayload,
+          providers: [attachPayload],
         },
       } as OsacMessage);
       const attached = attachedProviders.get(providerId);
@@ -844,31 +908,35 @@ export class SessionConnectorService {
         },
       });
     } catch (error) {
+      const handledByAttachReply = isHandledProviderAttachError(error);
       writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_FAILED]', {
         taskSessionId,
         connectorKey,
         providerId,
         runtimeSessionId: runtime.orchestratorSessionId,
         transport: providerConfig.transportName,
+        handledByAttachReply,
         error: error instanceof Error ? error.message : String(error),
       }, 'error');
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
-        runtimeStatus: 'failed',
-        runtimeProviderId: providerId,
-        runtimeEnvVersion,
-        runtimeTransport: providerConfig.transportName,
-        recoveryQueuedAt: new Date(),
-        lastError: error instanceof Error ? error.message : String(error),
-      });
-      await taskSessionRunDAO.appendConnectorRuntimeEvent({
-        sessionId: taskSessionId,
-        bindingId: binding.id,
-        providerId,
-        eventType: 'provider_attach_failed',
-        payloadJson: {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
+      if (!handledByAttachReply) {
+        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+          runtimeStatus: 'failed',
+          runtimeProviderId: providerId,
+          runtimeEnvVersion,
+          runtimeTransport: providerConfig.transportName,
+          recoveryQueuedAt: new Date(),
+          lastError: error instanceof Error ? error.message : String(error),
+        });
+        await taskSessionRunDAO.appendConnectorRuntimeEvent({
+          sessionId: taskSessionId,
+          bindingId: binding.id,
+          providerId,
+          eventType: 'provider_attach_failed',
+          payloadJson: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
       throw error;
     }
 

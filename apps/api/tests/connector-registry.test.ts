@@ -20,6 +20,10 @@ const envBackup = {
   VERCEL_MCP_REMOTE_HEADERS_JSON: process.env.VERCEL_MCP_REMOTE_HEADERS_JSON,
   VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
   VERCEL_CONNECTOR_CLIENT_SECRET: process.env.VERCEL_CONNECTOR_CLIENT_SECRET,
+  ONECEO_PROXY_ENABLED: process.env.ONECEO_PROXY_ENABLED,
+  HTTP_PROXY: process.env.HTTP_PROXY,
+  HTTPS_PROXY: process.env.HTTPS_PROXY,
+  NO_PROXY: process.env.NO_PROXY,
 };
 
 beforeEach(() => {
@@ -37,6 +41,10 @@ beforeEach(() => {
   process.env.VERCEL_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}","X-Test":"1"}';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
   process.env.VERCEL_CONNECTOR_CLIENT_SECRET = 'vercel-secret';
+  process.env.ONECEO_PROXY_ENABLED = 'true';
+  process.env.HTTP_PROXY = 'http://127.0.0.1:7890';
+  process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+  process.env.NO_PROXY = 'localhost,127.0.0.1';
 });
 
 afterEach(() => {
@@ -117,11 +125,14 @@ test('connector registry materializes local and remote MCP configs', () => {
     connectorKey: 'supabase',
     account: buildAccount('supabase', { accessToken: 'supabase-token' }),
   });
-  assert.equal(supabaseConfig.type, 'remote');
-  assert.equal(supabaseConfig.headers?.Authorization, 'Bearer supabase-token');
-  assert.equal(new URL(supabaseConfig.url || '').origin, 'https://mcp.supabase.com');
-  assert.equal(new URL(supabaseConfig.url || '').pathname, '/mcp');
-  assert.equal(new URL(supabaseConfig.url || '').searchParams.has('project_ref'), false);
+  assert.equal(supabaseConfig.type, 'local');
+  assert.equal(supabaseConfig.command[0], 'node');
+  assert.equal(supabaseConfig.command[1], '-e');
+  assert.match(supabaseConfig.command[2], /SUPABASE_MCP_URL/);
+  assert.equal(supabaseConfig.environment?.SUPABASE_ACCESS_TOKEN, 'supabase-token');
+  assert.equal(supabaseConfig.environment?.SUPABASE_MCP_URL, 'https://mcp.supabase.com/mcp');
+  assert.equal(supabaseConfig.environment?.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(supabaseConfig.environment?.NO_PROXY, 'localhost,127.0.0.1');
 });
 
 test('connector registry fails fast when remote adapter is unavailable', () => {

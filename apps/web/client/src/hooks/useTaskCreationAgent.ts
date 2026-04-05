@@ -1498,12 +1498,155 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   };
 }
 
+function isManagedAssistantMessage(message: Partial<AgentMessage>): boolean {
+  if (message.type !== 'agent_message') return false;
+  const metadata = toRecord(message.metadata);
+  const eventType = asText(metadata.eventType).toLowerCase();
+  if (eventType === 'assistant_delta' || eventType === 'assistant_message') {
+    return true;
+  }
+  const agent = asText(message.agent).toLowerCase();
+  const messageKey = resolveAgentMessageKey(message);
+  return agent === 'altus' && messageKey.startsWith('managed:');
+}
+
+function resolveManagedAssistantBaseKey(message: Partial<AgentMessage>): string {
+  const metadata = toRecord(message.metadata);
+  const runId = asText(metadata.runId);
+  if (runId) {
+    return `managed:${runId}:assistant`;
+  }
+  const messageKey = resolveAgentMessageKey(message);
+  const marker = ':assistant';
+  const markerIndex = messageKey.indexOf(marker);
+  if (markerIndex >= 0) {
+    return messageKey.slice(0, markerIndex + marker.length);
+  }
+  return messageKey;
+}
+
+function isManagedAssistantSegmentKeyForBase(messageKey: string, baseKey: string): boolean {
+  if (!messageKey || !baseKey) return false;
+  return messageKey === baseKey || messageKey.startsWith(`${baseKey}:segment:`);
+}
+
+function buildManagedAssistantSegmentKey(
+  prev: AgentMessage[],
+  baseKey: string,
+  metadata: Record<string, unknown>
+): string {
+  const sequence =
+    asPositiveInt(metadata.sequence) ??
+    asPositiveInt(metadata.sessionEventSeq) ??
+    asPositiveInt(metadata.seq) ??
+    asPositiveInt(metadata.timestamp);
+  if (sequence !== null) {
+    return `${baseKey}:segment:${sequence}`;
+  }
+  const prefix = `${baseKey}:segment:`;
+  let next = 1;
+  for (const item of prev) {
+    const key = resolveAgentMessageKey(item);
+    if (!key.startsWith(prefix)) continue;
+    const parsed = Number(key.slice(prefix.length));
+    if (Number.isFinite(parsed) && parsed >= next) {
+      next = Math.floor(parsed) + 1;
+    }
+  }
+  return `${baseKey}:segment:${next}`;
+}
+
+function normalizeManagedAssistantMessageIdentity(prev: AgentMessage[], message: AgentMessage): AgentMessage {
+  if (!isManagedAssistantMessage(message)) {
+    return message;
+  }
+  const metadata = toRecord(message.metadata);
+  const baseKey = resolveManagedAssistantBaseKey(message);
+  const currentKey = resolveAgentMessageKey(message) || baseKey;
+  const lastMessage = prev[prev.length - 1];
+  const lastKey = lastMessage ? resolveAgentMessageKey(lastMessage) : '';
+  const shouldContinueTail =
+    !!lastMessage &&
+    isManagedAssistantMessage(lastMessage) &&
+    isManagedAssistantSegmentKeyForBase(lastKey, baseKey);
+  if (shouldContinueTail) {
+    if (lastKey === currentKey) return message;
+    return normalizeAgentMessageIdentity({
+      ...message,
+      messageKey: lastKey,
+      metadata: {
+        ...metadata,
+        messageKey: lastKey,
+      },
+    });
+  }
+  const hasExistingSegments = prev.some((item) => {
+    const key = resolveAgentMessageKey(item);
+    return isManagedAssistantSegmentKeyForBase(key, baseKey);
+  });
+  if (hasExistingSegments && isManagedAssistantSegmentKeyForBase(currentKey, baseKey)) {
+    const segmentKey = buildManagedAssistantSegmentKey(prev, baseKey, metadata);
+    if (segmentKey === currentKey) return message;
+    return normalizeAgentMessageIdentity({
+      ...message,
+      messageKey: segmentKey,
+      metadata: {
+        ...metadata,
+        messageKey: segmentKey,
+      },
+    });
+  }
+  return message;
+}
+
+function shouldPreserveExistingManagedAssistantContent(
+  existing: AgentMessage,
+  incoming: AgentMessage
+): boolean {
+  if (!isManagedAssistantMessage(existing) || !isManagedAssistantMessage(incoming)) {
+    return false;
+  }
+  const incomingMeta = toRecord(incoming.metadata);
+  if (incomingMeta.streamDelta === true) return false;
+  const existingContent = asText(existing.content);
+  const incomingContent = asText(incoming.content);
+  if (!existingContent) return false;
+  if (!incomingContent) return true;
+  return incomingContent.length < existingContent.length;
+}
+
+function resolveMergedAgentMessageContent(existing: AgentMessage, incoming: AgentMessage): string | undefined {
+  if (shouldPreserveExistingManagedAssistantContent(existing, incoming)) {
+    return existing.content;
+  }
+  if (typeof incoming.content === 'string') {
+    if (!asText(incoming.content) && asText(existing.content)) {
+      return existing.content;
+    }
+    return incoming.content;
+  }
+  return existing.content;
+}
+
+function mergeMessageWithExistingIdentity(existing: AgentMessage, incoming: AgentMessage): AgentMessage {
+  return normalizeAgentMessageIdentity({
+    ...existing,
+    ...incoming,
+    content: resolveMergedAgentMessageContent(existing, incoming),
+    metadata: {
+      ...toRecord(existing.metadata),
+      ...toRecord(incoming.metadata),
+    },
+  });
+}
+
 export function mergeRealtimeMessage(
   prev: AgentMessage[],
   message: AgentMessage,
   welcomeMessage: string
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
+  message = normalizeManagedAssistantMessageIdentity(prev, message);
   const messageKey = resolveAgentMessageKey(message);
   const metadata = toRecord(message.metadata);
   if (message.type === 'error') {
@@ -1549,14 +1692,7 @@ export function mergeRealtimeMessage(
   }
   if (existingIndexByKey >= 0 && message.type !== 'opencode_event') {
     const next = [...prev];
-    next[existingIndexByKey] = normalizeAgentMessageIdentity({
-      ...next[existingIndexByKey],
-      ...message,
-      metadata: {
-        ...toRecord(next[existingIndexByKey].metadata),
-        ...toRecord(message.metadata),
-      },
-    });
+    next[existingIndexByKey] = mergeMessageWithExistingIdentity(next[existingIndexByKey], message);
     return next;
   }
   const isDuplicateWelcome =
@@ -1961,29 +2097,46 @@ const HISTORY_VIEW_CACHE_LIMIT = 300;
 const MANAGED_RUN_RECOVERY_PREFIX = 'task_creation_managed_run_recovery:';
 const MANAGED_RUN_RECOVERY_VERSION = 1;
 const HISTORY_PAGE_SIZE = 50;
+type HistoryLoadReason = 'initial' | 'replay' | 'reconcile' | 'managed_recovery';
+
+export function shouldUseManagedRecoveryHistoryReconcile(input: {
+  reason: HistoryLoadReason;
+  recentNewestCursor?: number | null;
+  historyNewestCursor?: number | null;
+  recentMessageCount: number;
+  historyMessageCount: number;
+  recentLatestMessageKey?: string | null;
+  historyLatestMessageKey?: string | null;
+}): boolean {
+  if (input.reason !== 'managed_recovery') return false;
+  const recentNewest = asPositiveInt(input.recentNewestCursor) ?? 0;
+  const historyNewest = asPositiveInt(input.historyNewestCursor) ?? 0;
+  if (historyNewest > recentNewest) return true;
+  if (input.historyMessageCount > input.recentMessageCount) return true;
+  const recentLatestMessageKey = asText(input.recentLatestMessageKey);
+  const historyLatestMessageKey = asText(input.historyLatestMessageKey);
+  if (historyLatestMessageKey && historyLatestMessageKey !== recentLatestMessageKey) {
+    return true;
+  }
+  return false;
+}
 
 function getHistoryMessageKey(message: Partial<AgentMessage>): string {
   return resolveAgentMessageKey(message);
 }
 
-function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
+export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
   const merged = [...base];
   const indexByKey = new Map<string, number>();
   base.forEach((item, index) => {
     indexByKey.set(getHistoryMessageKey(item), index);
   });
-  for (const item of incoming) {
+  for (const rawItem of incoming) {
+    const item = normalizeManagedAssistantMessageIdentity(merged, rawItem);
     const key = getHistoryMessageKey(item);
     const existingIndex = indexByKey.get(key);
     if (existingIndex !== undefined) {
-      merged[existingIndex] = normalizeAgentMessageIdentity({
-        ...merged[existingIndex],
-        ...item,
-        metadata: {
-          ...toRecord(merged[existingIndex]?.metadata),
-          ...toRecord(item?.metadata),
-        },
-      });
+      merged[existingIndex] = mergeMessageWithExistingIdentity(merged[existingIndex], item);
       continue;
     }
     indexByKey.set(key, merged.length);
@@ -2450,7 +2603,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistoryRef = useRef<
     (
       historySessionId: string,
-      options?: { reason?: 'initial' | 'replay' | 'reconcile' | 'managed_recovery' }
+      options?: { reason?: HistoryLoadReason }
     ) => Promise<void> | undefined
   >(() => undefined);
   const historyExpandedRef = useRef(false);
@@ -4048,7 +4201,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistory = useCallback(async (
     historySessionId: string,
     options?: {
-      reason?: 'initial' | 'replay' | 'reconcile' | 'managed_recovery';
+      reason?: HistoryLoadReason;
     }
   ) => {
     const reason = options?.reason ?? 'initial';
@@ -4060,80 +4213,126 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return inFlight.promise;
     }
     const task = (async () => {
-    activeHistorySessionRef.current = historySessionId;
-    olderHistoryRequestRef.current = null;
-    isLoadingOlderHistoryRef.current = false;
-    setIsLoadingOlderHistory(false);
-    const cached = readHistoryViewCache(historySessionId);
-    const cachedMessages = cached
-      ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
-      : null;
-    if (cached) {
-      oldestHistoryCursorRef.current = cached.oldestCursor;
-      setHasOlderHistory(cached.hasOlderHistory);
-      setMessages(cachedMessages || cached.messages);
-      syncQuestionAndRuntimeState(cachedMessages || cached.messages);
-    }
-    try {
-      const recent = await getTaskCreationRecentMessages(historySessionId);
-      const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
-      const shouldFallbackToHistory =
-        normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
-      if (shouldFallbackToHistory) {
-        throw new Error('recent cache empty');
-      }
-      const merged = cachedMessages
-        ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
-        : normalizedRecent;
-      const cachedExpanded = cached
-        ? cached.messages.length > normalizedRecent.length ||
-          ((cached.oldestCursor ?? 0) > 0 &&
-            (recent.oldestCursor ?? 0) > 0 &&
-            (cached.oldestCursor ?? 0) < (recent.oldestCursor ?? 0))
-        : false;
-      historyExpandedRef.current = cachedExpanded;
-      const nextOldestCursor =
-        cached?.oldestCursor ??
-        recent.oldestCursor ??
-        (merged.length > 0 ? asPositiveInt(toRecord(merged[0].metadata).sessionEventSeq) : null);
-      applyHistoryState(historySessionId, merged, {
-        oldestCursor: nextOldestCursor,
-        hasOlderHistory: recent.hasOlderHistory,
-      });
-    } catch (error) {
-      if (!isAbortLikeError(error)) {
-        console.error('[TaskCreationAgent] 加载最近历史失败:', error);
+      activeHistorySessionRef.current = historySessionId;
+      olderHistoryRequestRef.current = null;
+      isLoadingOlderHistoryRef.current = false;
+      setIsLoadingOlderHistory(false);
+      const cached = readHistoryViewCache(historySessionId);
+      const cachedMessages = cached
+        ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
+        : null;
+      if (cached) {
+        oldestHistoryCursorRef.current = cached.oldestCursor;
+        setHasOlderHistory(cached.hasOlderHistory);
+        setMessages(cachedMessages || cached.messages);
+        syncQuestionAndRuntimeState(cachedMessages || cached.messages);
       }
       try {
-        const page = await getTaskCreationOlderMessages(historySessionId, {
-          limit: HISTORY_PAGE_SIZE,
-        });
-        const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
-        const mergedFallback = cachedMessages
-          ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
-          : normalizedFallback;
+        const recent = await getTaskCreationRecentMessages(historySessionId);
+        const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
+        const shouldFallbackToHistory =
+          normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
+        if (shouldFallbackToHistory) {
+          throw new Error('recent cache empty');
+        }
+        const merged = cachedMessages
+          ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
+          : normalizedRecent;
         const cachedExpanded = cached
-          ? cached.messages.length > normalizedFallback.length ||
+          ? cached.messages.length > normalizedRecent.length ||
             ((cached.oldestCursor ?? 0) > 0 &&
-              (page.oldestCursor ?? 0) > 0 &&
-              (cached.oldestCursor ?? 0) < (page.oldestCursor ?? 0))
+              (recent.oldestCursor ?? 0) > 0 &&
+              (cached.oldestCursor ?? 0) < (recent.oldestCursor ?? 0))
           : false;
         historyExpandedRef.current = cachedExpanded;
-        const fallbackOldestCursor =
+        const nextOldestCursor =
           cached?.oldestCursor ??
-          page.oldestCursor ??
-          (mergedFallback.length > 0 ? asPositiveInt(toRecord(mergedFallback[0].metadata).sessionEventSeq) : null);
-        applyHistoryState(historySessionId, mergedFallback, {
-          oldestCursor: fallbackOldestCursor,
-          hasOlderHistory: page.hasMore,
+          recent.oldestCursor ??
+          (merged.length > 0 ? asPositiveInt(toRecord(merged[0].metadata).sessionEventSeq) : null);
+        applyHistoryState(historySessionId, merged, {
+          oldestCursor: nextOldestCursor,
+          hasOlderHistory: recent.hasOlderHistory,
         });
-      } catch (fallbackError) {
-        if (isAbortLikeError(fallbackError)) {
-          return;
+
+        if (reason === 'managed_recovery') {
+          try {
+            const recoveryPage = await getTaskCreationOlderMessages(historySessionId, {
+              limit: HISTORY_PAGE_SIZE,
+            });
+            const normalizedRecovery = normalizeHistoryMessages(historySessionId, recoveryPage.messages || []);
+            const shouldReconcile = shouldUseManagedRecoveryHistoryReconcile({
+              reason,
+              recentNewestCursor: recent.newestCursor,
+              historyNewestCursor: recoveryPage.newestCursor,
+              recentMessageCount: normalizedRecent.length,
+              historyMessageCount: normalizedRecovery.length,
+              recentLatestMessageKey:
+                normalizedRecent.length > 0 ? normalizedRecent[normalizedRecent.length - 1]?.messageKey : null,
+              historyLatestMessageKey:
+                normalizedRecovery.length > 0
+                  ? normalizedRecovery[normalizedRecovery.length - 1]?.messageKey
+                  : null,
+            });
+            if (shouldReconcile) {
+              const reconciled = mergeHistoryAgentMessages(merged, normalizedRecovery);
+              const reconcileOldestCursor =
+                cached?.oldestCursor ??
+                recent.oldestCursor ??
+                recoveryPage.oldestCursor ??
+                (reconciled.length > 0
+                  ? asPositiveInt(toRecord(reconciled[0].metadata).sessionEventSeq)
+                  : null);
+              historyExpandedRef.current =
+                historyExpandedRef.current ||
+                recoveryPage.hasMore ||
+                normalizedRecovery.length > normalizedRecent.length;
+              applyHistoryState(historySessionId, reconciled, {
+                oldestCursor: reconcileOldestCursor,
+                hasOlderHistory: recent.hasOlderHistory || recoveryPage.hasMore,
+              });
+            }
+          } catch (reconcileError) {
+            if (!isAbortLikeError(reconcileError)) {
+              console.warn('[TaskCreationAgent] managed recovery 对账 history 失败:', reconcileError);
+            }
+          }
         }
-        console.error('[TaskCreationAgent] recent 失败后回退 history 也失败:', fallbackError);
+      } catch (error) {
+        if (!isAbortLikeError(error)) {
+          console.error('[TaskCreationAgent] 加载最近历史失败:', error);
+        }
+        try {
+          const page = await getTaskCreationOlderMessages(historySessionId, {
+            limit: HISTORY_PAGE_SIZE,
+          });
+          const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
+          const mergedFallback = cachedMessages
+            ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
+            : normalizedFallback;
+          const cachedExpanded = cached
+            ? cached.messages.length > normalizedFallback.length ||
+              ((cached.oldestCursor ?? 0) > 0 &&
+                (page.oldestCursor ?? 0) > 0 &&
+                (cached.oldestCursor ?? 0) < (page.oldestCursor ?? 0))
+            : false;
+          historyExpandedRef.current = cachedExpanded;
+          const fallbackOldestCursor =
+            cached?.oldestCursor ??
+            page.oldestCursor ??
+            (mergedFallback.length > 0
+              ? asPositiveInt(toRecord(mergedFallback[0].metadata).sessionEventSeq)
+              : null);
+          applyHistoryState(historySessionId, mergedFallback, {
+            oldestCursor: fallbackOldestCursor,
+            hasOlderHistory: page.hasMore,
+          });
+        } catch (fallbackError) {
+          if (isAbortLikeError(fallbackError)) {
+            return;
+          }
+          console.error('[TaskCreationAgent] recent 失败后回退 history 也失败:', fallbackError);
+        }
       }
-    }
     })().finally(() => {
       if (loadHistoryRequestRef.current?.promise === task) {
         loadHistoryRequestRef.current = null;

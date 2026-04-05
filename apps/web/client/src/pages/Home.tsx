@@ -3592,10 +3592,45 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
 }
 
 export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
-  if (!messages.some((message) => message.type === "opencode_event")) {
+  const hasOpencodeEvents = messages.some((message) => message.type === "opencode_event");
+  if (!hasOpencodeEvents) {
+    return buildLegacyChatItems(messages);
+  }
+  if (messages.some((message) => isManagedTimelineMessage(message))) {
     return buildLegacyChatItems(messages);
   }
   return buildDirectOpencodeChatItems(messages);
+}
+
+function isManagedTimelineMessage(message: AgentMessage): boolean {
+  const metadata = toRecord(message.metadata);
+  const eventType = asText(metadata.eventType).toLowerCase();
+  const messageKey = asText(message.messageKey) || asText(metadata.messageKey);
+  if (isManagedExecutionEvent(metadata)) {
+    return true;
+  }
+  if (asText(message.agent).toLowerCase() === "altus") {
+    return true;
+  }
+  if (messageKey.startsWith("managed:")) {
+    return true;
+  }
+  return (
+    eventType === "assistant_delta" ||
+    eventType === "assistant_message" ||
+    eventType === "run_ack" ||
+    eventType === "run_status" ||
+    eventType === "deliverables_ready" ||
+    eventType === "run_completed" ||
+    eventType === "run_failed" ||
+    eventType === "run_stopped" ||
+    eventType === "clarification_requested" ||
+    eventType === "tool_call_started" ||
+    eventType === "tool_call_progress" ||
+    eventType === "tool_call_completed" ||
+    eventType === "tool_call_failed" ||
+    eventType === "artifact_updated"
+  );
 }
 
 function DirectFoldableMarkdownBlock({

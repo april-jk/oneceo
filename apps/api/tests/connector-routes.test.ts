@@ -10,13 +10,11 @@ type TestServer = {
 };
 
 const connectorServiceAny = userConnectorService as any;
-const originalListCatalog = connectorServiceAny.listCatalog;
-const originalListUserProfiles = connectorServiceAny.listUserProfiles;
+const originalGetMeSnapshot = connectorServiceAny.getMeSnapshot;
 const originalCreateProfile = connectorServiceAny.createProfile;
 
 after(() => {
-  connectorServiceAny.listCatalog = originalListCatalog;
-  connectorServiceAny.listUserProfiles = originalListUserProfiles;
+  connectorServiceAny.getMeSnapshot = originalGetMeSnapshot;
   connectorServiceAny.createProfile = originalCreateProfile;
 });
 
@@ -62,10 +60,13 @@ test('GET /api/connectors/me rejects anonymous access', async () => {
 
 test('GET /api/connectors/me returns user-scoped catalog and profiles', async () => {
   const server = await startServer();
-  connectorServiceAny.listCatalog = async () => [{ key: 'github', name: 'GitHub' }];
-  connectorServiceAny.listUserProfiles = async (userId: string) => {
+  connectorServiceAny.getMeSnapshot = async (userId: string) => {
     assert.equal(userId, 'connector-user-1');
-    return [{ profileId: 'profile-1', connectorKey: 'github' }];
+    return {
+      catalog: [{ key: 'github', name: 'GitHub' }],
+      profiles: [{ profileId: 'profile-1', connectorKey: 'github' }],
+      cache: { hit: false, source: 'db', redisEnabled: false },
+    };
   };
 
   try {

@@ -35,6 +35,18 @@ describe("message-reference-parser", () => {
     expect(resolved.attachments[0]?.name).toBe("README.md");
   });
 
+  it("fixes mojibake attachment names from history marker text", () => {
+    const resolved = resolveUserMessageReferences({
+      content:
+        "分析一下我提供的文档\n\n[Attached: éå½è¿ç¨è®°å½_20260328.md -> uploads/1775390487727-743df299-20260328.md]",
+      metadata: {},
+    });
+
+    expect(resolved.attachments).toHaveLength(1);
+    expect(resolved.attachments[0]?.name).toBe("递归过程记录_20260328.md");
+    expect(Number.isNaN(resolved.attachments[0]?.size)).toBe(true);
+  });
+
   it("recovers skills from managedSkillContext when skills is empty", () => {
     const resolved = resolveUserMessageReferences({
       content: "请基于我的技能执行",
@@ -59,4 +71,3 @@ describe("message-reference-parser", () => {
     expect(resolved.skills[0]?.name).toBe("PPT 办公");
   });
 });
-

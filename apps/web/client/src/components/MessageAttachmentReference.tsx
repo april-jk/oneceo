@@ -116,9 +116,11 @@ export default function MessageAttachmentReference({
                   >
                     <FileText className="h-3.5 w-3.5 shrink-0" />
                     <span className="truncate font-medium">{attachment.name || attachment.path}</span>
-                    <span className={cn("shrink-0 text-[11px]", metaClass)}>
-                      {formatAttachmentSize(attachment.size)}
-                    </span>
+                    {Number.isFinite(attachment.size) && attachment.size > 0 ? (
+                      <span className={cn("shrink-0 text-[11px]", metaClass)}>
+                        {formatAttachmentSize(attachment.size)}
+                      </span>
+                    ) : null}
                   </div>
                 ))}
               </div>

@@ -4,6 +4,7 @@ const REDIS_PREFIX = 'oneceo:v1';
 
 export const redisTtlSeconds = {
   workspaceCache: 120,
+  connectorsMe: 120,
   recentMessages: 600,
   historyCursor: 1800,
   projection: 1800,
@@ -97,6 +98,9 @@ export const redisKeyspace = {
   },
   connectorProjection(input: RedisSessionScope) {
     return `${scopePrefix(input)}:projection:connectors`;
+  },
+  connectorsMe(input: RedisUserScope) {
+    return `${userPrefix(input)}:cache:connectors:me`;
   },
   runtimeProjection(input: RedisSessionScope) {
     return `${scopePrefix(input)}:projection:runtime`;

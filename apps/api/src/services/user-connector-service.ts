@@ -5,6 +5,7 @@ import {
 } from '../db/dao';
 import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import { connectorRedisCacheService } from './connector-redis-cache-service';
 import {
   type ConnectorAccountMaterial,
   type ConnectorAccountSecret,
@@ -62,6 +63,16 @@ type CompleteOauthInput = {
   state: string;
   code: string;
   redirectUri: string;
+};
+
+type ConnectorMeSnapshot = {
+  catalog: ConnectorCatalogItem[];
+  profiles: UserConnectorProfileView[];
+  cache: {
+    hit: boolean;
+    source: 'redis' | 'db';
+    redisEnabled: boolean;
+  };
 };
 
 function asText(value: unknown): string {
@@ -379,6 +390,8 @@ function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string
 }
 
 export class UserConnectorService {
+  private readonly inFlightMeLoads = new Map<string, Promise<ConnectorMeSnapshot>>();
+
   async listCatalog() {
     return connectorRegistry.listVisibleCatalog();
   }
@@ -394,6 +407,68 @@ export class UserConnectorService {
     return profiles
       .filter((row) => visibleKeys.has(row.connectorKey as ConnectorKey))
       .map((row) => buildProfileView(row as any));
+  }
+
+  private async loadMeSnapshotFromDb(userId: string): Promise<ConnectorMeSnapshot> {
+    const [catalog, profiles] = await Promise.all([this.listCatalog(), this.listUserProfiles(userId)]);
+    return {
+      catalog,
+      profiles,
+      cache: {
+        hit: false,
+        source: 'db',
+        redisEnabled: connectorRedisCacheService.isEnabled(),
+      },
+    };
+  }
+
+  private async invalidateMeCache(userId: string) {
+    await connectorRedisCacheService.invalidateMe(userId);
+    console.info('[connector_cache_invalidate]', { userId });
+  }
+
+  async getMeSnapshot(userId: string): Promise<ConnectorMeSnapshot> {
+    const redisEnabled = connectorRedisCacheService.isEnabled();
+    if (!redisEnabled) {
+      console.info('[connector_cache_fallback_db]', { userId, reason: 'redis_disabled' });
+      return this.loadMeSnapshotFromDb(userId);
+    }
+
+    const cached = await connectorRedisCacheService.getMe(userId);
+    if (cached && Array.isArray(cached.catalog) && Array.isArray(cached.profiles)) {
+      console.info('[connector_cache_hit]', { userId });
+      return {
+        catalog: cached.catalog as ConnectorCatalogItem[],
+        profiles: cached.profiles as UserConnectorProfileView[],
+        cache: {
+          hit: true,
+          source: 'redis',
+          redisEnabled: true,
+        },
+      };
+    }
+
+    console.info('[connector_cache_miss]', { userId });
+    const existing = this.inFlightMeLoads.get(userId);
+    if (existing) {
+      return existing;
+    }
+
+    const loadPromise = (async () => {
+      const snapshot = await this.loadMeSnapshotFromDb(userId);
+      await connectorRedisCacheService.setMe(userId, {
+        catalog: snapshot.catalog,
+        profiles: snapshot.profiles,
+      });
+      console.info('[connector_cache_set]', { userId });
+      return snapshot;
+    })();
+    this.inFlightMeLoads.set(userId, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      this.inFlightMeLoads.delete(userId);
+    }
   }
 
   async getProfile(userId: string, profileId: string) {
@@ -546,7 +621,9 @@ export class UserConnectorService {
   }
 
   async createProfile(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
-    return this.saveProfileInternal(userId, connectorKey, null, input);
+    const saved = await this.saveProfileInternal(userId, connectorKey, null, input);
+    await this.invalidateMeCache(userId);
+    return saved;
   }
 
   async updateProfile(userId: string, profileId: string, input: SaveConnectorInput) {
@@ -554,7 +631,14 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('连接器 profile 不存在');
     }
-    return this.saveProfileInternal(userId, existing.connectorKey as ConnectorKey, profileId, input);
+    const saved = await this.saveProfileInternal(
+      userId,
+      existing.connectorKey as ConnectorKey,
+      profileId,
+      input
+    );
+    await this.invalidateMeCache(userId);
+    return saved;
   }
 
   async deleteProfile(userId: string, profileId: string) {
@@ -575,6 +659,7 @@ export class UserConnectorService {
         await userConnectorProfileDAO.update(nextDefault.id, userId, { isDefault: true } as any);
       }
     }
+    await this.invalidateMeCache(userId);
     return true;
   }
 
@@ -589,6 +674,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('设置默认 profile 失败');
     }
+    await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
   }
 
@@ -623,6 +709,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('断开连接器授权失败');
     }
+    await this.invalidateMeCache(userId);
     return {
       profile: buildProfileView(saved as any),
       remoteGrantRevoked,
@@ -653,6 +740,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('更新连接器授权状态失败');
     }
+    await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
   }
 
@@ -833,6 +921,7 @@ export class UserConnectorService {
       if (!saved) {
         throw new Error('OAuth 结果保存失败');
       }
+      await this.invalidateMeCache(userId);
 
       return {
         profile: buildProfileView(saved as any),

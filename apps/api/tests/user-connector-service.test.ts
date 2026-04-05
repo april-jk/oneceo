@@ -3,6 +3,7 @@ import { afterEach, mock, test } from 'node:test';
 import { connectorStorageBootstrap } from '../src/services/connector-storage-bootstrap';
 import { connectorSecretService } from '../src/services/connector-secret-service';
 import { connectorAuthRequestDAO, userConnectorProfileDAO } from '../src/db/dao';
+import { connectorRedisCacheService } from '../src/services/connector-redis-cache-service';
 import { userConnectorService } from '../src/services/user-connector-service';
 
 const originalFetch = global.fetch;
@@ -250,4 +251,75 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
     )?.accessToken,
     'vercel-access-token'
   );
+});
+
+test('getMeSnapshot returns redis payload when cache hit', async () => {
+  mock.method(connectorRedisCacheService, 'isEnabled', () => true);
+  mock.method(connectorRedisCacheService, 'getMe', async () => ({
+    catalog: [{ key: 'github', name: 'GitHub' }],
+    profiles: [{ profileId: 'profile-1', connectorKey: 'github' }],
+    cachedAt: new Date().toISOString(),
+  }));
+  const listCatalogMock = mock.method(userConnectorService as any, 'listCatalog', async () => {
+    throw new Error('listCatalog should not be called on redis hit');
+  });
+  const listProfilesMock = mock.method(userConnectorService as any, 'listUserProfiles', async () => {
+    throw new Error('listUserProfiles should not be called on redis hit');
+  });
+
+  const snapshot = await userConnectorService.getMeSnapshot('user-cache-hit');
+
+  assert.equal(snapshot.catalog.length, 1);
+  assert.equal(snapshot.profiles.length, 1);
+  assert.equal(snapshot.cache.hit, true);
+  assert.equal(snapshot.cache.source, 'redis');
+  assert.equal(listCatalogMock.mock.callCount(), 0);
+  assert.equal(listProfilesMock.mock.callCount(), 0);
+});
+
+test('getMeSnapshot loads from db on miss and writes redis cache', async () => {
+  mock.method(connectorRedisCacheService, 'isEnabled', () => true);
+  mock.method(connectorRedisCacheService, 'getMe', async () => null);
+  let setMePayload: Record<string, unknown> | null = null;
+  mock.method(connectorRedisCacheService, 'setMe', async (_userId: string, payload: any) => {
+    setMePayload = payload;
+  });
+  mock.method(userConnectorService as any, 'listCatalog', async () => [{ key: 'supabase' }]);
+  mock.method(userConnectorService as any, 'listUserProfiles', async () => [{ profileId: 'profile-db' }]);
+
+  const snapshot = await userConnectorService.getMeSnapshot('user-cache-miss');
+
+  assert.equal(snapshot.cache.hit, false);
+  assert.equal(snapshot.cache.source, 'db');
+  assert.equal(Array.isArray(setMePayload?.catalog), true);
+  assert.equal(Array.isArray(setMePayload?.profiles), true);
+});
+
+test('createProfile invalidates connectors me cache after persistence', async () => {
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
+  mock.method(userConnectorProfileDAO, 'create', async (input: any) => {
+    return {
+      ...input,
+      id: 'profile-supabase-cache-1',
+      connectorKey: 'supabase',
+      updatedAt: new Date('2026-04-03T00:00:00.000Z'),
+      createdAt: new Date('2026-04-03T00:00:00.000Z'),
+      metadataJson: {},
+      configJson: {},
+      lastAuthAt: new Date('2026-04-03T00:00:00.000Z'),
+      lastError: null,
+      isDefault: true,
+    } as any;
+  });
+  let invalidatedUserId = '';
+  mock.method(connectorRedisCacheService, 'invalidateMe', async (userId: string) => {
+    invalidatedUserId = userId;
+  });
+
+  await userConnectorService.createProfile('user-cache-invalidate', 'supabase', {
+    credentials: { accessToken: 'sbp-token-only' },
+  });
+
+  assert.equal(invalidatedUserId, 'user-cache-invalidate');
 });

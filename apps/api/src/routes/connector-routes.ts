@@ -48,17 +48,14 @@ router.get('/catalog', async (req, res) => {
 router.get('/me', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const [catalog, profiles] = await Promise.all([
-      userConnectorService.listCatalog(),
-      userConnectorService.listUserProfiles(currentUser.userId),
-    ]);
+    const snapshot = await userConnectorService.getMeSnapshot(currentUser.userId);
     return res.json({
       success: true,
       data: {
         userId: currentUser.userId,
         source: currentUser.source,
-        catalog,
-        profiles,
+        catalog: snapshot.catalog,
+        profiles: snapshot.profiles,
       },
     });
   } catch (error) {

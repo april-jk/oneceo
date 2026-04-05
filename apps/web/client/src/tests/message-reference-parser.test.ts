@@ -70,4 +70,24 @@ describe("message-reference-parser", () => {
     expect(resolved.skills[0]?.skillId).toBe("skill-1");
     expect(resolved.skills[0]?.name).toBe("PPT 办公");
   });
+
+  it("keeps skill visible even when revisionId is missing in legacy metadata", () => {
+    const resolved = resolveUserMessageReferences({
+      content: "执行技能",
+      metadata: {
+        skills: [
+          {
+            skillId: "skill-legacy",
+            name: "Legacy Skill",
+            slug: "legacy-skill",
+          },
+        ],
+      },
+    });
+
+    expect(resolved.skills).toHaveLength(1);
+    expect(resolved.skills[0]?.skillId).toBe("skill-legacy");
+    expect(resolved.skills[0]?.revisionId).toBe("skill-legacy");
+    expect(resolved.skills[0]?.name).toBe("Legacy Skill");
+  });
 });

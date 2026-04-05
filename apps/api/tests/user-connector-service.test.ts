@@ -277,6 +277,25 @@ test('getMeSnapshot returns redis payload when cache hit', async () => {
   assert.equal(listProfilesMock.mock.callCount(), 0);
 });
 
+test('getMeSnapshot falls back to db when redis is disabled', async () => {
+  mock.method(connectorRedisCacheService, 'isEnabled', () => false);
+  const getMeMock = mock.method(connectorRedisCacheService, 'getMe', async () => ({
+    catalog: [{ key: 'github' }],
+    profiles: [{ profileId: 'should-not-be-used' }],
+    cachedAt: new Date().toISOString(),
+  }));
+  mock.method(userConnectorService as any, 'listCatalog', async () => [{ key: 'supabase' }]);
+  mock.method(userConnectorService as any, 'listUserProfiles', async () => [{ profileId: 'profile-db-only' }]);
+
+  const snapshot = await userConnectorService.getMeSnapshot('user-redis-disabled');
+
+  assert.equal(snapshot.cache.hit, false);
+  assert.equal(snapshot.cache.source, 'db');
+  assert.equal(snapshot.cache.redisEnabled, false);
+  assert.equal(snapshot.profiles[0]?.profileId, 'profile-db-only');
+  assert.equal(getMeMock.mock.callCount(), 0);
+});
+
 test('getMeSnapshot loads from db on miss and writes redis cache', async () => {
   mock.method(connectorRedisCacheService, 'isEnabled', () => true);
   mock.method(connectorRedisCacheService, 'getMe', async () => null);
@@ -340,4 +359,109 @@ test('createProfile invalidates connectors me cache after persistence', async ()
   });
 
   assert.equal(invalidatedUserId, 'user-cache-invalidate');
+});
+
+test('getMeSnapshot deduplicates concurrent db loads on redis miss', async () => {
+  mock.method(connectorRedisCacheService, 'isEnabled', () => true);
+  mock.method(connectorRedisCacheService, 'getMe', async () => null);
+  mock.method(connectorRedisCacheService, 'setMe', async () => {});
+  let listCatalogCalls = 0;
+  let releaseProfiles: (() => void) | null = null;
+  mock.method(userConnectorService as any, 'listCatalog', async () => {
+    listCatalogCalls += 1;
+    return [{ key: 'github' }];
+  });
+  mock.method(userConnectorService as any, 'listUserProfiles', async () => {
+    await new Promise<void>((resolve) => {
+      releaseProfiles = resolve;
+    });
+    return [{ profileId: 'profile-concurrent' }];
+  });
+
+  const firstPromise = userConnectorService.getMeSnapshot('user-concurrent');
+  const secondPromise = userConnectorService.getMeSnapshot('user-concurrent');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!releaseProfiles) {
+    throw new Error('expected concurrent gate to be initialized');
+  }
+  releaseProfiles();
+  const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+  assert.equal(listCatalogCalls, 1);
+  assert.equal(first.profiles.length, 1);
+  assert.equal(second.profiles.length, 1);
+});
+
+test('updateProfile invalidates connectors me cache after persistence', async () => {
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-update-1',
+    connectorKey: 'github',
+  }) as any);
+  mock.method(userConnectorService as any, 'saveProfileInternal', async () => ({
+    profileId: 'profile-update-1',
+    connectorKey: 'github',
+  }));
+  let invalidatedUserId = '';
+  mock.method(connectorRedisCacheService, 'invalidateMe', async (userId: string) => {
+    invalidatedUserId = userId;
+  });
+
+  await userConnectorService.updateProfile('user-update-cache', 'profile-update-1', {
+    profileName: 'updated',
+  });
+
+  assert.equal(invalidatedUserId, 'user-update-cache');
+});
+
+test('deleteProfile invalidates connectors me cache after persistence', async () => {
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-delete-1',
+    connectorKey: 'github',
+    isDefault: false,
+  }) as any);
+  const deleteMock = mock.method(userConnectorProfileDAO, 'delete', async () => {});
+  let invalidatedUserId = '';
+  mock.method(connectorRedisCacheService, 'invalidateMe', async (userId: string) => {
+    invalidatedUserId = userId;
+  });
+
+  const deleted = await userConnectorService.deleteProfile('user-delete-cache', 'profile-delete-1');
+
+  assert.equal(deleted, true);
+  assert.equal(deleteMock.mock.callCount(), 1);
+  assert.equal(invalidatedUserId, 'user-delete-cache');
+});
+
+test('setDefaultProfile invalidates connectors me cache after persistence', async () => {
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-default-1',
+    connectorKey: 'github',
+  }) as any);
+  mock.method(userConnectorProfileDAO, 'clearDefaultForConnector', async () => {});
+  mock.method(userConnectorProfileDAO, 'update', async () => ({
+    id: 'profile-default-1',
+    connectorKey: 'github',
+    profileName: 'GitHub Main',
+    authMode: 'oauth',
+    authStatus: 'authorized',
+    displayName: 'april-jk',
+    configJson: {},
+    metadataJson: {},
+    secretCiphertext: null,
+    isDefault: true,
+    lastAuthAt: new Date('2026-04-05T12:00:00.000Z'),
+    updatedAt: new Date('2026-04-05T12:00:00.000Z'),
+    lastError: null,
+  }) as any);
+  let invalidatedUserId = '';
+  mock.method(connectorRedisCacheService, 'invalidateMe', async (userId: string) => {
+    invalidatedUserId = userId;
+  });
+
+  const result = await userConnectorService.setDefaultProfile('user-default-cache', 'profile-default-1');
+
+  assert.equal(result.profileId, 'profile-default-1');
+  assert.equal(invalidatedUserId, 'user-default-cache');
 });

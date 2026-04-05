@@ -5,7 +5,7 @@ export function buildSupabaseDefinition(): ConnectorDefinition {
     key: 'supabase',
     category: 'app',
     name: 'Supabase',
-    description: '独立的 Supabase 连接器，在平台外部保存 access token 配置，并在 sandbox 内通过 MCP 使用。',
+    description: '独立的 Supabase 连接器，在平台外部保存 access token，并通过 sandbox 内本地桥接挂载 MCP。',
     icon: 'supabase',
     isNew: true,
     featured: true,
@@ -43,7 +43,7 @@ export function buildSupabaseDefinition(): ConnectorDefinition {
     activityMatcherVerified: true,
     visibleInMenu: true,
     runtime: {
-      type: 'remote',
+      type: 'local',
       urlDefault: 'https://mcp.supabase.com/mcp',
       headerTemplate: 'supabase',
     },

@@ -1821,6 +1821,74 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
   return slim;
 }
 
+function hasUserReferenceMetadata(metadataRaw: unknown): boolean {
+  const metadata = pickRecord(metadataRaw);
+  if (asText(metadata.originalInput)) return true;
+  if (Array.isArray(metadata.skills) && metadata.skills.length > 0) return true;
+  if (Array.isArray(metadata.managedSkillContext) && metadata.managedSkillContext.length > 0) return true;
+  if (Array.isArray(metadata.attachments) && metadata.attachments.length > 0) return true;
+  if (Array.isArray(metadata.attachmentContext) && metadata.attachmentContext.length > 0) return true;
+  if (Array.isArray(metadata.mcpReferences) && metadata.mcpReferences.length > 0) return true;
+  return false;
+}
+
+function normalizeUserReferenceText(contentRaw: unknown, metadataRaw: unknown): string {
+  const metadata = pickRecord(metadataRaw);
+  const base = asText(metadata.originalInput) || asText(contentRaw);
+  if (!base) return '';
+  return base
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function mergeUserReferenceMetadataFromPersisted(
+  primaryMessages: TimelineMessage[],
+  persistedMessages: TimelineMessage[]
+): TimelineMessage[] {
+  if (!Array.isArray(primaryMessages) || primaryMessages.length === 0) {
+    return primaryMessages;
+  }
+  if (!Array.isArray(persistedMessages) || persistedMessages.length === 0) {
+    return primaryMessages;
+  }
+
+  const referenceQueueByText = new Map<string, Array<Record<string, unknown>>>();
+  for (const message of persistedMessages) {
+    if (message?.role !== 'user') continue;
+    if (!hasUserReferenceMetadata(message?.metadata)) continue;
+    const key = normalizeUserReferenceText(message?.content, message?.metadata);
+    if (!key) continue;
+    const queue = referenceQueueByText.get(key) || [];
+    queue.push(pickRecord(message?.metadata));
+    referenceQueueByText.set(key, queue);
+  }
+
+  if (referenceQueueByText.size === 0) {
+    return primaryMessages;
+  }
+
+  return primaryMessages.map((message) => {
+    if (message?.role !== 'user') return message;
+    if (hasUserReferenceMetadata(message?.metadata)) return message;
+    const key = normalizeUserReferenceText(message?.content, message?.metadata);
+    if (!key) return message;
+    const queue = referenceQueueByText.get(key);
+    if (!queue || queue.length === 0) return message;
+    const mergedSource = queue.shift();
+    if (!mergedSource) return message;
+    return {
+      ...message,
+      metadata: {
+        ...pickRecord(message.metadata),
+        ...mergedSource,
+      },
+    };
+  });
+}
+
 function normalizeRuntimeGenerationValue(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     return Math.floor(value);
@@ -2215,11 +2283,15 @@ async function resolveRenderableTimelineMessages(
     });
     const normalizedNativeMessages = nativeMessages ? attachTimelineMessageKeys(nativeMessages) : null;
     if (normalizedNativeMessages && normalizedNativeMessages.length > 0) {
+      const fallbackMessages = await loadPersistedMessages();
+      const mergedNativeMessages = mergeUserReferenceMetadataFromPersisted(
+        normalizedNativeMessages,
+        fallbackMessages
+      );
       if (hasRenderableAssistantReply(normalizedNativeMessages)) {
-        messages = normalizedNativeMessages;
+        messages = mergedNativeMessages;
       } else {
-        const fallbackMessages = await loadPersistedMessages();
-        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : normalizedNativeMessages;
+        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : mergedNativeMessages;
       }
     }
   }

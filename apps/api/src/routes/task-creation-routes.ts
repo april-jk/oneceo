@@ -1733,6 +1733,13 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'codexRestoreSourceKey',
     'previousExecutorSessionId',
     'codexRestoreFailureReason',
+    'originalInput',
+    'skills',
+    'managedSkillContext',
+    'managedSkillCatalog',
+    'attachments',
+    'attachmentContext',
+    'mcpReferences',
   ]) {
     if (metadata[key] !== undefined) {
       slim[key] = metadata[key];

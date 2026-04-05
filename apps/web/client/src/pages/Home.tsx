@@ -112,6 +112,7 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -2316,54 +2317,6 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   };
 
-  const extractUserSkills = (
-    metadata: unknown,
-  ): TaskCreationPlatformSkill[] => {
-    const record = toRecord(metadata);
-    const raw = Array.isArray(record.skills) ? record.skills : [];
-    return raw
-      .map((item) => toRecord(item))
-      .map((item) => ({
-        sourceType: (
-          asText(item.sourceType) === "custom" ? "custom" : "platform"
-        ) as "custom" | "platform",
-        skillId: asText(item.skillId),
-        revisionId: asText(item.revisionId),
-        slug: asText(item.slug),
-        name: asText(item.name),
-        description: asText(item.description),
-        category: asText(item.category),
-        revisionNumber:
-          typeof item.revisionNumber === "number" && Number.isFinite(item.revisionNumber)
-            ? item.revisionNumber
-            : item.revisionNumber === null
-              ? null
-              : Number(String(item.revisionNumber || "")) || null,
-        resourceSummary: null,
-      }))
-      .filter((item) => item.skillId && item.revisionId && item.name);
-  };
-
-  const extractUserAttachments = (
-    metadata: unknown,
-  ): UploadedTaskAttachment[] => {
-    const record = toRecord(metadata);
-    const raw = Array.isArray(record.attachments) ? record.attachments : [];
-    return raw
-      .map((item) => toRecord(item))
-      .map((item) => ({
-        name: asText(item.name),
-        path: asText(item.path),
-        size:
-          typeof item.size === "number" && Number.isFinite(item.size)
-            ? item.size
-            : Number(String(item.size || 0)) || 0,
-        mimeType: asText(item.mimeType) || undefined,
-        uploadedAt: asText(item.uploadedAt) || undefined,
-      }))
-      .filter((item) => item.name || item.path);
-  };
-
   const pushAgentMarkdown = (
     markdown: string,
     messageKey?: string,
@@ -2521,11 +2474,14 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     const message = messages[index];
     if (message.type === "user_input" || message.type === "user_response") {
       flushProgress();
-      const metadata = toRecord(message.metadata);
+      const resolvedUser = resolveUserMessageReferences({
+        content: message.content || "",
+        metadata: message.metadata,
+      });
       pushUser(
-        asText(metadata.originalInput) || message.content || "",
-        extractUserSkills(metadata),
-        extractUserAttachments(metadata),
+        resolvedUser.text,
+        resolvedUser.skills,
+        resolvedUser.attachments,
         message.messageKey,
       );
       continue;
@@ -3183,54 +3139,6 @@ type DirectTurnDraft = {
   messageKey?: string;
 };
 
-function extractUserAttachmentsFromMetadata(
-  metadata: unknown,
-): UploadedTaskAttachment[] {
-  const record = toRecord(metadata);
-  const raw = Array.isArray(record.attachments) ? record.attachments : [];
-  return raw
-    .map((item) => toRecord(item))
-    .map((item) => ({
-      name: asText(item.name),
-      path: asText(item.path),
-      size:
-        typeof item.size === "number" && Number.isFinite(item.size)
-          ? item.size
-          : Number(String(item.size || 0)) || 0,
-      mimeType: asText(item.mimeType) || undefined,
-      uploadedAt: asText(item.uploadedAt) || undefined,
-    }))
-    .filter((item) => item.name || item.path);
-}
-
-function extractUserSkillsFromMetadata(
-  metadata: unknown,
-): TaskCreationPlatformSkill[] {
-  const record = toRecord(metadata);
-  const raw = Array.isArray(record.skills) ? record.skills : [];
-  return raw
-    .map((item) => toRecord(item))
-    .map((item) => ({
-      sourceType: (
-        asText(item.sourceType) === "custom" ? "custom" : "platform"
-      ) as "custom" | "platform",
-      skillId: asText(item.skillId),
-      revisionId: asText(item.revisionId),
-      slug: asText(item.slug),
-      name: asText(item.name),
-      description: asText(item.description),
-      category: asText(item.category),
-      revisionNumber:
-        typeof item.revisionNumber === "number" && Number.isFinite(item.revisionNumber)
-          ? item.revisionNumber
-          : item.revisionNumber === null
-            ? null
-            : Number(String(item.revisionNumber || "")) || null,
-      resourceSummary: null,
-    }))
-    .filter((item) => item.skillId && item.revisionId && item.name);
-}
-
 function cleanHeadingText(value: string) {
   return value
     .replace(/`([^`]+)`/g, "$1")
@@ -3498,11 +3406,15 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     const message = messages[index];
 
     if (message.type === "user_input" || message.type === "user_response") {
+      const resolvedUser = resolveUserMessageReferences({
+        content: message.content || "",
+        metadata: message.metadata,
+      });
       directTurns.push(
         createDirectTurnDraft(
-          message.content || "",
-          extractUserSkillsFromMetadata(message.metadata),
-          extractUserAttachmentsFromMetadata(message.metadata),
+          resolvedUser.text,
+          resolvedUser.skills,
+          resolvedUser.attachments,
           message.messageKey,
         ),
       );

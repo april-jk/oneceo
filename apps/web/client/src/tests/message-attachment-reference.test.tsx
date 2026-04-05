@@ -43,4 +43,21 @@ describe("MessageAttachmentReference", () => {
     const html = renderToStaticMarkup(<MessageAttachmentReference />);
     expect(html).toBe("");
   });
+
+  it("does not render 0 B when attachment size is unknown", () => {
+    const html = renderToStaticMarkup(
+      <MessageAttachmentReference
+        attachments={[
+          {
+            name: "递归过程记录_20260328.md",
+            path: "uploads/1775390487727-743df299-20260328.md",
+            size: Number.NaN,
+          },
+        ]}
+      />,
+    );
+
+    expect(html).toContain("递归过程记录_20260328.md");
+    expect(html).not.toContain("0 B");
+  });
 });

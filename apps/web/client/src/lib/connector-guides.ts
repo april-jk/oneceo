@@ -102,7 +102,7 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   supabase: {
     intro:
-      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 access token，sandbox 内会直接使用这些已保存的凭据。",
+      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
     quickLinks: [
       {
         label: "Supabase Access Tokens",

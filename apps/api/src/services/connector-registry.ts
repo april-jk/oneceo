@@ -6,6 +6,10 @@ import {
   type ConnectorKey,
   type ConnectorOauthProvider,
 } from '../connectors/definitions';
+import {
+  buildSupabaseBridgeEnvironment,
+  buildSupabaseStdioBridgeCommand,
+} from '../connectors/bridges/supabase-stdio-bridge';
 
 export { CONNECTOR_KEYS, type ConnectorKey };
 
@@ -70,6 +74,14 @@ export type ConnectorRuntimeConfig =
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
 }
 
 function normalizeRepositoryFullName(value: unknown): string {
@@ -345,6 +357,28 @@ export class ConnectorRegistry {
         type: 'local',
         enabled: true,
         command: ['npx', '-y', '@modelcontextprotocol/server-postgres', dsn],
+      };
+    }
+
+    if (connectorKey === 'supabase') {
+      const accessToken = asText(secret.accessToken);
+      if (!accessToken) {
+        throw new Error('Supabase 连接器缺少 access token');
+      }
+      const proxyEnabled = toBool(
+        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
+        true
+      );
+      return {
+        type: 'local',
+        enabled: true,
+        command: ['node', '-e', buildSupabaseStdioBridgeCommand()],
+        environment: buildSupabaseBridgeEnvironment({
+          accessToken,
+          projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
+          mcpUrl: asText(configJson.mcpUrl),
+          proxyEnabled,
+        }),
       };
     }
 

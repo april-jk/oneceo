@@ -63,6 +63,12 @@ type McpProviderTransport =
       url: string;
       headers?: Record<string, string>;
       env?: Record<string, string>;
+    }
+  | {
+      type: 'streamable_http';
+      url: string;
+      headers?: Record<string, string>;
+      env?: Record<string, string>;
     };
 
 type McpProviderTool = {

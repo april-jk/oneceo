@@ -17,6 +17,7 @@ import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service
 import { githubConnectorRepositoryService } from './github-connector-repository-service';
 import { osacConnectionManager } from './osac-connection-manager';
 import { connectorGuideService } from './connector-guide-service';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import type { OsacMessage } from '../clients/osac-client';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
@@ -251,6 +252,10 @@ function isOsacRequestTimeoutError(error: unknown): boolean {
 }
 
 export class SessionConnectorService {
+  private async invalidateConnectorProjection(taskSessionId: string) {
+    await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
+  }
+
   private asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
     const payload = message?.payload;
     return payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
@@ -541,11 +546,21 @@ export class SessionConnectorService {
   async listSessionConnectors(taskSessionId: string, userId: string): Promise<SessionConnectorStatus[]> {
     await connectorStorageBootstrap.ensureReady();
     await this.assertSessionOwnership(taskSessionId, userId);
+    const cachedProjection = await taskSessionRedisCacheService
+      .getConnectorProjection({
+        sessionId: taskSessionId,
+        userId,
+      })
+      .catch(() => null);
+    if (cachedProjection && Array.isArray(cachedProjection.items) && cachedProjection.items.length > 0) {
+      return cachedProjection.items as SessionConnectorStatus[];
+    }
     const [accounts, profiles, bindings] = await Promise.all([
       userConnectorService.listUserAccounts(userId),
       userConnectorService.listUserProfiles(userId),
       taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId),
     ]);
+    const runtimeProbeEnabled = toBool(process.env.CONNECTOR_LIST_RUNTIME_PROBE_ENABLED, false);
     const requiresRuntimeProbe = bindings.some((item) => {
       const desiredState = asText(item.desiredState).toLowerCase();
       const runtimeProviderId = asText(item.runtimeProviderId);
@@ -556,10 +571,27 @@ export class SessionConnectorService {
         ['connected', 'connecting', 'unknown'].includes(runtimeStatus)
       );
     });
-    const runtime = requiresRuntimeProbe ? await this.resolveRuntimeContext(taskSessionId) : null;
+    let runtime: RuntimeContext | null = null;
+    if (runtimeProbeEnabled && requiresRuntimeProbe) {
+      runtime = await this.resolveRuntimeContext(taskSessionId).catch(() => null);
+    }
     const bindingMap = new Map(bindings.map((item) => [item.connectorKey, item]));
-    const liveMap = await this.getRuntimeMcpMap(runtime);
-    return connectorRegistry.listVisibleCatalog().map((item) => {
+    let liveMap = new Map<string, SessionMcpProviderStatus>();
+    if (runtime) {
+      liveMap = await this.getRuntimeMcpMap(runtime).catch((error) => {
+        writeConnectorDebugLog(
+          '[CONNECTOR_LIST_RUNTIME_PROBE_FAILED]',
+          {
+            taskSessionId,
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'warn'
+        );
+        return new Map<string, SessionMcpProviderStatus>();
+      });
+    }
+    const statuses = connectorRegistry.listVisibleCatalog().map((item) => {
       const account =
         accounts.find((entry) => entry.connectorKey === item.key) ||
         ({
@@ -578,6 +610,15 @@ export class SessionConnectorService {
         live: liveMap.get(asText(bindingMap.get(item.key)?.runtimeProviderId)),
       });
     });
+    await taskSessionRedisCacheService
+      .setConnectorProjection({
+        sessionId: taskSessionId,
+        userId,
+        items: statuses,
+        summary: this.summarizeStatuses(statuses),
+      })
+      .catch(() => null);
+    return statuses;
   }
 
   summarizeStatuses(statuses: SessionConnectorStatus[]) {
@@ -610,6 +651,7 @@ export class SessionConnectorService {
       orchestratorSessionId: asText(orchestratorSessionId) || null,
     });
     await this.assertSessionOwnership(taskSessionId, userId);
+    await this.invalidateConnectorProjection(taskSessionId);
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
     if (!catalogItem.available) {
       throw new Error(catalogItem.availabilityReason || '当前连接器不可用');
@@ -999,6 +1041,7 @@ export class SessionConnectorService {
   ) {
     await connectorStorageBootstrap.ensureReady();
     await this.assertSessionOwnership(taskSessionId, userId);
+    await this.invalidateConnectorProjection(taskSessionId);
     const runtime = await this.resolveRuntimeContext(taskSessionId, orchestratorSessionId);
     const serverName = serverNameFor(connectorKey, taskSessionId);
     const existingBinding = await taskSessionConnectorBindingDAO.getByTaskSessionAndConnectorKey(taskSessionId, connectorKey);
@@ -1161,6 +1204,7 @@ export class SessionConnectorService {
         });
       }
     }
+    await this.invalidateConnectorProjection(taskSessionId);
   }
 
   async noteUsageFromEvent(orchestratorSessionId: string, event: Record<string, unknown>) {
@@ -1171,6 +1215,7 @@ export class SessionConnectorService {
     const taskSessionId = asText(session?.id);
     if (!taskSessionId) return;
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
+    let touched = false;
     for (const binding of bindings) {
       const connectorKey = binding.connectorKey as ConnectorKey;
       const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
@@ -1183,6 +1228,10 @@ export class SessionConnectorService {
         lastUsedAt: new Date(),
         lastError: null,
       });
+      touched = true;
+    }
+    if (touched) {
+      await this.invalidateConnectorProjection(taskSessionId);
     }
   }
 

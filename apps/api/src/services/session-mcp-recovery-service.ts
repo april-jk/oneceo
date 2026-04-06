@@ -8,6 +8,7 @@ import { ensureDatabaseConnection } from '../config/database';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { sessionConnectorService } from './session-connector-service';
 import { osacAgentService } from './osac-agent-service';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
 function asText(value: unknown): string {
@@ -135,6 +136,7 @@ export class SessionMcpRecoveryService {
         });
       }
     }
+    await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
   }
 
   async enqueueSessionRecovery(taskSessionId: string, orchestratorSessionId: string) {
@@ -260,6 +262,7 @@ export class SessionMcpRecoveryService {
         throw error;
       }
     } finally {
+      await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
       this.runningTaskSessions.delete(taskSessionId);
     }
   }

@@ -5,6 +5,7 @@ import { deriveTenantKeyForRedis, redisKeyspace, redisTtlSeconds } from './redis
 import { userConnectorService } from './user-connector-service';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { connectorGuideService } from './connector-guide-service';
+import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
 const CONNECTOR_DRAFT_TTL_SECONDS = 24 * 60 * 60;
@@ -238,6 +239,7 @@ export class SessionConnectorDraftService {
     }
 
     await connectorGuideService.recomputeSessionGuides(taskSessionId).catch(() => null);
+    await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
 
     const sandboxBinding = await taskSessionRunDAO.getSandboxBindingBySession(taskSessionId).catch(() => null);
     const orchestratorSessionId = asText(sandboxBinding?.sandboxId);

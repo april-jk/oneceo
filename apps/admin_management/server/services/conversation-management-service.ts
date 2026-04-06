@@ -1165,6 +1165,147 @@ export class ConversationManagementService {
     }
   }
 
+  async getSessionCore(sessionId: string) {
+    const sessionErrors: string[] = [];
+    let session = await this.oneceoApi.getTaskCreationSession(sessionId).catch((error) => {
+      sessionErrors.push(error instanceof Error ? error.message : String(error));
+      return null;
+    });
+
+    let sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
+    if (!session) {
+      const local = await loadLocalMemorySnapshot();
+      const localSession = local?.sessions.find((item) => item.id === sessionId) || null;
+      if (localSession) {
+        session = localSession;
+        sessionMessages = local?.messagesBySession[sessionId] || [];
+        console.warn('[admin-management][conversation] session fallback to local memory', sessionId);
+      }
+    }
+
+    const [messages, intent, taskDescription, executionPlan] = await Promise.all([
+      sessionMessages.length > 0
+        ? Promise.resolve(sessionMessages)
+        : this.oneceoApi.getTaskCreationMessages(sessionId).catch(() => []),
+      this.oneceoApi.getTaskCreationIntent(sessionId).catch(() => null),
+      this.oneceoApi.getTaskCreationTaskDescription(sessionId).catch(() => null),
+      this.oneceoApi.getTaskCreationExecutionPlan(sessionId).catch(() => null),
+    ]);
+
+    const safeSession: TaskCreationSession =
+      session ||
+      ({
+        id: sessionId,
+        title: `会话 ${sessionId.slice(-6)}`,
+        status: 'unknown',
+        stage: 'unknown',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        pendingQuestion: undefined,
+        pendingOptions: [],
+      } as TaskCreationSession);
+
+    const normalizedMessages = Array.isArray(messages) ? messages : sessionMessages;
+    const binding = extractRuntimeBinding({
+      session: safeSession,
+      messages: normalizedMessages,
+      relatedEnvironments: [],
+    });
+
+    const llmTraces = buildLlmTraces({
+      sessionId,
+      messages: normalizedMessages,
+      intent,
+      taskDescription,
+      executionPlan,
+    });
+
+    const transitions = buildStateTransitions({
+      session: safeSession,
+      messages: normalizedMessages,
+    });
+
+    const kvmSummary: Record<string, unknown> = {
+      orchestratorSessionId: binding.orchestratorSessionId || null,
+      vmName: binding.vmName || null,
+      session: null,
+      sessionVm: null,
+      sandbox: null,
+      sandboxIp: null,
+      sandboxPorts: null,
+      vmDetail: null,
+      vmMetrics: null,
+      vmLogs: null,
+      quota: null,
+      auditEntries: [],
+      errors: sessionErrors,
+    };
+
+    const timeline = buildTimeline({
+      messages: normalizedMessages,
+      osacMessages: [],
+      kvmSummary,
+      transitions,
+      llmTraces,
+    });
+
+    const agentDecisionMessages = normalizedMessages.filter((item) => item.role === 'agent');
+    const opencodeMessages = normalizedMessages.filter((item) =>
+      ['opencode_event', 'opencode_status', 'opencode_user_input'].includes(item.messageType || '')
+    );
+
+    return {
+      session: safeSession,
+      messages: normalizedMessages,
+      intent,
+      taskDescription,
+      executionPlan,
+      runtime: {
+        taskSessionId: safeSession.id,
+        orchestratorSessionId: binding.orchestratorSessionId || null,
+        opencodeSessionId: binding.opencodeSessionId || null,
+        vmName: binding.vmName || null,
+        bindingUpdatedAt: binding.bindingUpdatedAt || null,
+        pendingResume: safeSession.pendingResume || null,
+        pendingQuestion: safeSession.pendingQuestion || null,
+        pendingOptions: safeSession.pendingOptions || [],
+      },
+      trace: {
+        timeline,
+        llm: llmTraces,
+        agentDecisions: agentDecisionMessages,
+        opencodeMessages,
+        stateTransitions: transitions,
+        sandbox: {
+          primaryEnvironment: null,
+          relatedEnvironments: [],
+        },
+        kvm: kvmSummary,
+        osac: {
+          messages: [],
+          summary: {
+            total: 0,
+            byType: [],
+          },
+          errors: [],
+        },
+      },
+    };
+  }
+
+  async getSessionInfra(sessionId: string) {
+    const detail = await this.getSessionDetail(sessionId);
+    return {
+      sessionId: detail.session.id,
+      runtime: detail.runtime,
+      trace: {
+        sandbox: detail.trace?.sandbox,
+        kvm: detail.trace?.kvm,
+        osac: detail.trace?.osac,
+      },
+    };
+  }
+
   async getSessionDetail(sessionId: string) {
     const sessionErrors: string[] = [];
     let session = await this.oneceoApi.getTaskCreationSession(sessionId).catch((error) => {

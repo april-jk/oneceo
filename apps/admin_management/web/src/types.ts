@@ -298,6 +298,16 @@ export interface ConversationSessionDetailResponse {
   };
 }
 
+export interface ConversationSessionInfraResponse {
+  sessionId: string;
+  runtime?: ConversationSessionDetailResponse['runtime'];
+  trace?: {
+    sandbox?: ConversationSessionDetailResponse['trace'] extends { sandbox: infer T } ? T : never;
+    kvm?: ConversationSessionDetailResponse['trace'] extends { kvm: infer T } ? T : never;
+    osac?: ConversationSessionDetailResponse['trace'] extends { osac: infer T } ? T : never;
+  };
+}
+
 export interface ConnectorGuidePolicy {
   id: string;
   connectorKey: string;

@@ -1781,6 +1781,7 @@ select:focus-visible {
 
 .runtime-status-group-main {
   font-weight: 600;
+  color: inherit;
 }
 
 .runtime-status-group-meta {
@@ -1794,11 +1795,6 @@ select:focus-visible {
   right: 10px;
   min-width: 34px;
   justify-content: center;
-}
-
-.runtime-quick-filter-emphasis {
-  border-color: rgba(176, 138, 73, 0.26);
-  background: linear-gradient(180deg, rgba(247, 238, 222, 0.98), rgba(241, 229, 208, 0.98));
 }
 
 .runtime-empty-state {

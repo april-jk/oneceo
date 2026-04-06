@@ -49,6 +49,7 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
+import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
 import {
   inferFilenameFromResponse,
@@ -3953,6 +3954,103 @@ router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
 });
 
 /**
+ * POST /api/task-creation/connector-drafts/:draftId
+ * 保存 new-task 连接器草稿（Redis 优先）
+ */
+router.post('/connector-drafts/:draftId', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    if (!draftId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 不能为空'),
+      });
+    }
+    const result = await sessionConnectorDraftService.saveDraft({
+      userId: currentUser.userId,
+      draftId,
+      entries: req.body?.entries,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    return res.status(authError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '保存连接器草稿失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/connector-drafts/:draftId/apply
+ * 将草稿回放到 session 绑定（不阻断主流程）
+ */
+router.post('/connector-drafts/:draftId/apply', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    const sessionId = asText(req.body?.sessionId);
+    if (!draftId || !sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 或 sessionId 缺失'),
+      });
+    }
+    const result = await sessionConnectorDraftService.applyDraftToSession({
+      userId: currentUser.userId,
+      draftId,
+      taskSessionId: sessionId,
+      entries: req.body?.entries,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '应用连接器草稿失败'
+      ),
+    });
+  }
+});
+
+/**
+ * DELETE /api/task-creation/connector-drafts/:draftId
+ * 清理已消费草稿
+ */
+router.delete('/connector-drafts/:draftId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    if (!draftId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 不能为空'),
+      });
+    }
+    const result = await sessionConnectorDraftService.clearDraft(currentUser.userId, draftId);
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    return res.status(authError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '清理连接器草稿失败'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/connectors
  * 获取当前会话的连接器运行状态
  */
@@ -4004,7 +4102,8 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       userId: currentUser.userId,
     });
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
-    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    const runtimeOrchestratorSessionId = asText(session?.runtime?.orchestratorSessionId) || undefined;
     if (!profileId) {
       throw new Error('缺少 profileId');
     }
@@ -4015,12 +4114,11 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       profileId,
       enabledTools,
       sessionConfig,
-      runtime.orchestratorSessionId
+      runtimeOrchestratorSessionId
     );
     return res.json({
       success: true,
       data: {
-        runtime,
         connector: status,
       },
     });

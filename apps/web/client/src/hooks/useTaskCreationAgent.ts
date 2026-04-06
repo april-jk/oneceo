@@ -28,6 +28,15 @@ import {
   type TaskCreationHistoryMessage,
   type OsacMessageRecord,
 } from '@/lib/task-creation-client';
+import {
+  applySessionConnectorDraft,
+  clearSessionConnectorDraft,
+} from '@/lib/connectors-client';
+import {
+  clearSessionConnectorDraftState,
+  getSessionConnectorDraftState,
+  listSessionConnectorDraftEntries,
+} from '@/lib/session-connector-draft';
 
 export interface AgentMessage {
   id?: string;
@@ -4972,6 +4981,26 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     });
   }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, orchestratorSessionId, sendOrQueueMessage, sessionId, trackPendingLocalMessage]);
 
+  const applyPendingConnectorDraftAsync = useCallback((targetSessionId: string) => {
+    const state = getSessionConnectorDraftState();
+    const draftId = asText(state?.draftId);
+    const entries = listSessionConnectorDraftEntries();
+    if (!draftId || entries.length === 0) {
+      return;
+    }
+    void applySessionConnectorDraft(draftId, {
+      sessionId: targetSessionId,
+      entries,
+    })
+      .then(async () => {
+        clearSessionConnectorDraftState();
+        await clearSessionConnectorDraft(draftId).catch(() => undefined);
+      })
+      .catch((error) => {
+        console.warn('[TaskCreationAgent] apply connector draft failed:', error);
+      });
+  }, []);
+
   const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
     if (!text) return;
@@ -5000,6 +5029,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        applyPendingConnectorDraftAsync(createdSessionId);
       }
 
       const messageKey = generateClientMessageKey('user');
@@ -5218,6 +5248,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
                 }),
           });
           prePersistedUserInput = executor !== 'codex';
+          applyPendingConnectorDraftAsync(activeSessionId);
           dispatchTaskCreationSessionUpdated({
             sessionId: activeSessionId,
             status: 'in_progress',
@@ -5358,6 +5389,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       sessionId: activeSessionId || options?.sessionId || undefined,
     });
   }, [
+    applyPendingConnectorDraftAsync,
     bindSessionId,
     location,
     orchestratorSessionId,

@@ -204,6 +204,7 @@ export class AltusRunCoordinator {
   }
 
   private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
+    const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
     await taskCreationFileMemoryStore.setPendingClarification(
       state.input.sessionId,
       input.question,
@@ -219,7 +220,7 @@ export class AltusRunCoordinator {
         options: input.options,
         runId: state.input.runId,
       },
-      messageKey: `managed:${state.input.runId}:clarification`,
+      messageKey: clarificationMessageKey,
     });
     await this.eventWriter.appendRunEvent(
       state.input.runId,
@@ -230,6 +231,7 @@ export class AltusRunCoordinator {
       question: input.question,
       options: input.options,
       content: input.question,
+      messageKey: clarificationMessageKey,
       }
     );
     return {

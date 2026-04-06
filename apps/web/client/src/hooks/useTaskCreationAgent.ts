@@ -1469,6 +1469,14 @@ export function resolveManagedStreamMessageKey(input: {
     return `managed:${runId}:tool:${toolCallId}`;
   }
 
+  if (eventType === 'clarification_requested') {
+    return (
+      payloadMessageKey ||
+      envelopeMessageKey ||
+      (runId ? `managed:${runId}:clarification` : 'managed:clarification')
+    );
+  }
+
   if (isManagedSystemEventType(eventType)) {
     if (eventType === 'artifact_updated' && runId) {
       const sequence = input.sequence ?? null;
@@ -1649,6 +1657,47 @@ function mergeMessageWithExistingIdentity(existing: AgentMessage, incoming: Agen
   });
 }
 
+function normalizeClarificationComparableText(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\*\*需要补充信息\*\*/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function stripDuplicateManagedAssistantForClarification(
+  prev: AgentMessage[],
+  clarificationMessage: AgentMessage
+): AgentMessage[] {
+  const clarificationMeta = toRecord(clarificationMessage.metadata);
+  const runId = asText(clarificationMeta.runId);
+  const questionText = normalizeClarificationComparableText(
+    (clarificationMessage as { question?: unknown }).question ||
+      clarificationMessage.content ||
+      clarificationMeta.question
+  );
+  if (!runId || !questionText) {
+    return prev;
+  }
+  let removed = false;
+  const next = prev.filter((item) => {
+    if (!isManagedAssistantMessage(item)) return true;
+    const itemMeta = toRecord(item.metadata);
+    if (asText(itemMeta.runId) !== runId) return true;
+    const assistantText = normalizeClarificationComparableText(item.content);
+    if (!assistantText) return true;
+    if (assistantText === questionText) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return removed ? next : prev;
+}
+
 export function mergeRealtimeMessage(
   prev: AgentMessage[],
   message: AgentMessage,
@@ -1656,6 +1705,12 @@ export function mergeRealtimeMessage(
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
   message = normalizeManagedAssistantMessageIdentity(prev, message);
+  if (message.type === 'clarification_request') {
+    const dedupedPrev = stripDuplicateManagedAssistantForClarification(prev, message);
+    if (dedupedPrev !== prev) {
+      return mergeRealtimeMessage(dedupedPrev, message, welcomeMessage);
+    }
+  }
   const messageKey = resolveAgentMessageKey(message);
   const metadata = toRecord(message.metadata);
   if (message.type === 'error') {

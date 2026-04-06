@@ -319,17 +319,39 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history returns 403 fo
 test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redis cursor snapshot', async () => {
   const server = await startServer();
   let cursorPayload: Record<string, unknown> | null = null;
+  let dbMessageReads = 0;
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'altus',
     executor: 'codex',
   });
+  sessionDaoAny.getMessages = async () => {
+    dbMessageReads += 1;
+    return [
+      {
+        id: 'm-h-db-1',
+        role: 'user',
+        content: 'db older',
+        messageType: 'user_input',
+        metadata: { timestamp: 1712100000000, sessionEventSeq: 1 },
+        createdAt: new Date(1712100000000).toISOString(),
+      },
+      {
+        id: 'm-h-db-2',
+        role: 'agent',
+        content: 'db newer',
+        messageType: 'assistant_response',
+        metadata: { timestamp: 1712100001000, sessionEventSeq: 2 },
+        createdAt: new Date(1712100001000).toISOString(),
+      },
+    ];
+  };
   fileStoreAny.getMessages = async () => [
     {
       id: 'm-h-1',
       role: 'user',
-      content: 'older',
+      content: 'file older',
       messageType: 'user_input',
       metadata: { timestamp: 1712100000000, sessionEventSeq: 1 },
       createdAt: new Date(1712100000000).toISOString(),
@@ -337,7 +359,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
     {
       id: 'm-h-2',
       role: 'agent',
-      content: 'newer',
+      content: 'file newer',
       messageType: 'assistant_response',
       metadata: { timestamp: 1712100001000, sessionEventSeq: 2 },
       createdAt: new Date(1712100001000).toISOString(),
@@ -355,11 +377,14 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
 
     assert.equal(response.status, 200);
     assert.equal(payload.data.source, 'resolved_history');
+    assert.equal(payload.data.messages[0]?.content, 'db newer');
+    assert.equal(dbMessageReads, 1);
     assert.ok(cursorPayload);
     assert.equal(cursorPayload?.sessionId, 's-history-cursor');
     assert.ok(typeof cursorPayload?.oldestCursor === 'number' || cursorPayload?.oldestCursor === null);
     assert.ok(typeof cursorPayload?.newestCursor === 'number' || cursorPayload?.newestCursor === null);
   } finally {
+    sessionDaoAny.getMessages = originalGetMessages;
     await server.close();
   }
 });
@@ -372,6 +397,34 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history preserves mana
     mode: 'altus',
     executor: 'altus',
   });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'm-h-managed-db-1',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        sessionEventSeq: 1,
+        runId: 'run-managed-history-1',
+        sessionId: 's-history-managed',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-history-1',
+            runId: 'run-managed-history-1',
+            path: 'deliverable-history-db.md',
+            name: 'deliverable-history-db.md',
+            mimeType: 'text/markdown',
+            size: 256,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
   fileStoreAny.getMessages = async () => [
     {
       id: 'm-h-managed-1',
@@ -390,8 +443,8 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history preserves mana
           {
             id: 'artifact-history-1',
             runId: 'run-managed-history-1',
-            path: 'deliverable-history.md',
-            name: 'deliverable-history.md',
+            path: 'deliverable-history-file.md',
+            name: 'deliverable-history-file.md',
             mimeType: 'text/markdown',
             size: 256,
           },
@@ -413,9 +466,10 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history preserves mana
     assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
     assert.equal(
       payload.data.messages[0]?.metadata?.deliverables?.[0]?.name,
-      'deliverable-history.md'
+      'deliverable-history-db.md'
     );
   } finally {
+    sessionDaoAny.getMessages = originalGetMessages;
     await server.close();
   }
 });

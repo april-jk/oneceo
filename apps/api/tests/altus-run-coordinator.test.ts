@@ -829,12 +829,14 @@ test('execute requests clarification and transitions to waiting_user', async () 
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'clarification_request');
   assert.equal(timelineCall.input.content, '你希望是网页版本还是原生版本？');
+  assert.equal(timelineCall.input.messageKey, 'managed:run-coordinator-clarify:clarification');
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
     ['run_status', 'run_status', 'tool_call_started', 'clarification_requested']
   );
   assert.equal(eventCalls[3]?.payload.question, '你希望是网页版本还是原生版本？');
+  assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
 });
 
 test('execute converts plain assistant clarification into waiting_user', async () => {
@@ -927,12 +929,14 @@ test('execute converts plain assistant clarification into waiting_user', async (
   const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
   assert.equal(timelineCall.input.messageType, 'clarification_request');
   assert.equal(timelineCall.input.content, '你希望优化哪些方面？比如颜色、布局还是动画？');
+  assert.equal(timelineCall.input.messageKey, 'managed:run-coordinator-plain-clarify:clarification');
 
   assert.deepEqual(
     eventCalls.map((entry) => entry.eventType),
     ['run_status', 'run_status', 'clarification_requested']
   );
   assert.equal(eventCalls[2]?.payload.question, '你希望优化哪些方面？比如颜色、布局还是动画？');
+  assert.equal(eventCalls[2]?.payload.messageKey, 'managed:run-coordinator-plain-clarify:clarification');
 });
 
 test('execute retries transient upstream timeout before completing', async () => {

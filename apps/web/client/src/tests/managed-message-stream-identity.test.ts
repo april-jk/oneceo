@@ -93,6 +93,77 @@ describe('managed message stream identity', () => {
     expect(next[0]?.content).toBe('工具 read_file 已完成');
   });
 
+  it('maps clarification_requested to the same key as persisted clarification message', () => {
+    const fallbackKey = resolveManagedStreamMessageKey({
+      eventType: 'clarification_requested',
+      runId: 'run-clarify-1',
+      sequence: 9,
+    });
+
+    expect(fallbackKey).toBe('managed:run-clarify-1:clarification');
+
+    const explicitKey = resolveManagedStreamMessageKey({
+      eventType: 'clarification_requested',
+      runId: 'run-clarify-1',
+      payloadMessageKey: 'managed:run-clarify-1:clarification',
+      sequence: 10,
+    });
+
+    expect(explicitKey).toBe('managed:run-clarify-1:clarification');
+  });
+
+  it('dedupes assistant clarification text and keeps only clarification_request', () => {
+    const assistantKey = resolveManagedStreamMessageKey({
+      eventType: 'assistant_delta',
+      runId: 'run-clarify-2',
+      payloadMessageKey: 'managed:run-clarify-2:assistant',
+      sequence: 31,
+    });
+
+    const withAssistant = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content:
+          '看起来 Supabase 连接器当前无法使用，尽管会话显示它已授权。请重新授权后告诉我。',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-clarify-2',
+          sequence: 31,
+          streamDelta: true,
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-clarify-2',
+      },
+      WELCOME_MESSAGE
+    );
+
+    const withClarification = mergeRealtimeMessage(
+      withAssistant,
+      {
+        type: 'clarification_request',
+        content:
+          '看起来 Supabase 连接器当前无法使用，尽管会话显示它已授权。请重新授权后告诉我。',
+        question:
+          '看起来 Supabase 连接器当前无法使用，尽管会话显示它已授权。请重新授权后告诉我。',
+        messageKey: 'managed:run-clarify-2:clarification',
+        metadata: {
+          eventType: 'clarification_requested',
+          runId: 'run-clarify-2',
+          messageKey: 'managed:run-clarify-2:clarification',
+        },
+        sessionId: 'session-clarify-2',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withClarification).toHaveLength(1);
+    expect(withClarification[0]?.type).toBe('clarification_request');
+    expect(withClarification[0]?.messageKey).toBe('managed:run-clarify-2:clarification');
+  });
+
   it('keeps the longer managed assistant content when final message is shorter', () => {
     const assistantKey = resolveManagedStreamMessageKey({
       eventType: 'assistant_delta',

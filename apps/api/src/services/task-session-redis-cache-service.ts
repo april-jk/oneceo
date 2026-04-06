@@ -35,6 +35,12 @@ type SessionEventEnvelope = {
   metadata: Record<string, unknown>;
 };
 
+type ConnectorProjectionSnapshot = {
+  items: unknown[];
+  summary?: Record<string, number>;
+  updatedAt: string;
+};
+
 function toRecord(value: unknown) {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -256,6 +262,38 @@ export class TaskSessionRedisCacheService {
     await this.appendSessionEvent({
       ...scope,
       ...input,
+    });
+  }
+
+  async getConnectorProjection(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    return this.redis.getJson<ConnectorProjectionSnapshot>(redisKeyspace.connectorProjection(scope));
+  }
+
+  async setConnectorProjection(input: SessionRedisScope & { items: unknown[]; summary?: Record<string, number> }) {
+    const scope = this.buildScope(input);
+    await this.redis.setJson(
+      redisKeyspace.connectorProjection(scope),
+      {
+        items: Array.isArray(input.items) ? input.items : [],
+        summary: input.summary || undefined,
+        updatedAt: new Date().toISOString(),
+      } satisfies ConnectorProjectionSnapshot,
+      redisTtlSeconds.connectorProjection
+    );
+  }
+
+  async invalidateConnectorProjection(input: SessionRedisScope) {
+    const scope = this.buildScope(input);
+    await this.redis.delete(redisKeyspace.connectorProjection(scope));
+  }
+
+  async invalidateConnectorProjectionBySessionId(sessionId: string) {
+    const scope = await this.resolveScopeBySession(sessionId);
+    if (!scope) return;
+    await this.invalidateConnectorProjection({
+      sessionId,
+      ...scope,
     });
   }
 

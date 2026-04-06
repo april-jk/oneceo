@@ -9,6 +9,7 @@ export const redisTtlSeconds = {
   recentMessages: 600,
   historyCursor: 1800,
   projection: 1800,
+  connectorProjection: 60,
   idempotency: 24 * 60 * 60,
   runState: 24 * 60 * 60,
   runOwner: 30,

@@ -4130,21 +4130,16 @@ export default function App() {
                 </div>
                 <div className="runtime-quick-filters">
                   {runtimeQuickStatusFilters.map((item) => (
-                    (() => {
-                      const emphasized = item.value === 'paused' && (summary?.paused ?? 0) > 0;
-                      return (
-                        <button
-                          key={item.value}
-                          type="button"
-                          className={`toggle-btn runtime-quick-filter runtime-status-group-item ${sandboxStatusFilter === item.value ? 'active' : ''} ${emphasized ? 'runtime-quick-filter-emphasis' : ''}`}
-                          onClick={() => setSandboxStatusFilter(item.value)}
-                        >
-                          <span className="runtime-status-group-main">{item.label}</span>
-                          <span className="runtime-status-group-meta">{item.meta}</span>
-                          <span className="session-status runtime-status-group-count">{item.count}</span>
-                        </button>
-                      );
-                    })()
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={`toggle-btn runtime-quick-filter runtime-status-group-item ${sandboxStatusFilter === item.value ? 'active' : ''}`}
+                      onClick={() => setSandboxStatusFilter(item.value)}
+                    >
+                      <span className="runtime-status-group-main">{item.label}</span>
+                      <span className="runtime-status-group-meta">{item.meta}</span>
+                      <span className="session-status runtime-status-group-count">{item.count}</span>
+                    </button>
                   ))}
                 </div>
                 <div className="runtime-risk-groups">

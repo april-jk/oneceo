@@ -522,6 +522,11 @@ export default function App() {
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
+  const [conversationDetailLoading, setConversationDetailLoading] = useState(false);
+  const [conversationInfraError, setConversationInfraError] = useState<string | null>(null);
+  const [conversationSearchQuery, setConversationSearchQuery] = useState('');
+  const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
+  const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
@@ -529,6 +534,7 @@ export default function App() {
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
+  const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -592,6 +598,7 @@ export default function App() {
     startX: number;
     startWidth: number;
   } | null>(null);
+  const conversationDetailCacheRef = useRef<Map<string, ConversationSessionDetailResponse>>(new Map());
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -666,11 +673,12 @@ export default function App() {
     } else {
       setSelectedSessionId(null);
       setConversationDetail(null);
+      setConversationDetailLoading(false);
     }
   }, [selectedSessionId]);
 
   const loadConversationDetail = useCallback(async (sessionId: string) => {
-    const detail = await api.getConversationSessionDetail(sessionId);
+    const detail = await api.getConversationSessionCore(sessionId);
     setConversationDetail(detail);
   }, []);
 
@@ -917,7 +925,7 @@ export default function App() {
     if (!taskSessionId) return;
     setError(null);
     setSandboxModalOpen(false);
-    setConversationDetail(null);
+    setConversationDetailLoading(true);
     setSelectedSessionId(taskSessionId);
     setActiveSection('conversation');
   }, []);
@@ -1393,25 +1401,76 @@ export default function App() {
       return;
     }
 
+    const cachedDetail = conversationDetailCacheRef.current.get(selectedSessionId);
+    if (cachedDetail) {
+      setConversationDetail(cachedDetail);
+      setConversationDetailLoading(false);
+    }
+
     let cancelled = false;
     const run = async () => {
+      if (!cachedDetail) {
+        setConversationDetailLoading(true);
+      }
       try {
-        const [detail, sessions] = await Promise.all([
-          api.getConversationSessionDetail(selectedSessionId),
-          api.listConversationSessions(30),
-        ]);
+        const detail = await api.getConversationSessionCore(selectedSessionId);
         if (!cancelled) {
+          conversationDetailCacheRef.current.set(selectedSessionId, detail);
           setConversationDetail(detail);
-          setConversationSessions(sessions.sessions);
+          setConversationInfraError(null);
         }
       } catch (requestError) {
         if (!cancelled) {
           setError(requestError instanceof Error ? requestError.message : '加载会话详情失败');
         }
+      } finally {
+        if (!cancelled) {
+          setConversationDetailLoading(false);
+        }
       }
     };
 
     void run();
+
+    void api.listConversationSessions(30)
+      .then((sessions) => {
+        if (!cancelled) {
+          setConversationSessions(sessions.sessions);
+        }
+      })
+      .catch(() => {
+        // ignore list refresh error here; detail view has higher priority
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, authStatus, selectedSessionId]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (!selectedSessionId || activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const detail = await api.getConversationSessionCore(selectedSessionId);
+        if (!cancelled) {
+          conversationDetailCacheRef.current.set(selectedSessionId, detail);
+          setConversationDetail(detail);
+          setConversationInfraError(null);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : '会话自动刷新失败');
+        }
+      }
+    };
+
     const timer = window.setInterval(() => {
       void run();
     }, 4000);
@@ -1420,6 +1479,106 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
+  }, [activeSection, authStatus, selectedSessionId, conversationAutoRefreshEnabled]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const sessions = await api.listConversationSessions(30);
+        if (!cancelled) {
+          setConversationSessions(sessions.sessions);
+        }
+      } catch {
+        // keep current list when periodic refresh fails
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void run();
+    }, 12000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeSection, authStatus, conversationAutoRefreshEnabled]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') {
+      return;
+    }
+    if (!selectedSessionId || activeSection !== 'conversation') {
+      return;
+    }
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const infra = await api.getConversationSessionInfra(selectedSessionId);
+        if (cancelled) {
+          return;
+        }
+        setConversationDetail((previous) => {
+          if (!previous || previous.session.id !== selectedSessionId) {
+            return previous;
+          }
+          return {
+            ...previous,
+            runtime: {
+              ...(previous.runtime || { taskSessionId: previous.session.id }),
+              ...(infra.runtime || {}),
+            },
+            trace: {
+              ...(previous.trace || {
+                timeline: [],
+                llm: [],
+                agentDecisions: [],
+                opencodeMessages: [],
+                sandbox: {
+                  primaryEnvironment: null,
+                  relatedEnvironments: [],
+                },
+                kvm: {},
+                osac: {
+                  messages: [],
+                  summary: { total: 0, byType: [] },
+                  errors: [],
+                },
+              }),
+              sandbox: infra.trace?.sandbox || previous.trace?.sandbox || {
+                primaryEnvironment: null,
+                relatedEnvironments: [],
+              },
+              kvm: infra.trace?.kvm || previous.trace?.kvm || {},
+              osac: infra.trace?.osac || previous.trace?.osac || {
+                messages: [],
+                summary: { total: 0, byType: [] },
+                errors: [],
+              },
+            },
+          };
+        });
+        setConversationInfraError(null);
+      } catch (requestError) {
+        if (!cancelled) {
+          setConversationInfraError(requestError instanceof Error ? requestError.message : '加载关联信息失败');
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeSection, authStatus, selectedSessionId]);
 
   useEffect(() => {
@@ -1427,8 +1586,10 @@ export default function App() {
     setTransitionView('timeline');
     setTransitionQuery('');
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+    setTransitionAdvancedFiltersOpen(false);
     setConversationGovernanceFilter(null);
     setConversationEnvironmentGroupFilter(null);
+    setConversationInfraError(null);
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -1546,6 +1707,37 @@ export default function App() {
 
     return summary;
   })();
+  const filteredConversationSessions = (() => {
+    const query = conversationSearchQuery.trim().toLowerCase();
+    return conversationSessions.filter((session) => {
+      if (conversationStatusFilter !== 'all' && session.status !== conversationStatusFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const haystack = [
+        session.id,
+        session.title,
+        session.pendingQuestion || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  })();
+  const conversationTabCounts = {
+    transitions: conversationDetail?.trace?.stateTransitions?.length || 0,
+    timeline: conversationDetail?.trace?.timeline.length || 0,
+    messages: conversationDetail?.messages.length || 0,
+    llm: conversationDetail?.trace?.llm.length || 0,
+  };
+  const conversationSwitching = Boolean(
+    conversationDetailLoading &&
+      selectedSessionId &&
+      conversationDetail &&
+      selectedSessionId !== conversationDetail.session.id
+  );
   const agentCapabilitySummary = (() => {
     const capabilities = agentOverview?.capabilities || [];
     return {
@@ -3040,27 +3232,72 @@ export default function App() {
                 <p className="section-tag">会话索引</p>
                 <h2>会话索引列</h2>
               </div>
-                <span className="panel-caption">按更新时间排序</span>
+              <label className="conversation-auto-refresh-toggle">
+                <input
+                  type="checkbox"
+                  checked={conversationAutoRefreshEnabled}
+                  onChange={(event) => setConversationAutoRefreshEnabled(event.target.checked)}
+                />
+                <span>{conversationAutoRefreshEnabled ? '自动刷新中' : '已暂停自动刷新'}</span>
+              </label>
+            </div>
+            <div className="conversation-index-toolbar">
+              <label className="state-filter-field">
+                <span>搜索会话</span>
+                <input
+                  type="search"
+                  placeholder="sessionId / 标题 / 待确认问题"
+                  value={conversationSearchQuery}
+                  onChange={(event) => setConversationSearchQuery(event.target.value)}
+                />
+              </label>
+              <div className="conversation-status-filter-group" role="group" aria-label="会话状态筛选">
+                {[
+                  { key: 'all', label: '全部' },
+                  { key: 'in_progress', label: '进行中' },
+                  { key: 'waiting_user', label: '待确认' },
+                  { key: 'failed', label: '失败' },
+                  { key: 'completed', label: '已完成' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className={`toggle-btn ${conversationStatusFilter === item.key ? 'active' : ''}`}
+                    onClick={() => setConversationStatusFilter(item.key as typeof conversationStatusFilter)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <p className="panel-caption">按更新时间排序 · {filteredConversationSessions.length} / {conversationSessions.length}</p>
             </div>
             <div className="session-list">
               {conversationSessions.length === 0 ? (
                 <p className="empty">暂无对话会话。</p>
+              ) : filteredConversationSessions.length === 0 ? (
+                <p className="empty">当前筛选条件下无会话。</p>
               ) : (
-                conversationSessions.map((session) => (
+                filteredConversationSessions.map((session) => (
                   <button
                     key={session.id}
                     type="button"
                     className={`session-item ${selectedSessionId === session.id ? 'active' : ''}`}
                     onClick={() => {
+                      if (selectedSessionId === session.id) return;
                       setSelectedSessionId(session.id);
-                      setConversationDetail(null);
+                      setConversationDetailLoading(true);
                     }}
                   >
-                    <div>
+                    <div className="session-item-main">
                       <p className="session-title">{session.title || session.id}</p>
+                      <p className="session-id mono">{truncateMiddle(session.id, 10, 8)}</p>
+                      <p className="session-note">{session.pendingQuestion ? summarizeText(session.pendingQuestion, 72) : '无待确认问题'}</p>
                       <p className="session-meta">{formatDateTime(session.updatedAt)}</p>
                     </div>
-                    <span className="session-status">{statusLabel(session.status)}</span>
+                    <div className="session-item-side">
+                      <span className={stateClassName(session.status)}>{statusLabel(session.status)}</span>
+                      <span className="session-status">{session.stage || '-'}</span>
+                    </div>
                   </button>
                 ))
               )}
@@ -3084,7 +3321,9 @@ export default function App() {
             {!conversationDetail ? (
               <p className="empty">请选择左侧会话查看。</p>
             ) : (
-              <div className="conversation-detail">
+              <div className="conversation-workspace-content">
+                {conversationSwitching ? <div className="conversation-loading-mask">正在切换会话...</div> : null}
+                <div className="conversation-detail">
                 <div className="detail-grid detail-grid-wide summary-grid conversation-summary-grid">
                   <div>
                     <p className="kpi-title">会话 ID</p>
@@ -3110,16 +3349,16 @@ export default function App() {
 
                 <div className="workspace-tab-strip">
                   <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'transitions' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('transitions')}>
-                    状态流转
+                    状态流转 ({conversationTabCounts.transitions})
                   </button>
                   <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'timeline' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('timeline')}>
-                    全链路时间线
+                    全链路时间线 ({conversationTabCounts.timeline})
                   </button>
                   <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'messages' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('messages')}>
-                    对话消息
+                    对话消息 ({conversationTabCounts.messages})
                   </button>
                   <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'llm' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('llm')}>
-                    LLM 调用
+                    LLM 调用 ({conversationTabCounts.llm})
                   </button>
                 </div>
 
@@ -3140,6 +3379,7 @@ export default function App() {
                           onClick={() => {
                             setTransitionQuery('');
                             setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+                            setTransitionAdvancedFiltersOpen(false);
                           }}
                         >
                           重置筛选
@@ -3162,64 +3402,71 @@ export default function App() {
                           <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
                         </label>
                       </div>
-                      <div className="state-filter-grid">
-                        <label className="state-filter-field">
-                          <span>起始阶段</span>
-                          <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>目标阶段</span>
-                          <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>状态</span>
-                          <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>阶段(Phase)</span>
-                          <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.phases.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>消息类型</span>
-                          <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>角色</span>
-                          <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.roles.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>Agent</span>
-                          <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.agents.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
-                        <label className="state-filter-field">
-                          <span>Tone</span>
-                          <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
-                            <option value="all">全部</option>
-                            {transitionOptions.tones.map((value) => <option key={value} value={value}>{value}</option>)}
-                          </select>
-                        </label>
+                      <div className="state-filter-advanced-toggle">
+                        <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
+                          {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
+                        </button>
                       </div>
+                      {transitionAdvancedFiltersOpen ? (
+                        <div className="state-filter-grid">
+                          <label className="state-filter-field">
+                            <span>起始阶段</span>
+                            <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>目标阶段</span>
+                            <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>状态</span>
+                            <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>阶段(Phase)</span>
+                            <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.phases.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>消息类型</span>
+                            <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>角色</span>
+                            <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.roles.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>Agent</span>
+                            <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.agents.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                          <label className="state-filter-field">
+                            <span>Tone</span>
+                            <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
+                              <option value="all">全部</option>
+                              {transitionOptions.tones.map((value) => <option key={value} value={value}>{value}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="kpi-grid conversation-kpi-grid">
@@ -3358,23 +3605,31 @@ export default function App() {
                     {llmItems.length === 0 ? (
                       <p className="empty">无 LLM 调用轨迹</p>
                     ) : (
-                      llmItems.map((item) => (
-                        <article key={item.id} className="sub-panel">
-                          <div className="trace-head">
-                            <strong>{item.stage}</strong>
-                            <span className="mono">{item.source}</span>
-                            <span>{item.inferred ? '推断还原' : '真实命令'}</span>
-                          </div>
-                          <p className="trace-meta">时间: {formatDateTime(item.createdAt)}</p>
-                          <p className="kpi-title">请求内容</p>
-                          <pre className="json-block">{toJsonText(item.request)}</pre>
-                          <p className="kpi-title">返回内容</p>
-                          <pre className="json-block">{toJsonText(item.response)}</pre>
-                        </article>
-                      ))
+                      llmItems.map((item) => {
+                        const requestSize = Object.keys(item.request || {}).length;
+                        const responseSize = Object.keys(item.response || {}).length;
+                        return (
+                          <details key={item.id} className="sub-panel llm-trace-item">
+                            <summary>
+                              <div className="trace-head">
+                                <strong>{item.stage}</strong>
+                                <span className="mono">{item.source}</span>
+                                <span>{item.inferred ? '推断还原' : '真实命令'}</span>
+                                <span>{formatDateTime(item.createdAt)}</span>
+                              </div>
+                              <p className="trace-meta">request {requestSize} 字段 · response {responseSize} 字段</p>
+                            </summary>
+                            <p className="kpi-title">请求内容</p>
+                            <pre className="json-block">{toJsonText(item.request)}</pre>
+                            <p className="kpi-title">返回内容</p>
+                            <pre className="json-block">{toJsonText(item.response)}</pre>
+                          </details>
+                        );
+                      })
                     )}
                   </div>
                 ) : null}
+                </div>
               </div>
             )}
           </article>
@@ -3393,6 +3648,9 @@ export default function App() {
                 <p className="empty">选择会话后，这里会显示运行绑定、KVM 摘要和 Sandbox 信息。</p>
               ) : (
                 <div className="conversation-inspector-content">
+                  {conversationInfraError ? (
+                    <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+                  ) : null}
                   <article className="sub-panel">
                     <div className="panel-header">
                       <h3>当前会话</h3>
@@ -3577,52 +3835,56 @@ export default function App() {
                     ) : null}
                   </article>
 
-                  <article className="sub-panel">
-                    <div className="panel-header panel-header-stack">
-                      <div>
-                        <h3>OSAC / OpenCode</h3>
-                        <span className="panel-caption">{osacMessages.length} 条消息</span>
+                  <details className="sub-panel conversation-osac-panel">
+                    <summary>
+                      <div className="panel-header panel-header-stack">
+                        <div>
+                          <h3>OSAC / OpenCode</h3>
+                          <span className="panel-caption">{osacMessages.length} 条消息</span>
+                        </div>
                       </div>
+                    </summary>
+                    <div className="conversation-osac-panel-body">
                       <button type="button" className="secondary-btn" onClick={() => setShowOpencodePayload((prev) => !prev)}>
                         {showOpencodePayload ? '隐藏 payload' : '显示 payload'}
                       </button>
+                      <div className="trace-list conversation-osac-list">
+                        {osacMessages.length === 0 ? (
+                          <p className="empty">无 OSAC 消息</p>
+                        ) : (
+                          osacMessages.map((message, index) => {
+                            const payload = (message.payload || {}) as Record<string, unknown>;
+                            const summary = summarizeText(
+                              [
+                                typeof payload.eventType === 'string' ? payload.eventType : '',
+                                typeof payload.message === 'string' ? payload.message : '',
+                                typeof payload.status === 'string' ? payload.status : '',
+                                typeof payload.output === 'string' ? payload.output : '',
+                              ].filter(Boolean).join(' | '),
+                              220
+                            );
+                            const payloadTimestamp =
+                              typeof payload.timestamp === 'string'
+                                ? payload.timestamp
+                                : typeof payload.time === 'string'
+                                  ? payload.time
+                                  : undefined;
+                            return (
+                              <article key={`${message.type}-${index}`} className="trace-item">
+                                <p className="trace-head">
+                                  <span className="trace-level info">osac</span>
+                                  <strong>{message.type}</strong>
+                                  <span>{formatDateTime(payloadTimestamp)}</span>
+                                </p>
+                                {summary ? <p className="message-content">{summary}</p> : null}
+                                {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
+                              </article>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
-                    <div className="trace-list conversation-osac-list">
-                      {osacMessages.length === 0 ? (
-                        <p className="empty">无 OSAC 消息</p>
-                      ) : (
-                        osacMessages.map((message, index) => {
-                          const payload = (message.payload || {}) as Record<string, unknown>;
-                          const summary = summarizeText(
-                            [
-                              typeof payload.eventType === 'string' ? payload.eventType : '',
-                              typeof payload.message === 'string' ? payload.message : '',
-                              typeof payload.status === 'string' ? payload.status : '',
-                              typeof payload.output === 'string' ? payload.output : '',
-                            ].filter(Boolean).join(' | '),
-                            220
-                          );
-                          const payloadTimestamp =
-                            typeof payload.timestamp === 'string'
-                              ? payload.timestamp
-                              : typeof payload.time === 'string'
-                                ? payload.time
-                                : undefined;
-                          return (
-                            <article key={`${message.type}-${index}`} className="trace-item">
-                              <p className="trace-head">
-                                <span className="trace-level info">osac</span>
-                                <strong>{message.type}</strong>
-                                <span>{formatDateTime(payloadTimestamp)}</span>
-                              </p>
-                              {summary ? <p className="message-content">{summary}</p> : null}
-                              {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
-                            </article>
-                          );
-                        })
-                      )}
-                    </div>
-                  </article>
+                  </details>
 
                   <details className="sub-panel">
                     <summary>KVM / Sandbox 原始状态</summary>

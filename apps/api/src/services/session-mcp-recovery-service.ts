@@ -26,7 +26,12 @@ function recoveryKeyFor(taskSessionId: string, orchestratorSessionId: string) {
 export class SessionMcpRecoveryService {
   private runningTaskSessions = new Set<string>();
 
-  private async isSessionAlreadyRecovered(taskSessionId: string, orchestratorSessionId: string) {
+  private async isSessionAlreadyRecovered(
+    taskSessionId: string,
+    orchestratorSessionId: string,
+    options?: { probeLive?: boolean }
+  ) {
+    const probeLive = Boolean(options?.probeLive);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
     const attachedBindings = bindings.filter((item) => asText(item.desiredState) === 'attached');
     if (attachedBindings.length === 0) {
@@ -35,6 +40,18 @@ export class SessionMcpRecoveryService {
     const activeJobs = await taskSessionMcpRecoveryJobDAO.listActiveByTaskSession(taskSessionId);
     if (activeJobs.length > 0) {
       return false;
+    }
+    const dbRecovered = attachedBindings.every((binding) => {
+      const providerId = asText(binding.runtimeProviderId);
+      return (
+        asText(binding.orchestratorSessionId) === orchestratorSessionId &&
+        asText(binding.runtimeStatus) === 'connected' &&
+        Boolean(binding.recoveryCompletedAt) &&
+        Boolean(providerId)
+      );
+    });
+    if (!probeLive) {
+      return dbRecovered;
     }
     let liveProviderIds = new Set<string>();
     try {
@@ -165,7 +182,7 @@ export class SessionMcpRecoveryService {
       );
       return false;
     }
-    if (await this.isSessionAlreadyRecovered(taskSessionId, orchestratorSessionId)) {
+    if (await this.isSessionAlreadyRecovered(taskSessionId, orchestratorSessionId, { probeLive: false })) {
       writeConnectorDebugLog('[SESSION_MCP_RECOVERY_SKIP_ALREADY_RECOVERED]', {
         taskSessionId,
         orchestratorSessionId,
@@ -176,7 +193,23 @@ export class SessionMcpRecoveryService {
     if (!job) {
       return true;
     }
-    await this.runRecoveryJob(job.id, taskSessionId);
+    writeConnectorDebugLog('[SESSION_MCP_RECOVERY_ENQUEUED_ASYNC]', {
+      taskSessionId,
+      orchestratorSessionId,
+      jobId: job.id,
+    });
+    void this.runRecoveryJob(job.id, taskSessionId).catch((error) => {
+      writeConnectorDebugLog(
+        '[SESSION_MCP_RECOVERY_RUN_ASYNC_FAILED]',
+        {
+          taskSessionId,
+          orchestratorSessionId,
+          jobId: job.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'error'
+      );
+    });
     return true;
   }
 

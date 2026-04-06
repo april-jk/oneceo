@@ -38,6 +38,7 @@ import {
   detachSessionConnector,
   getGithubProfileRepositories,
   getMyConnectorProfiles,
+  saveSessionConnectorDraft,
   getSessionConnectors,
   type ConnectorCatalogItem,
   type ConnectorKey,
@@ -45,6 +46,13 @@ import {
   type ConnectorProfile,
   type SessionConnectorStatus,
 } from "@/lib/connectors-client";
+import {
+  clearSessionConnectorDraftState,
+  ensureSessionConnectorDraftId,
+  listSessionConnectorDraftEntries,
+  removeSessionConnectorDraftEntry,
+  upsertSessionConnectorDraftEntry,
+} from "@/lib/session-connector-draft";
 import { resolveConnectorIcon } from "@/lib/connector-ui";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
 import { cn } from "@/lib/utils";
@@ -206,6 +214,28 @@ export default function ConnectorDialog({
         nextSessionStatuses = Object.fromEntries(
           sessionData.items.map((item) => [item.connectorKey, item])
         );
+      } else {
+        const draftEntries = listSessionConnectorDraftEntries();
+        const profilesByConnector = groupProfilesByConnector(me.profiles);
+        for (const entry of draftEntries) {
+          const catalogItem = me.catalog.find((item) => item.key === entry.connectorKey);
+          if (!catalogItem) continue;
+          const connectorProfiles = profilesByConnector[entry.connectorKey] || [];
+          const selectedProfile =
+            connectorProfiles.find((profile) => profile.profileId === entry.profileId) || null;
+          const repositories = Array.isArray(entry.sessionConfig?.repositories)
+            ? (entry.sessionConfig?.repositories as string[])
+            : [];
+          nextSessionStatuses[entry.connectorKey] = buildOptimisticSessionStatus({
+            item: catalogItem,
+            session: undefined,
+            connectorProfiles,
+            selectedProfileId: selectedProfile?.profileId || null,
+            selectedProfile,
+            attached: entry.desiredState !== "detached",
+            repositories,
+          });
+        }
       }
       const mergedSessionStatuses = {
         ...nextSessionStatuses,
@@ -432,9 +462,71 @@ export default function ConnectorDialog({
     mode: "attach" | "detach",
     sessionConfig?: Record<string, unknown>
   ) => {
-    if (!sessionId) return;
     setActingKey(connectorKey);
     try {
+      if (!sessionId) {
+        if (mode === "detach") {
+          const next = removeSessionConnectorDraftEntry(connectorKey);
+          const draftId = next?.draftId || ensureSessionConnectorDraftId();
+          const entries = next ? listSessionConnectorDraftEntries() : [];
+          await saveSessionConnectorDraft(draftId, entries);
+          applySessionStatusOverride(
+            buildOptimisticSessionStatus({
+              item: catalog.find((entry) => entry.key === connectorKey) || {
+                key: connectorKey,
+                name: sessionStatuses[connectorKey]?.name || connectorKey,
+                icon: sessionStatuses[connectorKey]?.icon || "plug",
+                authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+                available: true,
+                category: "app",
+              } as ConnectorCatalogItem,
+              session: sessionStatuses[connectorKey],
+              connectorProfiles: profilesByConnector[connectorKey] || [],
+              selectedProfileId: profileId,
+              selectedProfile:
+                (profilesByConnector[connectorKey] || []).find(
+                  (profile) => profile.profileId === profileId
+                ) || null,
+              attached: false,
+              repositories: [],
+            })
+          );
+          toast.success("连接器草稿已移除，发送后将按当前配置同步");
+          return;
+        }
+
+        const nextState = upsertSessionConnectorDraftEntry(connectorKey, {
+          profileId,
+          desiredState: "attached",
+          sessionConfig: sessionConfig || null,
+          enabledTools: [],
+        });
+        await saveSessionConnectorDraft(nextState.draftId, listSessionConnectorDraftEntries());
+        applySessionStatusOverride(
+          buildOptimisticSessionStatus({
+            item: catalog.find((entry) => entry.key === connectorKey) || {
+              key: connectorKey,
+              name: sessionStatuses[connectorKey]?.name || connectorKey,
+              icon: sessionStatuses[connectorKey]?.icon || "plug",
+              authMode: sessionStatuses[connectorKey]?.authMode || "oauth",
+              available: true,
+              category: "app",
+            } as ConnectorCatalogItem,
+            session: sessionStatuses[connectorKey],
+            connectorProfiles: profilesByConnector[connectorKey] || [],
+            selectedProfileId: profileId,
+            selectedProfile:
+              (profilesByConnector[connectorKey] || []).find(
+                (profile) => profile.profileId === profileId
+              ) || null,
+            attached: true,
+            repositories: (sessionConfig?.repositories as string[] | undefined) || [],
+          })
+        );
+        toast.success("连接器草稿已保存，发送后会自动同步到会话");
+        return;
+      }
+
       if (mode === "detach") {
         applySessionStatusOverride(
           buildOptimisticSessionStatus({
@@ -458,6 +550,12 @@ export default function ConnectorDialog({
           })
         );
         await detachSessionConnector(sessionId, connectorKey);
+        if (mode === "detach") {
+          const draftState = removeSessionConnectorDraftEntry(connectorKey);
+          if (draftState?.draftId) {
+            await saveSessionConnectorDraft(draftState.draftId, listSessionConnectorDraftEntries());
+          }
+        }
         toast.success("连接器已从当前会话移除");
       } else {
         applySessionStatusOverride(
@@ -485,6 +583,12 @@ export default function ConnectorDialog({
           profileId,
           sessionConfig,
         });
+        const draftState = removeSessionConnectorDraftEntry(connectorKey);
+        if (draftState?.draftId) {
+          await saveSessionConnectorDraft(draftState.draftId, listSessionConnectorDraftEntries());
+        } else {
+          clearSessionConnectorDraftState();
+        }
         toast.success(
           attachedStatus?.runtimeStatus === "pending_recover"
             ? "连接器已记录，sandbox 恢复后会自动挂载"
@@ -539,7 +643,7 @@ export default function ConnectorDialog({
       })
     );
 
-    if (!sessionId || !canAttach) return;
+    if (!canAttach) return;
     await handleAttach(connectorKey, profileId, "attach", {
       repositories: nextRepositories,
     });
@@ -624,7 +728,6 @@ export default function ConnectorDialog({
                       const isGithub = item.key === "github";
                       const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                       const canAttach =
-                        Boolean(sessionId) &&
                         item.available &&
                         Boolean(selectedProfileId) &&
                         selectedProfile?.authStatus === "authorized";
@@ -836,7 +939,6 @@ export default function ConnectorDialog({
                   const DetailIcon = resolveConnectorIcon(item.icon) || Link2;
                   const guide = CONNECTOR_GUIDES[item.key];
                   const canAttach =
-                    Boolean(sessionId) &&
                     item.available &&
                     Boolean(selectedProfileId) &&
                     selectedProfile?.authStatus === "authorized";

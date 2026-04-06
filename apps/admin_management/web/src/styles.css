@@ -1192,6 +1192,30 @@ select:focus-visible {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.conversation-index-toolbar {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.conversation-status-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conversation-auto-refresh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.conversation-auto-refresh-toggle input {
+  margin: 0;
+}
+
 .workspace-tab-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1280,6 +1304,31 @@ select:focus-visible {
   gap: 10px;
   padding: 14px 16px;
   color: var(--text);
+  text-align: left;
+}
+
+.session-item-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.session-item-side {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.session-id {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.session-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
 }
 
 .session-item:hover {
@@ -1303,6 +1352,26 @@ select:focus-visible {
 .session-title {
   font-size: 0.96rem;
   line-height: 1.35;
+}
+
+.conversation-workspace-content {
+  position: relative;
+}
+
+.conversation-loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 12px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.3));
+  color: var(--text-soft);
+  font-size: 12px;
+  backdrop-filter: blur(1px);
+  pointer-events: none;
 }
 
 .session-status {
@@ -1618,6 +1687,11 @@ select:focus-visible {
   gap: 12px;
 }
 
+.state-filter-advanced-toggle {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .state-filter-row {
   display: grid;
   grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(180px, 1fr));
@@ -1686,6 +1760,33 @@ select:focus-visible {
 
 .button-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.llm-trace-item summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.llm-trace-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.llm-trace-item[open] summary {
+  margin-bottom: 8px;
+}
+
+.conversation-osac-panel summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.conversation-osac-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.conversation-osac-panel-body {
+  display: grid;
+  gap: 10px;
 }
 
 .button-grid-two {

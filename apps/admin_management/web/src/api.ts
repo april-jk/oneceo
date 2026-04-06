@@ -2,6 +2,7 @@ import type {
   AgentManagementOverview,
   AuditResponse,
   ConversationSessionDetailResponse,
+  ConversationSessionInfraResponse,
   ConversationSessionsResponse,
   ConnectorGuidePolicy,
   ConnectorGuidePolicyDetail,
@@ -567,8 +568,16 @@ export const api = {
   listHosts: () => request<HostListResponse>('/api/hosts'),
   listConversationSessions: (limit = 30) =>
     request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
-  getConversationSessionDetail: (sessionId: string) =>
-    request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}`),
+  getConversationSessionCore: (sessionId: string) =>
+    request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/core`, {
+      timeoutMs: 10000,
+      abortMessage: '加载会话核心数据超时，请稍后重试',
+    }),
+  getConversationSessionInfra: (sessionId: string) =>
+    request<ConversationSessionInfraResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/infra`, {
+      timeoutMs: 20000,
+      abortMessage: '加载运行关联信息超时，请稍后重试',
+    }),
   getAgentManagementOverview: () =>
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>

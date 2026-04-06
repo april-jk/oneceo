@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react';
 import {
   Bar,
   BarChart,
@@ -150,6 +150,39 @@ const VM_STATE_COLORS: Record<string, string> = {
 
 const SANDBOX_RUNTIME_PAGE_SIZE = 80;
 const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
+
+type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active';
+type RuntimeSortDirection = 'asc' | 'desc';
+type RuntimeSortState = {
+  key: RuntimeSortKey;
+  direction: RuntimeSortDirection;
+};
+type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active' | 'actions';
+
+const DEFAULT_RUNTIME_SORT: RuntimeSortState = {
+  key: 'risk',
+  direction: 'desc',
+};
+
+const DEFAULT_RUNTIME_COLUMN_WIDTHS: Record<RuntimeColumnKey, number> = {
+  task_session: 228,
+  sandbox: 212,
+  executor: 128,
+  status: 232,
+  risk: 174,
+  last_active: 170,
+  actions: 236,
+};
+
+const RUNTIME_COLUMN_MIN_WIDTHS: Record<RuntimeColumnKey, number> = {
+  task_session: 168,
+  sandbox: 156,
+  executor: 108,
+  status: 186,
+  risk: 132,
+  last_active: 130,
+  actions: 206,
+};
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -509,8 +542,11 @@ export default function App() {
   const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState('all');
   const [sandboxStatusFilter, setSandboxStatusFilter] = useState('all');
   const [sandboxRiskFilter, setSandboxRiskFilter] = useState('all');
+  const [runtimeSort, setRuntimeSort] = useState<RuntimeSortState>(DEFAULT_RUNTIME_SORT);
+  const [runtimeColumnWidths, setRuntimeColumnWidths] = useState<Record<RuntimeColumnKey, number>>(DEFAULT_RUNTIME_COLUMN_WIDTHS);
   const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
+  const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
   const [sandboxDetailTab, setSandboxDetailTab] = useState<'overview' | 'connectivity' | 'archive' | 'metrics' | 'advanced'>('overview');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [sandboxMetrics, setSandboxMetrics] = useState<E2bSandboxMetricPoint[]>([]);
@@ -548,7 +584,14 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sandboxSectionRequestRef = useRef<Promise<void> | null>(null);
+  const sandboxOverviewRequestRef = useRef<Promise<void> | null>(null);
+  const sandboxRuntimeRegistryRequestRef = useRef<Promise<void> | null>(null);
   const sandboxRegistryLimitRef = useRef(SANDBOX_RUNTIME_PAGE_SIZE);
+  const runtimeColumnResizeRef = useRef<{
+    columnKey: RuntimeColumnKey;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -656,9 +699,102 @@ export default function App() {
     window.URL.revokeObjectURL(url);
   }, [conversationDetail]);
 
+  const closeParentDetails = useCallback((element: HTMLElement | null) => {
+    const details = element?.closest('details');
+    if (details instanceof HTMLDetailsElement) {
+      details.open = false;
+    }
+  }, []);
+
+  const toggleRuntimeSort = useCallback((key: RuntimeSortKey) => {
+    setRuntimeSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      const initialDirection: RuntimeSortDirection = key === 'risk' || key === 'last_active' ? 'desc' : 'asc';
+      return {
+        key,
+        direction: initialDirection,
+      };
+    });
+  }, []);
+
+  const beginRuntimeColumnResize = useCallback(
+    (columnKey: RuntimeColumnKey, event: ReactMouseEvent<HTMLSpanElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const startWidth = runtimeColumnWidths[columnKey] || DEFAULT_RUNTIME_COLUMN_WIDTHS[columnKey];
+      runtimeColumnResizeRef.current = {
+        columnKey,
+        startX: event.clientX,
+        startWidth,
+      };
+
+      const onPointerMove = (moveEvent: MouseEvent) => {
+        const active = runtimeColumnResizeRef.current;
+        if (!active) return;
+        const minWidth = RUNTIME_COLUMN_MIN_WIDTHS[active.columnKey];
+        const nextWidth = Math.max(minWidth, Math.round(active.startWidth + (moveEvent.clientX - active.startX)));
+        setRuntimeColumnWidths((previous) => ({
+          ...previous,
+          [active.columnKey]: nextWidth,
+        }));
+      };
+
+      const onPointerUp = () => {
+        runtimeColumnResizeRef.current = null;
+        window.removeEventListener('mousemove', onPointerMove);
+        window.removeEventListener('mouseup', onPointerUp);
+      };
+
+      window.addEventListener('mousemove', onPointerMove);
+      window.addEventListener('mouseup', onPointerUp);
+    },
+    [runtimeColumnWidths]
+  );
+
   const loadAgentSection = useCallback(async () => {
     const result = await api.getAgentManagementOverview();
     setAgentOverview(result);
+  }, []);
+
+  const loadSandboxOverview = useCallback(async () => {
+    if (sandboxOverviewRequestRef.current) {
+      return sandboxOverviewRequestRef.current;
+    }
+
+    const request = (async () => {
+      const overview = await api.getSandboxManagementOverview(80);
+      setSandboxOverview(overview);
+    })();
+
+    sandboxOverviewRequestRef.current = request;
+    try {
+      await request;
+    } finally {
+      sandboxOverviewRequestRef.current = null;
+    }
+  }, []);
+
+  const loadSandboxRuntimeRegistry = useCallback(async () => {
+    if (sandboxRuntimeRegistryRequestRef.current) {
+      return sandboxRuntimeRegistryRequestRef.current;
+    }
+
+    const request = (async () => {
+      const registry = await api.getSandboxRuntimeRegistry(sandboxRegistryLimitRef.current);
+      setSandboxRuntimeRegistry(registry);
+    })();
+
+    sandboxRuntimeRegistryRequestRef.current = request;
+    try {
+      await request;
+    } finally {
+      sandboxRuntimeRegistryRequestRef.current = null;
+    }
   }, []);
 
   const loadSandboxSection = useCallback(async () => {
@@ -666,22 +802,14 @@ export default function App() {
       return sandboxSectionRequestRef.current;
     }
 
-    const request = (async () => {
-      const [overview, registry] = await Promise.all([
-        api.getSandboxManagementOverview(80),
-        api.getSandboxRuntimeRegistry(sandboxRegistryLimitRef.current),
-      ]);
-      setSandboxOverview(overview);
-      setSandboxRuntimeRegistry(registry);
-    })();
-
+    const request = Promise.all([loadSandboxOverview(), loadSandboxRuntimeRegistry()]).then(() => undefined);
     sandboxSectionRequestRef.current = request;
     try {
       await request;
     } finally {
       sandboxSectionRequestRef.current = null;
     }
-  }, []);
+  }, [loadSandboxOverview, loadSandboxRuntimeRegistry]);
 
   const loadMoreSandboxRuntime = useCallback(async () => {
     const previousLimit = sandboxRegistryLimitRef.current;
@@ -689,17 +817,21 @@ export default function App() {
     sandboxRegistryLimitRef.current = nextLimit;
     setSandboxRegistryLimit(nextLimit);
     setSandboxRegistryLoadingMore(true);
+    setSandboxRegistryLoadMoreError(null);
     try {
-      await loadSandboxSection();
+      await loadSandboxRuntimeRegistry();
       setError(null);
+      setSandboxRegistryLoadMoreError(null);
     } catch (requestError) {
       sandboxRegistryLimitRef.current = previousLimit;
       setSandboxRegistryLimit(previousLimit);
-      setError(requestError instanceof Error ? requestError.message : '加载更多 Runtime 失败');
+      const message = requestError instanceof Error ? requestError.message : '加载更多 Runtime 失败';
+      setError(message);
+      setSandboxRegistryLoadMoreError(message);
     } finally {
       setSandboxRegistryLoadingMore(false);
     }
-  }, [loadSandboxSection]);
+  }, [loadSandboxRuntimeRegistry]);
 
   const loadTemplates = useCallback(async () => {
     const result = await api.listTemplates();
@@ -1523,9 +1655,6 @@ export default function App() {
   const breadcrumbTitle = activeNavItem.label;
   const sandboxApi = sandboxOverview?.sandboxApi ?? null;
   const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
-  const sandboxRegistrySummary = sandboxRuntimeRegistry?.summary ?? null;
-  const sandboxRegistryDistributions = sandboxRuntimeRegistry?.distributions ?? null;
-  const sandboxRegistryExecutors = asArray(sandboxRegistryDistributions?.executors);
   const sandboxRegistryItems = asArray(sandboxRuntimeRegistry?.items).map((item) => ({
     ...item,
     riskTags: asArray(item?.riskTags),
@@ -3644,14 +3773,28 @@ export default function App() {
   );
 
   const renderSandboxSection = () => {
-    const summary = sandboxRegistrySummary;
+    const liveSandboxIdSet = new Set(sandboxOverviewItems.map((item) => item.sandboxId).filter(Boolean));
+    const currentScopeItems =
+      liveSandboxIdSet.size === 0
+        ? sandboxRegistryItems
+        : sandboxRegistryItems.filter((item) => liveSandboxIdSet.has(item.sandboxId));
+    const summary = {
+      total: sandboxOverview?.summary.total ?? currentScopeItems.length,
+      running:
+        sandboxOverview?.summary.running ??
+        currentScopeItems.filter((item) => item.sandboxState === 'running' || (!item.sandboxState && item.status === 'ready')).length,
+      paused: sandboxOverview?.summary.paused ?? currentScopeItems.filter((item) => item.sandboxState === 'paused').length,
+      pendingArchive: currentScopeItems.filter((item) => item.pendingArchiveUpdate || item.archiveStatus === 'pending_update').length,
+      archiveFailed: currentScopeItems.filter((item) => item.archiveStatus === 'failed').length,
+      risky: currentScopeItems.filter((item) => item.riskTags.length > 0).length,
+    };
     const metricsData = (sandboxRuntimeDetail?.metrics || sandboxMetrics).map((point) => ({
       timeLabel: point.timestamp ? new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '-',
       cpu: point.cpuUsagePercent ?? 0,
       memory: point.memoryUsagePercent ?? 0,
       disk: point.diskUsagePercent ?? 0,
     }));
-    const riskyItems = sandboxRegistryItems
+    const riskyItems = currentScopeItems
       .filter((item) => item.riskTags.length > 0)
       .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
       .slice(0, 6);
@@ -3659,9 +3802,8 @@ export default function App() {
       label: string;
       count: number;
       lastSeenAt: string | null;
-      item: typeof sandboxRegistryItems[number];
     }>();
-    sandboxRegistryItems.forEach((item) => {
+    currentScopeItems.forEach((item) => {
       item.riskTags.forEach((risk) => {
         const previous = riskGroupMap.get(risk);
         const candidateTime = item.lastActiveAt || item.updatedAt || item.createdAt || null;
@@ -3670,27 +3812,49 @@ export default function App() {
             label: risk,
             count: 1,
             lastSeenAt: candidateTime,
-            item,
           });
           return;
         }
         previous.count += 1;
         if (toTimestamp(candidateTime) > toTimestamp(previous.lastSeenAt)) {
           previous.lastSeenAt = candidateTime;
-          previous.item = item;
         }
       });
     });
     const riskGroups = Array.from(riskGroupMap.values()).sort(
       (a, b) => b.count - a.count || toTimestamp(b.lastSeenAt) - toTimestamp(a.lastSeenAt) || a.label.localeCompare(b.label)
     );
+    const executorDistribution = Array.from(
+      currentScopeItems.reduce((acc, item) => {
+        const key = item.executor || 'unknown';
+        acc.set(key, (acc.get(key) || 0) + 1);
+        return acc;
+      }, new Map<string, number>())
+    )
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
     const executorOptions = Array.from(new Set(sandboxRegistryItems.map((item) => item.executor).filter(Boolean))).sort();
     const statusOptions = Array.from(
-      new Set(sandboxRegistryItems.map((item) => item.sandboxState || item.status).filter(Boolean))
+      new Set([
+        ...sandboxRegistryItems.map((item) => item.sandboxState || item.status).filter(Boolean),
+        'running',
+        'paused',
+        'pending_archive',
+      ])
     ).sort();
+    const runtimeQuickStatusFilters = [
+      { label: '全部', value: 'all', count: summary?.total ?? 0, meta: '全部 Sandbox' },
+      { label: '运行中', value: 'running', count: summary?.running ?? 0, meta: '运行中的 Sandbox' },
+      { label: '暂停中', value: 'paused', count: summary?.paused ?? 0, meta: '暂停且不计费' },
+      { label: '待归档', value: 'pending_archive', count: summary?.pendingArchive ?? 0, meta: '待归档更新' },
+    ];
     const riskOptions = riskGroups.map((item) => item.label);
     const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
-    const runtimeItems = sandboxRegistryItems
+    const loadedRuntimeCount = sandboxRegistryItems.length;
+    const loadMoreTargetCount = Math.max(loadedRuntimeCount, sandboxRegistryLimit);
+    const loadMoreRangeStart = loadedRuntimeCount + 1;
+    const loadMoreRangeEnd = loadMoreTargetCount;
+    const runtimeFilteredItems = sandboxRegistryItems
       .filter((item) => {
         const query = sandboxRuntimeQuery.trim().toLowerCase();
         if (!query) return true;
@@ -3705,13 +3869,43 @@ export default function App() {
           .some((value) => String(value).toLowerCase().includes(query));
       })
       .filter((item) => sandboxExecutorFilter === 'all' || item.executor === sandboxExecutorFilter)
-      .filter((item) => sandboxStatusFilter === 'all' || (item.sandboxState || item.status) === sandboxStatusFilter)
-      .filter((item) => sandboxRiskFilter === 'all' || item.riskTags.includes(sandboxRiskFilter))
-      .sort((a, b) => {
-        const riskDelta = b.riskTags.length - a.riskTags.length;
-        if (riskDelta !== 0) return riskDelta;
-        return toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt) - toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt);
-      });
+      .filter((item) => {
+        if (sandboxStatusFilter === 'all') return true;
+        if (sandboxStatusFilter === 'running') {
+          return item.sandboxState === 'running' || (!item.sandboxState && item.status === 'ready');
+        }
+        if (sandboxStatusFilter === 'pending_archive') {
+          return item.pendingArchiveUpdate || item.archiveStatus === 'pending_update';
+        }
+        return (item.sandboxState || item.status) === sandboxStatusFilter;
+      })
+      .filter((item) => sandboxRiskFilter === 'all' || item.riskTags.includes(sandboxRiskFilter));
+    const runtimeItems = [...runtimeFilteredItems].sort((a, b) => {
+      let delta = 0;
+      if (runtimeSort.key === 'task_session') {
+        delta = (a.taskSessionId || '').localeCompare(b.taskSessionId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (runtimeSort.key === 'sandbox') {
+        delta = (a.sandboxId || '').localeCompare(b.sandboxId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (runtimeSort.key === 'executor') {
+        delta = (a.executor || '').localeCompare(b.executor || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (runtimeSort.key === 'status') {
+        delta = (a.sandboxState || a.status || '').localeCompare(b.sandboxState || b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (runtimeSort.key === 'risk') {
+        delta = a.riskTags.length - b.riskTags.length;
+      } else if (runtimeSort.key === 'last_active') {
+        delta =
+          toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt) - toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt);
+      }
+
+      if (delta !== 0) {
+        return runtimeSort.direction === 'asc' ? delta : -delta;
+      }
+
+      const riskDelta = b.riskTags.length - a.riskTags.length;
+      if (riskDelta !== 0) return riskDelta;
+      return toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt) - toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt);
+    });
+    const runtimeSkeletonRowCount = runtimeItems.length > 0 && sandboxRegistryLoadingMore ? 4 : 0;
     const archiveRows = sandboxRuntimeDetail
       ? ((sandboxArchiveHistory.length > 0
           ? sandboxArchiveHistory.map((item) => ({
@@ -3803,23 +3997,6 @@ export default function App() {
                 <span className="hero-metric-label">风险项</span>
                 <strong>{summary?.risky ?? 0}</strong>
               </div>
-              <div className="sandbox-summary-card sandbox-summary-card-wide">
-                <span className="hero-metric-label">当前页面</span>
-                <strong>
-                  {sandboxTab === 'overview'
-                    ? 'Sandbox 摘要'
-                    : sandboxTab === 'runtime'
-                      ? 'Sandbox 列表'
-                      : '模板管理'}
-                </strong>
-                <p className="session-meta">
-                  {sandboxTab === 'overview'
-                    ? '汇总当前 Sandbox 和风险状态。'
-                    : sandboxTab === 'runtime'
-                      ? '查看 Sandbox 列表、风险状态和详情。'
-                      : '查看模板版本和构建状态。'}
-                </p>
-              </div>
             </div>
           </section>
 
@@ -3899,7 +4076,7 @@ export default function App() {
                     <span className="panel-caption">模式分布</span>
                   </div>
                   <div className="compact-list">
-                    {sandboxRegistryExecutors.map((item) => (
+                    {executorDistribution.map((item) => (
                       <div key={item.label} className="compact-item">
                         <strong>{item.label}</strong>
                         <span className="session-status">{item.value}</span>
@@ -3937,61 +4114,63 @@ export default function App() {
 
           {sandboxTab === 'runtime' ? (
             <section className="sandbox-runtime-layout fade-in">
-                <article className="panel sandbox-runtime-side">
-                <div className="panel-header">
-                  <div>
-                    <h2>风险聚合</h2>
-                    <span className="panel-caption">按风险类型查看</span>
-                  </div>
-                  <span className="session-status">{riskGroups.length} 类风险</span>
-                </div>
-                <div className="risk-group-grid">
-                  {riskGroups.length === 0 ? (
-                    <p className="empty">当前没有高风险 Sandbox。</p>
-                  ) : (
-                    riskGroups.map((group) => (
-                      <article key={group.label} className="risk-group-card">
-                        <div className="risk-group-head">
-                          <strong>{group.label}</strong>
-                          <span className="session-status">{group.count}</span>
-                        </div>
-                        <p className="session-meta">最近出现：{formatDateTime(group.lastSeenAt)}</p>
-                        <div className="action-inline">
-                          <button
-                            type="button"
-                            className="secondary-btn"
-                            onClick={() => {
-                              setSandboxTab('runtime');
-                              setSandboxRiskFilter(group.label);
-                            }}
-                          >
-                            筛选 Sandbox
-                          </button>
-                          <button
-                            type="button"
-                            className="table-btn"
-                            onClick={() => void openSandboxDetail(group.item.sandboxId)}
-                          >
-                            查看最新 Sandbox
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </article>
-
               <article className="panel sandbox-runtime-main">
                 <div className="panel-header">
                   <div>
                     <h2>Sandbox 列表</h2>
-                    <span className="panel-caption">
-                      已加载 {sandboxRegistryItems.length} 条，当前筛选命中 {runtimeItems.length} 条
+                    <span className={`panel-caption ${sandboxRegistryLoadingMore ? 'runtime-load-caption-active' : ''}`} aria-live="polite">
+                      {sandboxRegistryLoadingMore
+                        ? `已加载 ${loadedRuntimeCount} 条，正在加载第 ${loadMoreRangeStart}-${loadMoreRangeEnd} 条`
+                        : `已加载 ${loadedRuntimeCount} 条，当前筛选命中 ${runtimeItems.length} 条`}
                     </span>
                   </div>
                   <span className="session-status">
-                    {runtimeItems.length} / {sandboxRegistryItems.length}
+                    {runtimeItems.length} / {loadedRuntimeCount}
                   </span>
+                </div>
+                <div className="runtime-quick-filters">
+                  {runtimeQuickStatusFilters.map((item) => (
+                    (() => {
+                      const emphasized = item.value === 'paused' && (summary?.paused ?? 0) > 0;
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          className={`toggle-btn runtime-quick-filter runtime-status-group-item ${sandboxStatusFilter === item.value ? 'active' : ''} ${emphasized ? 'runtime-quick-filter-emphasis' : ''}`}
+                          onClick={() => setSandboxStatusFilter(item.value)}
+                        >
+                          <span className="runtime-status-group-main">{item.label}</span>
+                          <span className="runtime-status-group-meta">{item.meta}</span>
+                          <span className="session-status runtime-status-group-count">{item.count}</span>
+                        </button>
+                      );
+                    })()
+                  ))}
+                </div>
+                <div className="runtime-risk-groups">
+                  <div className="runtime-risk-groups-head">
+                    <span className="panel-caption">风险聚合</span>
+                    <span className="session-status">{riskGroups.length} 类风险</span>
+                  </div>
+                  {riskGroups.length === 0 ? (
+                    <p className="empty runtime-risk-empty">当前没有高风险 Sandbox。</p>
+                  ) : (
+                    <div className="runtime-risk-group-list">
+                      {riskGroups.map((group) => (
+                        <button
+                          key={group.label}
+                          type="button"
+                          className={`secondary-btn runtime-risk-group-btn ${sandboxRiskFilter === group.label ? 'active' : ''}`}
+                          onClick={() => setSandboxRiskFilter((prev) => (prev === group.label ? 'all' : group.label))}
+                          title={`最近出现：${formatDateTime(group.lastSeenAt)}`}
+                        >
+                          <span className="runtime-risk-group-main">{group.label}</span>
+                          <span className="runtime-risk-group-meta">最近出现：{formatDateTime(group.lastSeenAt)}</span>
+                          <span className="session-status runtime-risk-group-count">{group.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="runtime-filter-grid">
                   <label className="state-filter-field">
@@ -4020,7 +4199,7 @@ export default function App() {
                       <option value="all">全部</option>
                       {statusOptions.map((item) => (
                         <option key={item} value={item}>
-                          {item}
+                          {item === 'pending_archive' ? 'pending_archive' : item}
                         </option>
                       ))}
                     </select>
@@ -4037,24 +4216,89 @@ export default function App() {
                     </select>
                   </label>
                 </div>
-                <div className="table-wrap table-wrap-runtime">
+                {runtimeItems.length === 0 ? (
+                  <p className="empty runtime-empty-state">当前筛选条件下没有 Sandbox 记录</p>
+                ) : null}
+                <div className="table-wrap table-wrap-runtime" aria-busy={sandboxRegistryLoadingMore}>
                   <table className="runtime-table">
+                    <colgroup>
+                      <col style={{ width: `${runtimeColumnWidths.task_session}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.sandbox}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.executor}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.status}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.risk}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.last_active}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.actions}px` }} />
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th>会话 ID</th>
-                        <th>Sandbox</th>
-                        <th>Executor</th>
-                        <th>状态</th>
-                        <th>风险摘要</th>
-                        <th>最近活跃</th>
-                        <th>操作</th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'task_session' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('task_session')}>
+                              会话 ID
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'task_session' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('task_session', event)} />
+                          </div>
+                        </th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'sandbox' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('sandbox')}>
+                              Sandbox
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'sandbox' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('sandbox', event)} />
+                          </div>
+                        </th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'executor' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('executor')}>
+                              Executor
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'executor' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('executor', event)} />
+                          </div>
+                        </th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'status' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('status')}>
+                              状态
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'status' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('status', event)} />
+                          </div>
+                        </th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'risk' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('risk')}>
+                              风险摘要
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'risk' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('risk', event)} />
+                          </div>
+                        </th>
+                        <th>
+                          <div className="runtime-th-wrap">
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'last_active' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('last_active')}>
+                              最近活跃
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'last_active' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            </button>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('last_active', event)} />
+                          </div>
+                        </th>
+                        <th className="runtime-col-actions">
+                          <div className="runtime-th-wrap">
+                            <span className="runtime-th-label">操作</span>
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('actions', event)} />
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {runtimeItems.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="empty">
-                            当前筛选条件下没有 Sandbox 记录
+                            {sandboxRegistryLoadingMore ? '正在扩展已加载范围，请稍候...' : '当前筛选条件下没有 Sandbox 记录'}
                           </td>
                         </tr>
                       ) : (
@@ -4168,7 +4412,7 @@ export default function App() {
                               <div>{formatDateTime(item.lastActiveAt || item.updatedAt)}</div>
                               <p className="session-meta">{item.lastActiveReason || '-'}</p>
                             </td>
-                            <td>
+                            <td className="runtime-col-actions">
                               <div className="action-inline runtime-actions">
                                 <button type="button" className="table-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
                                   查看
@@ -4202,27 +4446,49 @@ export default function App() {
                                     关机
                                   </button>
                                 ) : null}
-                                <button
-                                  type="button"
-                                  className="secondary-btn"
-                                  disabled={sandboxBusyIds[item.sandboxId] || !item.taskSessionId}
-                                  onClick={() => void restartSandbox(item.sandboxId)}
-                                >
-                                  重启
-                                </button>
-                                <button
-                                  type="button"
-                                  className="secondary-btn"
-                                  disabled={sandboxBusyIds[item.sandboxId]}
-                                  onClick={() => void runSandboxArchive(item.sandboxId)}
-                                >
-                                  归档
-                                </button>
+                                <details className="runtime-action-menu">
+                                  <summary className="secondary-btn runtime-action-menu-trigger">更多</summary>
+                                  <div className="runtime-action-menu-popover">
+                                    <button
+                                      type="button"
+                                      className="table-btn runtime-action-menu-item"
+                                      disabled={sandboxBusyIds[item.sandboxId] || !item.taskSessionId}
+                                      onClick={(event) => {
+                                        closeParentDetails(event.currentTarget);
+                                        void restartSandbox(item.sandboxId);
+                                      }}
+                                    >
+                                      重启
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="table-btn runtime-action-menu-item"
+                                      disabled={sandboxBusyIds[item.sandboxId]}
+                                      onClick={(event) => {
+                                        closeParentDetails(event.currentTarget);
+                                        void runSandboxArchive(item.sandboxId);
+                                      }}
+                                    >
+                                      归档
+                                    </button>
+                                  </div>
+                                </details>
                               </div>
                             </td>
                           </tr>
                         ))
                       )}
+                      {Array.from({ length: runtimeSkeletonRowCount }, (_, index) => (
+                        <tr key={`runtime-loading-${index}`} className="runtime-loading-row" aria-hidden="true">
+                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
+                          <td><span className="runtime-skeleton runtime-skeleton-button" /></td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -4230,15 +4496,26 @@ export default function App() {
                   <div className="runtime-load-more">
                     <button
                       type="button"
-                      className="secondary-btn"
+                      className={`secondary-btn runtime-load-more-btn ${sandboxRegistryLoadingMore ? 'is-loading' : ''}`}
                       disabled={sandboxRegistryLoadingMore || refreshing}
                       onClick={() => void loadMoreSandboxRuntime()}
+                      aria-busy={sandboxRegistryLoadingMore}
                     >
-                      {sandboxRegistryLoadingMore ? '加载更多中...' : `查看更多 Sandbox（+${SANDBOX_RUNTIME_LOAD_MORE_STEP}）`}
+                      {sandboxRegistryLoadingMore ? (
+                        <>
+                          <span className="runtime-load-spinner" aria-hidden="true" />
+                          正在加载更多...
+                        </>
+                      ) : (
+                        `查看更多 Sandbox（+${SANDBOX_RUNTIME_LOAD_MORE_STEP}）`
+                      )}
                     </button>
-                    <p className="session-meta">
-                      当前已加载 {sandboxRegistryItems.length} 条 Sandbox 记录，筛选后剩余 {runtimeItems.length} 条。
+                    <p className="session-meta runtime-load-feedback" aria-live="polite">
+                      {sandboxRegistryLoadingMore
+                        ? `当前正在请求第 ${loadMoreRangeStart}-${loadMoreRangeEnd} 条 Sandbox 记录，已加载内容保持可见。`
+                        : `当前已加载 ${loadedRuntimeCount} 条 Sandbox 记录，筛选后剩余 ${runtimeItems.length} 条。`}
                     </p>
+                    {sandboxRegistryLoadMoreError ? <p className="runtime-load-error" role="status">加载更多失败，请重试。{sandboxRegistryLoadMoreError}</p> : null}
                   </div>
                 ) : null}
               </article>

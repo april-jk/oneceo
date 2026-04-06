@@ -200,9 +200,13 @@ export default function ConnectorDialog({
     Partial<Record<string, string[]>>
   >({});
 
-  const load = async () => {
-    if (!open) return;
-    setLoading(true);
+  const load = async (options?: { allowClosed?: boolean; silent?: boolean }) => {
+    const allowClosed = Boolean(options?.allowClosed);
+    const silent = Boolean(options?.silent);
+    if (!open && !allowClosed) return;
+    if (!silent) {
+      setLoading(true);
+    }
     try {
       const me = await getMyConnectorProfiles();
       setCatalog(me.catalog);
@@ -262,9 +266,13 @@ export default function ConnectorDialog({
         return next;
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load connectors");
+      if (!silent) {
+        toast.error(error instanceof Error ? error.message : "Failed to load connectors");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -280,6 +288,10 @@ export default function ConnectorDialog({
     }, 5000);
     return () => window.clearInterval(timer);
   }, [open, sessionId]);
+
+  useEffect(() => {
+    void load({ allowClosed: true, silent: true });
+  }, [sessionId]);
 
   const profilesByConnector = useMemo(
     () => groupProfilesByConnector(profiles),

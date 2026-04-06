@@ -7,6 +7,10 @@
   - attach 路由改为不强制先起 runtime，允许离线持久化为 `pending_recover`。
   - 文档方案状态已从 `[尚未采用]` 更新为 `[20260406-1831已采用]` 并同步索引。
   - 对回归问题做热修：将 session MCP 恢复从“主链路同步执行”改为“入队后后台异步执行”，并把 Altus run 启动阶段的恢复调用改成非阻塞，避免 `正在准备 sandbox` 长时间卡住。
+  - 继续修复 session 页连接器体验：
+    - `ConnectorDialog` 增加未展开静默预加载，输入框旁连接器图标可及时显示已选连接器。
+    - 后端新增会话连接器投影 Redis 缓存（connector projection），并在 attach/detach/恢复/草稿 apply 后失效缓存。
+    - 关闭默认 runtime 直连探测，避免连接器列表请求被 OSAC 超时拖慢。
 
 - 遇到什么：
   - API 工程存在大量既有 TypeScript 报错，导致无法用全量 type-check 证明“零报错”。

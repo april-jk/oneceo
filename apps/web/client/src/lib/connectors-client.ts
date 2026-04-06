@@ -40,6 +40,11 @@ export type ConnectorCatalogItem = {
   activityMatcherVerified: boolean;
   visibleInMenu?: boolean;
   deprecated?: boolean;
+  runtime?: {
+    type?: string;
+    urlDefault?: string;
+    headerTemplate?: string;
+  };
 };
 
 export type ConnectorProfile = {

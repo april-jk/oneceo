@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  mergeHistoryAgentMessages,
   mergeRealtimeMessage,
   resolveManagedStreamMessageKey,
   type AgentMessage,
@@ -92,7 +93,7 @@ describe('managed message stream identity', () => {
     expect(next[0]?.content).toBe('工具 read_file 已完成');
   });
 
-  it('appends managed assistant delta chunks and replaces them with the final assistant message', () => {
+  it('keeps the longer managed assistant content when final message is shorter', () => {
     const assistantKey = resolveManagedStreamMessageKey({
       eventType: 'assistant_delta',
       runId: 'run-3',
@@ -163,5 +164,177 @@ describe('managed message stream identity', () => {
     expect(withFinal).toHaveLength(1);
     expect(withFinal[0]?.content).toBe('你好，世界');
     expect(withFinal[0]?.metadata?.eventType).toBe('assistant_message');
+
+    const withShortFinal = mergeRealtimeMessage(
+      withSecondDelta,
+      {
+        type: 'agent_message',
+        content: '你好',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_message',
+          runId: 'run-3',
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withShortFinal).toHaveLength(1);
+    expect(withShortFinal[0]?.content).toBe('你好，世界');
+    expect(withShortFinal[0]?.metadata?.eventType).toBe('assistant_message');
+  });
+
+  it('keeps the longer managed assistant content when history merge receives a shorter final message', () => {
+    const key = 'managed:run-history-1:assistant';
+    const merged = mergeHistoryAgentMessages(
+      [
+        {
+          type: 'agent_message',
+          content: '第一段，第二段',
+          agent: 'altus',
+          messageKey: key,
+          metadata: {
+            eventType: 'assistant_delta',
+            runId: 'run-history-1',
+            streamDelta: true,
+            messageKey: key,
+          },
+        },
+      ],
+      [
+        {
+          type: 'agent_message',
+          content: '第一段',
+          agent: 'altus',
+          messageKey: key,
+          metadata: {
+            eventType: 'assistant_message',
+            runId: 'run-history-1',
+            messageKey: key,
+          },
+        },
+      ]
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.content).toBe('第一段，第二段');
+    expect(merged[0]?.metadata?.eventType).toBe('assistant_message');
+  });
+
+  it('keeps managed assistant and tool-call ordering by splitting stream segments after interruptions', () => {
+    const key = 'managed:run-seq-1:assistant';
+    const withFirstAssistant = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content: '我需要先检查连接器状态。',
+        agent: 'altus',
+        messageKey: key,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-seq-1',
+          sequence: 1,
+          streamDelta: true,
+          messageKey: key,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+    const withTool = mergeRealtimeMessage(
+      withFirstAssistant,
+      {
+        type: 'executor_event',
+        content: '工具 load_connector_guide 失败',
+        messageKey: 'managed:run-seq-1:tool:load_connector_guide',
+        metadata: {
+          eventType: 'tool_call_failed',
+          runId: 'run-seq-1',
+          toolCallId: 'load_connector_guide',
+          toolName: 'load_connector_guide',
+          messageKey: 'managed:run-seq-1:tool:load_connector_guide',
+        },
+      },
+      WELCOME_MESSAGE
+    );
+    const withSecondAssistant = mergeRealtimeMessage(
+      withTool,
+      {
+        type: 'agent_message',
+        content: '连接器不可用，我将请求您提供 GitHub 用户名。',
+        agent: 'altus',
+        messageKey: key,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-seq-1',
+          sequence: 3,
+          streamDelta: true,
+          messageKey: key,
+        },
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withSecondAssistant).toHaveLength(3);
+    expect(withSecondAssistant[0]?.type).toBe('agent_message');
+    expect(withSecondAssistant[0]?.content).toContain('检查连接器状态');
+    expect(withSecondAssistant[1]?.type).toBe('executor_event');
+    expect(withSecondAssistant[2]?.type).toBe('agent_message');
+    expect(withSecondAssistant[2]?.content).toContain('连接器不可用');
+    expect(withSecondAssistant[2]?.messageKey).toContain(':segment:');
+  });
+
+  it('keeps history merge ordering by splitting managed assistant segments after tool events', () => {
+    const merged = mergeHistoryAgentMessages(
+      [
+        {
+          type: 'agent_message',
+          content: '第一段说明',
+          agent: 'altus',
+          messageKey: 'managed:run-h-seq-1:assistant',
+          metadata: {
+            eventType: 'assistant_delta',
+            runId: 'run-h-seq-1',
+            sequence: 1,
+            messageKey: 'managed:run-h-seq-1:assistant',
+          },
+        },
+        {
+          type: 'executor_event',
+          content: '工具失败',
+          messageKey: 'managed:run-h-seq-1:tool:load_connector_guide',
+          metadata: {
+            eventType: 'tool_call_failed',
+            runId: 'run-h-seq-1',
+            toolName: 'load_connector_guide',
+            toolCallId: 'load_connector_guide',
+            messageKey: 'managed:run-h-seq-1:tool:load_connector_guide',
+          },
+        },
+      ],
+      [
+        {
+          type: 'agent_message',
+          content: '第二段说明',
+          agent: 'altus',
+          messageKey: 'managed:run-h-seq-1:assistant',
+          metadata: {
+            eventType: 'assistant_message',
+            runId: 'run-h-seq-1',
+            sequence: 3,
+            messageKey: 'managed:run-h-seq-1:assistant',
+          },
+        },
+      ]
+    );
+
+    expect(merged).toHaveLength(3);
+    expect(merged[0]?.type).toBe('agent_message');
+    expect(merged[1]?.type).toBe('executor_event');
+    expect(merged[2]?.type).toBe('agent_message');
+    expect(merged[2]?.content).toContain('第二段说明');
+    expect(merged[2]?.messageKey).toContain(':segment:');
   });
 });

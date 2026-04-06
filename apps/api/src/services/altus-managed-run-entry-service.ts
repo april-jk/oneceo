@@ -79,7 +79,7 @@ export class AltusManagedRunEntryService {
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId) {
-      await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId);
+      void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
     const connectorSnapshot = await this.setupService.captureConnectorSnapshot(sessionId, userId);
     const mcpToolSnapshot = await this.setupService.captureMcpToolSnapshot(sessionId);

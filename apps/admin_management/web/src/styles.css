@@ -2264,6 +2264,108 @@ tbody tr:hover {
   white-space: nowrap;
 }
 
+.archive-detail-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.archive-detail-popup-card {
+  width: min(760px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.24);
+  padding: 16px;
+}
+
+.archive-detail-popup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.archive-detail-popup-head h3 {
+  margin: 0;
+}
+
+.archive-detail-popup-head .panel-caption {
+  margin-top: 4px;
+}
+
+.archive-detail-popup-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.archive-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.archive-detail-fact {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(247, 250, 253, 1));
+}
+
+.archive-detail-fact span,
+.archive-detail-code-card span {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.archive-detail-fact strong {
+  color: #162334;
+}
+
+.archive-detail-code-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(248, 250, 253, 0.92);
+}
+
+.archive-detail-code-card code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.05);
+  color: #1f2937;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.archive-detail-popup-actions {
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .archive-detail-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
 .host-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

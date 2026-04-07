@@ -53,6 +53,19 @@ type ArchiveManifest = {
   reason: string;
 };
 
+type SnapshotMetadata = {
+  version: number;
+  sandboxId: string;
+  taskSessionId?: string;
+  archivedAt: string;
+  snapshotKey: string;
+  archiveKey: string;
+  metadataKey: string;
+  sha256: string;
+  sizeBytes: number;
+  reason: string;
+};
+
 export type SandboxArchiveHistoryEntry = {
   snapshotKey: string;
   archiveKey?: string | null;
@@ -155,6 +168,10 @@ function buildSnapshotPrefix(taskSessionId: string | null, sandboxId: string): s
   return `sandboxes/${sandboxId}/snapshots/`;
 }
 
+function buildSnapshotMetadataKey(snapshotKey: string): string {
+  return snapshotKey.endsWith('.tar.gz') ? snapshotKey.slice(0, -'.tar.gz'.length) + '.meta.json' : `${snapshotKey}.meta.json`;
+}
+
 function buildMetadataKey(taskSessionId: string | null, sandboxId: string): string {
   if (taskSessionId) {
     return `sessions/${taskSessionId}/metadata.json`;
@@ -244,6 +261,18 @@ fi
 function parseManifest(raw: Buffer): Partial<ArchiveManifest> {
   try {
     const parsed = JSON.parse(raw.toString('utf8')) as Partial<ArchiveManifest>;
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function parseSnapshotMetadata(raw: Buffer): Partial<SnapshotMetadata> {
+  try {
+    const parsed = JSON.parse(raw.toString('utf8')) as Partial<SnapshotMetadata>;
     if (!parsed || typeof parsed !== 'object') {
       return {};
     }
@@ -478,6 +507,22 @@ rm -rf ${shellEscape(bundleRoot)}
     reason,
   };
   await sandboxArchiveServiceDeps.uploadToR2(metadataKey, Buffer.from(JSON.stringify(manifest, null, 2)));
+  const snapshotMetadata: SnapshotMetadata = {
+    version: 1,
+    sandboxId,
+    taskSessionId: taskSessionId || undefined,
+    archivedAt,
+    snapshotKey: storedSnapshotKey,
+    archiveKey,
+    metadataKey,
+    sha256: hash,
+    sizeBytes,
+    reason,
+  };
+  await sandboxArchiveServiceDeps.uploadToR2(
+    buildSnapshotMetadataKey(storedSnapshotKey),
+    Buffer.from(JSON.stringify(snapshotMetadata, null, 2))
+  );
 
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(
     sandboxId,
@@ -669,7 +714,49 @@ export async function listSandboxArchiveHistory(sandboxId: string): Promise<Sand
     });
   }
 
-  return rows;
+  const enrichLimitRaw = Number(process.env.SANDBOX_ARCHIVE_HISTORY_ENRICH_MAX || 200);
+  const enrichLimit = Number.isFinite(enrichLimitRaw) ? Math.max(0, Math.floor(enrichLimitRaw)) : 200;
+  let enrichedCount = 0;
+
+  const enrichedRows = await Promise.all(
+    rows.map(async (row): Promise<SandboxArchiveHistoryEntry> => {
+      if (row.sizeBytes != null && row.sha256) {
+        return row;
+      }
+
+      const sidecarKey = buildSnapshotMetadataKey(row.snapshotKey);
+      if (await sandboxArchiveServiceDeps.existsInR2(sidecarKey).catch(() => false)) {
+        const sidecar = parseSnapshotMetadata(await sandboxArchiveServiceDeps.downloadFromR2(sidecarKey));
+        return {
+          ...row,
+          archiveKey: row.archiveKey ?? sidecar.archiveKey ?? null,
+          metadataKey: row.metadataKey ?? sidecar.metadataKey ?? null,
+          archivedAt: row.archivedAt ?? sidecar.archivedAt ?? null,
+          sizeBytes: row.sizeBytes ?? sidecar.sizeBytes ?? null,
+          sha256: row.sha256 ?? sidecar.sha256 ?? null,
+          reason: row.reason ?? sidecar.reason ?? null,
+        };
+      }
+
+      if (enrichedCount >= enrichLimit) {
+        return row;
+      }
+      enrichedCount += 1;
+
+      try {
+        const archiveBytes = await sandboxArchiveServiceDeps.downloadFromR2(row.snapshotKey);
+        return {
+          ...row,
+          sizeBytes: row.sizeBytes ?? archiveBytes.length,
+          sha256: row.sha256 ?? sha256(archiveBytes),
+        };
+      } catch {
+        return row;
+      }
+    })
+  );
+
+  return enrichedRows;
 }
 
 function fileNameFromR2Key(key: string): string {

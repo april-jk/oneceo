@@ -157,12 +157,12 @@ type RuntimeSortState = {
   direction: RuntimeSortDirection;
 };
 type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active' | 'actions';
-type ArchiveSortKey = 'snapshot' | 'time' | 'type' | 'size' | 'hash' | 'reason' | 'status';
+type ArchiveSortKey = 'time' | 'type' | 'size' | 'reason' | 'status';
 type ArchiveSortState = {
   key: ArchiveSortKey;
   direction: RuntimeSortDirection;
 };
-type ArchiveColumnKey = 'snapshot' | 'time' | 'type' | 'size' | 'hash' | 'reason' | 'status' | 'actions';
+type ArchiveColumnKey = 'time' | 'type' | 'size' | 'reason' | 'status' | 'actions';
 
 const DEFAULT_RUNTIME_SORT: RuntimeSortState = {
   key: 'risk',
@@ -195,25 +195,21 @@ const DEFAULT_ARCHIVE_SORT: ArchiveSortState = {
 };
 
 const DEFAULT_ARCHIVE_COLUMN_WIDTHS: Record<ArchiveColumnKey, number> = {
-  snapshot: 238,
-  time: 188,
+  time: 210,
   type: 112,
   size: 108,
-  hash: 148,
-  reason: 216,
+  reason: 228,
   status: 126,
-  actions: 176,
+  actions: 248,
 };
 
 const ARCHIVE_COLUMN_MIN_WIDTHS: Record<ArchiveColumnKey, number> = {
-  snapshot: 178,
   time: 150,
   type: 88,
   size: 84,
-  hash: 108,
   reason: 156,
   status: 96,
-  actions: 146,
+  actions: 208,
 };
 
 function formatDateTime(value?: string | null) {
@@ -607,6 +603,16 @@ export default function App() {
     '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
+  const [archiveDetailRow, setArchiveDetailRow] = useState<{
+    id: string;
+    snapshotKey: string | null;
+    timestamp: string | null;
+    type: string;
+    size: string;
+    hash: string;
+    status: string;
+    reason: string;
+  } | null>(null);
 
   const [templates, setTemplates] = useState<E2bTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -4297,16 +4303,12 @@ export default function App() {
       : [];
     const archiveSortedRows = [...archiveRows].sort((a, b) => {
       let delta = 0;
-      if (archiveSort.key === 'snapshot') {
-        delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
-      } else if (archiveSort.key === 'time') {
+      if (archiveSort.key === 'time') {
         delta = toTimestamp(a.timestamp) - toTimestamp(b.timestamp);
       } else if (archiveSort.key === 'type') {
         delta = (a.type || '').localeCompare(b.type || '', 'zh-Hans-CN', { sensitivity: 'base' });
       } else if (archiveSort.key === 'size') {
         delta = (a.sizeBytes ?? -1) - (b.sizeBytes ?? -1);
-      } else if (archiveSort.key === 'hash') {
-        delta = (a.hash || '').localeCompare(b.hash || '', 'zh-Hans-CN', { sensitivity: 'base' });
       } else if (archiveSort.key === 'reason') {
         delta = (a.reason || '').localeCompare(b.reason || '', 'zh-Hans-CN', { sensitivity: 'base' });
       } else if (archiveSort.key === 'status') {
@@ -4319,32 +4321,10 @@ export default function App() {
 
       return toTimestamp(b.timestamp) - toTimestamp(a.timestamp);
     });
-    const archiveTimelineRows = [
-      ...archiveRows.map((row) => ({
-        id: `archive-${row.id}`,
-        timestamp: row.timestamp,
-        kind: 'archive',
-        title: row.type === 'current' ? '当前快照' : '历史快照',
-        status: row.status,
-        summary: `${row.reason} · ${row.size}`,
-        detail: row.hash,
-      })),
-      ...(sandboxRuntimeDetail?.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail?.runtime.dedupeReplacedAt
-        ? [
-            {
-              id: `governance-${sandboxRuntimeDetail.runtime.sandboxId}`,
-              timestamp: sandboxRuntimeDetail.runtime.dedupeReplacedAt || sandboxRuntimeDetail.runtime.closedAt || null,
-              kind: 'governance',
-              title: sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason),
-              status: 'deduped',
-              summary: sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId
-                ? `已由 ${truncateMiddle(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId, 8, 6)} 接管`
-                : '已由同任务的新 Sandbox 接管',
-              detail: sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || '-',
-            },
-          ]
-        : []),
-    ].sort((a, b) => toTimestamp(b.timestamp) - toTimestamp(a.timestamp));
+    const currentArchiveRow =
+      archiveRows.find((row) => row.type === 'current') ||
+      [...archiveRows].sort((a, b) => toTimestamp(b.timestamp) - toTimestamp(a.timestamp))[0] ||
+      null;
 
     return (
       <>
@@ -5223,7 +5203,7 @@ export default function App() {
                 <div className="inspector-page-stack">
                   <article className="inspector-card">
                     <div className="inspector-card-header">
-                      <h3>归档时间线</h3>
+                      <h3>当前快照</h3>
                       <div className="action-inline runtime-actions">
                         <button
                           type="button"
@@ -5235,40 +5215,23 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                    <div className="inspector-governance-list">
-                      {archiveTimelineRows.length === 0 ? (
-                        <p className="empty">当前没有归档记录。</p>
-                      ) : (
-                        archiveTimelineRows.map((row) => (
-                          <article key={row.id} className="inspector-governance-event">
-                            <div className="inspector-governance-head">
-                              <strong>{row.title}</strong>
-                              <span className="session-meta">{formatDateTime(row.timestamp)}</span>
-                            </div>
-                            <div className="action-inline">
-                              <span className={`session-status ${row.kind === 'governance' ? 'session-status-governance' : ''}`}>
-                                {row.kind === 'governance' ? '状态事件' : '归档事件'}
-                              </span>
-                              <span className={stateClassName(row.status)}>{archiveStatusLabel(row.status)}</span>
-                            </div>
-                            <p className="session-meta">{row.summary}</p>
-                            {row.kind === 'governance' && sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId ? (
-                              <p className="session-meta">
-                                <button
-                                  type="button"
-                                  className="link-btn sandbox-jump-btn mono"
-                                  onClick={() => void openSandboxDetail(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId!)}
-                                >
-                                  {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId}
-                                </button>
-                              </p>
-                            ) : (
-                              <p className="session-meta mono">{row.detail}</p>
-                            )}
-                          </article>
-                        ))
-                      )}
-                    </div>
+                    {currentArchiveRow ? (
+                      <div className="inspector-governance-list">
+                        <article className="inspector-governance-event">
+                          <div className="inspector-governance-head">
+                            <span className="session-meta">{formatDateTime(currentArchiveRow.timestamp)}</span>
+                          </div>
+                          <div className="action-inline">
+                            <span className="session-status">归档事件</span>
+                            <span className={stateClassName(currentArchiveRow.status)}>{archiveStatusLabel(currentArchiveRow.status)}</span>
+                          </div>
+                          <p className="session-meta">{currentArchiveRow.reason} · {currentArchiveRow.size}</p>
+                          <p className="session-meta mono">{currentArchiveRow.hash}</p>
+                        </article>
+                      </div>
+                    ) : (
+                      <p className="empty">当前没有归档记录。</p>
+                    )}
                   </article>
 
                   <article className="inspector-card">
@@ -5278,26 +5241,15 @@ export default function App() {
                     <div className="table-wrap">
                       <table className="runtime-table archive-snapshot-table">
                         <colgroup>
-                          <col style={{ width: `${archiveColumnWidths.snapshot}px` }} />
                           <col style={{ width: `${archiveColumnWidths.time}px` }} />
                           <col style={{ width: `${archiveColumnWidths.type}px` }} />
                           <col style={{ width: `${archiveColumnWidths.size}px` }} />
-                          <col style={{ width: `${archiveColumnWidths.hash}px` }} />
                           <col style={{ width: `${archiveColumnWidths.reason}px` }} />
                           <col style={{ width: `${archiveColumnWidths.status}px` }} />
                           <col style={{ width: `${archiveColumnWidths.actions}px` }} />
                         </colgroup>
                         <thead>
                           <tr>
-                            <th>
-                              <div className="runtime-th-wrap">
-                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'snapshot' ? 'active' : ''}`} onClick={() => toggleArchiveSort('snapshot')}>
-                                  快照标识
-                                  <span className="runtime-sort-indicator">{archiveSort.key === 'snapshot' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                                </button>
-                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('snapshot', event)} />
-                              </div>
-                            </th>
                             <th>
                               <div className="runtime-th-wrap">
                                 <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'time' ? 'active' : ''}`} onClick={() => toggleArchiveSort('time')}>
@@ -5323,15 +5275,6 @@ export default function App() {
                                   <span className="runtime-sort-indicator">{archiveSort.key === 'size' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                                 </button>
                                 <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('size', event)} />
-                              </div>
-                            </th>
-                            <th>
-                              <div className="runtime-th-wrap">
-                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'hash' ? 'active' : ''}`} onClick={() => toggleArchiveSort('hash')}>
-                                  哈希
-                                  <span className="runtime-sort-indicator">{archiveSort.key === 'hash' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                                </button>
-                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('hash', event)} />
                               </div>
                             </th>
                             <th>
@@ -5363,11 +5306,9 @@ export default function App() {
                         <tbody>
                           {archiveSortedRows.map((row) => (
                             <tr key={`${row.id}-${row.hash}`}>
-                              <td className="mono">{row.id}</td>
                               <td>{formatDateTime(row.timestamp)}</td>
                               <td><span className="session-status">{row.type}</span></td>
                               <td>{row.size}</td>
-                              <td className="mono">{row.hash}</td>
                               <td>{row.reason}</td>
                               <td><span className={stateClassName(row.status)}>{row.status}</span></td>
                               <td>
@@ -5396,6 +5337,24 @@ export default function App() {
                                   >
                                     恢复
                                   </button>
+                                  <button
+                                    type="button"
+                                    className="secondary-btn"
+                                    onClick={() =>
+                                      setArchiveDetailRow({
+                                        id: row.id,
+                                        snapshotKey: row.snapshotKey ?? null,
+                                        timestamp: row.timestamp ?? null,
+                                        type: row.type,
+                                        size: row.size,
+                                        hash: row.hash,
+                                        status: row.status,
+                                        reason: row.reason,
+                                      })
+                                    }
+                                  >
+                                    详情
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -5411,6 +5370,84 @@ export default function App() {
                     </div>
                     <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.archive)}</pre>
                   </article>
+
+                  {archiveDetailRow ? (
+                    <div className="archive-detail-popup-backdrop" role="dialog" aria-modal="true" onClick={() => setArchiveDetailRow(null)}>
+                      <div
+                        className="archive-detail-popup-card"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                        }}
+                      >
+                        <div className="archive-detail-popup-head">
+                          <div>
+                            <h3>快照详情</h3>
+                            <p className="panel-caption">完整标识与校验信息</p>
+                          </div>
+                          <div className="action-inline">
+                            <span className={stateClassName(archiveDetailRow.status)}>{archiveStatusLabel(archiveDetailRow.status)}</span>
+                            <button type="button" className="secondary-btn" onClick={() => setArchiveDetailRow(null)}>
+                              关闭
+                            </button>
+                          </div>
+                        </div>
+                        <div className="archive-detail-popup-body">
+                          <div className="archive-detail-facts">
+                            <article className="archive-detail-fact">
+                              <span>时间</span>
+                              <strong>{formatDateTime(archiveDetailRow.timestamp)}</strong>
+                            </article>
+                            <article className="archive-detail-fact">
+                              <span>类型</span>
+                              <strong>{archiveDetailRow.type}</strong>
+                            </article>
+                            <article className="archive-detail-fact">
+                              <span>大小</span>
+                              <strong>{archiveDetailRow.size}</strong>
+                            </article>
+                            <article className="archive-detail-fact">
+                              <span>原因</span>
+                              <strong>{archiveDetailRow.reason}</strong>
+                            </article>
+                          </div>
+                          <article className="archive-detail-code-card">
+                            <span>快照标识</span>
+                            <code className="mono">{archiveDetailRow.id}</code>
+                          </article>
+                          <article className="archive-detail-code-card">
+                            <span>哈希</span>
+                            <code className="mono">{archiveDetailRow.hash}</code>
+                          </article>
+                        </div>
+                        <div className="archive-detail-popup-actions action-inline runtime-actions">
+                          <button
+                            type="button"
+                            className="secondary-btn snapshot-action-download"
+                            disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !archiveDetailRow.snapshotKey}
+                            onClick={() =>
+                              archiveDetailRow.snapshotKey
+                                ? void downloadSandboxSnapshot(sandboxRuntimeDetail.runtime.sandboxId, archiveDetailRow.snapshotKey)
+                                : undefined
+                            }
+                          >
+                            下载
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-btn snapshot-action-restore"
+                            disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !archiveDetailRow.snapshotKey}
+                            onClick={() =>
+                              archiveDetailRow.snapshotKey
+                                ? void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId, archiveDetailRow.snapshotKey)
+                                : undefined
+                            }
+                          >
+                            恢复
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

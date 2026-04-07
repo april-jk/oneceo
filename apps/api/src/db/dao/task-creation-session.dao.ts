@@ -1088,6 +1088,18 @@ export class TaskCreationSessionDAO {
   }
 
   /**
+   * 获取管理态最近会话列表（不按用户过滤）
+   */
+  async getRecentSessionsForAdmin(limit: number = 50) {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 5000)) : 50;
+    return await db
+      .select()
+      .from(taskCreationSessions)
+      .orderBy(desc(taskCreationSessions.updatedAt), desc(taskCreationSessions.createdAt), desc(taskCreationSessions.id))
+      .limit(safeLimit);
+  }
+
+  /**
    * 删除会话（级联删除所有关联数据）
    */
   async deleteSession(sessionId: string) {

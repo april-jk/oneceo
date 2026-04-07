@@ -75,3 +75,35 @@ test('POST /api/internal/task-creation/sessions/:sessionId/runtime/start returns
     await server.close();
   }
 });
+
+test('GET /api/internal/task-creation/admin/sessions returns 403 when internal token is not configured', async () => {
+  const server = await startServer();
+  process.env.ONECEO_INTERNAL_TOKEN = '';
+
+  try {
+    const response = await fetch(`${server.origin}/api/internal/task-creation/admin/sessions?limit=20`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 403);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, 'task creation 内部接口未启用');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/internal/task-creation/admin/sessions returns 401 when token is configured but missing', async () => {
+  const server = await startServer();
+  process.env.ONECEO_INTERNAL_TOKEN = 'internal-secret';
+
+  try {
+    const response = await fetch(`${server.origin}/api/internal/task-creation/admin/sessions?limit=20`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.equal(payload.success, false);
+    assert.equal(payload.error, '未授权的内部请求');
+  } finally {
+    await server.close();
+  }
+});

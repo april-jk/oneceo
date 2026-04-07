@@ -119,6 +119,16 @@ function formatGuideSection(title: string, items: Array<{ connectorKey: string; 
 }
 
 export class ConnectorGuideService {
+  private collectActiveConnectorKeysFromBindings(bindings: Array<{ connectorKey: string; desiredState: string }>) {
+    return Array.from(
+      new Set(
+        bindings
+          .filter((binding) => binding.desiredState === 'attached' && isSupportedConnectorKey(binding.connectorKey))
+          .map((binding) => binding.connectorKey)
+      )
+    ) as SupportedConnectorKey[];
+  }
+
   private assertSupportedConnectorKey(connectorKey: string) {
     if (!isSupportedConnectorKey(connectorKey)) {
       throw new Error('首批仅支持 github、supabase、vercel 三个 connector guide');
@@ -339,13 +349,7 @@ export class ConnectorGuideService {
 
   async recomputeSessionGuides(taskSessionId: string) {
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
-    const activeConnectorKeys = Array.from(
-      new Set(
-        bindings
-          .filter((binding) => binding.desiredState === 'attached' && isSupportedConnectorKey(binding.connectorKey))
-          .map((binding) => binding.connectorKey)
-      )
-    ) as SupportedConnectorKey[];
+    const activeConnectorKeys = this.collectActiveConnectorKeysFromBindings(bindings);
 
     writeConnectorDebugLog('[CONNECTOR_GUIDE_RECOMPUTE_START]', {
       taskSessionId,
@@ -379,6 +383,25 @@ export class ConnectorGuideService {
       appliedCount: guides.length,
     });
     return result;
+  }
+
+  async ensureSessionGuidesUpToDate(taskSessionId: string) {
+    const [bindings, sessionGuides] = await Promise.all([
+      taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId),
+      connectorGuideDAO.listSessionGuides(taskSessionId),
+    ]);
+    const activeConnectorKeys = this.collectActiveConnectorKeysFromBindings(bindings).sort();
+    const currentGuideConnectorKeys = Array.from(
+      new Set(sessionGuides.map((item) => asText(item.sessionGuide.connectorKey)).filter(Boolean))
+    ).sort();
+    const needsRecompute =
+      activeConnectorKeys.length !== currentGuideConnectorKeys.length ||
+      activeConnectorKeys.some((connectorKey, index) => connectorKey !== currentGuideConnectorKeys[index]);
+    if (!needsRecompute) {
+      return false;
+    }
+    await this.recomputeSessionGuides(taskSessionId);
+    return true;
   }
 
   async listSessionGuides(taskSessionId: string) {

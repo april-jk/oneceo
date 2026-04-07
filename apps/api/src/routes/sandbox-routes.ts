@@ -150,7 +150,10 @@ router.post('/environment/:sessionId/archive', async (req, res) => {
 
 router.post('/environment/:sessionId/restore', async (req, res) => {
   try {
-    const restored = await restoreWorkspaceIfArchived(req.params.sessionId);
+    const snapshotKey = asText(req.body?.snapshotKey);
+    const restored = await restoreWorkspaceIfArchived(req.params.sessionId, {
+      snapshotKey: snapshotKey || undefined,
+    });
     return res.json({
       success: true,
       data: {

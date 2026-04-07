@@ -2200,6 +2200,30 @@ tbody tr:hover {
   text-align: center;
 }
 
+.snapshot-action-download {
+  color: #1d4ed8;
+  background: rgba(219, 234, 254, 0.72);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.snapshot-action-download:hover:not(:disabled) {
+  color: #1e40af;
+  background: rgba(191, 219, 254, 0.82);
+  border-color: rgba(37, 99, 235, 0.45);
+}
+
+.snapshot-action-restore {
+  color: #0f766e;
+  background: rgba(209, 250, 229, 0.76);
+  border-color: rgba(20, 184, 166, 0.34);
+}
+
+.snapshot-action-restore:hover:not(:disabled) {
+  color: #0f5f58;
+  background: rgba(167, 243, 208, 0.84);
+  border-color: rgba(15, 118, 110, 0.4);
+}
+
 .runtime-action-menu {
   position: relative;
 }
@@ -2600,6 +2624,13 @@ tbody tr:hover {
   gap: 16px;
 }
 
+.inspector-overview-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
 .inspector-card,
 .inspector-log-shell {
   display: grid;
@@ -2609,6 +2640,23 @@ tbody tr:hover {
 
 .inspector-card-large {
   min-height: 100%;
+}
+
+.inspector-overview-actions-card {
+  align-content: start;
+}
+
+.inspector-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inspector-action-grid .primary-btn,
+.inspector-action-grid .secondary-btn {
+  width: 100%;
+  justify-content: center;
+  min-height: 40px;
 }
 
 .inspector-card-header {
@@ -2690,6 +2738,60 @@ tbody tr:hover {
   padding: 12px 14px;
   border-radius: 14px;
   background: #f8f9fb;
+}
+
+.inspector-endpoint-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.inspector-endpoint-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.inspector-endpoint-value code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.inspector-endpoint-inline-status {
+  margin-left: auto;
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.inspector-endpoint-inline-status.is-ok {
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.12);
+  border-color: rgba(15, 118, 110, 0.2);
+}
+
+.inspector-endpoint-inline-status.is-missing {
+  color: #b91c1c;
+  background: rgba(185, 28, 28, 0.1);
+  border-color: rgba(185, 28, 28, 0.18);
+}
+
+.inspector-endpoint-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .inspector-endpoint-row code {
@@ -2945,7 +3047,8 @@ tbody tr:hover {
   .debug-meta-grid,
   .debug-results-grid,
   .inspector-stat-grid,
-  .inspector-main-grid {
+  .inspector-main-grid,
+  .inspector-overview-bottom-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2962,6 +3065,10 @@ tbody tr:hover {
   }
 
   .inspector-kv-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector-action-grid {
     grid-template-columns: 1fr;
   }
 }

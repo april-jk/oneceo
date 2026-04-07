@@ -662,7 +662,7 @@ export default function App() {
   }, []);
 
   const loadConversationSessions = useCallback(async () => {
-    const result = await api.listConversationSessions(30);
+    const result = await api.listConversationSessions(200);
     setConversationSessions(result.sessions);
 
     if (result.sessions.length > 0) {
@@ -1432,7 +1432,7 @@ export default function App() {
 
     void run();
 
-    void api.listConversationSessions(30)
+    void api.listConversationSessions(200)
       .then((sessions) => {
         if (!cancelled) {
           setConversationSessions(sessions.sessions);
@@ -1492,7 +1492,7 @@ export default function App() {
     let cancelled = false;
     const run = async () => {
       try {
-        const sessions = await api.listConversationSessions(30);
+        const sessions = await api.listConversationSessions(200);
         if (!cancelled) {
           setConversationSessions(sessions.sessions);
         }
@@ -2192,7 +2192,7 @@ export default function App() {
               <p className="section-tag">会话摘要</p>
               <h2>会话索引与状态记录</h2>
             </div>
-            <span className="service-state ok">最近 30 条会话</span>
+            <span className="service-state ok">最近 200 条会话</span>
           </div>
           <div className="hero-metrics">
             <div>
@@ -3206,7 +3206,7 @@ export default function App() {
           <article className="summary-card summary-card-emphasis">
             <span className="summary-card-label">总会话</span>
             <strong>{conversationSummary.total}</strong>
-            <p>最近 30 条会话索引</p>
+            <p>最近 200 条会话索引</p>
           </article>
           <article className="summary-card">
             <span className="summary-card-label">进行中</span>

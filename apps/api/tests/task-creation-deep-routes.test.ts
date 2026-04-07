@@ -226,6 +226,53 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
   }
 });
 
+test('GET /api/task-creation/sessions/:sessionId/messages/recent preserves managed tool metadata fields', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'm-managed-tool-recent',
+      role: 'agent',
+      content: '工具 read_file 已完成',
+      messageType: 'executor_event',
+      metadata: {
+        timestamp: 1712101000000,
+        runId: 'run-managed-tool-1',
+        sessionId: 's-tool-meta',
+        executionMode: 'managed',
+        eventType: 'tool_call_completed',
+        executor: 'altus',
+        toolName: 'read_file',
+        toolCallId: 'tool-call-1',
+        arguments: {
+          path: '/workspace/README.md',
+        },
+        error: '',
+      },
+      createdAt: new Date(1712101000000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-tool-meta/messages/recent`, {
+      headers: { 'x-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.ok(Array.isArray(payload.data.messages));
+    assert.equal(payload.data.messages[0]?.messageType, 'executor_event');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(payload.data.messages[0]?.metadata?.toolCallId, 'tool-call-1');
+    assert.equal(payload.data.messages[0]?.metadata?.arguments?.path, '/workspace/README.md');
+    assert.equal(payload.data.messages[0]?.metadata?.eventType, 'tool_call_completed');
+  } finally {
+    await server.close();
+  }
+});
+
 test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis cache for non-opencode session', async () => {
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });

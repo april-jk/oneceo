@@ -78,6 +78,11 @@ export type UserConnectorAccount = {
   profilesCount?: number;
 };
 
+export type ConnectorOauthAccount = ConnectorProfile & {
+  defaultProfileId?: string | null;
+  defaultProfileName?: string | null;
+};
+
 export type SessionConnectorStatus = {
   connectorKey: ConnectorKey;
   name: string;
@@ -409,13 +414,13 @@ export async function completeConnectorOauth(
     redirectUri: string;
   }
 ): Promise<{
-  account?: ConnectorProfile;
+  account?: ConnectorOauthAccount;
   returnToSessionId?: string | null;
 }> {
   const result = await requestJson<{
     data?: {
-      account?: ConnectorProfile;
-      profile?: ConnectorProfile;
+      account?: ConnectorOauthAccount;
+      profile?: ConnectorOauthAccount;
       returnToSessionId?: string | null;
     };
   }>(`${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}/oauth/callback`, {

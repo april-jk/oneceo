@@ -382,6 +382,22 @@ function buildGithubProfileName(displayName?: string | null): string {
   return resolved ? `GitHub · ${resolved}` : 'GitHub';
 }
 
+function resolveNotionWorkspaceName(payload: Record<string, unknown>): string {
+  const workspaceName = asText(payload.workspace_name);
+  if (workspaceName) return workspaceName;
+  const workspace = pickObject(payload.workspace);
+  const workspaceLabel = asText(workspace.name) || asText(workspace.title);
+  if (workspaceLabel) return workspaceLabel;
+  const owner = pickObject(payload.owner);
+  const ownerUser = pickObject(owner.user);
+  return asText(ownerUser.name) || asText(ownerUser.email) || '';
+}
+
+function buildNotionProfileName(displayName?: string | null): string {
+  const resolved = asText(displayName);
+  return resolved ? `Notion · ${resolved}` : 'Notion';
+}
+
 function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string): string {
   if (connectorKey === 'supabase') {
     return 'Supabase Default';
@@ -894,7 +910,13 @@ export class UserConnectorService {
         asText(tokenPayload.workspace_name) ||
         asText(profile.displayName) ||
         '';
-      let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
+      let profileName =
+        asText(profile.profileName) ||
+        (connectorKey === 'github'
+          ? buildGithubProfileName(displayName)
+          : connectorKey === 'notion'
+            ? buildNotionProfileName(displayName)
+            : asText(profile.profileName));
 
       const secret: ConnectorAccountSecret = {
         accessToken,
@@ -923,6 +945,16 @@ export class UserConnectorService {
             'GitHub App 已授权，但当前账号下没有任何可用安装。请先在 GitHub 安装该 App 或批准安装更新后，再重新连接。';
           secretCiphertext = null;
           lastAuthAt = null;
+        }
+      } else if (connectorKey === 'notion') {
+        const workspaceName = resolveNotionWorkspaceName(tokenPayload);
+        displayName = workspaceName || displayName;
+        if (
+          !asText(profile.profileName) ||
+          profile.profileName === 'Notion Default' ||
+          profile.profileName === 'Notion'
+        ) {
+          profileName = buildNotionProfileName(displayName);
         }
       } else if (connectorKey === 'vercel') {
         const vercelProfile = await resolveVercelProfile(accessToken);

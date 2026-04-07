@@ -29,7 +29,6 @@ import type {
   DashboardOverview,
   E2bSandboxDetail,
   E2bSandboxFullInfo,
-  E2bSandboxMetricPoint,
   E2bTemplate,
   E2bTemplateBuildInfo,
   E2bTemplateBuildLogsResponse,
@@ -158,6 +157,12 @@ type RuntimeSortState = {
   direction: RuntimeSortDirection;
 };
 type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active' | 'actions';
+type ArchiveSortKey = 'snapshot' | 'time' | 'type' | 'size' | 'hash' | 'reason' | 'status';
+type ArchiveSortState = {
+  key: ArchiveSortKey;
+  direction: RuntimeSortDirection;
+};
+type ArchiveColumnKey = 'snapshot' | 'time' | 'type' | 'size' | 'hash' | 'reason' | 'status' | 'actions';
 
 const DEFAULT_RUNTIME_SORT: RuntimeSortState = {
   key: 'risk',
@@ -182,6 +187,33 @@ const RUNTIME_COLUMN_MIN_WIDTHS: Record<RuntimeColumnKey, number> = {
   risk: 132,
   last_active: 130,
   actions: 206,
+};
+
+const DEFAULT_ARCHIVE_SORT: ArchiveSortState = {
+  key: 'time',
+  direction: 'desc',
+};
+
+const DEFAULT_ARCHIVE_COLUMN_WIDTHS: Record<ArchiveColumnKey, number> = {
+  snapshot: 238,
+  time: 188,
+  type: 112,
+  size: 108,
+  hash: 148,
+  reason: 216,
+  status: 126,
+  actions: 176,
+};
+
+const ARCHIVE_COLUMN_MIN_WIDTHS: Record<ArchiveColumnKey, number> = {
+  snapshot: 178,
+  time: 150,
+  type: 88,
+  size: 84,
+  hash: 108,
+  reason: 156,
+  status: 96,
+  actions: 146,
 };
 
 function formatDateTime(value?: string | null) {
@@ -550,12 +582,13 @@ export default function App() {
   const [sandboxRiskFilter, setSandboxRiskFilter] = useState('all');
   const [runtimeSort, setRuntimeSort] = useState<RuntimeSortState>(DEFAULT_RUNTIME_SORT);
   const [runtimeColumnWidths, setRuntimeColumnWidths] = useState<Record<RuntimeColumnKey, number>>(DEFAULT_RUNTIME_COLUMN_WIDTHS);
+  const [archiveSort, setArchiveSort] = useState<ArchiveSortState>(DEFAULT_ARCHIVE_SORT);
+  const [archiveColumnWidths, setArchiveColumnWidths] = useState<Record<ArchiveColumnKey, number>>(DEFAULT_ARCHIVE_COLUMN_WIDTHS);
   const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
-  const [sandboxDetailTab, setSandboxDetailTab] = useState<'overview' | 'connectivity' | 'archive' | 'metrics' | 'advanced'>('overview');
+  const [sandboxDetailTab, setSandboxDetailTab] = useState<'overview' | 'connectivity' | 'archive' | 'advanced'>('overview');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
-  const [sandboxMetrics, setSandboxMetrics] = useState<E2bSandboxMetricPoint[]>([]);
   const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
   const [sandboxToolAction, setSandboxToolAction] = useState('command.run');
@@ -595,6 +628,11 @@ export default function App() {
   const sandboxRegistryLimitRef = useRef(SANDBOX_RUNTIME_PAGE_SIZE);
   const runtimeColumnResizeRef = useRef<{
     columnKey: RuntimeColumnKey;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const archiveColumnResizeRef = useRef<{
+    columnKey: ArchiveColumnKey;
     startX: number;
     startWidth: number;
   } | null>(null);
@@ -764,6 +802,56 @@ export default function App() {
     [runtimeColumnWidths]
   );
 
+  const toggleArchiveSort = useCallback((key: ArchiveSortKey) => {
+    setArchiveSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      const initialDirection: RuntimeSortDirection = key === 'time' || key === 'size' ? 'desc' : 'asc';
+      return {
+        key,
+        direction: initialDirection,
+      };
+    });
+  }, []);
+
+  const beginArchiveColumnResize = useCallback(
+    (columnKey: ArchiveColumnKey, event: ReactMouseEvent<HTMLSpanElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const startWidth = archiveColumnWidths[columnKey] || DEFAULT_ARCHIVE_COLUMN_WIDTHS[columnKey];
+      archiveColumnResizeRef.current = {
+        columnKey,
+        startX: event.clientX,
+        startWidth,
+      };
+
+      const onPointerMove = (moveEvent: MouseEvent) => {
+        const active = archiveColumnResizeRef.current;
+        if (!active) return;
+        const minWidth = ARCHIVE_COLUMN_MIN_WIDTHS[active.columnKey];
+        const nextWidth = Math.max(minWidth, Math.round(active.startWidth + (moveEvent.clientX - active.startX)));
+        setArchiveColumnWidths((previous) => ({
+          ...previous,
+          [active.columnKey]: nextWidth,
+        }));
+      };
+
+      const onPointerUp = () => {
+        archiveColumnResizeRef.current = null;
+        window.removeEventListener('mousemove', onPointerMove);
+        window.removeEventListener('mouseup', onPointerUp);
+      };
+
+      window.addEventListener('mousemove', onPointerMove);
+      window.addEventListener('mouseup', onPointerUp);
+    },
+    [archiveColumnWidths]
+  );
+
   const loadAgentSection = useCallback(async () => {
     const result = await api.getAgentManagementOverview();
     setAgentOverview(result);
@@ -863,17 +951,11 @@ export default function App() {
     setSandboxArchiveHistory(archiveHistory);
     setSandboxDetail(result.liveSandboxDetail);
     setSandboxFullInfo(result.liveSandboxFullInfo);
-    setSandboxMetrics(result.metrics);
   }, []);
 
   const loadSandboxFullInfo = useCallback(async (sandboxId: string) => {
     const result = await api.getSandboxFullInfo(sandboxId);
     setSandboxFullInfo(result);
-  }, []);
-
-  const loadSandboxMetrics = useCallback(async (sandboxId: string) => {
-    const result = await api.getSandboxMetrics(sandboxId);
-    setSandboxMetrics(result);
   }, []);
 
   const openTemplateDetail = useCallback(async (templateId: string) => {
@@ -1197,10 +1279,10 @@ export default function App() {
   );
 
   const runSandboxRestore = useCallback(
-    async (sandboxId: string) => {
+    async (sandboxId: string, snapshotKey?: string) => {
       setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
       try {
-        await api.restoreSandboxEnvironment(sandboxId);
+        await api.restoreSandboxEnvironment(sandboxId, snapshotKey ? { snapshotKey } : undefined);
         await loadSandboxRuntimeDetail(sandboxId);
         await loadSandboxSection();
       } catch (actionError) {
@@ -1211,6 +1293,26 @@ export default function App() {
     },
     [loadSandboxRuntimeDetail, loadSandboxSection]
   );
+
+  const downloadSandboxSnapshot = useCallback(async (sandboxId: string, snapshotKey?: string) => {
+    setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: true }));
+    try {
+      const result = await api.getSandboxArchiveDownloadUrl(sandboxId, 3600, snapshotKey);
+      const link = document.createElement('a');
+      link.href = result.downloadUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.download = result.fileName || 'sandbox-snapshot.tar.gz';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setError(null);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : '下载归档快照失败');
+    } finally {
+      setSandboxBusyIds((prev) => ({ ...prev, [sandboxId]: false }));
+    }
+  }, []);
 
   const runSandboxConnectivityCheck = useCallback(async (sandboxId: string) => {
     try {
@@ -4050,12 +4152,6 @@ export default function App() {
       archiveFailed: currentScopeItems.filter((item) => item.archiveStatus === 'failed').length,
       risky: currentScopeItems.filter((item) => item.riskTags.length > 0).length,
     };
-    const metricsData = (sandboxRuntimeDetail?.metrics || sandboxMetrics).map((point) => ({
-      timeLabel: point.timestamp ? new Date(point.timestamp).toLocaleTimeString('zh-CN', { hour12: false }) : '-',
-      cpu: point.cpuUsagePercent ?? 0,
-      memory: point.memoryUsagePercent ?? 0,
-      disk: point.diskUsagePercent ?? 0,
-    }));
     const riskyItems = currentScopeItems
       .filter((item) => item.riskTags.length > 0)
       .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
@@ -4172,9 +4268,11 @@ export default function App() {
       ? ((sandboxArchiveHistory.length > 0
           ? sandboxArchiveHistory.map((item) => ({
               id: item.snapshotKey,
+              snapshotKey: item.snapshotKey,
               timestamp: item.archivedAt,
               type: item.isCurrent ? 'current' : 'snapshot',
               size: item.sizeBytes ? `${Math.max(1, Math.round(item.sizeBytes / 1024))} KB` : '-',
+              sizeBytes: item.sizeBytes ?? null,
               hash: item.sha256 || item.archiveKey || '-',
               status: item.status || 'archived',
               reason: item.reason || '-',
@@ -4182,6 +4280,7 @@ export default function App() {
           : [
               {
                 id: sandboxRuntimeDetail.archive.snapshotKey || sandboxRuntimeDetail.archive.archiveKey || 'snapshot-current',
+                snapshotKey: sandboxRuntimeDetail.archive.snapshotKey || null,
                 timestamp:
                   sandboxRuntimeDetail.archive.restoredAt ||
                   sandboxRuntimeDetail.archive.archivePendingSince ||
@@ -4189,18 +4288,43 @@ export default function App() {
                   sandboxRuntimeDetail.runtime.createdAt,
                 type: sandboxRuntimeDetail.archive.archiveDirty ? 'dirty' : 'snapshot',
                 size: sandboxDetail ? `${sandboxDetail.diskSizeMB} MB` : '-',
+                sizeBytes: sandboxDetail ? sandboxDetail.diskSizeMB * 1024 * 1024 : null,
                 hash: sandboxRuntimeDetail.archive.metadataKey || sandboxRuntimeDetail.archive.archiveKey || '-',
                 status: sandboxRuntimeDetail.archive.archiveStatus || 'unknown',
                 reason: sandboxRuntimeDetail.archive.lastDirtyReason || '-',
               },
             ]))
       : [];
+    const archiveSortedRows = [...archiveRows].sort((a, b) => {
+      let delta = 0;
+      if (archiveSort.key === 'snapshot') {
+        delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (archiveSort.key === 'time') {
+        delta = toTimestamp(a.timestamp) - toTimestamp(b.timestamp);
+      } else if (archiveSort.key === 'type') {
+        delta = (a.type || '').localeCompare(b.type || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (archiveSort.key === 'size') {
+        delta = (a.sizeBytes ?? -1) - (b.sizeBytes ?? -1);
+      } else if (archiveSort.key === 'hash') {
+        delta = (a.hash || '').localeCompare(b.hash || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (archiveSort.key === 'reason') {
+        delta = (a.reason || '').localeCompare(b.reason || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (archiveSort.key === 'status') {
+        delta = (a.status || '').localeCompare(b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      }
+
+      if (delta !== 0) {
+        return archiveSort.direction === 'asc' ? delta : -delta;
+      }
+
+      return toTimestamp(b.timestamp) - toTimestamp(a.timestamp);
+    });
     const archiveTimelineRows = [
       ...archiveRows.map((row) => ({
         id: `archive-${row.id}`,
         timestamp: row.timestamp,
         kind: 'archive',
-        title: row.type === 'current' ? '当前归档快照' : '历史归档快照',
+        title: row.type === 'current' ? '当前快照' : '历史快照',
         status: row.status,
         summary: `${row.reason} · ${row.size}`,
         detail: row.hash,
@@ -4930,18 +5054,10 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'metrics' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('metrics')}
-                >
-                  <span className="inspector-tab-card-key mono">04</span>
-                  <span className="inspector-tab-card-label">指标</span>
-                </button>
-                <button
-                  type="button"
                   className={`inspector-tab-card ${sandboxDetailTab === 'advanced' ? 'active' : ''}`}
                   onClick={() => setSandboxDetailTab('advanced')}
                 >
-                  <span className="inspector-tab-card-key mono">05</span>
+                  <span className="inspector-tab-card-key mono">04</span>
                   <span className="inspector-tab-card-label">高级调试</span>
                 </button>
               </div>
@@ -4953,12 +5069,9 @@ export default function App() {
                     <article className="inspector-stat-card">
                       <span className="inspector-stat-label">运行状态</span>
                       <strong>{sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status}</strong>
-                      <span className={stateClassName(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}>
-                        {sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status}
-                      </span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">任务状态</span>
+                      <span className="inspector-stat-label">会话状态</span>
                       <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
                       {sandboxRuntimeDetail.runtime.taskSessionId ? (
                         <button
@@ -4979,7 +5092,7 @@ export default function App() {
                     </article>
                   </section>
 
-                  <section className="inspector-main-grid">
+                  <section className="inspector-overview-bottom-grid">
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
                         <h3>Sandbox 基础信息</h3>
@@ -4987,120 +5100,17 @@ export default function App() {
                       </div>
                       <div className="inspector-kv-grid">
                         <div><span>Sandbox 标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
-                        <div>
-                          <span>会话 ID</span>
-                          {sandboxRuntimeDetail.runtime.taskSessionId ? (
-                            <button
-                              type="button"
-                              className="link-btn sandbox-jump-btn mono"
-                              onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
-                            >
-                              {sandboxRuntimeDetail.runtime.taskSessionId}
-                            </button>
-                          ) : (
-                            <strong className="mono">-</strong>
-                          )}
-                        </div>
                         <div><span>执行器</span><strong>{sandboxRuntimeDetail.runtime.executor}</strong></div>
-                        <div><span>执行模式</span><strong>{sandboxRuntimeDetail.runtime.codexExecutionMode || '-'}</strong></div>
                         <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
-                        <div><span>Sandbox 域名</span><strong>{sandboxFullInfo?.sandboxDomain || '-'}</strong></div>
-                      </div>
-                    </article>
-                    <article className="inspector-card">
-                      <div className="inspector-card-header">
-                        <h3>会话绑定</h3>
-                      </div>
-                      <div className="inspector-kv-grid">
                         <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
-                        <div><span>会话状态</span><strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : (sandboxRuntimeDetail.runtime.taskStatus || '-')}</strong></div>
-                        <div>
-                          <span>会话 ID</span>
-                          {sandboxRuntimeDetail.runtime.taskSessionId ? (
-                            <button
-                              type="button"
-                              className="link-btn sandbox-jump-btn mono"
-                              onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
-                            >
-                              {sandboxRuntimeDetail.runtime.taskSessionId}
-                            </button>
-                          ) : (
-                            <strong className="mono">-</strong>
-                          )}
-                        </div>
-                        <div><span>编排会话</span><strong className="mono">{sandboxRuntimeDetail.runtime.orchestratorSessionId || '-'}</strong></div>
                       </div>
                     </article>
-                  </section>
-
-                  <section className="inspector-main-grid">
-                    <article className="inspector-card inspector-card-large">
-                      <div className="inspector-card-header">
-                        <h3>状态时间线</h3>
-                        {sandboxRuntimeDetail.runtime.status === 'closed' &&
-                        (sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail.runtime.dedupeReplacedAt) ? (
-                          <span className="session-status session-status-governance">已收口</span>
-                        ) : (
-                          <span className="panel-caption">当前无收口事件</span>
-                        )}
-                      </div>
-                      {sandboxRuntimeDetail.runtime.status === 'closed' &&
-                      (sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId || sandboxRuntimeDetail.runtime.dedupeReplacedAt) ? (
-                        <div className="inspector-governance-list">
-                          <article className="inspector-governance-event">
-                            <div className="inspector-governance-head">
-                              <strong>{sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason)}</strong>
-                              <span className="session-meta">{formatDateTime(sandboxRuntimeDetail.runtime.dedupeReplacedAt)}</span>
-                            </div>
-                            <p className="session-meta">
-                              当前 Sandbox 已关闭，后续由新的 Sandbox 接续。
-                            </p>
-                            <div className="inspector-kv-grid">
-                              <div>
-                                <span>接管 Sandbox</span>
-                                {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId ? (
-                                  <button
-                                    type="button"
-                                    className="link-btn sandbox-jump-btn mono"
-                                    onClick={() => void openSandboxDetail(sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId!)}
-                                  >
-                                    {sandboxRuntimeDetail.runtime.dedupeReplacementSandboxId}
-                                  </button>
-                                ) : (
-                                  <strong className="mono">-</strong>
-                                )}
-                              </div>
-                              <div>
-                                <span>收口原因</span>
-                                <strong>{sandboxDedupeReasonLabel(sandboxRuntimeDetail.runtime.dedupeReason)}</strong>
-                              </div>
-                            </div>
-                          </article>
-                        </div>
-                      ) : (
-                        <p className="empty">当前记录没有替换或接管事件。</p>
-                      )}
-                    </article>
-                    <article className="inspector-card">
-                      <div className="inspector-card-header">
-                        <h3>生命周期备注</h3>
-                      </div>
-                      <div className="inspector-kv-grid">
-                        <div><span>最近活跃原因</span><strong>{sandboxRuntimeDetail.runtime.lastActiveReason || '-'}</strong></div>
-                        <div><span>归档状态</span><strong>{archiveStatusLabel(sandboxRuntimeDetail.runtime.archiveStatus)}</strong></div>
-                        <div><span>更新时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.updatedAt)}</strong></div>
-                        <div><span>关闭时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.closedAt)}</strong></div>
-                      </div>
-                    </article>
-                  </section>
-
-                  <section className="inspector-main-grid">
-                    <article className="inspector-card inspector-card-large">
+                    <article className="inspector-card inspector-overview-actions-card">
                       <div className="inspector-card-header">
                         <h3>机器动作</h3>
                         <span className="panel-caption">开机/关机/重启/归档</span>
                       </div>
-                      <div className="action-inline">
+                      <div className="inspector-action-grid">
                         <button
                           type="button"
                           className="primary-btn"
@@ -5135,36 +5145,12 @@ export default function App() {
                         </button>
                       </div>
                     </article>
-                    <article className="inspector-card">
-                      <div className="inspector-card-header">
-                        <h3>调试快照</h3>
-                      </div>
-                      <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.debug || { message: '暂无调试快照' })}</pre>
-                    </article>
                   </section>
                 </div>
               ) : null}
 
               {sandboxDetailTab === 'connectivity' ? (
                 <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">握手状态</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.osacConfigured ? '正常' : '缺失'}</strong>
-                      <span className="session-meta">{sandboxRuntimeDetail.runtime.osacEndpoint || 'osacEndpoint 未配置'}</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">注册连接</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.opencodeConfigured ? '已连接' : '缺失'}</strong>
-                      <span className="session-meta">{sandboxRuntimeDetail.runtime.opencodeBaseUrl || 'opencodeBaseUrl 未配置'}</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">鉴权令牌</span>
-                      <strong>{sandboxRuntimeDetail.connectivity.trafficAccessTokenPresent ? '有效' : '缺失'}</strong>
-                      <span className="session-meta">访问令牌</span>
-                    </article>
-                  </section>
-
                   <article className="inspector-card">
                     <div className="inspector-card-header">
                       <h3>配置端点映射</h3>
@@ -5174,14 +5160,44 @@ export default function App() {
                     </div>
                     <div className="inspector-endpoint-list">
                       {[
-                        ['osacEndpoint', sandboxRuntimeDetail.runtime.osacEndpoint || '-'],
-                        ['opencodeBaseUrl', sandboxRuntimeDetail.runtime.opencodeBaseUrl || '-'],
-                        ['workspaceRoot', sandboxRuntimeDetail.connectivity.workspaceRoot || '-'],
-                        ['stateRoot', sandboxRuntimeDetail.connectivity.stateRoot || '-'],
-                      ].map(([label, value]) => (
-                        <div key={label} className="inspector-endpoint-row">
-                          <span className="mono">{label}</span>
-                          <code>{value}</code>
+                        {
+                          label: 'osacEndpoint',
+                          value: sandboxRuntimeDetail.runtime.osacEndpoint || '-',
+                          status: sandboxRuntimeDetail.connectivity.osacConfigured ? 'ok' : 'missing',
+                          statusText: sandboxRuntimeDetail.connectivity.osacConfigured ? '正常' : '缺失',
+                        },
+                        {
+                          label: 'opencodeBaseUrl',
+                          value: sandboxRuntimeDetail.runtime.opencodeBaseUrl || '-',
+                          status: sandboxRuntimeDetail.connectivity.opencodeConfigured ? 'ok' : 'missing',
+                          statusText: sandboxRuntimeDetail.connectivity.opencodeConfigured ? '正常' : '缺失',
+                        },
+                        {
+                          label: 'workspaceRoot',
+                          value: sandboxRuntimeDetail.connectivity.workspaceRoot || '-',
+                        },
+                        {
+                          label: 'stateRoot',
+                          value: sandboxRuntimeDetail.connectivity.stateRoot || '-',
+                        },
+                      ].map((row) => (
+                        <div key={row.label} className="inspector-endpoint-row">
+                          <div className="inspector-endpoint-label">
+                            <span className="mono">{row.label}</span>
+                          </div>
+                          <div className="inspector-endpoint-value">
+                            <code>{row.value}</code>
+                            {row.status ? (
+                              <span
+                                className={`inspector-endpoint-inline-status is-${row.status}`}
+                                title={`连通性${row.statusText}`}
+                                aria-label={`连通性${row.statusText}`}
+                              >
+                                <span className="inspector-endpoint-dot" aria-hidden="true" />
+                                <span>{row.statusText}</span>
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -5205,27 +5221,19 @@ export default function App() {
 
               {sandboxDetailTab === 'archive' ? (
                 <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">归档状态</span>
-                      <strong>{archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus)}</strong>
-                      <span className="session-meta">归档台账状态</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">工作区脏标记</span>
-                      <strong>{sandboxRuntimeDetail.archive.archiveDirty ? '是' : '否'}</strong>
-                      <span className="session-meta">工作区变更标记</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">待归档更新</span>
-                      <strong>{sandboxRuntimeDetail.archive.pendingArchiveUpdate ? '待处理' : '无'}</strong>
-                      <span className="session-meta">归档队列状态</span>
-                    </article>
-                  </section>
-
                   <article className="inspector-card">
                     <div className="inspector-card-header">
                       <h3>归档时间线</h3>
+                      <div className="action-inline runtime-actions">
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                        >
+                          手动归档
+                        </button>
+                      </div>
                     </div>
                     <div className="inspector-governance-list">
                       {archiveTimelineRows.length === 0 ? (
@@ -5266,40 +5274,94 @@ export default function App() {
                   <article className="inspector-card">
                     <div className="inspector-card-header">
                       <h3>历史快照</h3>
-                      <div className="action-inline">
-                        <button
-                          type="button"
-                          className="secondary-btn"
-                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId)}
-                        >
-                          手动恢复
-                        </button>
-                        <button
-                          type="button"
-                          className="primary-btn"
-                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
-                        >
-                          手动归档
-                        </button>
-                      </div>
                     </div>
                     <div className="table-wrap">
-                      <table>
+                      <table className="runtime-table archive-snapshot-table">
+                        <colgroup>
+                          <col style={{ width: `${archiveColumnWidths.snapshot}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.time}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.type}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.size}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.hash}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.reason}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.status}px` }} />
+                          <col style={{ width: `${archiveColumnWidths.actions}px` }} />
+                        </colgroup>
                         <thead>
                           <tr>
-                            <th>快照标识</th>
-                            <th>时间</th>
-                            <th>类型</th>
-                            <th>大小</th>
-                            <th>哈希</th>
-                            <th>原因</th>
-                            <th>状态</th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'snapshot' ? 'active' : ''}`} onClick={() => toggleArchiveSort('snapshot')}>
+                                  快照标识
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'snapshot' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('snapshot', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'time' ? 'active' : ''}`} onClick={() => toggleArchiveSort('time')}>
+                                  时间
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'time' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('time', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'type' ? 'active' : ''}`} onClick={() => toggleArchiveSort('type')}>
+                                  类型
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'type' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('type', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'size' ? 'active' : ''}`} onClick={() => toggleArchiveSort('size')}>
+                                  大小
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'size' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('size', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'hash' ? 'active' : ''}`} onClick={() => toggleArchiveSort('hash')}>
+                                  哈希
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'hash' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('hash', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'reason' ? 'active' : ''}`} onClick={() => toggleArchiveSort('reason')}>
+                                  原因
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'reason' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('reason', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <button type="button" className={`runtime-sort-btn ${archiveSort.key === 'status' ? 'active' : ''}`} onClick={() => toggleArchiveSort('status')}>
+                                  状态
+                                  <span className="runtime-sort-indicator">{archiveSort.key === 'status' ? (archiveSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                                </button>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('status', event)} />
+                              </div>
+                            </th>
+                            <th>
+                              <div className="runtime-th-wrap">
+                                <span className="runtime-th-label">操作</span>
+                                <span className="runtime-col-resize-handle" onMouseDown={(event) => beginArchiveColumnResize('actions', event)} />
+                              </div>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {archiveRows.map((row) => (
+                          {archiveSortedRows.map((row) => (
                             <tr key={`${row.id}-${row.hash}`}>
                               <td className="mono">{row.id}</td>
                               <td>{formatDateTime(row.timestamp)}</td>
@@ -5308,6 +5370,34 @@ export default function App() {
                               <td className="mono">{row.hash}</td>
                               <td>{row.reason}</td>
                               <td><span className={stateClassName(row.status)}>{row.status}</span></td>
+                              <td>
+                                <div className="runtime-actions">
+                                  <button
+                                    type="button"
+                                    className="secondary-btn snapshot-action-download"
+                                    disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !row.snapshotKey}
+                                    onClick={() =>
+                                      row.snapshotKey
+                                        ? void downloadSandboxSnapshot(sandboxRuntimeDetail.runtime.sandboxId, row.snapshotKey)
+                                        : undefined
+                                    }
+                                  >
+                                    下载
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="secondary-btn snapshot-action-restore"
+                                    disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !row.snapshotKey}
+                                    onClick={() =>
+                                      row.snapshotKey
+                                        ? void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId, row.snapshotKey)
+                                        : undefined
+                                    }
+                                  >
+                                    恢复
+                                  </button>
+                                </div>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -5320,35 +5410,6 @@ export default function App() {
                       <h3>归档元数据</h3>
                     </div>
                     <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.archive)}</pre>
-                  </article>
-                </div>
-              ) : null}
-
-              {sandboxDetailTab === 'metrics' ? (
-                <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card"><span className="inspector-stat-label">CPU</span><strong>{metricsData.at(-1)?.cpu ?? 0}%</strong><span className="session-meta">latest</span></article>
-                    <article className="inspector-stat-card"><span className="inspector-stat-label">Memory</span><strong>{metricsData.at(-1)?.memory ?? 0}%</strong><span className="session-meta">latest</span></article>
-                    <article className="inspector-stat-card"><span className="inspector-stat-label">Disk</span><strong>{metricsData.at(-1)?.disk ?? 0}%</strong><span className="session-meta">latest</span></article>
-                  </section>
-
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>Resource Timeline</h3>
-                    </div>
-                    <div className="chart-wrap">
-                      <ResponsiveContainer width="100%" height={260}>
-                        <LineChart data={metricsData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                          <XAxis dataKey="timeLabel" />
-                          <YAxis />
-                          <Tooltip />
-                          <Line type="monotone" dataKey="cpu" stroke="#0f766e" name="CPU%" strokeWidth={2} />
-                          <Line type="monotone" dataKey="memory" stroke="#1d4ed8" name="内存%" strokeWidth={2} />
-                          <Line type="monotone" dataKey="disk" stroke="#b45309" name="磁盘%" strokeWidth={2} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
                   </article>
                 </div>
               ) : null}

@@ -42,11 +42,13 @@ import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
   clearConnectorProfileAuth,
+  completeConnectorOauth,
   completeConnectorProfileOauth,
   createConnectorProfile,
   deleteConnectorProfile,
   getMyConnectorProfiles,
   setDefaultConnectorProfile,
+  startConnectorOauth,
   startConnectorProfileOauth,
   updateConnectorProfile,
   type ConnectorCatalogItem,
@@ -131,7 +133,7 @@ function buildConnectorRedirectUri(
   location: string,
   search: string,
   connectorKey: ConnectorKey,
-  profileId: string,
+  profileId?: string | null,
   targetSessionId?: string | null
 ) {
   const url = new URL(location, window.location.origin);
@@ -150,7 +152,9 @@ function buildConnectorRedirectUri(
   params.set("settingsTab", "connectors");
   params.set("connector_oauth", "1");
   params.set("connector", connectorKey);
-  params.set("profileId", profileId);
+  if (profileId) {
+    params.set("profileId", profileId);
+  }
   if (targetSessionId) {
     params.set("targetSessionId", targetSessionId);
   }
@@ -283,6 +287,10 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
   return item?.key === "github";
 }
 
+export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
+  return connectorKey === "notion";
+}
+
 function getGithubAppReauthHint() {
   return "本地清除只会移除 oneceo 保存的授权态，不会撤销 GitHub 侧的 GitHub App 授权或安装批准。若需要强制重新走授权，请先到 GitHub 撤销授权或确认安装页已批准最新权限。";
 }
@@ -384,18 +392,22 @@ export function ConnectorCenterPanel({
     const state = params.get("state");
     const connector = params.get("connector") as ConnectorKey | null;
     const profileId = params.get("profileId");
+    const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
     if (params.get("connector_oauth") !== "1") return;
-    if (!code || !state || !connector || !profileId) return;
+    if (!code || !state || !connector) return;
+    if (!useConnectorLevelOauth && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
 
     setActiveTab("app");
     setDetailKey(connector);
     setActionKey(`oauth:${connector}`);
-    setSelectedProfileIds((prev) => ({
-      ...prev,
-      [connector]: profileId,
-    }));
+    if (profileId) {
+      setSelectedProfileIds((prev) => ({
+        ...prev,
+        [connector]: profileId,
+      }));
+    }
 
     void (async () => {
       try {
@@ -406,17 +418,37 @@ export function ConnectorCenterPanel({
           profileId,
           effectiveTargetSessionId
         );
-        const result = await completeConnectorProfileOauth(profileId, {
-          code,
-          state,
-          redirectUri,
-        });
-        const completedProfileId =
-          result.profile?.profileId || result.account?.profileId || profileId;
-        const attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+        let completedProfileId = profileId || null;
+        let attachTarget: string | null | undefined = effectiveTargetSessionId;
+        let authStatus = "";
+        let callbackLastError = "";
+
+        if (useConnectorLevelOauth) {
+          const result = await completeConnectorOauth(connector, {
+            code,
+            state,
+            redirectUri,
+          });
+          completedProfileId =
+            result.account?.defaultProfileId || result.account?.profileId || completedProfileId;
+          attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+          authStatus = asText(result.account?.authStatus);
+          callbackLastError = asText(result.account?.lastError);
+        } else {
+          const result = await completeConnectorProfileOauth(profileId!, {
+            code,
+            state,
+            redirectUri,
+          });
+          completedProfileId =
+            result.profile?.profileId || result.account?.profileId || completedProfileId;
+          attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+          authStatus = asText(result.profile?.authStatus || result.account?.authStatus);
+          callbackLastError = asText(result.profile?.lastError || result.account?.lastError);
+        }
 
         let attachError: Error | null = null;
-        if (attachTarget && completedProfileId && result.profile?.authStatus === "authorized") {
+        if (attachTarget && completedProfileId && authStatus === "authorized") {
           try {
             await attachSessionConnector(attachTarget, connector, {
               profileId: completedProfileId,
@@ -439,11 +471,11 @@ export function ConnectorCenterPanel({
         if (attachError) {
           toast.error(`授权已完成，但挂载失败：${attachError.message}`);
         } else if (
-          result.profile?.authStatus !== "authorized" &&
-          typeof result.profile?.lastError === "string" &&
-          GITHUB_INSTALLATION_MISSING_PATTERN.test(result.profile.lastError)
+          authStatus !== "authorized" &&
+          callbackLastError &&
+          GITHUB_INSTALLATION_MISSING_PATTERN.test(callbackLastError)
         ) {
-          toast.error(result.profile.lastError);
+          toast.error(callbackLastError);
         } else if (attachTarget) {
           toast.success("授权完成，连接器已挂载到目标会话");
         } else {
@@ -550,7 +582,8 @@ export function ConnectorCenterPanel({
       item,
       formOverride || formState[editorKey(item.key, profileId)] || {}
     );
-    const requiresExplicitProfileName = item.key !== "github" && item.key !== "supabase";
+    const requiresExplicitProfileName =
+      item.key !== "github" && item.key !== "supabase" && item.key !== "notion";
 
     if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error("请先填写 profile name");
@@ -663,6 +696,30 @@ export function ConnectorCenterPanel({
   const handleOAuth = async () => {
     if (!detailItem) return;
     const githubConnector = isGithubConnector(detailItem);
+    const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
+
+    if (connectorLevelOauth) {
+      setActionKey(`oauth:${detailItem.key}`);
+      try {
+        const redirectUri = buildConnectorRedirectUri(
+          location,
+          search,
+          detailItem.key,
+          null,
+          effectiveTargetSessionId
+        );
+        const { authUrl } = await startConnectorOauth(detailItem.key, {
+          redirectUri,
+          returnToSessionId: effectiveTargetSessionId || undefined,
+        });
+        window.location.href = authUrl;
+        return;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "OAuth start failed");
+        setActionKey(null);
+        return;
+      }
+    }
     
     // 如果是 GitHub 且没有选中的 Profile，则自动使用/创建一个默认 Profile
     let profileId = activeEditorProfileId;
@@ -884,6 +941,7 @@ export function ConnectorCenterPanel({
     const Icon = resolveConnectorIcon(detailItem.icon);
     const guide = CONNECTOR_GUIDES[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
+    const notionConnector = shouldUseConnectorLevelOauth(detailItem.key);
     const statusText = connectorStatusText({
       available: detailItem.available,
       authStatus: selectedDetailProfile?.authStatus,
@@ -1462,7 +1520,13 @@ export function ConnectorCenterPanel({
                           ) : (
                             <ArrowUpRight className="mr-2 h-4 w-4" />
                           )}
-                          {selectedDetailProfile?.authStatus === "authorized" ? "重新授权" : "发起 OAuth"}
+                          {notionConnector
+                            ? selectedDetailProfile?.authStatus === "authorized"
+                              ? "重新连接 Notion"
+                              : "连接 Notion"
+                            : selectedDetailProfile?.authStatus === "authorized"
+                              ? "重新授权"
+                              : "发起 OAuth"}
                         </Button>
                       ) : null}
                       

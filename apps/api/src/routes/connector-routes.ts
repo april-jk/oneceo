@@ -267,7 +267,7 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
-    const profileId = result.account?.defaultProfileId || result.account?.profileId;
+    const profileId = result.account?.defaultProfileId;
     const runtimeRefreshQueued = Boolean(profileId && result.account?.authStatus === 'authorized');
     if (runtimeRefreshQueued && profileId) {
       queueProfileRuntimeRefresh(

@@ -1668,6 +1668,10 @@ function normalizeClarificationComparableText(value: unknown): string {
     .trim();
 }
 
+function buildClarificationSemanticKey(value: unknown): string {
+  return normalizeClarificationComparableText(value).replace(/\s+/g, '');
+}
+
 function stripDuplicateManagedAssistantForClarification(
   prev: AgentMessage[],
   clarificationMessage: AgentMessage
@@ -1675,6 +1679,11 @@ function stripDuplicateManagedAssistantForClarification(
   const clarificationMeta = toRecord(clarificationMessage.metadata);
   const runId = asText(clarificationMeta.runId);
   const questionText = normalizeClarificationComparableText(
+    (clarificationMessage as { question?: unknown }).question ||
+      clarificationMessage.content ||
+      clarificationMeta.question
+  );
+  const questionSemanticKey = buildClarificationSemanticKey(
     (clarificationMessage as { question?: unknown }).question ||
       clarificationMessage.content ||
       clarificationMeta.question
@@ -1688,8 +1697,14 @@ function stripDuplicateManagedAssistantForClarification(
     const itemMeta = toRecord(item.metadata);
     if (asText(itemMeta.runId) !== runId) return true;
     const assistantText = normalizeClarificationComparableText(item.content);
+    const assistantSemanticKey = buildClarificationSemanticKey(item.content);
     if (!assistantText) return true;
-    if (assistantText === questionText) {
+    if (
+      assistantText === questionText ||
+      (questionSemanticKey &&
+        assistantSemanticKey &&
+        assistantSemanticKey === questionSemanticKey)
+    ) {
       removed = true;
       return false;
     }

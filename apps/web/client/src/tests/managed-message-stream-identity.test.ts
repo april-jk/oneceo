@@ -164,6 +164,58 @@ describe('managed message stream identity', () => {
     expect(withClarification[0]?.messageKey).toBe('managed:run-clarify-2:clarification');
   });
 
+  it('dedupes clarification when text differs only by mixed CJK and English spacing', () => {
+    const assistantKey = resolveManagedStreamMessageKey({
+      eventType: 'assistant_delta',
+      runId: 'run-clarify-3',
+      payloadMessageKey: 'managed:run-clarify-3:assistant',
+      sequence: 41,
+    });
+
+    const withAssistant = mergeRealtimeMessage(
+      [],
+      {
+        type: 'agent_message',
+        content:
+          '当前会话的 Supabase连接器未提供直接列出项目的工具。建议通过Supabase 项目控制台查看项目列表，或确认是否需要其他操作。',
+        agent: 'altus',
+        messageKey: assistantKey,
+        metadata: {
+          eventType: 'assistant_delta',
+          runId: 'run-clarify-3',
+          sequence: 41,
+          streamDelta: true,
+          messageKey: assistantKey,
+        },
+        sessionId: 'session-clarify-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    const withClarification = mergeRealtimeMessage(
+      withAssistant,
+      {
+        type: 'clarification_request',
+        content:
+          '当前会话的 Supabase 连接器未提供直接列出项目的工具。建议通过 Supabase 项目控制台查看项目列表，或确认是否需要其他操作。',
+        question:
+          '当前会话的 Supabase 连接器未提供直接列出项目的工具。建议通过 Supabase 项目控制台查看项目列表，或确认是否需要其他操作。',
+        messageKey: 'managed:run-clarify-3:clarification',
+        metadata: {
+          eventType: 'clarification_requested',
+          runId: 'run-clarify-3',
+          messageKey: 'managed:run-clarify-3:clarification',
+        },
+        sessionId: 'session-clarify-3',
+      },
+      WELCOME_MESSAGE
+    );
+
+    expect(withClarification).toHaveLength(1);
+    expect(withClarification[0]?.type).toBe('clarification_request');
+    expect(withClarification[0]?.messageKey).toBe('managed:run-clarify-3:clarification');
+  });
+
   it('keeps the longer managed assistant content when final message is shorter', () => {
     const assistantKey = resolveManagedStreamMessageKey({
       eventType: 'assistant_delta',

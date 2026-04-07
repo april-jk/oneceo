@@ -1,6 +1,6 @@
 import express from 'express';
 import { sandboxEnvironmentService } from '../services/sandbox-environment-service';
-import { listSandboxArchiveHistory } from '../services/sandbox-archive-service';
+import { getSandboxArchiveDownloadSpec, listSandboxArchiveHistory } from '../services/sandbox-archive-service';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { createRequireInternalToken } from './internal-auth-middleware';
 
@@ -34,6 +34,26 @@ router.get('/sandbox/:sandboxId/archive-history', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '获取 Sandbox 归档历史失败'),
+    });
+  }
+});
+
+router.get('/sandbox/:sandboxId/archive-download-url', async (req, res) => {
+  try {
+    const expiresInSecondsRaw = Number(req.query.expiresInSeconds || 3600);
+    const expiresInSeconds = Number.isFinite(expiresInSecondsRaw) ? expiresInSecondsRaw : 3600;
+    const snapshotKey = typeof req.query.snapshotKey === 'string' ? req.query.snapshotKey : undefined;
+    return res.json({
+      success: true,
+      data: await getSandboxArchiveDownloadSpec(req.params.sandboxId, {
+        expiresInSeconds,
+        snapshotKey,
+      }),
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取 Sandbox 归档下载链接失败'),
     });
   }
 });

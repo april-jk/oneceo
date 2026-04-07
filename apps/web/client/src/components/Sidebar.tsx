@@ -87,6 +87,53 @@ interface SidebarProps {
   onProjectSelect?: (projectId: string | null) => void;
 }
 
+const WAITING_USER_TEXT_CLASS = "text-[var(--function-warning,rgb(217_119_6))]";
+
+function WaitingUserIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg
+      height="16"
+      width="16"
+      fill="none"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      className={className}
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r="6.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeDasharray="2.44 1.62"
+      />
+    </svg>
+  );
+}
+
+export function getSessionStatusVisual(status: string) {
+  const normalized = (status || "").trim().toLowerCase();
+  if (normalized === "completed") {
+    return {
+      label: "完成",
+      labelClassName: "text-muted-foreground",
+      waitingUser: false,
+    } as const;
+  }
+  if (normalized === "waiting_user") {
+    return {
+      label: "待补充",
+      labelClassName: WAITING_USER_TEXT_CLASS,
+      waitingUser: true,
+    } as const;
+  }
+  return {
+    label: "进行中",
+    labelClassName: "text-muted-foreground",
+    waitingUser: false,
+  } as const;
+}
+
 export default function Sidebar({
   className = "",
   collapsed = false,
@@ -385,12 +432,6 @@ export default function Sidebar({
     0,
   );
   const hasSessionOverflow = hiddenSessionCount > 0;
-  const formatSessionStatus = (status: string) => {
-    if (status === "completed") return "完成";
-    if (status === "waiting_user") return "待补充";
-    return "进行中";
-  };
-
   const patchSessionTask = React.useCallback((sessionId: string, patch: Partial<SessionTask>) => {
     setSessionTasks((prev) =>
       sortSessionTasks(
@@ -497,9 +538,13 @@ export default function Sidebar({
   const renderSessionTaskItem = React.useCallback(
     (session: SessionTask, options?: { compact?: boolean; onNavigate?: () => void }) => {
       const compact = Boolean(options?.compact);
-      const label = formatSessionStatus(session.status);
+      const statusVisual = getSessionStatusVisual(session.status);
       const favoriteLabel = session.isFavorite ? "取消收藏" : "添加到收藏";
-      const leadingIcon = session.isFavorite ? (
+      const leadingIcon = statusVisual.waitingUser ? (
+        <WaitingUserIcon
+          className={`${compact ? "h-3.5 w-3.5" : "w-4 h-4 shrink-0"} ${WAITING_USER_TEXT_CLASS}`}
+        />
+      ) : session.isFavorite ? (
         <Star className="h-3.5 w-3.5 fill-current text-amber-500" />
       ) : (
         <FileText className={compact ? "h-3.5 w-3.5" : "w-4 h-4 shrink-0"} />
@@ -514,8 +559,8 @@ export default function Sidebar({
           <span className="text-xs truncate flex-1 min-w-0 text-left">
             {session.title}
           </span>
-          <span className="w-9 truncate text-right text-[10px] text-muted-foreground">
-            {label}
+          <span className={`w-9 truncate text-right text-[10px] ${statusVisual.labelClassName}`}>
+            {statusVisual.label}
           </span>
         </Button>
       ) : (
@@ -530,8 +575,8 @@ export default function Sidebar({
               {session.title}
             </span>
           </span>
-          <span className="text-xs text-muted-foreground shrink-0">
-            {label}
+          <span className={`text-xs shrink-0 ${statusVisual.labelClassName}`}>
+            {statusVisual.label}
           </span>
         </Button>
       );
@@ -569,7 +614,7 @@ export default function Sidebar({
         </ContextMenu>
       );
     },
-    [formatSessionStatus, handleFavoriteToggle, openDeleteDialog, openRenameDialog],
+    [handleFavoriteToggle, openDeleteDialog, openRenameDialog],
   );
 
   return (

@@ -50,6 +50,7 @@ import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service'
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
+import { connectorGuideService } from '../services/connector-guide-service';
 import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
 import {
   inferFilenameFromResponse,
@@ -4059,6 +4060,17 @@ router.get('/sessions/:sessionId/connectors', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    await connectorGuideService.ensureSessionGuidesUpToDate(sessionId).catch((error) => {
+      writeConnectorDebugLog(
+        '[CONNECTOR_GUIDE_ON_DEMAND_RECOMPUTE_FAILED]',
+        {
+          taskSessionId: sessionId,
+          userId: currentUser.userId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'warn'
+      );
+    });
     const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
     return res.json({
       success: true,

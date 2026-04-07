@@ -13,6 +13,7 @@ type OneceoEnvelope<T> = {
 
 export type TaskCreationSession = {
   id: string;
+  userId?: string | null;
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' | string;
@@ -459,37 +460,39 @@ export class OneceoApiConnector {
   }
 
   listTaskCreationSessions(limit = 20) {
-    return this.request<TaskCreationSession[]>(`/api/task-creation/sessions?limit=${limit}`);
+    return this.request<TaskCreationSession[]>(`/api/internal/task-creation/admin/sessions?limit=${limit}`);
   }
 
   getTaskCreationSession(sessionId: string) {
-    return this.request<TaskCreationSession>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}`);
+    return this.request<TaskCreationSession>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   getTaskCreationMessages(sessionId: string) {
     return this.request<TaskCreationSession['messages']>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/messages`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/messages`
     );
   }
 
   getTaskCreationIntent(sessionId: string) {
-    return this.request<Record<string, unknown>>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}/intent`);
+    return this.request<Record<string, unknown>>(
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/intent`
+    );
   }
 
   getTaskCreationTaskDescription(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/task-description`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/task-description`
     );
   }
 
   getTaskCreationExecutionPlan(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/execution-plan`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/execution-plan`
     );
   }
 
   getTaskCreationDebug(sessionId: string) {
-    return this.request<TaskDebugInfo>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}/debug`);
+    return this.request<TaskDebugInfo>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/debug`);
   }
 
   startTaskCreationRuntime(sessionId: string) {

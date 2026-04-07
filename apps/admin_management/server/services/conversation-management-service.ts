@@ -7,8 +7,6 @@ import type {
 } from '../connectors/oneceo-api-connector';
 import type { KvmOrchestratorConnector } from '../connectors/kvm-orchestrator-connector';
 import type { AuditService } from './audit-service';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 
 type TraceEvent = {
   id: string;
@@ -535,97 +533,6 @@ function summarizeDecisionInput(stage: LlmTrace['stage'], request: Record<string
   return undefined;
 }
 
-type LocalMemoryStore = {
-  sessions: Array<
-    TaskCreationSession & {
-      phase?: string;
-      phaseCycle?: number;
-      messages?: TaskCreationMessage[];
-    }
-  >;
-};
-
-type LocalMemorySnapshot = {
-  loadedAt: number;
-  sessions: TaskCreationSession[];
-  messagesBySession: Record<string, TaskCreationMessage[]>;
-};
-
-let localMemorySnapshot: LocalMemorySnapshot | null = null;
-
-function isLocalFallbackEnabled(): boolean {
-  const raw = String(process.env.ADMIN_MANAGEMENT_LOCAL_MEMORY_FALLBACK || 'true').trim().toLowerCase();
-  return !['0', 'false', 'no', 'off'].includes(raw);
-}
-
-function resolveLocalMemoryPath(): string {
-  const override = String(process.env.ADMIN_MANAGEMENT_LOCAL_MEMORY_PATH || '').trim();
-  if (override) {
-    return override;
-  }
-  return path.resolve(process.cwd(), '..', 'api', 'data', 'task-creation-memory.json');
-}
-
-function mapLocalSession(session: Record<string, unknown>): TaskCreationSession {
-  return {
-    id: String(session.id || ''),
-    title: String(session.title || '任务会话'),
-    status: String(session.status || 'unknown'),
-    stage: typeof session.stage === 'string' ? session.stage : undefined,
-    runtime: (session.runtime as TaskCreationSession['runtime']) || undefined,
-    pendingQuestion: typeof session.pendingQuestion === 'string' ? session.pendingQuestion : undefined,
-    pendingOptions: Array.isArray(session.pendingOptions)
-      ? (session.pendingOptions as string[]).filter(Boolean)
-      : undefined,
-    pendingResume: (session.pendingResume as TaskCreationSession['pendingResume']) || undefined,
-    createdAt: typeof session.createdAt === 'string' ? session.createdAt : new Date().toISOString(),
-    updatedAt: typeof session.updatedAt === 'string' ? session.updatedAt : new Date().toISOString(),
-    messages: Array.isArray(session.messages) ? (session.messages as TaskCreationMessage[]) : undefined,
-  };
-}
-
-function mapLocalMessages(messages: TaskCreationMessage[] | undefined): TaskCreationMessage[] {
-  if (!Array.isArray(messages)) return [];
-  return messages.map((message) => ({
-    id: String(message.id || ''),
-    role: message.role,
-    messageType: message.messageType,
-    content: message.content || '',
-    createdAt: message.createdAt || new Date().toISOString(),
-    metadata: message.metadata,
-  }));
-}
-
-async function loadLocalMemorySnapshot(): Promise<LocalMemorySnapshot | null> {
-  if (!isLocalFallbackEnabled()) return null;
-  const ttlMs = Math.max(1000, Number(process.env.ADMIN_MANAGEMENT_LOCAL_MEMORY_TTL_MS || 5000));
-  if (localMemorySnapshot && Date.now() - localMemorySnapshot.loadedAt < ttlMs) {
-    return localMemorySnapshot;
-  }
-
-  try {
-    const filePath = resolveLocalMemoryPath();
-    const raw = await fs.readFile(filePath, 'utf-8');
-    const parsed = JSON.parse(raw) as LocalMemoryStore;
-    const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
-    const mappedSessions = sessions.map((item) => mapLocalSession(item as Record<string, unknown>));
-    const messagesBySession: Record<string, TaskCreationMessage[]> = {};
-    for (const session of mappedSessions) {
-      const source = sessions.find((item) => String((item as any).id) === session.id) as any;
-      messagesBySession[session.id] = mapLocalMessages(source?.messages);
-    }
-    localMemorySnapshot = {
-      loadedAt: Date.now(),
-      sessions: mappedSessions,
-      messagesBySession,
-    };
-    return localMemorySnapshot;
-  } catch (error) {
-    console.warn('[admin-management][conversation] local memory load failed', error);
-    return null;
-  }
-}
-
 function normalizeMessageSource(role: string): 'user' | 'agent' | 'system' {
   if (role === 'user' || role === 'agent' || role === 'system') {
     return role;
@@ -1118,51 +1025,22 @@ export class ConversationManagementService {
   ) {}
 
   async listSessions(limit = 20) {
-    try {
-      const sessions = await this.oneceoApi.listTaskCreationSessions(limit);
-      const normalized = sessions.map((item) => ({
-        id: item.id,
-        title: item.title,
-        status: item.status,
-        stage: item.stage,
-        pendingQuestion: item.pendingQuestion,
-        pendingOptions: item.pendingOptions,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      }));
+    const sessions = await this.oneceoApi.listTaskCreationSessions(limit);
+    const normalized = sessions.map((item) => ({
+      id: item.id,
+      title: item.title,
+      status: item.status,
+      stage: item.stage,
+      pendingQuestion: item.pendingQuestion,
+      pendingOptions: item.pendingOptions,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    }));
 
-      return {
-        total: normalized.length,
-        sessions: normalized,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn('[admin-management][conversation] listSessions failed, fallback to local memory', message);
-      const local = await loadLocalMemorySnapshot();
-      const sessions = local?.sessions
-        .slice()
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-        .slice(0, limit)
-        .map((item) => ({
-          id: item.id,
-          title: item.title,
-          status: item.status,
-          stage: item.stage,
-          pendingQuestion: item.pendingQuestion,
-          pendingOptions: item.pendingOptions,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        })) || [];
-
-      if (sessions.length === 0) {
-        throw error;
-      }
-
-      return {
-        total: sessions.length,
-        sessions,
-      };
-    }
+    return {
+      total: normalized.length,
+      sessions: normalized,
+    };
   }
 
   async getSessionCore(sessionId: string) {
@@ -1172,16 +1050,7 @@ export class ConversationManagementService {
       return null;
     });
 
-    let sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
-    if (!session) {
-      const local = await loadLocalMemorySnapshot();
-      const localSession = local?.sessions.find((item) => item.id === sessionId) || null;
-      if (localSession) {
-        session = localSession;
-        sessionMessages = local?.messagesBySession[sessionId] || [];
-        console.warn('[admin-management][conversation] session fallback to local memory', sessionId);
-      }
-    }
+    const sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
 
     const [messages, intent, taskDescription, executionPlan] = await Promise.all([
       sessionMessages.length > 0
@@ -1313,16 +1182,7 @@ export class ConversationManagementService {
       return null;
     });
 
-    let sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
-    if (!session) {
-      const local = await loadLocalMemorySnapshot();
-      const localSession = local?.sessions.find((item) => item.id === sessionId) || null;
-      if (localSession) {
-        session = localSession;
-        sessionMessages = local?.messagesBySession[sessionId] || [];
-        console.warn('[admin-management][conversation] session fallback to local memory', sessionId);
-      }
-    }
+    const sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
 
     const [messages, intent, taskDescription, executionPlan, sandboxEnvironments] = await Promise.all([
       sessionMessages.length > 0

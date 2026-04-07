@@ -2065,6 +2065,11 @@ export type ChatItem =
     }
   | { kind: "agent"; markdown: string; author?: string; messageKey?: string; showAuthor?: boolean }
   | {
+      kind: "clarification_notice";
+      text: string;
+      messageKey?: string;
+    }
+  | {
       kind: "agent_explanation";
       markdown: string;
       heading: string;
@@ -2189,6 +2194,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const seenFinalMessages = new Set<string>();
   const normalizeForDedup = (value: string): string =>
     value.replace(/\r\n/g, "\n").trim();
+  const normalizeClarificationComparableText = (value: string): string =>
+    value
+      .replace(/\r\n/g, "\n")
+      .replace(/\*\*需要补充信息\*\*/g, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  const buildClarificationSemanticKey = (value: string): string =>
+    normalizeClarificationComparableText(value).replace(/\s+/g, "");
   const userTextSet = new Set<string>();
   const finalizedPartIds = new Set<string>();
   const codexTurnFilePaths = new Map<string, string[]>();
@@ -3058,12 +3072,49 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "clarification_request") {
       flushProgress();
+      const question = message.question || "请补充更多信息";
+      const previousMessage = index > 0 ? messages[index - 1] : null;
+      const previousContent =
+        previousMessage?.type === "agent_message"
+          ? previousMessage.content || ""
+          : "";
+      const currentNormalized = normalizeClarificationComparableText(question);
+      const previousNormalized =
+        previousMessage?.type === "agent_message"
+          ? normalizeClarificationComparableText(previousContent)
+          : "";
+      const currentSemantic = buildClarificationSemanticKey(question);
+      const previousSemantic =
+        previousMessage?.type === "agent_message"
+          ? buildClarificationSemanticKey(previousContent)
+          : "";
+      const currentRunId = asText(toRecord(message.metadata).runId);
+      const previousRunId =
+        previousMessage?.type === "agent_message"
+          ? asText(toRecord(previousMessage.metadata).runId)
+          : "";
+      const isSameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
+      if (
+        previousMessage?.type === "agent_message" &&
+        isSameRun &&
+        (currentNormalized === previousNormalized ||
+          (!!currentSemantic &&
+            !!previousSemantic &&
+            currentSemantic === previousSemantic))
+      ) {
+        items.push({
+          kind: "clarification_notice",
+          text: "Altus 将在你回复后继续工作",
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
       const optionLines =
         message.options && message.options.length > 0
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
           : "";
       pushAgentMarkdown(
-        `**需要补充信息**\n\n${message.question || "请补充更多信息"}${optionLines}`,
+        `**需要补充信息**\n\n${question}${optionLines}`,
         message.messageKey,
       );
       continue;
@@ -3923,6 +3974,35 @@ function MessageBubble({
         author={item.author}
         showAuthor={item.showAuthor}
       />
+    );
+  }
+
+  if (item.kind === "clarification_notice") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+        className="w-full"
+        data-message-key={item.messageKey}
+      >
+        <div
+          className="flex items-center gap-[6px] py-1.5 text-sm font-medium"
+          style={{ color: "var(--function-warning, rgb(217 119 6))" }}
+        >
+          <svg height="16" width="16" fill="none" viewBox="0 0 16 16" aria-hidden="true">
+            <circle
+              cx="8"
+              cy="8"
+              r="6.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeDasharray="2.44 1.62"
+            />
+          </svg>
+          <span>{item.text}</span>
+        </div>
+      </motion.div>
     );
   }
 

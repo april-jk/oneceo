@@ -592,7 +592,7 @@ export default function App() {
   const [sandboxToolResult, setSandboxToolResult] = useState<unknown>(null);
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
-  const [sandboxFilePath, setSandboxFilePath] = useState('/workspace');
+  const [sandboxFilePath, setSandboxFilePath] = useState('/');
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
   const [sandboxFileContent, setSandboxFileContent] = useState('');
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
@@ -950,13 +950,15 @@ export default function App() {
       api.getSandboxRuntimeDetail(sandboxId),
       api.getSandboxArchiveHistory(sandboxId).catch(() => []),
     ]);
-    setSandboxRuntimeDetail({
+    const runtimeDetailWithArchive = {
       ...result,
       archiveHistory,
-    });
+    };
+    setSandboxRuntimeDetail(runtimeDetailWithArchive);
     setSandboxArchiveHistory(archiveHistory);
     setSandboxDetail(result.liveSandboxDetail);
     setSandboxFullInfo(result.liveSandboxFullInfo);
+    return runtimeDetailWithArchive;
   }, []);
 
   const loadSandboxFullInfo = useCallback(async (sandboxId: string) => {
@@ -976,11 +978,13 @@ export default function App() {
     async (sandboxId: string) => {
       try {
         setError(null);
-        await loadSandboxRuntimeDetail(sandboxId);
+        const detail = await loadSandboxRuntimeDetail(sandboxId);
         setSandboxDetailTab('overview');
         setSandboxConnectivityResult(null);
         setSandboxToolResult(null);
         setSandboxTerminalOutput('');
+        setSandboxFilePath(detail.connectivity.workspaceRoot?.trim() || '/');
+        setSandboxFileContent('');
         setSandboxFileItems([]);
         setSandboxProcessResult(null);
         setSandboxPortResult(null);
@@ -1183,12 +1187,14 @@ export default function App() {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
     if (!sandboxId || !sandboxFilePath.trim()) return;
     try {
+      setError(null);
       const result = await api.runSandboxToolAction(sandboxId, 'files.list', {
         path: sandboxFilePath.trim(),
       });
       const items = normalizeSandboxFileItems(result, sandboxFilePath.trim());
       setSandboxFileItems(items);
     } catch (toolError) {
+      setSandboxFileItems([]);
       setError(toolError instanceof Error ? toolError.message : '查看目录失败');
     }
   }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath]);

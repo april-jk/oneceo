@@ -27,6 +27,7 @@ import { sessionMcpRecoveryService } from './services/session-mcp-recovery-servi
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 import { connectorGuideService } from './services/connector-guide-service';
+import { isConnectorGuideStartupRecomputeEnabled } from './services/connector-guide-startup-config';
 import { appAuthMiddleware } from './middleware/app-auth-middleware';
 import { adminAuthService } from './services/admin-auth-service';
 import { getProxyEnv, isGlobalProxyEnabled } from './config/proxy';
@@ -74,6 +75,7 @@ const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
   ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
   : 16;
 const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
+const connectorGuideStartupRecomputeEnabled = isConnectorGuideStartupRecomputeEnabled();
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -364,10 +366,13 @@ async function startServer() {
     void sessionMcpRecoveryService
       .recoverBacklog()
       .catch((error) => console.error('[SESSION_MCP_RECOVERY_BACKLOG_FAILED]', error));
-    // Connector guide session 重算改为监听后后台执行，避免启动前卡住端口绑定。
-    void connectorGuideService
-      .recomputeBuiltinPolicySessions()
-      .catch((error) => console.error('[CONNECTOR_GUIDE_BACKGROUND_RECOMPUTE_FAILED]', error));
+    if (connectorGuideStartupRecomputeEnabled) {
+      void connectorGuideService
+        .recomputeBuiltinPolicySessions()
+        .catch((error) => console.error('[CONNECTOR_GUIDE_BACKGROUND_RECOMPUTE_FAILED]', error));
+    } else {
+      console.log('[CONNECTOR_GUIDE_STARTUP_RECOMPUTE_SKIPPED] set CONNECTOR_GUIDE_STARTUP_RECOMPUTE_ENABLED=true to enable');
+    }
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
     

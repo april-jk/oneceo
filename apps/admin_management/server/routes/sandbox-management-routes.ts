@@ -31,6 +31,10 @@ const toolSchema = z.object({
   payload: z.any().optional(),
 });
 
+const restoreSchema = z.object({
+  snapshotKey: z.string().min(1).optional(),
+});
+
 const templateQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   nextToken: z.string().optional(),
@@ -75,6 +79,26 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   );
 
   router.get(
+    '/environments/:sandboxId/archive-history',
+    asyncHandler(async (req, res) => {
+      const result = await service.getArchiveHistory(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/environments/:sandboxId/archive-download-url',
+    asyncHandler(async (req, res) => {
+      const expiresInSeconds = req.query.expiresInSeconds === undefined
+        ? 3600
+        : z.coerce.number().int().min(60).max(86400).parse(req.query.expiresInSeconds);
+      const snapshotKey = typeof req.query.snapshotKey === 'string' ? req.query.snapshotKey : undefined;
+      const result = await service.getArchiveDownloadUrl(req.params.sandboxId, expiresInSeconds, snapshotKey);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/environments/:sandboxId',
     asyncHandler(async (req, res) => {
       const result = await service.getEnvironment(req.params.sandboxId);
@@ -110,6 +134,22 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   );
 
   router.post(
+    '/environments/:sandboxId/open',
+    asyncHandler(async (req, res) => {
+      const result = await service.openEnvironment(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
+    '/environments/:sandboxId/restart',
+    asyncHandler(async (req, res) => {
+      const result = await service.restartEnvironment(req.params.sandboxId);
+      return ok(res, result);
+    })
+  );
+
+  router.post(
     '/environments/:sandboxId/archive',
     asyncHandler(async (req, res) => {
       const result = await service.archiveEnvironment(req.params.sandboxId);
@@ -120,7 +160,8 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   router.post(
     '/environments/:sandboxId/restore',
     asyncHandler(async (req, res) => {
-      const result = await service.restoreEnvironment(req.params.sandboxId);
+      const payload = restoreSchema.parse(req.body ?? {});
+      const result = await service.restoreEnvironment(req.params.sandboxId, payload);
       return ok(res, result);
     })
   );

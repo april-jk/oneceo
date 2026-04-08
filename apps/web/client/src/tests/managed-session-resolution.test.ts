@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveChatInputSessionId } from '@/hooks/useTaskCreationAgent';
+import {
+  resolveChatInputSessionId,
+  resolveSessionRouteState,
+  shouldDeferPendingSessionRouteSync,
+} from '@/hooks/useTaskCreationAgent';
 
 describe('managed chat session resolution', () => {
   it('prefers explicit requested session id', () => {
@@ -37,5 +41,49 @@ describe('managed chat session resolution', () => {
         locationPath: '/new-task',
       })
     ).toBe('');
+  });
+
+  it('parses managed route state from path and search', () => {
+    expect(
+      resolveSessionRouteState({
+        locationPath: '/session/session-path',
+        search: '?foo=1',
+      })
+    ).toEqual({
+      querySessionId: '',
+      createNewToken: '',
+      pathSessionId: 'session-path',
+      resolvedSessionId: 'session-path',
+    });
+  });
+
+  it('defers pending session sync while url still carries new token', () => {
+    expect(
+      shouldDeferPendingSessionRouteSync({
+        pendingSessionId: 'session-1',
+        locationPath: '/new-task',
+        search: '?new=1',
+      })
+    ).toBe(true);
+  });
+
+  it('defers pending session sync until path settles onto target session without legacy query', () => {
+    expect(
+      shouldDeferPendingSessionRouteSync({
+        pendingSessionId: 'session-1',
+        locationPath: '/session/session-1',
+        search: '?sessionId=session-1',
+      })
+    ).toBe(true);
+  });
+
+  it('allows pending session sync to clear once path matches target session and query is clean', () => {
+    expect(
+      shouldDeferPendingSessionRouteSync({
+        pendingSessionId: 'session-1',
+        locationPath: '/session/session-1',
+        search: '',
+      })
+    ).toBe(false);
   });
 });

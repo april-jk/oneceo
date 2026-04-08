@@ -1,7 +1,34 @@
-import { taskSessionRunDAO } from '../db/dao';
+import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
 import { altusManagedStreamService } from './altus-managed-stream-service';
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
 import { toIso, type ManagedRunSummary } from './altus-managed-shared';
+
+const MANAGED_TOOL_EVENT_TYPES = new Set([
+  'tool_call_started',
+  'tool_call_completed',
+  'tool_call_failed',
+]);
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function shouldProjectManagedToolEvent(eventType: string) {
+  return MANAGED_TOOL_EVENT_TYPES.has(asText(eventType).toLowerCase());
+}
+
+function buildManagedToolMessageKey(input: {
+  runId: string;
+  eventType: string;
+  sequence: number;
+  payload: Record<string, unknown>;
+}) {
+  const toolCallId = asText(input.payload.toolCallId);
+  if (toolCallId) {
+    return `managed:${input.runId}:tool:${toolCallId}`;
+  }
+  return `managed:${input.runId}:${input.eventType}:${Math.max(0, Math.floor(input.sequence || 0))}`;
+}
 
 export class AltusRunEventWriter {
   constructor(private readonly redisStateService: AltusRunRedisStateService = altusRunRedisStateService) {}
@@ -20,26 +47,55 @@ export class AltusRunEventWriter {
       payloadJson: payload,
     });
     const sequence = Number(event.sequence || 0);
-    const envelopePayload = {
+    const normalizedEventType = asText(eventType).toLowerCase() || eventType;
+    const envelopePayload: Record<string, unknown> = {
       ...payload,
       runId,
       sessionId,
       userId,
       sequence,
-      eventType,
+      eventType: normalizedEventType,
     };
+    if (shouldProjectManagedToolEvent(normalizedEventType)) {
+      const messageKey = buildManagedToolMessageKey({
+        runId,
+        eventType: normalizedEventType,
+        sequence,
+        payload: envelopePayload,
+      });
+      const content = asText(envelopePayload.content) || normalizedEventType;
+      await taskCreationSessionDAO.addMessage({
+        sessionId,
+        role: 'agent',
+        messageType: 'executor_event',
+        content,
+        metadata: {
+          ...envelopePayload,
+          messageKey,
+          eventType: normalizedEventType,
+          executor: 'altus',
+          executionMode: 'managed',
+          runId,
+          sessionId,
+          userId,
+          toolCallId: asText(envelopePayload.toolCallId) || undefined,
+          toolName: asText(envelopePayload.toolName) || undefined,
+        },
+        createdAt: event.createdAt || new Date(),
+      });
+    }
     await this.redisStateService.appendRunEvent({
       runId,
       sessionId,
       userId,
       eventId: String(event.id),
-      eventType,
+      eventType: normalizedEventType,
       sequence,
       payload: envelopePayload,
     });
     altusManagedStreamService.publish(runId, {
       sequence,
-      eventType,
+      eventType: normalizedEventType,
       payload: envelopePayload,
     });
     return { sequence, payload: envelopePayload };

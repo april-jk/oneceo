@@ -59,3 +59,16 @@
    - 现状：当前授权成功后仅提示保存成功。
    - 后续需要优化回调逻辑，使其在特定场景下自动并静默地将 Profile 挂载到目标会话中。
 
+## 2026-04-03
+
+### 文档
+
+- 管理文档：
+  - [20260403_Vercel连接器改为官方OAuth直连方案_[尚未采用_暂未实现-因VercelOAuthIntegration审核严格暂未申请].md](/Users/watson/codingProj/oneceo/docs/agent研发文档/20260403_Vercel连接器改为官方OAuth直连方案_[尚未采用_暂未实现-因VercelOAuthIntegration审核严格暂未申请].md)
+
+### TODO 列表
+
+1. Vercel 官方 OAuth 单路径接入
+   - 现状：方案已明确，但要对齐 Manus 的授权路径，必须先拿到 Vercel OAuth integration 的 `client_id / client_secret`
+   - 阻塞：Vercel OAuth integration 审核较严格，当前暂未申请，因此暂不继续实现
+   - 后续需要补齐：完成 integration 申请后，恢复 Vercel connector 的官方 OAuth 单路径开发与真实联调

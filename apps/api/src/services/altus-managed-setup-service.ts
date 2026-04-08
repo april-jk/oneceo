@@ -324,7 +324,7 @@ export class AltusManagedSetupService {
     if (runtimeSandboxId) {
       const reusedFromRuntime = await this.reuseKnownSandbox(sessionId, runtimeSandboxId, workspaceRoot);
       if (reusedFromRuntime) {
-        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromRuntime.sandboxId).catch(() => null);
+        void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromRuntime.sandboxId).catch(() => null);
         return reusedFromRuntime;
       }
     }
@@ -337,7 +337,7 @@ export class AltusManagedSetupService {
         existing.workspaceRoot || workspaceRoot
       );
       if (reusedFromBinding) {
-        await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromBinding.sandboxId).catch(() => null);
+        void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromBinding.sandboxId).catch(() => null);
         return reusedFromBinding;
       }
       try {
@@ -384,7 +384,7 @@ export class AltusManagedSetupService {
     await ensureSandboxRuntimeMetadata(opened.sessionId, {
       taskSessionId: sessionId,
     }).catch(() => null);
-    await sessionMcpRecoveryService.ensureSessionRecovered(sessionId, opened.sessionId).catch(() => null);
+    void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, opened.sessionId).catch(() => null);
     return {
       sandboxId: opened.sessionId,
       workspaceRoot,

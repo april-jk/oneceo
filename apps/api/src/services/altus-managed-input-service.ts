@@ -15,7 +15,6 @@ import {
 } from './task-attachment-service';
 import { asText, pickObject } from './altus-managed-shared';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
-import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { userSkillService } from './user-skill-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
@@ -72,13 +71,6 @@ export class AltusManagedInputService {
       throw new Error('当前会话已有运行中的 Altus managed run');
     }
 
-    const sandbox = await this.setupService.ensureSandbox(sessionId);
-    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_SANDBOX_READY]', {
-      sessionId,
-      sandboxId: sandbox.sandboxId,
-      workspaceRoot: sandbox.workspaceRoot,
-      reused: sandbox.reused,
-    });
     const availableSkills = await userSkillService.listAvailableSkills(userId);
     writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_AVAILABLE_SKILLS_READY]', {
       sessionId,
@@ -93,20 +85,17 @@ export class AltusManagedInputService {
       sessionId,
       resolvedSkillCount: resolvedSkills.length,
     });
-    await sandboxSkillSyncService.syncResolvedSkills({
-      taskSessionId: sessionId,
-      orchestratorSessionId: sandbox.sandboxId,
-      skills: resolvedSkills,
-    });
-    writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_SKILL_SYNC_READY]', {
-      sessionId,
-      orchestratorSessionId: sandbox.sandboxId,
-      resolvedSkillCount: resolvedSkills.length,
-    });
-    let attachments =
-      normalizedUploads.length > 0
-        ? await this.uploadAttachments(sandbox.sandboxId, sandbox.workspaceRoot, normalizedUploads)
-        : [];
+    let attachments: TaskAttachmentRecord[] = [];
+    if (normalizedUploads.length > 0) {
+      const sandbox = await this.setupService.ensureSandbox(sessionId);
+      writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_SANDBOX_READY]', {
+        sessionId,
+        sandboxId: sandbox.sandboxId,
+        workspaceRoot: sandbox.workspaceRoot,
+        reused: sandbox.reused,
+      });
+      attachments = await this.uploadAttachments(sandbox.sandboxId, sandbox.workspaceRoot, normalizedUploads);
+    }
     if (attachments.length > 0) {
       attachments = await this.uploadImageObjects(sessionId, resolvedMessageKey, attachments, normalizedUploads);
     }
@@ -131,9 +120,12 @@ export class AltusManagedInputService {
       messageKey: resolvedMessageKey,
       metadata,
     });
+    if (!run) {
+      throw new Error('managed run 创建失败');
+    }
     writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_RUN_READY]', {
       sessionId,
-      runId: run.id || run.runId || null,
+      runId: run.id || null,
       runStatus: run.status || null,
     });
 

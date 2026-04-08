@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-type LogLevel = 'info' | 'error';
+type LogLevel = 'info' | 'warn' | 'error';
 
 const logFilePath = path.resolve(process.cwd(), 'data', 'connector-debug.log');
 
@@ -19,6 +19,8 @@ export function writeConnectorDebugLog(tag: string, payload: Record<string, unkn
   const line = `${new Date().toISOString()} ${level.toUpperCase()} ${tag} ${serializePayload(payload)}\n`;
   if (level === 'error') {
     console.error(tag, payload);
+  } else if (level === 'warn') {
+    console.warn(tag, payload);
   } else {
     console.info(tag, payload);
   }

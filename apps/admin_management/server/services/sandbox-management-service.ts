@@ -52,6 +52,9 @@ type RuntimeRegistryItem = {
   createdAt?: string | null;
   updatedAt?: string | null;
   closedAt?: string | null;
+  dedupeReplacedAt?: string | null;
+  dedupeReason?: string | null;
+  dedupeReplacementSandboxId?: string | null;
   riskTags: RuntimeRiskTag[];
   source: 'tracked' | 'live_only';
 };
@@ -71,6 +74,7 @@ type RuntimeRegistryResponse = {
     templates: Array<{ label: string; value: number }>;
     archiveStatuses: Array<{ label: string; value: number }>;
   };
+  hasMore: boolean;
   items: RuntimeRegistryItem[];
 };
 
@@ -104,6 +108,22 @@ type RuntimeDetailResponse = {
   };
   metadata: Record<string, unknown>;
 };
+
+type SandboxArchiveHistoryEntry = {
+  snapshotKey: string;
+  archiveKey?: string | null;
+  metadataKey?: string | null;
+  archivedAt: string | null;
+  sizeBytes?: number | null;
+  sha256?: string | null;
+  reason?: string | null;
+  status?: string | null;
+  isCurrent: boolean;
+};
+
+function hasLiveSandbox(runtime: RuntimeDetailResponse['runtime']) {
+  return runtime.sandboxState === 'running' || runtime.sandboxState === 'paused';
+}
 
 function summarizeStatus(records: E2bSandboxListItem[]): SandboxStatusSummary {
   return {
@@ -246,6 +266,9 @@ function buildRuntimeItem(input: {
     createdAt: tracked?.createdAt || null,
     updatedAt: tracked?.updatedAt || null,
     closedAt: tracked?.closedAt || null,
+    dedupeReplacedAt: asText(metadata.dedupeReplacedAt),
+    dedupeReason: asText(metadata.dedupeReason),
+    dedupeReplacementSandboxId: asText(metadata.dedupeReplacementSandboxId),
     riskTags: [],
     source: tracked ? 'tracked' : 'live_only',
   };
@@ -259,9 +282,27 @@ function buildRuntimeItem(input: {
   return item;
 }
 
+function toLiveListItemFromDetail(
+  detail: Awaited<ReturnType<typeof e2bConnector.getSandboxInfo>> | null
+): E2bSandboxListItem | null {
+  if (!detail) return null;
+  return {
+    sandboxId: detail.sandboxId,
+    state: detail.state,
+    templateId: detail.templateId,
+    alias: detail.name,
+    startedAt: detail.startedAt,
+    endAt: detail.endAt,
+    cpuCount: detail.cpuCount,
+    memoryMB: detail.memoryMB,
+    diskSizeMB: detail.diskSizeMB,
+    metadata: detail.metadata,
+  };
+}
+
 export class SandboxManagementService {
   private async listTrackedEnvironments(limit: number) {
-    return oneceoApiConnector.listSandboxEnvironments(limit).catch(() => []);
+    return oneceoApiConnector.listSandboxEnvironmentRegistry(limit).catch(() => []);
   }
 
   private async listTaskSessions(limit: number) {
@@ -335,10 +376,12 @@ export class SandboxManagementService {
   }
 
   async getRuntimeRegistry(limit = 80): Promise<RuntimeRegistryResponse> {
+    const fetchLimit = Math.max(1, limit);
+    const queryLimit = fetchLimit + 1;
     const [trackedEnvironments, taskSessions, liveSandboxes] = await Promise.all([
-      this.listTrackedEnvironments(Math.max(limit, 120)),
-      this.listTaskSessions(Math.max(limit, 120)),
-      this.listLiveSandboxes(Math.max(limit, 120)).catch(() => []),
+      this.listTrackedEnvironments(queryLimit),
+      this.listTaskSessions(queryLimit),
+      this.listLiveSandboxes(queryLimit).catch(() => []),
     ]);
 
     const taskSessionById = new Map(taskSessions.map((item) => [item.id, item]));
@@ -382,7 +425,8 @@ export class SandboxManagementService {
       return bTime - aTime;
     });
 
-    const sliced = items.slice(0, limit);
+    const hasMore = items.length > fetchLimit;
+    const sliced = items.slice(0, fetchLimit);
     return {
       summary: {
         total: sliced.length,
@@ -398,6 +442,7 @@ export class SandboxManagementService {
         templates: buildDistribution(sliced, (item) => item.template),
         archiveStatuses: buildDistribution(sliced, (item) => item.archiveStatus),
       },
+      hasMore,
       items: sliced,
     };
   }
@@ -418,34 +463,47 @@ export class SandboxManagementService {
   }
 
   async getRuntimeDetail(sandboxId: string): Promise<RuntimeDetailResponse> {
-    const [trackedEnvironment, registry, liveSandbox, liveSandboxDetail, liveSandboxFullInfo, metrics] = await Promise.all([
+    const [trackedEnvironment, liveSandboxDetail, liveSandboxFullInfo, metrics] = await Promise.all([
       oneceoApiConnector.getSandboxEnvironment(sandboxId).catch(() => null),
-      this.getRuntimeRegistry(200),
-      this.listLiveSandboxes(200).then((items) => items.find((item) => item.sandboxId === sandboxId) || null).catch(() => null),
       e2bConnector.getSandboxInfo(sandboxId).catch(() => null),
       e2bConnector.getSandboxFullInfo(sandboxId).catch(() => null),
       this.getEnvironmentMetrics(sandboxId).catch(() => []),
     ]);
 
-    const registryRuntime = registry.items.find((item) => item.sandboxId === sandboxId) || null;
+    const liveSandbox = toLiveListItemFromDetail(liveSandboxDetail);
     const trackedMetadata = asRecord(trackedEnvironment?.metadata);
     const liveMetadata = asRecord(liveSandbox?.metadata);
     const metadata = { ...trackedMetadata, ...liveMetadata };
-    const taskSessionId = registryRuntime?.taskSessionId || asText(metadata.taskSessionId);
+    const taskSessionId = asText(metadata.taskSessionId);
 
-    const [taskSession, debug] = taskSessionId
-      ? await Promise.all([
-          oneceoApiConnector.getTaskCreationSession(taskSessionId).catch(() => null),
-          oneceoApiConnector.getTaskCreationDebug(taskSessionId).catch(() => null),
-        ])
-      : [null, null];
+    let taskSession: TaskCreationSession | null = null;
+    let debug: unknown = null;
+    if (taskSessionId) {
+      [taskSession, debug] = await Promise.all([
+        oneceoApiConnector.getTaskCreationSession(taskSessionId).catch(() => null),
+        oneceoApiConnector.getTaskCreationDebug(taskSessionId).catch(() => null),
+      ]);
+    } else {
+      const runtimeSessionId =
+        asText(trackedEnvironment?.orchestratorSessionId) ||
+        asText(trackedEnvironment?.sessionId) ||
+        liveSandbox?.sandboxId ||
+        null;
+      if (runtimeSessionId) {
+        const taskSessions = await this.listTaskSessions(200);
+        taskSession =
+          taskSessions.find((item) => String(item.runtime?.orchestratorSessionId || '') === runtimeSessionId) || null;
+        if (taskSession?.id) {
+          debug = await oneceoApiConnector.getTaskCreationDebug(taskSession.id).catch(() => null);
+        }
+      }
+    }
 
-    const runtime =
-      buildRuntimeItem({
-        tracked: trackedEnvironment,
-        live: liveSandbox,
-        taskSession,
-      }) || registryRuntime;
+    const runtime = buildRuntimeItem({
+      tracked: trackedEnvironment,
+      live: liveSandbox,
+      taskSession,
+    });
 
     return {
       runtime,
@@ -500,7 +558,7 @@ export class SandboxManagementService {
   }
 
   async closeEnvironment(sandboxId: string) {
-    return e2bConnector.killSandbox(sandboxId);
+    return oneceoApiConnector.closeSandboxEnvironment(sandboxId);
   }
 
   async pauseEnvironment(sandboxId: string) {
@@ -512,11 +570,79 @@ export class SandboxManagementService {
   }
 
   async archiveEnvironment(sandboxId: string) {
-    return oneceoApiConnector.archiveSandboxEnvironment(sandboxId);
+    const detail = await this.getRuntimeDetail(sandboxId);
+    if (!hasLiveSandbox(detail.runtime)) {
+      if (detail.archive.archiveStatus === 'up_to_date' || detail.archive.archiveStatus === 'archived') {
+        return {
+          action: 'archive_noop',
+          sandboxId,
+          taskSessionId: detail.runtime.taskSessionId || null,
+          archiveStatus: detail.archive.archiveStatus,
+          message: '当前 Sandbox 已无活体实例，现有归档已是最新状态',
+        };
+      }
+      throw new AppError(400, '当前 Sandbox 已无活体实例，无法执行手动归档');
+    }
+    const result = await oneceoApiConnector.archiveSandboxEnvironment(sandboxId);
+    return {
+      action: 'archive',
+      sandboxId,
+      taskSessionId: detail.runtime.taskSessionId || null,
+      result,
+    };
   }
 
-  async restoreEnvironment(sandboxId: string) {
-    return oneceoApiConnector.restoreSandboxEnvironment(sandboxId);
+  async restoreEnvironment(sandboxId: string, options?: { snapshotKey?: string }) {
+    return oneceoApiConnector.restoreSandboxEnvironment(sandboxId, options);
+  }
+
+  async openEnvironment(sandboxId: string) {
+    const detail = await this.getRuntimeDetail(sandboxId);
+    if (detail.runtime.sandboxState === 'paused') {
+      await e2bConnector.resumeSandbox(sandboxId);
+      return { action: 'resume', sandboxId, taskSessionId: detail.runtime.taskSessionId || null };
+    }
+    if (detail.runtime.taskSessionId) {
+      const result = await oneceoApiConnector.startTaskCreationRuntime(detail.runtime.taskSessionId);
+      return { action: 'runtime_start', sandboxId, taskSessionId: detail.runtime.taskSessionId, result };
+    }
+    throw new AppError(400, '当前 Sandbox 未绑定 task session，无法执行开机');
+  }
+
+  async restartEnvironment(sandboxId: string) {
+    const detail = await this.getRuntimeDetail(sandboxId);
+    if (!detail.runtime.taskSessionId) {
+      throw new AppError(400, '当前 Sandbox 未绑定 task session，无法执行重启');
+    }
+    let archiveResult: Record<string, unknown> | null = null;
+    let closeResult: Record<string, unknown> | null = null;
+    if (hasLiveSandbox(detail.runtime)) {
+      archiveResult = await oneceoApiConnector.archiveSandboxEnvironment(sandboxId);
+      closeResult = await oneceoApiConnector.closeSandboxEnvironment(sandboxId);
+    }
+    const runtimeResult = await oneceoApiConnector.startTaskCreationRuntime(detail.runtime.taskSessionId);
+    return {
+      action: 'restart',
+      sandboxId,
+      taskSessionId: detail.runtime.taskSessionId,
+      archiveResult,
+      closeResult,
+      runtimeResult,
+      mode: hasLiveSandbox(detail.runtime) ? 'archive_close_start' : 'start_only',
+    };
+  }
+
+  async getArchiveHistory(sandboxId: string): Promise<SandboxArchiveHistoryEntry[]> {
+    return oneceoApiConnector.getSandboxArchiveHistory(sandboxId) as Promise<SandboxArchiveHistoryEntry[]>;
+  }
+
+  async getArchiveDownloadUrl(sandboxId: string, expiresInSeconds = 3600, snapshotKey?: string): Promise<{
+    key: string;
+    fileName: string;
+    downloadUrl: string;
+    expiresInSeconds: number;
+  }> {
+    return oneceoApiConnector.getSandboxArchiveDownloadUrl(sandboxId, expiresInSeconds, snapshotKey);
   }
 
   async connectivityCheck(sandboxId: string) {

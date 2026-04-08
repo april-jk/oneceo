@@ -120,9 +120,12 @@ export class AltusManagedInputService {
       messageKey: resolvedMessageKey,
       metadata,
     });
+    if (!run) {
+      throw new Error('managed run 创建失败');
+    }
     writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_RUN_READY]', {
       sessionId,
-      runId: run.id || run.runId || null,
+      runId: run.id || null,
       runStatus: run.status || null,
     });
 

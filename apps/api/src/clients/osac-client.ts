@@ -90,8 +90,9 @@ function toBuffer(data: WebSocket.RawData): Buffer {
   if (data instanceof ArrayBuffer) {
     return Buffer.from(data);
   }
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  if (ArrayBuffer.isView(data as any)) {
+    const view = data as unknown as ArrayBufferView;
+    return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
   }
   return Buffer.from(String(data));
 }

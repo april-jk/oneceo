@@ -405,6 +405,71 @@ function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string
   return `${catalogName} Default`;
 }
 
+const NOTION_STATE_VERSION = 'oneceo_notion_v1';
+
+function parseBase64UrlJson(value: string): Record<string, unknown> | null {
+  const raw = asText(value);
+  if (!raw) return null;
+  const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '==='.slice((normalized.length + 3) % 4);
+  try {
+    const decoded = Buffer.from(padded, 'base64').toString('utf8');
+    const parsed = JSON.parse(decoded);
+    return pickObject(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function buildNotionOauthState(input: {
+  requestId: string;
+  returnToSessionId: string | null;
+}): string {
+  const payload = {
+    rid: asText(input.requestId),
+    sid: asText(input.returnToSessionId),
+    ts: Date.now(),
+    nonce: base64Url(randomBytes(12)),
+  };
+  const encoded = base64Url(Buffer.from(JSON.stringify(payload), 'utf8'));
+  return `${NOTION_STATE_VERSION}.${encoded}`;
+}
+
+function parseNotionOauthState(state: string): { requestId: string; sessionId: string | null } | null {
+  const text = asText(state);
+  if (!text) return null;
+  const [version, encodedPayload] = text.split('.', 2);
+  if (version !== NOTION_STATE_VERSION || !encodedPayload) return null;
+  const payload = parseBase64UrlJson(encodedPayload);
+  if (!payload) return null;
+  const requestId = asText(payload.rid);
+  const sessionId = asText(payload.sid) || null;
+  if (!requestId) return null;
+  return {
+    requestId,
+    sessionId,
+  };
+}
+
+function resolveOauthRedirectUri(
+  connectorKey: ConnectorKey,
+  provider: { redirectUri?: string },
+  inputRedirectUri: string
+): string {
+  if (connectorKey === 'notion') {
+    const fixedRedirectUri = asText(provider.redirectUri);
+    if (!fixedRedirectUri) {
+      throw new Error('Notion OAuth 固定回调地址未配置');
+    }
+    return fixedRedirectUri;
+  }
+  const dynamicRedirectUri = asText(inputRedirectUri);
+  if (!dynamicRedirectUri) {
+    throw new Error('OAuth redirectUri 不能为空');
+  }
+  return dynamicRedirectUri;
+}
+
 export class UserConnectorService {
   private readonly inFlightMeLoads = new Map<string, Promise<ConnectorMeSnapshot>>();
 
@@ -795,9 +860,14 @@ export class UserConnectorService {
     if (!provider) {
       throw new Error('当前连接器未配置 OAuth');
     }
-    const state = randomUUID();
     const requestId = randomUUID();
+    const returnToSessionId = asText(input.returnToSessionId) || null;
+    const state =
+      connectorKey === 'notion'
+        ? buildNotionOauthState({ requestId, returnToSessionId })
+        : randomUUID();
     const pkce = provider.pkceMethod === 'S256' ? createPkcePair() : null;
+    const redirectUri = resolveOauthRedirectUri(connectorKey, provider, input.redirectUri);
     await connectorAuthRequestDAO.create({
       requestId,
       userId,
@@ -806,13 +876,13 @@ export class UserConnectorService {
       provider: provider.provider,
       state,
       codeVerifier: pkce?.verifier || null,
-      returnToSessionId: asText(input.returnToSessionId) || null,
+      returnToSessionId,
       status: 'pending',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     } as any);
     const authUrl = new URL(provider.authorizationUrl);
     authUrl.searchParams.set('client_id', provider.clientId);
-    authUrl.searchParams.set('redirect_uri', input.redirectUri);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('state', state);
     const scopeParam = provider.scopeParam || 'scope';
@@ -859,9 +929,18 @@ export class UserConnectorService {
     }
 
     try {
+      if (connectorKey === 'notion') {
+        const parsedState = parseNotionOauthState(input.state);
+        const storedSessionId = asText(request.returnToSessionId) || null;
+        if (!parsedState || parsedState.requestId !== request.requestId || parsedState.sessionId !== storedSessionId) {
+          throw new Error('OAuth state 校验失败');
+        }
+      }
+
+      const redirectUri = resolveOauthRedirectUri(connectorKey, provider, input.redirectUri);
       const body: Record<string, string> = {
         code: input.code,
-        redirect_uri: input.redirectUri,
+        redirect_uri: redirectUri,
       };
       if (provider.pkceMethod === 'S256') {
         const codeVerifier = asText(request.codeVerifier);

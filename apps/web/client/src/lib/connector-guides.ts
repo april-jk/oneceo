@@ -102,13 +102,8 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   supabase: {
     intro:
-      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 project ref 和 access token，sandbox 内会直接使用这些已保存的凭据。",
+      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
     quickLinks: [
-      {
-        label: "Supabase Project Settings",
-        href: "https://supabase.com/dashboard/project/_/settings/general",
-        description: "查看 project ref",
-      },
       {
         label: "Supabase Access Tokens",
         href: "https://supabase.com/dashboard/account/tokens",
@@ -116,16 +111,14 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
       },
     ],
     steps: [
-      "在 Supabase 控制台打开目标 project，复制 project ref。",
       "在 account tokens 页面创建或复制 access token。",
-      "把这两个值填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。",
+      "把 token 填入连接器配置，sandbox 内会复用该配置访问 Supabase 能力。",
     ],
     tips: [
       "不要把 Supabase 当作 postgres 的替代项；它是独立连接器。",
+      "Profile Name 和 Display Name 都可以留空，系统会自动补齐默认 profile 名称。",
       "保存后可以附带一个 display name，方便后续在会话里识别。",
     ],
-    exampleLabel: "Copy Project Ref Template",
-    exampleValue: "project_ref=your-project-ref",
   },
   figma: {
     intro:
@@ -149,22 +142,27 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   vercel: {
     intro:
-      "Vercel 连接器在 sandbox 外完成 token 配置，sandbox 内会直接复用该授权执行相关能力。",
+      "Vercel 连接器现在直接使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前部署还没配置 OAuth，也可以先手动填写 Personal Access Token。",
     quickLinks: [
       {
         label: "Vercel Tokens",
         href: "https://vercel.com/account/tokens",
         description: "创建或管理 access token",
       },
+      {
+        label: "Vercel MCP Docs",
+        href: "https://vercel.com/docs/agent-resources/vercel-mcp",
+        description: "查看官方 MCP 功能与授权方式",
+      },
     ],
     steps: [
-      "在 Vercel 账号设置中创建 Personal Access Token。",
-      "复制 token 并保存到连接器配置中。",
-      "sandbox 内会直接使用该 token，无需在执行时重新登录。",
+      "如果部署已配置 Vercel OAuth，优先点击连接并完成官方授权。",
+      "如果当前环境还未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
+      "保存后，sandbox 会直接通过官方 MCP 地址复用该授权。",
     ],
     tips: [
-      "建议为不同环境使用独立 token。",
-      "如果部署或项目能力异常，先检查 token 权限范围。",
+      "Team ID 仍然是可选项，用于限定团队上下文。",
+      "如果部署或项目能力异常，先检查 token 权限范围，或确认 OAuth 已授权到目标团队。",
     ],
   },
   postgres: {

@@ -15,8 +15,9 @@ import {
 } from "@/hooks/useTaskCreationAgent";
 import { motion, AnimatePresence } from "framer-motion";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
-import AttachmentChipList from "@/components/AttachmentChipList";
+import MessageAttachmentReference from "@/components/MessageAttachmentReference";
 import {
+  type TaskCreationPlatformSkill,
   uploadTaskCreationAttachment,
   type TaskCreationUploadedAttachment as UploadedTaskAttachment,
 } from "@/lib/task-creation-client";
@@ -45,6 +46,20 @@ function getMessageAttachments(
       typeof item === "object" &&
       typeof item.name === "string" &&
       typeof item.size === "number"
+    );
+  });
+}
+
+function getMessageSkills(message: AgentMessage): TaskCreationPlatformSkill[] {
+  const raw = message?.metadata?.skills;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is TaskCreationPlatformSkill => {
+    return (
+      !!item &&
+      typeof item === "object" &&
+      typeof (item as TaskCreationPlatformSkill).skillId === "string" &&
+      typeof (item as TaskCreationPlatformSkill).revisionId === "string" &&
+      typeof (item as TaskCreationPlatformSkill).name === "string"
     );
   });
 }
@@ -317,6 +332,7 @@ export default function TaskCreationChat({
  */
 function MessageCard({ message }: { message: AgentMessage }) {
   const attachments = getMessageAttachments(message);
+  const skills = getMessageSkills(message);
 
   const getAgentName = (agent?: string) => {
     const nameMap: Record<string, string> = {
@@ -377,12 +393,16 @@ function MessageCard({ message }: { message: AgentMessage }) {
           <p className="text-sm font-medium text-foreground">
             {getAgentName(message.agent)}
           </p>
+          {skills.length || attachments.length ? (
+            <MessageAttachmentReference
+              skills={skills}
+              attachments={attachments}
+              className="mt-3"
+            />
+          ) : null}
           <p className="text-sm text-muted-foreground mt-1">
             {message.content}
           </p>
-          {attachments.length ? (
-            <AttachmentChipList attachments={attachments} className="mt-3" />
-          ) : null}
         </div>
       </div>
     </Card>

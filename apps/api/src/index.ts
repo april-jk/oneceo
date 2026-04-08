@@ -13,9 +13,11 @@ import llmProxyRoutes from './routes/llm-proxy-routes';
 import connectorRoutes from './routes/connector-routes';
 import authRoutes from './routes/auth-routes';
 import internalSkillRoutes from './routes/internal-skill-routes';
+import internalSandboxRoutes from './routes/internal-sandbox-routes';
 import internalConnectorGuideRoutes from './routes/internal-connector-guide-routes';
 import internalRuntimeArtifactRoutes from './routes/internal-runtime-artifact-routes';
 import internalAdminAuthRoutes from './routes/internal-admin-auth-routes';
+import internalTaskCreationRoutes from './routes/internal-task-creation-routes';
 import { taskCreationWebSocketService } from './agents/task-creation/websocket-service';
 import { closeDatabaseConnection, testDatabaseConnection } from './config/database';
 import { getPublicErrorMessage } from './utils/error-response';
@@ -25,8 +27,10 @@ import { sessionMcpRecoveryService } from './services/session-mcp-recovery-servi
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 import { connectorGuideService } from './services/connector-guide-service';
+import { isConnectorGuideStartupRecomputeEnabled } from './services/connector-guide-startup-config';
 import { appAuthMiddleware } from './middleware/app-auth-middleware';
 import { adminAuthService } from './services/admin-auth-service';
+import { getProxyEnv, isGlobalProxyEnabled } from './config/proxy';
 
 function mergeNoProxy(entries: string[], current?: string): string {
   const normalized = (current || '')
@@ -40,14 +44,10 @@ function mergeNoProxy(entries: string[], current?: string): string {
   return Array.from(set).join(',');
 }
 
-const proxyToggleRaw = String(process.env.E2B_PROXY_ENABLED ?? process.env.ONECEO_PROXY_ENABLED ?? 'true')
-  .trim()
-  .toLowerCase();
-const proxyToggleEnabled = !['0', 'false', 'no', 'off'].includes(proxyToggleRaw);
+const { httpProxy, httpsProxy } = getProxyEnv();
 const proxyEnabled =
-  proxyToggleEnabled &&
-  (Boolean(process.env.HTTP_PROXY || process.env.http_proxy) ||
-    Boolean(process.env.HTTPS_PROXY || process.env.https_proxy));
+  isGlobalProxyEnabled() &&
+  (Boolean(httpProxy) || Boolean(httpsProxy));
 
 if (proxyEnabled) {
   const bypass = [
@@ -75,6 +75,7 @@ const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
   ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
   : 16;
 const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
+const connectorGuideStartupRecomputeEnabled = isConnectorGuideStartupRecomputeEnabled();
 const io = new Server(httpServer, {
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -156,9 +157,11 @@ app.use('/api/sandbox/osac', osacRoutes);
 app.use('/api/llm-proxy', llmProxyRoutes);
 app.use('/api/connectors', connectorRoutes);
 app.use('/api/internal', internalSkillRoutes);
+app.use('/api/internal', internalSandboxRoutes);
 app.use('/api/internal', internalConnectorGuideRoutes);
 app.use('/api/internal', internalRuntimeArtifactRoutes);
 app.use('/api/internal', internalAdminAuthRoutes);
+app.use('/api/internal', internalTaskCreationRoutes);
 
 // 任务相关 API
 app.get('/api/tasks', (req, res) => {
@@ -247,6 +250,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
+const API_HOST = (process.env.API_HOST || '::').trim() || '::';
+const API_HOST_DISPLAY = API_HOST.includes(':') ? `[${API_HOST}]` : API_HOST;
 let shuttingDown = false;
 let isListening = false;
 let listenRetryTimer: NodeJS.Timeout | null = null;
@@ -320,7 +325,7 @@ httpServer.on('error', (error: any) => {
       listenRetryTimer = setTimeout(() => {
         listenRetryTimer = null;
         if (!shuttingDown && !isListening) {
-          httpServer.listen(PORT);
+          httpServer.listen(Number(PORT), API_HOST);
         }
       }, listenRetryDelayMs);
       return;
@@ -343,16 +348,16 @@ async function startServer() {
   await connectorStorageBootstrap.ensureReady();
   await connectorGuideService.ensureBuiltinPolicies();
 
-  httpServer.listen(PORT, () => {
+  httpServer.listen(Number(PORT), API_HOST, () => {
     isListening = true;
     listenAttempts = 0;
     console.log('');
     console.log('🚀 oneceo.ai API Server');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`📡 API server running on http://localhost:${PORT}`);
-    console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
-    console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
-    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+    console.log(`📡 API server running on http://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 WebSocket server running on ws://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 Task Creation WebSocket: ws://${API_HOST_DISPLAY}:${PORT}/ws/task-creation`);
+    console.log(`🏥 Health check: http://${API_HOST_DISPLAY}:${PORT}/health`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // 启动后先进行数据库连通性重试检测
@@ -363,6 +368,13 @@ async function startServer() {
     void sessionMcpRecoveryService
       .recoverBacklog()
       .catch((error) => console.error('[SESSION_MCP_RECOVERY_BACKLOG_FAILED]', error));
+    if (connectorGuideStartupRecomputeEnabled) {
+      void connectorGuideService
+        .recomputeBuiltinPolicySessions()
+        .catch((error) => console.error('[CONNECTOR_GUIDE_BACKGROUND_RECOMPUTE_FAILED]', error));
+    } else {
+      console.log('[CONNECTOR_GUIDE_STARTUP_RECOMPUTE_SKIPPED] set CONNECTOR_GUIDE_STARTUP_RECOMPUTE_ENABLED=true to enable');
+    }
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
     

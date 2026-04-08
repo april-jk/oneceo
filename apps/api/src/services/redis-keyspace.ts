@@ -4,9 +4,12 @@ const REDIS_PREFIX = 'oneceo:v1';
 
 export const redisTtlSeconds = {
   workspaceCache: 120,
+  connectorsMe: 120,
+  connectorDraft: 24 * 60 * 60,
   recentMessages: 600,
   historyCursor: 1800,
   projection: 1800,
+  connectorProjection: 60,
   idempotency: 24 * 60 * 60,
   runState: 24 * 60 * 60,
   runOwner: 30,
@@ -97,6 +100,12 @@ export const redisKeyspace = {
   },
   connectorProjection(input: RedisSessionScope) {
     return `${scopePrefix(input)}:projection:connectors`;
+  },
+  connectorsMe(input: RedisUserScope) {
+    return `${userPrefix(input)}:cache:connectors:me`;
+  },
+  connectorDraft(input: RedisUserScope & { draftId: string }) {
+    return `${userPrefix(input)}:draft:connectors:${ensureSegment(input.draftId, 'draft_id')}`;
   },
   runtimeProjection(input: RedisSessionScope) {
     return `${scopePrefix(input)}:projection:runtime`;

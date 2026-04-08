@@ -144,3 +144,146 @@
   - 当前需要警惕的不是生产代码绕开开关，而是后续新增 Redis 能力时有人直接在业务代码里 `new Redis(...)`。这次已经通过 `AGENTS.md` 明确禁止。
 - 计划如何解决：
   - 后续凡是新增 Redis 缓存或 stream，都继续复用 `redis-client-service.ts` 统一开关，不允许在业务层重复接环境变量。
+## 2026-04-03 #6 ClaudeCode 风格 connector guide runtime 强约束实现
+
+- 做了什么：
+  - 已认领 GitHub issue `#6`，并重新对照 `referance/claudecode_src/CLAUDECODE_MCP_SKILLS_REFERENCE.md` 检查当前实现，确认此前只完成了 prompt 注入和 relevant guides surfaced，仍缺 runtime blocking requirement。
+  - 在 `connector-guide-service.ts` 增加 `getActiveGuideForConnector`，供运行时一次性读取当前 session 下某 connector 的 active guide 文本。
+  - 在 `altus-managed-shared.ts` 新增内建工具 `load_connector_guide`，在 `altus-managed-prompt-service.ts` 明确要求：命中 active connector guide 后，先调用 `load_connector_guide`，再调用该 connector 的 MCP 工具。
+  - 在 `altus-managed-tool-runtime.ts` 落地 ClaudeCode 风格的首次调用阻断：如果某 connector 在当前 session 有 active guide、但当前 run 尚未加载该 guide，则首次 MCP 调用直接阻断；guide 加载成功后，同一 run 内该 connector 的 MCP 工具恢复放行。
+  - 已补 `apps/api/tests/altus-managed-tool-runtime.test.ts` 两条定向测试，覆盖“guide 加载后放行”和“未加载前阻断”两条主路径；同时更新采用文档，去掉“runtime preflight 放第二阶段”的旧描述。
+- 遇到什么：
+  - 当前仓库已经有一批并行中的 connector guide 多用户隔离改动，不能覆盖用户现有工作区，只能在现有 adopted 文档基础上做边界内更新。
+- 计划如何解决：
+  - 下一步继续做真实会话联调，直接验证 GitHub connector attach 后，Altus 在首次 MCP 工具调用前会命中 `load_connector_guide` / 阻断日志，而不是只停留在单测。
+
+## 2026-04-03 #6 GitHub connector guide 真实会话联调阻塞排查
+
+- 做了什么：
+  - 按最真实路径执行了一轮联调：真实创建 task session、真实 `ensureSandbox`、真实 GitHub attach、真实 managed run 生命周期、真实 OSAC/MCP provider 恢复与工具快照读取。
+  - 首次联调在新 session 的 attach 阶段被 `githubConnectorRepositoryService.assertProfileAuthorized()` 直接拦住；进一步核对后确认当前 GitHub profile `623e7547-d8a5-4c26-a82a-e43ba11f76c2` 已被系统标记为 `needs_auth`，`user_connector_profiles.secret_ciphertext` 为空，access token / refresh token 都不存在。
+  - 为避免误判，又继续尝试复用历史上真实 attached 的 GitHub session（`daff72f6-2717-41fe-a325-17573932cab8` 与 `aac2ac06-9173-4eb8-8861-332a2d093da5`），确认 sandbox/OSAC 可以被恢复，但 `captureMcpToolSnapshot()` 最终返回 `0 provider`，说明历史 GitHub MCP runtime 也已经不存在，无法继续做真实 tool 调用链路验证。
+  - 已对本轮联调过程中启动/恢复的 sandbox 做清理，实际 kill 了 `i7nr7pku8q91fxv4bpl1z`、`ilgkd142w9i7ru02vcp4h`、`i92xz5t7ywqskh6rllqk8`，并把对应 session 的 sandbox binding 标记为 `closed`，避免继续产生 E2B 计费。
+- 遇到什么：
+  - 这轮无法继续验证 `load_connector_guide -> GitHub MCP tool retry` 的真实 run 链路，不是因为 connector guide/runtime 代码路径有新错误，而是因为当前 GitHub 授权状态已经被系统判定失效，且 secret 已经被清空；历史 session 里的 GitHub provider 也已消失，无法作为替代执行面。
+- 计划如何解决：
+  - 下一步必须先完成 GitHub 重新授权，直到 `user_connector_profiles.auth_status = authorized` 且 secret 恢复存在，再重新跑真实 attach + run 联调。
+  - GitHub 恢复后，优先复测目标证据链：`tool_call_failed(connector_guide_blocked:github)` -> `tool_call_completed(load_connector_guide)` -> `tool_call_completed(github MCP tool)`。
+
+## 2026-04-03 #6 GitHub connector guide 真实会话联调已通过
+
+- 做了什么：
+  - 改用当前浏览器真实登录用户 `c2f3b1e7-fcea-4585-a37d-b7aa6490addc` 的最新 GitHub profile `f9c0bbaf-fdf8-4b0a-8894-dfec1e54813d` 继续联调，确认该 profile 处于 `authorized` 且 secret 存在。
+  - 通过真实前端登录态调用 `/api/task-creation/sessions` 创建了真实 session `1bbe31ef-8608-4f5d-a0b8-c27ed0e7e52d`，再通过真实 attach 路由把 GitHub connector 挂到该 session；随后核对 `task_session_connector_guides` 已写入 `github` 对应的 policy/revision 记录。
+  - 使用真实 `/api/altus-managed/inputs` 发起 managed run `f083414d-39eb-4658-948a-c3343569665e`，要求 Altus 直接使用 GitHub 连接器做一次最小读操作；实际事件链路表现为：先 `tool_call_completed(load_connector_guide)`，再 `tool_call_completed(mcp__search_repositories__...)`，最后 `complete_task` 收尾。
+  - 同步抓取 `data/connector-debug.log`，已确认 `CONNECTOR_GUIDE_PROMPT_SECTIONS_READY`、`ALTUS_RUN_PROMPT_READY`、`CONNECTOR_GUIDE_RUNTIME_LOADED` 均命中该真实 session / run。
+  - 联调结束后已 kill 本轮新启动的 sandbox `igwfxxny8xe59wn31cnnk`，避免继续产生 E2B 计费。
+- 遇到什么：
+  - 这次真实模型没有先“错误地直接打 GitHub MCP 然后被 runtime block”，而是直接遵守 prompt 指令，先调用了 `load_connector_guide`，因此没有出现 `connector_guide_blocked:github` 这条失败事件。
+- 计划如何解决：
+  - 当前第一阶段目标已经达成：真实 session 下 guide 自动挂载、prompt 注入、运行时显式加载、GitHub MCP 随后执行这条闭环已成立。
+  - 如果后续要强制验出 `connector_guide_blocked:github`，需要再补一条可控联调路径，让模型或测试驱动先直接发起 GitHub MCP tool，再观察 runtime block；这属于第二层“防误用”验证，不影响当前闭环成立。
+
+## 2026-04-03 #6 connector guide 防误用链路自动化补测
+
+- 做了什么：
+  - 在 `apps/api/tests/altus-run-coordinator.test.ts` 补了一条协调器级回归测试：第一轮模型直接调用 GitHub MCP `search_repositories`，第二轮根据 `tool_call_failed(connector_guide_blocked:github)` 改为调用 `load_connector_guide`，第三轮重试同一个 GitHub MCP tool，最后 `complete_task` 收尾。
+  - 顺手修正了同文件里历史 `appendRunEvent` mock 的参数签名，避免事件类型被旧测试基线错误记录成 `userId`。
+  - 重新跑通 `tests/altus-run-coordinator.test.ts` 与 `tests/altus-managed-tool-runtime.test.ts`，现在两套测试都覆盖了 prompt 注入、runtime block、guide 加载、retry 放行三层行为。
+- 遇到什么：
+  - 旧测试基线与当前 `appendRunEvent(runId, sessionId, userId, eventType, payload)` 签名不一致，导致一整批旧断言假失败；这次已一并收口。
+- 计划如何解决：
+  - 当前 connector guide 模块的第一阶段功能需求已经由“真实会话联调 + 协调器级 block/retry 回归测试 + runtime 单测”三层证据闭环。
+  - 后续再继续推进时，优先扩展到 `Supabase / Vercel` 两个 connector 的同类真实联调，而不是继续在 GitHub 上重复加同类测试。
+
+## 2026-04-03 #6 Vercel connector guide 代码层补全与环境可用性确认
+
+- 做了什么：
+  - 在 `apps/api/tests/connector-registry.test.ts` 补了 Vercel catalog / runtime config 相关断言，覆盖 remote URL 已配置时的 materialize 逻辑，以及 `VERCEL_MCP_REMOTE_URL` 缺失时的 availability 降级提示。
+  - 在 `apps/api/tests/altus-managed-tool-runtime.test.ts` 补了 Vercel 版 runtime block 测试，验证未加载 guide 时直接调用 `list_projects` 会被 `connector_guide_blocked:vercel` 拦截，调用 `load_connector_guide` 后同一 connector 的 MCP 工具会放行。
+  - 在 `apps/api/tests/altus-run-coordinator.test.ts` 补了 Vercel 版协调器测试，完整覆盖 `blocked -> load_connector_guide -> retry vercel mcp tool -> complete_task`。
+  - 通过浏览器真实登录态调用 `/api/connectors/me` 确认当前环境下的 Vercel catalog 状态：connector 存在，但 `available=false`，原因是“部署环境未配置 Vercel MCP remote URL”。
+- 遇到什么：
+  - 当前 oneceo 运行环境里没有配置 `VERCEL_MCP_REMOTE_URL`，而且当前用户也没有 Vercel profile，因此暂时无法像 GitHub 那样继续做真实 attach + managed run 的联调。
+- 计划如何解决：
+  - 代码层面这轮已经补齐：Vercel guide、runtime block、coordinator retry、catalog availability 校验都已覆盖。
+  - 下一步若要继续做真实会话联调，需要先在部署环境补上 `VERCEL_MCP_REMOTE_URL`，并为当前用户完成 Vercel connector 授权，再复用 GitHub 的联调方法跑一轮真实 session / run 验证。
+
+## 2026-04-03 Vercel 官方 MCP 地址与 OAuth/Token 双路径收口
+
+- 做了什么：
+  - 将 `apps/api/src/connectors/definitions/vercel.ts` 改为固定使用 Vercel 官方 MCP 地址 `https://mcp.vercel.com`，不再因为 `VERCEL_MCP_REMOTE_URL` 缺失而把 catalog 判为 unavailable。
+  - 补充了可选的 Vercel OAuth provider 解析逻辑；若部署配置 `VERCEL_CONNECTOR_CLIENT_ID / VERCEL_CONNECTOR_CLIENT_SECRET`，平台会切到 OAuth 模式。
+  - 在 `apps/api/src/services/user-connector-service.ts` 补上通用 PKCE 支持，并为 Vercel OAuth 回调增加 `code_verifier` 兑换与用户信息回填。
+  - 更新了 `apps/web/client/src/lib/connector-guides.ts` 与 `apps/.env.example`，明确 Vercel 默认直连官方 MCP，OAuth 是可选增强路径。
+  - 跑通 4 组定向测试：`connector-registry.test.ts`、`user-connector-service.test.ts`、`altus-managed-tool-runtime.test.ts`、`altus-run-coordinator.test.ts`，共 `23/23` 通过。
+  - 用服务层直接核对当前真实用户 `c2f3b1e7-fcea-4585-a37d-b7aa6490addc` 的 connector 视图，确认 `vercel` 已从此前的 `unavailable` 变为 `authStatus=not_configured`，说明平台现在允许直接配置和连接。
+  - 额外直连检查 `https://mcp.vercel.com`，返回 `401 invalid_token` 且带 `resource_metadata`，证明官方 endpoint 在线并按 OAuth-protected resource 规范响应。
+- 遇到什么：
+  - 当前本地/部署环境里仍没有现成的 Vercel OAuth client，也没有当前用户可直接复用的 Vercel token，所以还不能像 GitHub 一样把真实 attach + managed run 联调完整跑穿。
+- 计划如何解决：
+  - 如果继续做真实 Vercel 联调，下一步只差一项真实授权材料：要么当前用户在连接器页手动保存一个有效的 Vercel Personal Access Token，要么部署补上 Vercel OAuth client 后走一次官方 OAuth。
+  - 一旦拿到真实授权，我会继续沿用 GitHub 的联调方法，验证 `attach -> task_session_connector_guides -> load_connector_guide -> vercel MCP tool` 的真实闭环。
+
+## 2026-04-03 Vercel 改为官方 OAuth 单路径方案整理
+
+- 做了什么：
+  - 根据用户新要求，重新收敛了 Vercel connector 目标行为：不再以手动 token 作为用户主路径，而是完全对齐 Manus 的“点击连接 -> 官方 OAuth -> 回调完成授权”模式。
+  - 新增待审文档 `20260403_Vercel连接器改为官方OAuth直连方案_[尚未采用_暂未实现-因VercelOAuthIntegration审核严格暂未申请].md`，明确了目标链路、受影响模块、实现范围、测试要求和唯一前置条件。
+- 遇到什么：
+  - 这次需求已经改变了产品边界，不再是“补齐 Vercel connector 可用性”，而是“收敛到 OAuth 单路径”。这不应该继续沿用前一轮的 token/OAuth 双路径方案直接往下写，需要先经用户确认。
+- 计划如何解决：
+  - 待用户审核该方案后，再进入代码实施。
+  - 实施前置条件不变：平台需要准备 `VERCEL_CONNECTOR_CLIENT_ID / VERCEL_CONNECTOR_CLIENT_SECRET`，否则无法真正完成官方 OAuth 闭环。
+
+## 2026-04-03 Vercel OAuth 单路径方案暂停落地记录
+
+- 做了什么：
+  - 根据最新决定，把 Vercel 单路径 OAuth 方案文档标题更新为带阻塞原因的状态文档，明确“暂未实现，因 Vercel OAuth integration 审核严格暂未申请”。
+  - 准备同步到 TODO 索引与 GitHub issue，避免后续遗漏这条外部前置条件。
+- 遇到什么：
+  - 当前阻塞不在代码，而在外部平台审批：没有正式申请到可用的 Vercel OAuth integration，就无法完成 Manus 式授权闭环。
+- 计划如何解决：
+  - 先将阻塞原因和后续动作沉淀到 TODO 与 issue。
+  - 等拿到 `client_id / client_secret` 后，再恢复该方案实施。
+
+## 2026-04-03 #18 Altus managed 首轮反馈链路补强
+
+- 做了什么：
+  - 在 `apps/api/src/services/altus-run-coordinator.ts` 增加了首轮 `run_status(starting)` 事件，并把上游流式文本增量显式转成 `assistant_delta` run event。
+  - 将 managed assistant 流式增量与最终 `assistant_message` 收口到同一个稳定 `messageKey`，避免前端把首包与最终消息渲染成两条重复 assistant。
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 补了本地首轮 `run_ack` 种入逻辑，并修正 managed `assistant_delta` 的前端合并策略，保证同 key 按增量拼接、最终消息再覆盖收口。
+  - 新增 focused tests：`apps/api/tests/altus-run-first-feedback.test.ts`、`apps/web/client/src/tests/managed-message-stream-identity.test.ts`。
+- 遇到什么：
+  - `apps/api` 全量 `type-check` 目前存在一批仓库内既有错误，和本次改动无关，不能作为 `#18` 的有效回归门禁。
+  - `apps/api/tests/altus-run-coordinator.test.ts` 与 `apps/api/tests/altus-managed-run-entry.service.test.ts` 仍混有 DB / recovery 依赖，直接跑全文件会被无关问题干扰。
+- 计划如何解决：
+  - 先以 focused tests 锁住 `#18` 的首轮反馈语义：`run_ack` 可见、`run_status(starting -> running)` 连续、`assistant_delta -> assistant_message` 同 key 收口。
+  - 等后续继续推进 `#20/#21/#22` 时，再回到更大范围的 managed 全链路联调与刷新恢复验证。
+
+## 2026-04-03 #20 Altus managed 新会话首轮 session 绑定竞态收口
+
+- 做了什么：
+  - 在 `apps/web/client/src/hooks/useTaskCreationAgent.ts` 新增 route-state helper，把 `location/search` 对 session 的解析与“是否需要继续 defer pending sync”收口成可测逻辑。
+  - 修正 `pendingSessionSyncRef` 的释放时机：不再在 `sessionId state` 一致后立刻清除，而是等 URL 真正落到 `/session/:id` 且不再携带 `?new` / `?sessionId` 之后再释放。
+  - 调整 location/search 同步 effect，在 pending sync 尚未落稳时禁止触发 `resetConversationState(...)`，避免新建任务首轮跳转时把 optimistic user message 和 managed recovery 状态清空。
+  - 在 `apps/web/client/src/tests/managed-session-resolution.test.ts` 补了 pending route sync 相关断言。
+- 遇到什么：
+  - 当前问题本质不是单独的 `bindSessionId()` 或单独的 `loadHistory()`，而是两者之间夹着一个“URL 尚未稳定、但 pending sync 已过早释放”的时间窗。
+- 计划如何解决：
+  - 下一步若继续推进 `#21/#22`，优先把 `latest run` 恢复与 history/recent 回放也收敛到同一套首轮 session 初始化状态机中，减少 managed mode 里这种“状态先后各自正确、组合后却竞态”的问题。
+
+## 2026-04-03 #20 Altus managed 新会话首轮跳转竞态浏览器与接口验证
+
+- 做了什么：
+  - 按测试规范先补了 `docs/单元测试文档/20260403_#20_Altus_managed_新会话首轮跳转竞态测试.md`，明确单元级、浏览器级和接口级验收项。
+  - 先执行了 `managed-session-resolution / managed-history-pending-message / managed-message-stream-identity` 三组 focused tests，确认 route defer、消息 identity 和刷新恢复相关断言通过。
+  - 发现本地 web dev 默认从 `apps/.env` 读取 `VITE_API_BASE_URL=http://oneceo.ai:4000`，导致浏览器没有真正命中本地 API；随后将 web dev 改为显式覆盖本地 API/WS 地址后继续联调。
+  - 用 Playwright 跑通真实浏览器链路：注册用户 -> 当前 `new-task` 页面切 `managed` -> 发送首条消息 -> 跳转 `/session/:id` -> 刷新当前会话页。
+  - 对同一真实用户再调用 session detail 与 history 接口，确认首轮 `user_input`、assistant message 与 `run_completed` 已落库，且 `status/stage=completed`。
+- 遇到什么：
+  - 浏览器日志里仍有与本次修复无关的噪声：`umami` 请求指向 `oneceo.ai:3000` 被拦截，Vite HMR 仍尝试连接 `ws://localhost:3000`。
+  - 注册成功后若再次主动导航到新的 `/new-task?new=...`，当前认证链路偶发跳回登录页；这属于独立问题，不是本次 `#20` session 绑定竞态修复范围。
+- 计划如何解决：
+  - `#20` 本身已经通过真实浏览器和接口双重验证，可以作为已验收结果保留。
+  - 若继续推进后续任务，优先处理独立的认证/重新进入 `new-task?new=` 问题，并把它与 managed route sync 修复拆开追踪，避免混淆回归结论。

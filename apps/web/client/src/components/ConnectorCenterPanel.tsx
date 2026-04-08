@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   Check,
   CheckCircle2,
+  Database,
   ChevronRight,
   Loader2,
   Plus,
@@ -41,11 +42,13 @@ import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
   clearConnectorProfileAuth,
+  completeConnectorOauth,
   completeConnectorProfileOauth,
   createConnectorProfile,
   deleteConnectorProfile,
   getMyConnectorProfiles,
   setDefaultConnectorProfile,
+  startConnectorOauth,
   startConnectorProfileOauth,
   updateConnectorProfile,
   type ConnectorCatalogItem,
@@ -130,7 +133,7 @@ function buildConnectorRedirectUri(
   location: string,
   search: string,
   connectorKey: ConnectorKey,
-  profileId: string,
+  profileId?: string | null,
   targetSessionId?: string | null
 ) {
   const url = new URL(location, window.location.origin);
@@ -149,7 +152,9 @@ function buildConnectorRedirectUri(
   params.set("settingsTab", "connectors");
   params.set("connector_oauth", "1");
   params.set("connector", connectorKey);
-  params.set("profileId", profileId);
+  if (profileId) {
+    params.set("profileId", profileId);
+  }
   if (targetSessionId) {
     params.set("targetSessionId", targetSessionId);
   }
@@ -282,6 +287,10 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
   return item?.key === "github";
 }
 
+export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
+  return connectorKey === "notion";
+}
+
 function getGithubAppReauthHint() {
   return "本地清除只会移除 oneceo 保存的授权态，不会撤销 GitHub 侧的 GitHub App 授权或安装批准。若需要强制重新走授权，请先到 GitHub 撤销授权或确认安装页已批准最新权限。";
 }
@@ -308,6 +317,9 @@ export function ConnectorCenterPanel({
   const [detailKey, setDetailKey] = useState<ConnectorKey | null>(
     effectiveHighlightedConnector || null
   );
+  const [supabaseDetailExpanded, setSupabaseDetailExpanded] = useState(false);
+  const [supabaseConnectDialogOpen, setSupabaseConnectDialogOpen] = useState(false);
+  const [supabaseTokenInput, setSupabaseTokenInput] = useState("");
   const [catalog, setCatalog] = useState<ConnectorCatalogItem[]>([]);
   const [profiles, setProfiles] = useState<ConnectorProfile[]>([]);
   const [selectedProfileIds, setSelectedProfileIds] = useState<
@@ -380,18 +392,22 @@ export function ConnectorCenterPanel({
     const state = params.get("state");
     const connector = params.get("connector") as ConnectorKey | null;
     const profileId = params.get("profileId");
+    const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
     if (params.get("connector_oauth") !== "1") return;
-    if (!code || !state || !connector || !profileId) return;
+    if (!code || !state || !connector) return;
+    if (!useConnectorLevelOauth && !profileId) return;
     if (callbackHandled.current) return;
     callbackHandled.current = true;
 
     setActiveTab("app");
     setDetailKey(connector);
     setActionKey(`oauth:${connector}`);
-    setSelectedProfileIds((prev) => ({
-      ...prev,
-      [connector]: profileId,
-    }));
+    if (profileId) {
+      setSelectedProfileIds((prev) => ({
+        ...prev,
+        [connector]: profileId,
+      }));
+    }
 
     void (async () => {
       try {
@@ -402,17 +418,37 @@ export function ConnectorCenterPanel({
           profileId,
           effectiveTargetSessionId
         );
-        const result = await completeConnectorProfileOauth(profileId, {
-          code,
-          state,
-          redirectUri,
-        });
-        const completedProfileId =
-          result.profile?.profileId || result.account?.profileId || profileId;
-        const attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+        let completedProfileId = profileId || null;
+        let attachTarget: string | null | undefined = effectiveTargetSessionId;
+        let authStatus = "";
+        let callbackLastError = "";
+
+        if (useConnectorLevelOauth) {
+          const result = await completeConnectorOauth(connector, {
+            code,
+            state,
+            redirectUri,
+          });
+          completedProfileId =
+            result.account?.defaultProfileId || result.account?.profileId || completedProfileId;
+          attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+          authStatus = asText(result.account?.authStatus);
+          callbackLastError = asText(result.account?.lastError);
+        } else {
+          const result = await completeConnectorProfileOauth(profileId!, {
+            code,
+            state,
+            redirectUri,
+          });
+          completedProfileId =
+            result.profile?.profileId || result.account?.profileId || completedProfileId;
+          attachTarget = result.returnToSessionId || effectiveTargetSessionId;
+          authStatus = asText(result.profile?.authStatus || result.account?.authStatus);
+          callbackLastError = asText(result.profile?.lastError || result.account?.lastError);
+        }
 
         let attachError: Error | null = null;
-        if (attachTarget && completedProfileId && result.profile?.authStatus === "authorized") {
+        if (attachTarget && completedProfileId && authStatus === "authorized") {
           try {
             await attachSessionConnector(attachTarget, connector, {
               profileId: completedProfileId,
@@ -435,11 +471,11 @@ export function ConnectorCenterPanel({
         if (attachError) {
           toast.error(`授权已完成，但挂载失败：${attachError.message}`);
         } else if (
-          result.profile?.authStatus !== "authorized" &&
-          typeof result.profile?.lastError === "string" &&
-          GITHUB_INSTALLATION_MISSING_PATTERN.test(result.profile.lastError)
+          authStatus !== "authorized" &&
+          callbackLastError &&
+          GITHUB_INSTALLATION_MISSING_PATTERN.test(callbackLastError)
         ) {
-          toast.error(result.profile.lastError);
+          toast.error(callbackLastError);
         } else if (attachTarget) {
           toast.success("授权完成，连接器已挂载到目标会话");
         } else {
@@ -503,6 +539,12 @@ export function ConnectorCenterPanel({
       : {};
 
   useEffect(() => {
+    setSupabaseDetailExpanded(false);
+    setSupabaseConnectDialogOpen(false);
+    setSupabaseTokenInput("");
+  }, [detailKey]);
+
+  useEffect(() => {
     if (!detailItem) return;
     const key = editorKey(detailItem.key, activeEditorProfileId);
     if (formState[key]) return;
@@ -529,14 +571,19 @@ export function ConnectorCenterPanel({
 
   const persistProfile = async (
     item: ConnectorCatalogItem,
-    profileId: string | null
+    profileId: string | null,
+    formOverride?: ConnectorFormValues
   ) => {
     const editableProfileId = normalizeEditableProfileId(profileId);
     const connectorProfiles = profilesByConnector[item.key] || [];
     const currentProfile =
       connectorProfiles.find((profile) => profile.profileId === editableProfileId) || null;
-    const payload = buildSavePayload(item, formState[editorKey(item.key, profileId)] || {});
-    const requiresExplicitProfileName = item.key !== "github";
+    const payload = buildSavePayload(
+      item,
+      formOverride || formState[editorKey(item.key, profileId)] || {}
+    );
+    const requiresExplicitProfileName =
+      item.key !== "github" && item.key !== "supabase" && item.key !== "notion";
 
     if (requiresExplicitProfileName && !payload.profileName) {
       throw new Error("请先填写 profile name");
@@ -591,9 +638,88 @@ export function ConnectorCenterPanel({
     }
   };
 
+  const handleSupabaseConnect = async () => {
+    if (!detailItem || detailItem.key !== "supabase") return;
+    const token = supabaseTokenInput.trim();
+    if (!token) {
+      toast.error("请先输入 Supabase Personal Access Token");
+      return;
+    }
+
+    const profileId = activeEditorProfileId;
+    const formKey = editorKey(detailItem.key, profileId);
+    const nextForm: ConnectorFormValues = {
+      ...(formState[formKey] || {}),
+      accessToken: token,
+    };
+
+    setActionKey(`save:${detailItem.key}`);
+    try {
+      const saved = await persistProfile(detailItem, profileId, nextForm);
+      setSelectedProfileIds((prev) => ({
+        ...prev,
+        [detailItem.key]: saved.profileId,
+      }));
+      setFormState((prev) => ({
+        ...prev,
+        [editorKey(detailItem.key, saved.profileId)]: nextForm,
+      }));
+
+      let attachError: Error | null = null;
+      if (effectiveTargetSessionId && saved.authStatus === "authorized") {
+        try {
+          await attachSessionConnector(effectiveTargetSessionId, detailItem.key, {
+            profileId: saved.profileId,
+          });
+        } catch (error) {
+          attachError = error instanceof Error ? error : new Error("连接器挂载失败");
+        }
+      }
+
+      await load();
+      setSupabaseConnectDialogOpen(false);
+
+      if (attachError) {
+        toast.error(`profile 已保存，但挂载失败：${attachError.message}`);
+      } else if (effectiveTargetSessionId && saved.authStatus === "authorized") {
+        toast.success("profile 已保存，并挂载到目标会话");
+      } else {
+        toast.success("Supabase 已连接");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Save connector failed");
+    } finally {
+      setActionKey(null);
+    }
+  };
+
   const handleOAuth = async () => {
     if (!detailItem) return;
     const githubConnector = isGithubConnector(detailItem);
+    const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
+
+    if (connectorLevelOauth) {
+      setActionKey(`oauth:${detailItem.key}`);
+      try {
+        const redirectUri = buildConnectorRedirectUri(
+          location,
+          search,
+          detailItem.key,
+          null,
+          effectiveTargetSessionId
+        );
+        const { authUrl } = await startConnectorOauth(detailItem.key, {
+          redirectUri,
+          returnToSessionId: effectiveTargetSessionId || undefined,
+        });
+        window.location.href = authUrl;
+        return;
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "OAuth start failed");
+        setActionKey(null);
+        return;
+      }
+    }
     
     // 如果是 GitHub 且没有选中的 Profile，则自动使用/创建一个默认 Profile
     let profileId = activeEditorProfileId;
@@ -815,6 +941,7 @@ export function ConnectorCenterPanel({
     const Icon = resolveConnectorIcon(detailItem.icon);
     const guide = CONNECTOR_GUIDES[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
+    const notionConnector = shouldUseConnectorLevelOauth(detailItem.key);
     const statusText = connectorStatusText({
       available: detailItem.available,
       authStatus: selectedDetailProfile?.authStatus,
@@ -841,10 +968,27 @@ export function ConnectorCenterPanel({
           ? "当前只完成了 GitHub App 用户授权，但 GitHub 侧没有任何可用安装。必须先安装该 App 或批准安装更新，然后再回 oneceo 重新连接。"
           : getGithubAppReauthHint();
 
+    const isSupabaseConnector = detailItem.key === "supabase";
+    const isSupabaseAuthorized =
+      isSupabaseConnector && selectedDetailProfile?.authStatus === "authorized";
+    const supabaseRuntimeUrl =
+      detailItem.runtime?.urlDefault || "https://mcp.supabase.com/mcp";
+
     return (
+      <>
       <Dialog open={Boolean(detailItem)} onOpenChange={(open) => !open && setDetailKey(null)}>
-        <DialogContent showCloseButton={false} className="flex flex-col w-[min(880px,calc(100vw-32px))] max-w-[880px] h-[min(400px,calc(100vh-64px))] md:h-[min(440px,calc(100vh-64px))] gap-0 overflow-hidden rounded-[28px] border shadow-xl p-0">
-          <div className="flex flex-col items-start justify-start overflow-clip relative w-full h-full">
+        <DialogContent
+          showCloseButton={false}
+          className={cn(
+            "flex flex-col w-[min(880px,calc(100vw-32px))] max-w-[880px] gap-0 overflow-hidden rounded-[28px] border shadow-xl p-0",
+            isSupabaseConnector
+              ? "h-[min(400px,calc(100vh-64px))] md:h-[min(440px,calc(100vh-64px))]"
+              : "h-[min(400px,calc(100vh-64px))] md:h-[min(440px,calc(100vh-64px))]"
+          )}
+        >
+          <div
+            className="flex h-full flex-col items-start justify-start overflow-clip relative w-full"
+          >
             <div className="bg-muted/10 flex gap-6 items-center justify-start px-6 py-5 relative shrink-0 w-full border-b border-border/60">
               <div className="basis-0 flex gap-6 grow items-center justify-end min-h-px min-w-px p-0 relative shrink-0">
                 <button 
@@ -856,8 +1000,29 @@ export function ConnectorCenterPanel({
               </div>
             </div>
 
-            <ScrollArea className="min-h-0 flex-1 w-full bg-background">
-              <div className="flex flex-col gap-[32px] items-center justify-center pb-3 pt-8 px-6 relative shrink-0 w-full">
+            <div
+              className={cn(
+                "min-h-0 flex-1 w-full bg-background",
+                isSupabaseConnector
+                  ? "overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin] [-ms-overflow-style:auto] [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar]:h-3"
+                  : "overflow-y-auto",
+                isSupabaseConnector && !supabaseDetailExpanded
+                  ? "[scrollbar-color:transparent_transparent] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-transparent"
+                  : isSupabaseConnector
+                    ? "[scrollbar-color:rgba(120,120,120,0.7)_transparent] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/50 [&::-webkit-scrollbar-thumb]:rounded-full"
+                    : ""
+              )}
+            >
+              <div
+                className={cn(
+                  "flex flex-col items-center justify-start px-6 relative shrink-0 w-full",
+                  isSupabaseConnector
+                    ? supabaseDetailExpanded
+                      ? "gap-6 pb-4 pt-8"
+                      : "gap-4 pb-3 pt-6"
+                    : "gap-6 pb-4 pt-8"
+                )}
+              >
                 <div className="flex flex-col gap-4 items-center justify-center max-w-[600px] p-0 relative shrink-0 w-full">
                   <div className="bg-background flex items-center justify-center p-[8px] relative rounded-xl shrink-0 size-16 border border-border/60 shadow-sm">
                     <Icon className="h-10 w-10 text-foreground/85" />
@@ -901,42 +1066,193 @@ export function ConnectorCenterPanel({
                           ) : null}
                           取消授权
                         </Button>
-                        <Button
-                          className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
-                          onClick={() => void handleOAuth()}
-                          disabled={busy || !detailItem.available}
-                        >
-                          {actionKey === `oauth:${detailItem.key}` ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : null}
-                          重新连接
-                        </Button>
+                        {!isSupabaseConnector ? (
+                          <Button
+                            className="h-[36px] min-w-[72px] px-[12px] rounded-[8px] text-sm bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+                            onClick={() => void handleOAuth()}
+                            disabled={busy || !detailItem.available}
+                          >
+                            {actionKey === `oauth:${detailItem.key}` ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : null}
+                            重新连接
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   ) : (
-                    <Button
-                      className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
-                      onClick={() => void handleOAuth()}
-                      disabled={busy || !detailItem.available}
-                    >
-                      {actionKey === `oauth:${detailItem.key}` ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                    <>
+                      {isSupabaseConnector ? (
+                        <div className="mt-2 flex flex-col items-center gap-2">
+                          <div className="inline-flex items-center gap-2 rounded-xl bg-muted px-4 py-2 text-sm text-muted-foreground">
+                            <AlertCircle className="h-4 w-4" />
+                            此连接器需要额外配置
+                          </div>
+                        </div>
+                      ) : null}
+                      {isSupabaseConnector ? (
+                        <div className="mt-2 flex items-center justify-center gap-2.5">
+                          <Button
+                            className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm bg-primary text-primary-foreground hover:bg-primary/90"
+                            onClick={() => {
+                              setSupabaseTokenInput((activeEditorForm.accessToken || "").trim());
+                              setSupabaseConnectDialogOpen(true);
+                            }}
+                            disabled={busy || !detailItem.available}
+                          >
+                            {actionKey === `save:${detailItem.key}` ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Plus className="h-4 w-4" />
+                            )}
+                            连接
+                          </Button>
+                          <a
+                            href="https://supabase.com/dashboard/account/tokens"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex h-[36px] min-w-[72px] items-center justify-center gap-1 rounded-[8px] border border-border/60 bg-background px-[12px] text-sm text-foreground hover:bg-muted/40"
+                          >
+                            前往 Token 创建
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </a>
+                        </div>
                       ) : (
-                        <Plus className="h-4 w-4" />
+                        <Button
+                          className="inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors h-[36px] min-w-[72px] px-[12px] rounded-[8px] gap-[6px] text-sm mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                          onClick={() => {
+                            void handleOAuth();
+                          }}
+                          disabled={busy || !detailItem.available}
+                        >
+                          {actionKey === `oauth:${detailItem.key}` || actionKey === `save:${detailItem.key}` ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Plus className="h-4 w-4" />
+                          )}
+                          连接
+                        </Button>
                       )}
-                      连接
-                    </Button>
+                    </>
                   )}
                 </div>
 
-                <button className="flex gap-1 items-center justify-center w-full mt-4 mb-3 text-muted-foreground hover:text-foreground transition-colors">
-                  <span className="text-[13px] leading-[18px] tracking-[-0.08px]">显示详情</span>
-                  <ChevronRight className="h-4 w-4 rotate-90" />
-                </button>
+                {isSupabaseConnector ? (
+                  <div className="mt-1 mb-3 flex w-full items-center justify-center">
+                    <button
+                      className="flex gap-1 items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={() => setSupabaseDetailExpanded((prev) => !prev)}
+                    >
+                      <span className="text-[13px] leading-[18px] tracking-[-0.08px]">
+                        {supabaseDetailExpanded ? "隐藏详情" : "显示详情"}
+                      </span>
+                      <ChevronRight
+                        className={cn(
+                          "h-4 w-4 transition-transform",
+                          supabaseDetailExpanded ? "rotate-90" : "-rotate-90"
+                        )}
+                      />
+                    </button>
+                  </div>
+                ) : null}
 
                 {renderTargetBanner()}
 
                 <div className="w-full max-w-[720px] space-y-8 mt-4">
+                {isSupabaseConnector && supabaseDetailExpanded ? (
+                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <Sparkles className="h-4 w-4 text-foreground/70" />
+                        MCP 详细信息
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        与你的 Supabase 项目交互，支持管理数据表、执行 SQL、搜索文档、部署边缘函数与项目设置维护。
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-xs text-muted-foreground">MCP Endpoint</p>
+                        <p className="mt-1 break-all text-sm font-medium text-foreground">{supabaseRuntimeUrl}</p>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-xs text-muted-foreground">认证方式</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">Personal Access Token</p>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-xs text-muted-foreground">当前状态</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">{statusText}</p>
+                      </div>
+                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-xs text-muted-foreground">已选 Profile</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">
+                          {selectedDetailProfile?.profileName || "Supabase Default"}
+                        </p>
+                      </div>
+                    </div>
+
+                    {guide?.quickLinks?.length ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-muted-foreground">相关文档</p>
+                        <div className="grid gap-2">
+                          {guide.quickLinks.map((link) => (
+                            <a
+                              key={link.href}
+                              href={link.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-between rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/40"
+                            >
+                              <span>{link.label}</span>
+                              <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
+                      <p className="text-sm font-medium text-foreground">从注册到生成 Token</p>
+                      <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
+                        <li>
+                          打开
+                          <a
+                            href="https://supabase.com"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
+                          >
+                            supabase.com
+                          </a>
+                          注册账号（已有账号可直接登录）。
+                        </li>
+                        <li>登录后进入 Dashboard，按提示创建或进入任意项目。</li>
+                        <li>点击右上角头像，进入 Account Settings（账户设置）。</li>
+                        <li>
+                          打开
+                          <a
+                            href="https://supabase.com/dashboard/account/tokens"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
+                          >
+                            Access Tokens 页面
+                          </a>
+                          ，点击创建新的 Personal Access Token。
+                        </li>
+                        <li>复制新生成的 Token，回到本页面粘贴后点击“连接”。</li>
+                      </ol>
+                    </div>
+
+                    {!isSupabaseAuthorized ? (
+                      <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
+                        点击上方“连接”，输入 Token 后即可完成 Supabase MCP 挂载。
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {githubConnector ? (
                   <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
                     <div className="space-y-2">
@@ -1001,7 +1317,7 @@ export function ConnectorCenterPanel({
                 ) : null}
                 
                 {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
-                {detailItem.key !== "github" ? (
+                {detailItem.key !== "github" && detailItem.key !== "supabase" ? (
                   <>
                     <div className="space-y-2">
                       <Label className="text-base font-medium text-foreground">Profile 配置</Label>
@@ -1204,7 +1520,13 @@ export function ConnectorCenterPanel({
                           ) : (
                             <ArrowUpRight className="mr-2 h-4 w-4" />
                           )}
-                          {selectedDetailProfile?.authStatus === "authorized" ? "重新授权" : "发起 OAuth"}
+                          {notionConnector
+                            ? selectedDetailProfile?.authStatus === "authorized"
+                              ? "重新连接 Notion"
+                              : "连接 Notion"
+                            : selectedDetailProfile?.authStatus === "authorized"
+                              ? "重新授权"
+                              : "发起 OAuth"}
                         </Button>
                       ) : null}
                       
@@ -1228,10 +1550,79 @@ export function ConnectorCenterPanel({
               ) : null}
               </div>
             </div>
-            </ScrollArea>
+          </div>
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={supabaseConnectDialogOpen} onOpenChange={setSupabaseConnectDialogOpen}>
+        <DialogContent
+          showCloseButton={false}
+          className="w-[min(620px,calc(100vw-32px))] max-w-[620px] gap-0 overflow-hidden rounded-[28px] border shadow-xl p-0"
+        >
+          <div className="flex items-center justify-end border-b border-border/60 px-6 py-4">
+            <button
+              onClick={() => setSupabaseConnectDialogOpen(false)}
+              className="inline-flex items-center justify-center text-foreground transition hover:opacity-80"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="space-y-6 px-8 pb-8 pt-6">
+            <div className="flex flex-col items-center gap-4 text-center">
+              <div className="flex items-center gap-4">
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-border/70 bg-background">
+                  <Sparkles className="h-6 w-6 text-foreground/80" />
+                </div>
+                <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-border/70 bg-background">
+                  <Database className="h-6 w-6 text-foreground/80" />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-2xl font-semibold text-foreground">连接 Supabase</h3>
+                <p className="text-sm leading-6 text-muted-foreground">
+                  配置 Supabase 访问令牌以使用该功能。请参阅
+                  <a
+                    href="https://supabase.com/dashboard/account/tokens"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
+                  >
+                    官方文档
+                  </a>
+                  获取与管理 Token。
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-base font-medium text-foreground">Personal Access Token</Label>
+              <Input
+                type="password"
+                value={supabaseTokenInput}
+                placeholder="YOUR_SUPABASE_ACCESS_TOKEN"
+                className="h-14 rounded-xl bg-muted/30 text-base"
+                onChange={(event) => setSupabaseTokenInput(event.target.value)}
+              />
+            </div>
+
+            <Button
+              className="h-14 w-full rounded-xl text-xl font-semibold"
+              disabled={Boolean(actionKey) || !supabaseTokenInput.trim()}
+              onClick={() => void handleSupabaseConnect()}
+            >
+              {actionKey === "save:supabase" ? (
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              ) : null}
+              连接
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      </>
     );
   };
 

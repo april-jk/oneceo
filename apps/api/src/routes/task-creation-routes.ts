@@ -49,6 +49,8 @@ import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
 import { sessionConnectorService } from '../services/session-connector-service';
+import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
+import { connectorGuideService } from '../services/connector-guide-service';
 import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
 import {
   inferFilenameFromResponse,
@@ -516,16 +518,43 @@ function normalizeLiveSessionStage(
 }
 
 async function findEnvironmentByTaskSessionId(taskSessionId: string) {
-  const limit = clampNumber(Number(process.env.SANDBOX_RUNTIME_LOOKUP_LIMIT || 500), 50, 5000);
-  const environments = await sandboxExecutionEnvironmentDAO.listRecent(limit);
+  return sandboxExecutionEnvironmentDAO.findCanonicalByTaskSessionId(taskSessionId);
+}
+
+async function reconcileTaskSessionDuplicateEnvironments(
+  taskSessionId: string,
+  activeOrchestratorSessionId: string
+) {
+  if (!taskSessionId || !activeOrchestratorSessionId) return;
+  const environments = await sandboxExecutionEnvironmentDAO.listByTaskSessionId(taskSessionId, 200);
   for (const env of environments) {
-    const meta = (env.metadata || {}) as Record<string, unknown>;
-    const metaTaskId = typeof (meta as any).taskSessionId === 'string' ? String((meta as any).taskSessionId) : '';
-    if (metaTaskId && metaTaskId === taskSessionId) {
-      return env;
+    if (env.sessionId === activeOrchestratorSessionId || env.status === 'closed') {
+      continue;
     }
+    const metadata = ((env.metadata || {}) as Record<string, unknown>) || {};
+    const isE2b = String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
+    if (isE2b) {
+      try {
+        await e2bConnector.killSandbox(env.sessionId);
+      } catch (error) {
+        if (!isSandboxNotFoundError(error)) {
+          console.warn('[TASK_RUNTIME_DUPLICATE_KILL_FAILED]', {
+            taskSessionId,
+            staleSandboxId: env.sessionId,
+            activeOrchestratorSessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    await sandboxExecutionEnvironmentDAO.updateMetadata(env.sessionId, {
+      ...metadata,
+      dedupeReplacedAt: new Date().toISOString(),
+      dedupeReason: 'task_runtime_rebound',
+      dedupeReplacementSandboxId: activeOrchestratorSessionId,
+    }).catch(() => null);
+    await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName || null).catch(() => null);
   }
-  return null;
 }
 
 async function buildFileSessionFromDb(sessionId: string): Promise<FileSessionRecord | null> {
@@ -814,9 +843,16 @@ async function reconcileRecoveredOpencodeCompletion(
     return session;
   }
 
-  const nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
-    allowProvision: true,
-  });
+  let nativeProgress: Awaited<ReturnType<typeof opencodeRemoteService.inspectNativeSessionProgress>> | null = null;
+  try {
+    nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
+      // 会话详情/历史接口不应触发 sandbox provision，否则会因为运行时依赖缺失导致 500。
+      allowProvision: false,
+    });
+  } catch (error) {
+    console.warn('[TASK_CREATION_NATIVE_PROGRESS_CHECK_FAILED]', { sessionId: session.id, error });
+    return session;
+  }
 
   if (
     !nativeProgress?.assistantObserved ||
@@ -1064,7 +1100,7 @@ function isAltusManagedSession(session: Pick<FileSessionRecord, 'mode' | 'driver
   return asText(session.mode) === 'altus' || asText(session.driver) === 'altus';
 }
 
-async function ensureTaskSessionRuntime(sessionId: string) {
+export async function ensureTaskSessionRuntime(sessionId: string) {
   const session = await resolveTaskSessionRecord(sessionId);
   if (!session) {
     throw new Error('会话不存在');
@@ -1121,6 +1157,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
         }
         await syncTaskSessionSandboxBinding(sessionId, orchestratorSessionId, workspaceRoot);
         await touchSandbox(orchestratorSessionId, 'runtime_start_reuse');
+        await reconcileTaskSessionDuplicateEnvironments(sessionId, orchestratorSessionId);
         const runtimeStatus = await resolveRuntimeStatus(orchestratorSessionId);
         writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_REUSED]', {
           taskSessionId: sessionId,
@@ -1173,6 +1210,7 @@ async function ensureTaskSessionRuntime(sessionId: string) {
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
   await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
+  await reconcileTaskSessionDuplicateEnvironments(sessionId, provision.sessionId);
 
   const runtimeStatus = await resolveRuntimeStatus(provision.sessionId);
   writeConnectorDebugLog('[CONNECTOR_RUNTIME_ENSURE_PROVISIONED]', {
@@ -1706,10 +1744,18 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'workspacePath',
     'stage',
     'tone',
+    'runId',
+    'sessionId',
+    'executionMode',
+    'deliverables',
+    'verification',
     'streamKey',
     'partId',
     'eventType',
     'executor',
+    'toolCallId',
+    'arguments',
+    'error',
     'itemId',
     'itemType',
     'itemStatus',
@@ -1728,6 +1774,13 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'codexRestoreSourceKey',
     'previousExecutorSessionId',
     'codexRestoreFailureReason',
+    'originalInput',
+    'skills',
+    'managedSkillContext',
+    'managedSkillCatalog',
+    'attachments',
+    'attachmentContext',
+    'mcpReferences',
   ]) {
     if (metadata[key] !== undefined) {
       slim[key] = metadata[key];
@@ -1807,6 +1860,74 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
   }
 
   return slim;
+}
+
+function hasUserReferenceMetadata(metadataRaw: unknown): boolean {
+  const metadata = pickRecord(metadataRaw);
+  if (asText(metadata.originalInput)) return true;
+  if (Array.isArray(metadata.skills) && metadata.skills.length > 0) return true;
+  if (Array.isArray(metadata.managedSkillContext) && metadata.managedSkillContext.length > 0) return true;
+  if (Array.isArray(metadata.attachments) && metadata.attachments.length > 0) return true;
+  if (Array.isArray(metadata.attachmentContext) && metadata.attachmentContext.length > 0) return true;
+  if (Array.isArray(metadata.mcpReferences) && metadata.mcpReferences.length > 0) return true;
+  return false;
+}
+
+function normalizeUserReferenceText(contentRaw: unknown, metadataRaw: unknown): string {
+  const metadata = pickRecord(metadataRaw);
+  const base = asText(metadata.originalInput) || asText(contentRaw);
+  if (!base) return '';
+  return base
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function mergeUserReferenceMetadataFromPersisted(
+  primaryMessages: TimelineMessage[],
+  persistedMessages: TimelineMessage[]
+): TimelineMessage[] {
+  if (!Array.isArray(primaryMessages) || primaryMessages.length === 0) {
+    return primaryMessages;
+  }
+  if (!Array.isArray(persistedMessages) || persistedMessages.length === 0) {
+    return primaryMessages;
+  }
+
+  const referenceQueueByText = new Map<string, Array<Record<string, unknown>>>();
+  for (const message of persistedMessages) {
+    if (message?.role !== 'user') continue;
+    if (!hasUserReferenceMetadata(message?.metadata)) continue;
+    const key = normalizeUserReferenceText(message?.content, message?.metadata);
+    if (!key) continue;
+    const queue = referenceQueueByText.get(key) || [];
+    queue.push(pickRecord(message?.metadata));
+    referenceQueueByText.set(key, queue);
+  }
+
+  if (referenceQueueByText.size === 0) {
+    return primaryMessages;
+  }
+
+  return primaryMessages.map((message) => {
+    if (message?.role !== 'user') return message;
+    if (hasUserReferenceMetadata(message?.metadata)) return message;
+    const key = normalizeUserReferenceText(message?.content, message?.metadata);
+    if (!key) return message;
+    const queue = referenceQueueByText.get(key);
+    if (!queue || queue.length === 0) return message;
+    const mergedSource = queue.shift();
+    if (!mergedSource) return message;
+    return {
+      ...message,
+      metadata: {
+        ...pickRecord(message.metadata),
+        ...mergedSource,
+      },
+    };
+  });
 }
 
 function normalizeRuntimeGenerationValue(value: unknown): number | null {
@@ -2015,6 +2136,7 @@ function mergeCodexRuntimeMetadata(
   runtime: {
     generation?: number;
     executor?: string;
+    transport?: string;
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: string;
@@ -2028,6 +2150,7 @@ function mergeCodexRuntimeMetadata(
   const metadata = pickRecord(environmentMetadata);
   return {
     ...runtime,
+    transport: asText(metadata.transport) || runtime.transport,
     codexRestoreStatus: asText(metadata.codexRestoreStatus) || runtime.codexRestoreStatus,
     codexRestoreAt: asText(metadata.codexRestoreAt) || runtime.codexRestoreAt,
     codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || runtime.codexRestoreSourceKey,
@@ -2188,12 +2311,36 @@ async function resolveRenderableTimelineMessages(
   const shouldPreferOpencodeNativeHistory =
     asText(session?.mode) === 'sandbox' &&
     (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
+  const shouldPreferDatabaseTimelineForManaged =
+    asText(session?.mode) === 'altus' ||
+    asText(session?.executor) === 'altus' ||
+    asText(session?.runtime?.executionMode) === 'managed' ||
+    asText(session?.runtime?.executor) === 'altus';
 
-  let persistedMessages: TimelineMessage[] | null = null;
-  const loadPersistedMessages = async () => {
-    if (persistedMessages) return persistedMessages;
-    persistedMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
-    return persistedMessages;
+  let fileStoreMessages: TimelineMessage[] | null = null;
+  const loadFileStoreMessages = async () => {
+    if (fileStoreMessages) return fileStoreMessages;
+    fileStoreMessages = mapStoredMessagesToTimeline(await taskCreationFileMemoryStore.getMessages(sessionId));
+    return fileStoreMessages;
+  };
+
+  let dbMessages: TimelineMessage[] | null = null;
+  const loadDatabaseMessages = async () => {
+    if (dbMessages) return dbMessages;
+    dbMessages = mapStoredMessagesToTimeline(await taskCreationSessionDAO.getMessages(sessionId));
+    return dbMessages;
+  };
+
+  const loadPrimaryTimelineMessages = async () => {
+    if (!shouldPreferDatabaseTimelineForManaged) {
+      return loadFileStoreMessages();
+    }
+    const primaryDbMessages = await loadDatabaseMessages();
+    if (primaryDbMessages.length === 0) {
+      return loadFileStoreMessages();
+    }
+    const fallbackFileMessages = await loadFileStoreMessages();
+    return mergeUserReferenceMetadataFromPersisted(primaryDbMessages, fallbackFileMessages);
   };
 
   let messages: TimelineMessage[] | null = null;
@@ -2203,17 +2350,21 @@ async function resolveRenderableTimelineMessages(
     });
     const normalizedNativeMessages = nativeMessages ? attachTimelineMessageKeys(nativeMessages) : null;
     if (normalizedNativeMessages && normalizedNativeMessages.length > 0) {
+      const fallbackMessages = await loadPrimaryTimelineMessages();
+      const mergedNativeMessages = mergeUserReferenceMetadataFromPersisted(
+        normalizedNativeMessages,
+        fallbackMessages
+      );
       if (hasRenderableAssistantReply(normalizedNativeMessages)) {
-        messages = normalizedNativeMessages;
+        messages = mergedNativeMessages;
       } else {
-        const fallbackMessages = await loadPersistedMessages();
-        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : normalizedNativeMessages;
+        messages = hasRenderableAssistantReply(fallbackMessages) ? fallbackMessages : mergedNativeMessages;
       }
     }
   }
 
   if (!messages || messages.length === 0) {
-    messages = await loadPersistedMessages();
+    messages = await loadPrimaryTimelineMessages();
   }
   if (!messages || messages.length === 0) {
     const fallback = await taskCreationSessionDAO.getMessages(sessionId);
@@ -2361,7 +2512,14 @@ function isSandboxNotFoundError(error: unknown): boolean {
   if (!error) return false;
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
-  return normalized.includes('sandbox was not found') || normalized.includes('sandbox not found');
+  return (
+    normalized.includes('sandbox was not found') ||
+    normalized.includes('sandbox not found') ||
+    normalized.includes('not running anymore') ||
+    normalized.includes('guest has been shut down') ||
+    normalized.includes('instance was stopped') ||
+    normalized.includes('failed to connect to sandbox')
+  );
 }
 
 async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
@@ -3809,6 +3967,103 @@ router.post('/sessions/:sessionId/runtime/touch', async (req, res) => {
 });
 
 /**
+ * POST /api/task-creation/connector-drafts/:draftId
+ * 保存 new-task 连接器草稿（Redis 优先）
+ */
+router.post('/connector-drafts/:draftId', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    if (!draftId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 不能为空'),
+      });
+    }
+    const result = await sessionConnectorDraftService.saveDraft({
+      userId: currentUser.userId,
+      draftId,
+      entries: req.body?.entries,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    return res.status(authError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '保存连接器草稿失败'),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/connector-drafts/:draftId/apply
+ * 将草稿回放到 session 绑定（不阻断主流程）
+ */
+router.post('/connector-drafts/:draftId/apply', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    const sessionId = asText(req.body?.sessionId);
+    if (!draftId || !sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 或 sessionId 缺失'),
+      });
+    }
+    const result = await sessionConnectorDraftService.applyDraftToSession({
+      userId: currentUser.userId,
+      draftId,
+      taskSessionId: sessionId,
+      entries: req.body?.entries,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '应用连接器草稿失败'
+      ),
+    });
+  }
+});
+
+/**
+ * DELETE /api/task-creation/connector-drafts/:draftId
+ * 清理已消费草稿
+ */
+router.delete('/connector-drafts/:draftId', async (req, res) => {
+  try {
+    const currentUser = currentUserResolver.require(req);
+    const draftId = asText(req.params.draftId);
+    if (!draftId) {
+      return res.status(400).json({
+        success: false,
+        error: getPublicErrorMessage('draftId 不能为空'),
+      });
+    }
+    const result = await sessionConnectorDraftService.clearDraft(currentUser.userId, draftId);
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    return res.status(authError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(authError?.message || error?.message || '清理连接器草稿失败'),
+    });
+  }
+});
+
+/**
  * GET /api/task-creation/sessions/:sessionId/connectors
  * 获取当前会话的连接器运行状态
  */
@@ -3817,6 +4072,17 @@ router.get('/sessions/:sessionId/connectors', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    await connectorGuideService.ensureSessionGuidesUpToDate(sessionId).catch((error) => {
+      writeConnectorDebugLog(
+        '[CONNECTOR_GUIDE_ON_DEMAND_RECOMPUTE_FAILED]',
+        {
+          taskSessionId: sessionId,
+          userId: currentUser.userId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'warn'
+      );
+    });
     const statuses = await sessionConnectorService.listSessionConnectors(sessionId, currentUser.userId);
     return res.json({
       success: true,
@@ -3860,7 +4126,8 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       userId: currentUser.userId,
     });
     await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
-    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    const runtimeOrchestratorSessionId = asText(session?.runtime?.orchestratorSessionId) || undefined;
     if (!profileId) {
       throw new Error('缺少 profileId');
     }
@@ -3871,12 +4138,11 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
       profileId,
       enabledTools,
       sessionConfig,
-      runtime.orchestratorSessionId
+      runtimeOrchestratorSessionId
     );
     return res.json({
       success: true,
       data: {
-        runtime,
         connector: status,
       },
     });
@@ -3906,6 +4172,8 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
         ? 401
         : normalized.includes('未授权') || normalized.includes('尚未完成授权')
           ? 409
+          : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
+            ? 504
           : 400;
     return res.status(status).json({
       success: false,
@@ -4022,7 +4290,7 @@ router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
     if (executor === 'opencode' || executor === 'claudecode') {
       await osacAgentService.interruptExecutor(orchestratorSessionId, {
         executor: executor as 'opencode' | 'claudecode',
-        executorSessionId: executorSessionId || undefined,
+        executorSessionId: executorSessionId || '',
       });
       await touchSandbox(orchestratorSessionId, `${executor}_interrupt`);
       return res.json({
@@ -4908,7 +5176,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
       const redisCached = await taskSessionRedisCacheService.getWorkspaceDir({
         sessionId,
-        userId: currentUser.userId || tenantKey,
+        userId: currentUser?.userId || tenantKey,
         tenantKey,
         cacheKey: buildWorkspaceDirCacheKey({
           path: dirPath,

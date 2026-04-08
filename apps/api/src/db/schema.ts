@@ -616,23 +616,51 @@ export const searchRecords = pgTable('search_records', {
  *
  * 记录 Session 与 KVM/增量盘映射，以及安全配置快照
  */
-export const sandboxExecutionEnvironments = pgTable('sandbox_execution_environments', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  sessionId: text('session_id').notNull().unique(),
-  orchestratorSessionId: text('orchestrator_session_id').notNull(),
-  vmName: text('vm_name'),
-  baseImage: text('base_image').notNull(),
-  incrementalStorageDir: text('incremental_storage_dir').notNull(),
-  incrementalFileName: text('incremental_file_name').notNull(),
-  incrementalFilePath: text('incremental_file_path').notNull(),
-  status: text('status').notNull().default('creating'), // creating, ready, closing, closed, failed
-  securityProfile: jsonb('security_profile').notNull(),
-  networkPolicy: jsonb('network_policy').notNull(),
-  metadata: jsonb('metadata'),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
-  closedAt: timestamp('closed_at'),
-});
+export const sandboxExecutionEnvironments = pgTable(
+  'sandbox_execution_environments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: text('session_id').notNull().unique(),
+    orchestratorSessionId: text('orchestrator_session_id').notNull(),
+    vmName: text('vm_name'),
+    baseImage: text('base_image').notNull(),
+    incrementalStorageDir: text('incremental_storage_dir').notNull(),
+    incrementalFileName: text('incremental_file_name').notNull(),
+    incrementalFilePath: text('incremental_file_path').notNull(),
+    status: text('status').notNull().default('creating'), // creating, ready, closing, closed, failed
+    securityProfile: jsonb('security_profile').notNull(),
+    networkPolicy: jsonb('network_policy').notNull(),
+    metadata: jsonb('metadata'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    closedAt: timestamp('closed_at'),
+  },
+  (table) => ({
+    sessionIdIdx: index('idx_sandbox_execution_environments_session_id').on(table.sessionId),
+    statusIdx: index('idx_sandbox_execution_environments_status').on(table.status),
+    createdAtIdx: index('idx_sandbox_execution_environments_created_at').on(table.createdAt),
+    taskSessionCreatedAtIdx: index('idx_sandbox_execution_environments_task_session_created_at').on(
+      sql`((${table.metadata} ->> 'taskSessionId'))`,
+      table.createdAt,
+      table.updatedAt
+    ),
+    taskSessionCanonicalIdx: index('idx_sandbox_execution_environments_task_session_canonical').on(
+      sql`((${table.metadata} ->> 'taskSessionId'))`,
+      sql`(
+        case
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'ready' then 5
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'creating' then 4
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'closing' then 3
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} <> 'closed' then 2
+          when coalesce(${table.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${table.status} = 'closed' then 1
+          else 0
+        end
+      )`,
+      table.createdAt,
+      table.updatedAt
+    ),
+  })
+);
 
 export const userConnectorAccounts = pgTable(
   'user_connector_accounts',

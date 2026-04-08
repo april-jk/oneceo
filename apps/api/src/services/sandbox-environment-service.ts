@@ -204,6 +204,11 @@ export class SandboxEnvironmentService {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
     return sandboxExecutionEnvironmentDAO.listRecent(limit);
   }
+
+  async listRegistryEnvironments(limit: number = 20) {
+    await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+    return sandboxExecutionEnvironmentDAO.listRecentRegistry(limit);
+  }
 }
 
 export const sandboxEnvironmentService = new SandboxEnvironmentService();

@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   connectorAuthRequestDAO,
   userConnectorProfileDAO,
 } from '../db/dao';
 import { connectorSecretService } from './connector-secret-service';
 import { connectorStorageBootstrap } from './connector-storage-bootstrap';
+import { connectorRedisCacheService } from './connector-redis-cache-service';
 import {
   type ConnectorAccountMaterial,
   type ConnectorAccountSecret,
@@ -64,8 +65,32 @@ type CompleteOauthInput = {
   redirectUri: string;
 };
 
+type ConnectorMeSnapshot = {
+  catalog: ConnectorCatalogItem[];
+  profiles: UserConnectorProfileView[];
+  cache: {
+    hit: boolean;
+    source: 'redis' | 'db';
+    redisEnabled: boolean;
+  };
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function base64Url(input: Buffer): string {
+  return input
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = base64Url(randomBytes(48));
+  const challenge = base64Url(createHash('sha256').update(verifier).digest());
+  return { verifier, challenge };
 }
 
 function toIso(value: unknown): string | null {
@@ -180,6 +205,25 @@ function buildSecretPayload(
     refreshToken: asText(credentials.refreshToken) || asText(current.refreshToken) || undefined,
     tokenType: asText(credentials.tokenType) || asText(current.tokenType) || undefined,
     scope: asText(credentials.scope) || asText(current.scope) || undefined,
+  };
+}
+
+async function resolveVercelProfile(accessToken: string): Promise<{ displayName?: string }> {
+  const payload = await fetchJson('https://api.vercel.com/www/user', {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'User-Agent': 'oneceo-connectors',
+    },
+  });
+  const user =
+    payload.user && typeof payload.user === 'object'
+      ? (payload.user as Record<string, unknown>)
+      : payload;
+  return {
+    displayName:
+      asText(user.username) || asText(user.name) || asText(user.email) || undefined,
   };
 }
 
@@ -338,7 +382,32 @@ function buildGithubProfileName(displayName?: string | null): string {
   return resolved ? `GitHub · ${resolved}` : 'GitHub';
 }
 
+function resolveNotionWorkspaceName(payload: Record<string, unknown>): string {
+  const workspaceName = asText(payload.workspace_name);
+  if (workspaceName) return workspaceName;
+  const workspace = pickObject(payload.workspace);
+  const workspaceLabel = asText(workspace.name) || asText(workspace.title);
+  if (workspaceLabel) return workspaceLabel;
+  const owner = pickObject(payload.owner);
+  const ownerUser = pickObject(owner.user);
+  return asText(ownerUser.name) || asText(ownerUser.email) || '';
+}
+
+function buildNotionProfileName(displayName?: string | null): string {
+  const resolved = asText(displayName);
+  return resolved ? `Notion · ${resolved}` : 'Notion';
+}
+
+function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string): string {
+  if (connectorKey === 'supabase') {
+    return 'Supabase Default';
+  }
+  return `${catalogName} Default`;
+}
+
 export class UserConnectorService {
+  private readonly inFlightMeLoads = new Map<string, Promise<ConnectorMeSnapshot>>();
+
   async listCatalog() {
     return connectorRegistry.listVisibleCatalog();
   }
@@ -354,6 +423,92 @@ export class UserConnectorService {
     return profiles
       .filter((row) => visibleKeys.has(row.connectorKey as ConnectorKey))
       .map((row) => buildProfileView(row as any));
+  }
+
+  private async loadMeSnapshotFromDb(userId: string): Promise<ConnectorMeSnapshot> {
+    const [catalog, profiles] = await Promise.all([this.listCatalog(), this.listUserProfiles(userId)]);
+    return {
+      catalog,
+      profiles,
+      cache: {
+        hit: false,
+        source: 'db',
+        redisEnabled: connectorRedisCacheService.isEnabled(),
+      },
+    };
+  }
+
+  private async invalidateMeCache(userId: string) {
+    try {
+      await connectorRedisCacheService.invalidateMe(userId);
+      console.info('[connector_cache_invalidate]', { userId });
+    } catch (error) {
+      console.warn('[connector_cache_invalidate_failed]', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async getMeSnapshot(userId: string): Promise<ConnectorMeSnapshot> {
+    const redisEnabled = connectorRedisCacheService.isEnabled();
+    if (!redisEnabled) {
+      console.info('[connector_cache_fallback_db]', { userId, reason: 'redis_disabled' });
+      return this.loadMeSnapshotFromDb(userId);
+    }
+
+    let cached: Awaited<ReturnType<typeof connectorRedisCacheService.getMe>> = null;
+    try {
+      cached = await connectorRedisCacheService.getMe(userId);
+    } catch (error) {
+      console.warn('[connector_cache_get_failed]', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      console.info('[connector_cache_fallback_db]', { userId, reason: 'redis_get_failed' });
+      return this.loadMeSnapshotFromDb(userId);
+    }
+    if (cached && Array.isArray(cached.catalog) && Array.isArray(cached.profiles)) {
+      console.info('[connector_cache_hit]', { userId });
+      return {
+        catalog: cached.catalog as ConnectorCatalogItem[],
+        profiles: cached.profiles as UserConnectorProfileView[],
+        cache: {
+          hit: true,
+          source: 'redis',
+          redisEnabled: true,
+        },
+      };
+    }
+
+    console.info('[connector_cache_miss]', { userId });
+    const existing = this.inFlightMeLoads.get(userId);
+    if (existing) {
+      return existing;
+    }
+
+    const loadPromise = (async () => {
+      const snapshot = await this.loadMeSnapshotFromDb(userId);
+      try {
+        await connectorRedisCacheService.setMe(userId, {
+          catalog: snapshot.catalog,
+          profiles: snapshot.profiles,
+        });
+        console.info('[connector_cache_set]', { userId });
+      } catch (error) {
+        console.warn('[connector_cache_set_failed]', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return snapshot;
+    })();
+    this.inFlightMeLoads.set(userId, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      this.inFlightMeLoads.delete(userId);
+    }
   }
 
   async getProfile(userId: string, profileId: string) {
@@ -460,7 +615,7 @@ export class UserConnectorService {
       asText(existing?.profileName) ||
       (connectorKey === 'github'
         ? buildGithubProfileName(resolvedDisplayName)
-        : `${catalogItem.name} Default`);
+        : buildDefaultProfileName(connectorKey, catalogItem.name));
     const profileName =
       connectorKey === 'github'
         ? profileNameCandidate || buildGithubProfileName(resolvedDisplayName)
@@ -506,7 +661,9 @@ export class UserConnectorService {
   }
 
   async createProfile(userId: string, connectorKey: ConnectorKey, input: SaveConnectorInput) {
-    return this.saveProfileInternal(userId, connectorKey, null, input);
+    const saved = await this.saveProfileInternal(userId, connectorKey, null, input);
+    await this.invalidateMeCache(userId);
+    return saved;
   }
 
   async updateProfile(userId: string, profileId: string, input: SaveConnectorInput) {
@@ -514,7 +671,14 @@ export class UserConnectorService {
     if (!existing) {
       throw new Error('连接器 profile 不存在');
     }
-    return this.saveProfileInternal(userId, existing.connectorKey as ConnectorKey, profileId, input);
+    const saved = await this.saveProfileInternal(
+      userId,
+      existing.connectorKey as ConnectorKey,
+      profileId,
+      input
+    );
+    await this.invalidateMeCache(userId);
+    return saved;
   }
 
   async deleteProfile(userId: string, profileId: string) {
@@ -535,6 +699,7 @@ export class UserConnectorService {
         await userConnectorProfileDAO.update(nextDefault.id, userId, { isDefault: true } as any);
       }
     }
+    await this.invalidateMeCache(userId);
     return true;
   }
 
@@ -549,6 +714,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('设置默认 profile 失败');
     }
+    await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
   }
 
@@ -583,6 +749,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('断开连接器授权失败');
     }
+    await this.invalidateMeCache(userId);
     return {
       profile: buildProfileView(saved as any),
       remoteGrantRevoked,
@@ -613,6 +780,7 @@ export class UserConnectorService {
     if (!saved) {
       throw new Error('更新连接器授权状态失败');
     }
+    await this.invalidateMeCache(userId);
     return buildProfileView(saved as any);
   }
 
@@ -629,6 +797,7 @@ export class UserConnectorService {
     }
     const state = randomUUID();
     const requestId = randomUUID();
+    const pkce = provider.pkceMethod === 'S256' ? createPkcePair() : null;
     await connectorAuthRequestDAO.create({
       requestId,
       userId,
@@ -636,7 +805,7 @@ export class UserConnectorService {
       profileId,
       provider: provider.provider,
       state,
-      codeVerifier: randomUUID(),
+      codeVerifier: pkce?.verifier || null,
       returnToSessionId: asText(input.returnToSessionId) || null,
       status: 'pending',
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
@@ -652,6 +821,10 @@ export class UserConnectorService {
     }
     for (const [key, value] of Object.entries(provider.authorizationExtraParams || {})) {
       authUrl.searchParams.set(key, value);
+    }
+    if (provider.pkceMethod === 'S256' && pkce) {
+      authUrl.searchParams.set('code_challenge_method', 'S256');
+      authUrl.searchParams.set('code_challenge', pkce.challenge);
     }
     return {
       requestId,
@@ -690,6 +863,13 @@ export class UserConnectorService {
         code: input.code,
         redirect_uri: input.redirectUri,
       };
+      if (provider.pkceMethod === 'S256') {
+        const codeVerifier = asText(request.codeVerifier);
+        if (!codeVerifier) {
+          throw new Error('OAuth 请求缺少 PKCE code_verifier');
+        }
+        body.code_verifier = codeVerifier;
+      }
       if (provider.tokenClientAuth !== 'basic') {
         body.client_id = provider.clientId;
         body.client_secret = provider.clientSecret;
@@ -730,7 +910,13 @@ export class UserConnectorService {
         asText(tokenPayload.workspace_name) ||
         asText(profile.displayName) ||
         '';
-      let profileName = asText(profile.profileName) || buildGithubProfileName(displayName);
+      let profileName =
+        asText(profile.profileName) ||
+        (connectorKey === 'github'
+          ? buildGithubProfileName(displayName)
+          : connectorKey === 'notion'
+            ? buildNotionProfileName(displayName)
+            : asText(profile.profileName));
 
       const secret: ConnectorAccountSecret = {
         accessToken,
@@ -760,6 +946,22 @@ export class UserConnectorService {
           secretCiphertext = null;
           lastAuthAt = null;
         }
+      } else if (connectorKey === 'notion') {
+        const workspaceName = resolveNotionWorkspaceName(tokenPayload);
+        displayName = workspaceName || displayName;
+        if (
+          !asText(profile.profileName) ||
+          profile.profileName === 'Notion Default' ||
+          profile.profileName === 'Notion'
+        ) {
+          profileName = buildNotionProfileName(displayName);
+        }
+      } else if (connectorKey === 'vercel') {
+        const vercelProfile = await resolveVercelProfile(accessToken);
+        displayName = vercelProfile.displayName || displayName;
+        if (!asText(profile.profileName) || profile.profileName === 'Vercel Default' || profile.profileName === 'Vercel') {
+          profileName = displayName || 'Vercel';
+        }
       }
 
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
@@ -775,6 +977,7 @@ export class UserConnectorService {
       if (!saved) {
         throw new Error('OAuth 结果保存失败');
       }
+      await this.invalidateMeCache(userId);
 
       return {
         profile: buildProfileView(saved as any),

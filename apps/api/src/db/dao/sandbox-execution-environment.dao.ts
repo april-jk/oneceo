@@ -1,6 +1,71 @@
 import { db } from '../../config/database';
 import { sandboxExecutionEnvironments, type NewSandboxExecutionEnvironment } from '../schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, sql } from 'drizzle-orm';
+
+type SandboxExecutionEnvironmentRecord = Awaited<ReturnType<SandboxExecutionEnvironmentDAO['getBySessionId']>>;
+
+function asText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function canonicalTaskSessionEnvironmentScore(
+  environment: SandboxExecutionEnvironmentRecord | undefined | null
+) {
+  if (!environment) return -1;
+
+  const metadata = (environment.metadata || {}) as Record<string, unknown>;
+  const replacementSandboxId = asText(metadata.dedupeReplacementSandboxId);
+
+  if (environment.status === 'ready' && !replacementSandboxId) return 5;
+  if (environment.status === 'creating' && !replacementSandboxId) return 4;
+  if (environment.status === 'closing' && !replacementSandboxId) return 3;
+  if (environment.status !== 'closed' && !replacementSandboxId) return 2;
+  if (environment.status === 'closed' && !replacementSandboxId) return 1;
+  return 0;
+}
+
+function taskSessionIdSql() {
+  return sql<string>`${sandboxExecutionEnvironments.metadata} ->> 'taskSessionId'`;
+}
+
+function canonicalTaskSessionEnvironmentScoreSql() {
+  return sql<number>`
+    case
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'ready' then 5
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'creating' then 4
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'closing' then 3
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} <> 'closed' then 2
+      when coalesce(${sandboxExecutionEnvironments.metadata} ->> 'dedupeReplacementSandboxId', '') = '' and ${sandboxExecutionEnvironments.status} = 'closed' then 1
+      else 0
+    end
+  `;
+}
+
+export function pickCanonicalTaskSessionEnvironment<T extends {
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
+}>(environments: T[]): T | null {
+  const items = Array.isArray(environments) ? environments : [];
+  if (items.length === 0) return null;
+
+  return (
+    [...items].sort((left, right) => {
+      const scoreDelta =
+        canonicalTaskSessionEnvironmentScore(right as SandboxExecutionEnvironmentRecord) -
+        canonicalTaskSessionEnvironmentScore(left as SandboxExecutionEnvironmentRecord);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      const createdDelta =
+        new Date(right.createdAt || 0).getTime() -
+        new Date(left.createdAt || 0).getTime();
+      if (createdDelta !== 0) return createdDelta;
+
+      return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
+    })[0] || null
+  );
+}
 
 export class SandboxExecutionEnvironmentDAO {
   async createEnvironment(data: NewSandboxExecutionEnvironment) {
@@ -18,7 +83,96 @@ export class SandboxExecutionEnvironmentDAO {
 
   async listRecent(limit: number = 20) {
     return db
+      .select({
+        id: sandboxExecutionEnvironments.id,
+        sessionId: sandboxExecutionEnvironments.sessionId,
+        orchestratorSessionId: sandboxExecutionEnvironments.orchestratorSessionId,
+        vmName: sandboxExecutionEnvironments.vmName,
+        baseImage: sandboxExecutionEnvironments.baseImage,
+        status: sandboxExecutionEnvironments.status,
+        metadata: sandboxExecutionEnvironments.metadata,
+        createdAt: sandboxExecutionEnvironments.createdAt,
+        updatedAt: sandboxExecutionEnvironments.updatedAt,
+        closedAt: sandboxExecutionEnvironments.closedAt,
+      })
+      .from(sandboxExecutionEnvironments)
+      .orderBy(desc(sandboxExecutionEnvironments.createdAt))
+      .limit(limit);
+  }
+
+  async listByTaskSessionId(taskSessionId: string, limit: number = 200) {
+    const taskSessionIdExpr = taskSessionIdSql();
+    return db
       .select()
+      .from(sandboxExecutionEnvironments)
+      .where(sql`${taskSessionIdExpr} = ${taskSessionId}`)
+      .orderBy(desc(sandboxExecutionEnvironments.createdAt), desc(sandboxExecutionEnvironments.updatedAt))
+      .limit(limit);
+  }
+
+  async findCanonicalByTaskSessionId(taskSessionId: string) {
+    const taskSessionIdExpr = taskSessionIdSql();
+    const canonicalScoreExpr = canonicalTaskSessionEnvironmentScoreSql();
+    const [row] = await db
+      .select()
+      .from(sandboxExecutionEnvironments)
+      .where(sql`${taskSessionIdExpr} = ${taskSessionId}`)
+      .orderBy(
+        desc(canonicalScoreExpr),
+        desc(sandboxExecutionEnvironments.createdAt),
+        desc(sandboxExecutionEnvironments.updatedAt)
+      )
+      .limit(1);
+    return row || null;
+  }
+
+  async listRecentRegistry(limit: number = 20) {
+    const metadata = sql<Record<string, unknown>>`
+      jsonb_strip_nulls(
+        jsonb_build_object(
+          'taskSessionId', ${sandboxExecutionEnvironments.metadata} -> 'taskSessionId',
+          'sandboxExecutor', ${sandboxExecutionEnvironments.metadata} -> 'sandboxExecutor',
+          'executor', ${sandboxExecutionEnvironments.metadata} -> 'executor',
+          'driver', ${sandboxExecutionEnvironments.metadata} -> 'driver',
+          'codexExecutionMode', ${sandboxExecutionEnvironments.metadata} -> 'codexExecutionMode',
+          'codexMode', ${sandboxExecutionEnvironments.metadata} -> 'codexMode',
+          'archiveStatus', ${sandboxExecutionEnvironments.metadata} -> 'archiveStatus',
+          'archiveDirty', ${sandboxExecutionEnvironments.metadata} -> 'archiveDirty',
+          'pendingArchiveUpdate', ${sandboxExecutionEnvironments.metadata} -> 'pendingArchiveUpdate',
+          'lastActiveAt', ${sandboxExecutionEnvironments.metadata} -> 'lastActiveAt',
+          'lastActiveReason', ${sandboxExecutionEnvironments.metadata} -> 'lastActiveReason',
+          'dedupeReplacedAt', ${sandboxExecutionEnvironments.metadata} -> 'dedupeReplacedAt',
+          'dedupeReason', ${sandboxExecutionEnvironments.metadata} -> 'dedupeReason',
+          'dedupeReplacementSandboxId', ${sandboxExecutionEnvironments.metadata} -> 'dedupeReplacementSandboxId',
+          'opencodeBaseUrl', ${sandboxExecutionEnvironments.metadata} -> 'opencodeBaseUrl',
+          'osacEndpoint', ${sandboxExecutionEnvironments.metadata} -> 'osacEndpoint',
+          'osacHostPort', ${sandboxExecutionEnvironments.metadata} -> 'osacHostPort',
+          'osacPort', ${sandboxExecutionEnvironments.metadata} -> 'osacPort',
+          'trafficAccessToken', ${sandboxExecutionEnvironments.metadata} -> 'trafficAccessToken',
+          'e2b',
+            jsonb_strip_nulls(
+              jsonb_build_object(
+                'template', ${sandboxExecutionEnvironments.metadata} -> 'e2b' -> 'template',
+                'trafficAccessToken', ${sandboxExecutionEnvironments.metadata} -> 'e2b' -> 'trafficAccessToken'
+              )
+            )
+        )
+      )
+    `;
+
+    return db
+      .select({
+        id: sandboxExecutionEnvironments.id,
+        sessionId: sandboxExecutionEnvironments.sessionId,
+        orchestratorSessionId: sandboxExecutionEnvironments.orchestratorSessionId,
+        vmName: sandboxExecutionEnvironments.vmName,
+        baseImage: sandboxExecutionEnvironments.baseImage,
+        status: sandboxExecutionEnvironments.status,
+        metadata,
+        createdAt: sandboxExecutionEnvironments.createdAt,
+        updatedAt: sandboxExecutionEnvironments.updatedAt,
+        closedAt: sandboxExecutionEnvironments.closedAt,
+      })
       .from(sandboxExecutionEnvironments)
       .orderBy(desc(sandboxExecutionEnvironments.createdAt))
       .limit(limit);

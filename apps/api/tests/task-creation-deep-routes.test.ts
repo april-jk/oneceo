@@ -181,7 +181,33 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
   const server = await startServer();
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
   fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
-  sessionDaoAny.getRecentMessages = async () => [];
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'm-managed-recent',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        runId: 'run-managed-1',
+        sessionId: 's-3',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-1',
+            runId: 'run-managed-1',
+            path: 'deliverable.md',
+            name: 'deliverable.md',
+            mimeType: 'text/markdown',
+            size: 128,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-3/messages/recent`, {
@@ -192,6 +218,56 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
     assert.ok(Array.isArray(payload.data.messages));
+    assert.equal(payload.data.messages[0]?.metadata?.runId, 'run-managed-1');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(payload.data.messages[0]?.metadata?.deliverables?.[0]?.name, 'deliverable.md');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages/recent preserves managed tool metadata fields', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId);
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'm-managed-tool-recent',
+      role: 'agent',
+      content: '工具 read_file 已完成',
+      messageType: 'executor_event',
+      metadata: {
+        timestamp: 1712101000000,
+        runId: 'run-managed-tool-1',
+        sessionId: 's-tool-meta',
+        executionMode: 'managed',
+        eventType: 'tool_call_completed',
+        executor: 'altus',
+        toolName: 'read_file',
+        toolCallId: 'tool-call-1',
+        arguments: {
+          path: '/workspace/README.md',
+        },
+        error: '',
+      },
+      createdAt: new Date(1712101000000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-tool-meta/messages/recent`, {
+      headers: { 'x-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.ok(Array.isArray(payload.data.messages));
+    assert.equal(payload.data.messages[0]?.messageType, 'executor_event');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(payload.data.messages[0]?.metadata?.toolCallId, 'tool-call-1');
+    assert.equal(payload.data.messages[0]?.metadata?.arguments?.path, '/workspace/README.md');
+    assert.equal(payload.data.messages[0]?.metadata?.eventType, 'tool_call_completed');
   } finally {
     await server.close();
   }
@@ -290,17 +366,39 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history returns 403 fo
 test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redis cursor snapshot', async () => {
   const server = await startServer();
   let cursorPayload: Record<string, unknown> | null = null;
+  let dbMessageReads = 0;
   sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
   fileStoreAny.getSession = async (sessionId: string) => ({
     ...ownerSession(sessionId),
     mode: 'altus',
     executor: 'codex',
   });
+  sessionDaoAny.getMessages = async () => {
+    dbMessageReads += 1;
+    return [
+      {
+        id: 'm-h-db-1',
+        role: 'user',
+        content: 'db older',
+        messageType: 'user_input',
+        metadata: { timestamp: 1712100000000, sessionEventSeq: 1 },
+        createdAt: new Date(1712100000000).toISOString(),
+      },
+      {
+        id: 'm-h-db-2',
+        role: 'agent',
+        content: 'db newer',
+        messageType: 'assistant_response',
+        metadata: { timestamp: 1712100001000, sessionEventSeq: 2 },
+        createdAt: new Date(1712100001000).toISOString(),
+      },
+    ];
+  };
   fileStoreAny.getMessages = async () => [
     {
       id: 'm-h-1',
       role: 'user',
-      content: 'older',
+      content: 'file older',
       messageType: 'user_input',
       metadata: { timestamp: 1712100000000, sessionEventSeq: 1 },
       createdAt: new Date(1712100000000).toISOString(),
@@ -308,7 +406,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
     {
       id: 'm-h-2',
       role: 'agent',
-      content: 'newer',
+      content: 'file newer',
       messageType: 'assistant_response',
       metadata: { timestamp: 1712100001000, sessionEventSeq: 2 },
       createdAt: new Date(1712100001000).toISOString(),
@@ -326,11 +424,99 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
 
     assert.equal(response.status, 200);
     assert.equal(payload.data.source, 'resolved_history');
+    assert.equal(payload.data.messages[0]?.content, 'db newer');
+    assert.equal(dbMessageReads, 1);
     assert.ok(cursorPayload);
     assert.equal(cursorPayload?.sessionId, 's-history-cursor');
     assert.ok(typeof cursorPayload?.oldestCursor === 'number' || cursorPayload?.oldestCursor === null);
     assert.ok(typeof cursorPayload?.newestCursor === 'number' || cursorPayload?.newestCursor === null);
   } finally {
+    sessionDaoAny.getMessages = originalGetMessages;
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId/messages/history preserves managed deliverable metadata', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({ id: sessionId, userId: 'owner-user' });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    ...ownerSession(sessionId),
+    mode: 'altus',
+    executor: 'altus',
+  });
+  sessionDaoAny.getMessages = async () => [
+    {
+      id: 'm-h-managed-db-1',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        sessionEventSeq: 1,
+        runId: 'run-managed-history-1',
+        sessionId: 's-history-managed',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-history-1',
+            runId: 'run-managed-history-1',
+            path: 'deliverable-history-db.md',
+            name: 'deliverable-history-db.md',
+            mimeType: 'text/markdown',
+            size: 256,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
+  fileStoreAny.getMessages = async () => [
+    {
+      id: 'm-h-managed-1',
+      role: 'system',
+      content: '交付文件已生成',
+      messageType: 'status_update',
+      metadata: {
+        timestamp: 1712100000000,
+        sessionEventSeq: 1,
+        runId: 'run-managed-history-1',
+        sessionId: 's-history-managed',
+        executionMode: 'managed',
+        eventType: 'deliverables_ready',
+        executor: 'altus',
+        deliverables: [
+          {
+            id: 'artifact-history-1',
+            runId: 'run-managed-history-1',
+            path: 'deliverable-history-file.md',
+            name: 'deliverable-history-file.md',
+            mimeType: 'text/markdown',
+            size: 256,
+          },
+        ],
+      },
+      createdAt: new Date(1712100000000).toISOString(),
+    },
+  ];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-history-managed/messages/history?limit=20`, {
+      headers: { 'x-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.source, 'resolved_history');
+    assert.equal(payload.data.messages[0]?.metadata?.runId, 'run-managed-history-1');
+    assert.equal(payload.data.messages[0]?.metadata?.executionMode, 'managed');
+    assert.equal(
+      payload.data.messages[0]?.metadata?.deliverables?.[0]?.name,
+      'deliverable-history-db.md'
+    );
+  } finally {
+    sessionDaoAny.getMessages = originalGetMessages;
     await server.close();
   }
 });
@@ -753,6 +939,30 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
 
     assert.equal(response.status, 403);
     assert.equal(payload.error, '当前用户无权管理该会话连接器');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attach returns 504 on osac timeout', async () => {
+  const server = await startServer();
+  sessionConnectorAny.assertSessionOwnership = async () => {
+    throw new Error('OSAC 请求超时');
+  };
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-10-timeout/connectors/supabase/attach`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-user-id': 'owner-user',
+      },
+      body: JSON.stringify({ profileId: 'profile-timeout' }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 504);
+    assert.equal(payload.error, 'OSAC 请求超时');
   } finally {
     await server.close();
   }

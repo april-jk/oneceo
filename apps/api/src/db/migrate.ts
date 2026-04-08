@@ -631,6 +631,9 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
   completed_at TIMESTAMP
 );
 
+-- 连接器相关表与补丁必须在 runtime_events 外键表之前创建
+${connectorTablesSQL}
+
 -- 对话消息表
 CREATE TABLE IF NOT EXISTS conversation_messages (
   id UUID PRIMARY KEY,
@@ -955,6 +958,26 @@ CREATE INDEX IF NOT EXISTS idx_execution_plans_session_id ON execution_plans(ses
 CREATE INDEX IF NOT EXISTS idx_search_records_session_id ON search_records(session_id);
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_session_id ON sandbox_execution_environments(session_id);
 CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_status ON sandbox_execution_environments(status);
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_created_at ON sandbox_execution_environments(created_at);
+DROP INDEX IF EXISTS idx_sandbox_execution_environments_task_session_created_at;
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_task_session_created_at
+  ON sandbox_execution_environments(((metadata ->> 'taskSessionId')), created_at, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sandbox_execution_environments_task_session_canonical
+  ON sandbox_execution_environments(
+    ((metadata ->> 'taskSessionId')),
+    (
+      CASE
+        WHEN COALESCE(metadata ->> 'dedupeReplacementSandboxId', '') = '' AND status = 'ready' THEN 5
+        WHEN COALESCE(metadata ->> 'dedupeReplacementSandboxId', '') = '' AND status = 'creating' THEN 4
+        WHEN COALESCE(metadata ->> 'dedupeReplacementSandboxId', '') = '' AND status = 'closing' THEN 3
+        WHEN COALESCE(metadata ->> 'dedupeReplacementSandboxId', '') = '' AND status <> 'closed' THEN 2
+        WHEN COALESCE(metadata ->> 'dedupeReplacementSandboxId', '') = '' AND status = 'closed' THEN 1
+        ELSE 0
+      END
+    ),
+    created_at,
+    updated_at
+  );
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_status ON task_creation_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_task_creation_sessions_created_at ON task_creation_sessions(created_at);
 CREATE INDEX IF NOT EXISTS idx_task_session_runs_session_id ON task_session_runs(session_id);
@@ -1039,7 +1062,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
   ON user_custom_skill_documents(custom_skill_id, document_path);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
   ON user_custom_skill_documents(custom_skill_id, sort_order);
-${connectorTablesSQL}
 `;
 
 const deliverableTablesSQL = `
@@ -1377,17 +1399,4 @@ export async function dropAllTables() {
     console.error('❌ 删除表失败:', error);
     throw error;
   }
-}
-
-// 如果直接运行此脚本，执行迁移
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runMigration()
-    .then(() => {
-      console.log('迁移完成，退出...');
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.error('迁移失败:', error);
-      process.exit(1);
-    });
 }

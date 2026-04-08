@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "background": "#F8FAFC",
+                    "surface": "#FFFFFF",
+                    "border-default": "#CBD5E1",
+                    "border-hover": "#94A3B8",
+                    "border-focus": "#2563EB",
+                    "text-body": "#0F172A",
+                    "text-placeholder": "#94A3B8",
+                    "text-subtext": "#64748B",
+                    "skill-bg": "#ECFDF5",
+                    "skill-border": "#34D399",
+                    "mcp-bg": "#EFF6FF",
+                    "mcp-border": "#60A5FA",
+                    "capsule-text": "#1E293B",
+                    "button-bg": "#0F172A",
+                    "button-hover": "#1E293B",
+                    "button-text": "#FFFFFF"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.5rem",
+                    "lg": "0.5rem",
+                    "xl": "1.5rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Inter"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        font-size: 20px;
+      }
+      .custom-focus:focus-within {
+        border-color: #2563EB;
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+      }
+    </style>
+</head>
+<body class="bg-background font-body text-text-body min-h-screen flex items-center justify-center p-6">
+<div class="w-full max-w-3xl flex flex-col gap-2">
+<div class="bg-surface rounded-xl border border-border-default hover:border-border-hover transition-all duration-300 p-4 flex flex-col gap-4 custom-focus group">
+<!-- Line 1: Selected Command Pill and Input -->
+<div class="flex items-center gap-3">
+<div class="flex-shrink-0 flex items-center bg-skill-bg px-3 py-1.5 rounded-full gap-2 border border-skill-border">
+<span class="material-symbols-outlined text-capsule-text text-[16px]" data-icon="terminal">terminal</span>
+<span class="text-capsule-text font-semibold text-sm tracking-tight">Vercel:verification</span>
+<button class="flex items-center justify-center hover:bg-skill-border/20 rounded-full p-0.5 transition-colors">
+<span class="material-symbols-outlined text-[14px] text-capsule-text" data-icon="close">close</span>
+</button>
+</div>
+<div class="flex-grow">
+<input class="w-full bg-transparent border-none focus:ring-0 text-text-body text-lg placeholder:text-text-placeholder font-medium p-0" placeholder="Type additional parameters..." type="text" value="deploy --prod"/>
+</div>
+</div>
+<!-- Line 2: Functional Icons and Send Button Area -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<button class="p-1.5 hover:bg-slate-100 rounded-lg transition-all text-text-subtext flex items-center justify-center" title="Add source">
+<span class="material-symbols-outlined text-[22px]" data-icon="add">add</span>
+</button>
+<button class="p-1.5 hover:bg-slate-100 rounded-lg transition-all text-text-subtext flex items-center justify-center" title="Integration">
+<span class="material-symbols-outlined text-[20px]" data-icon="power">power</span>
+</button>
+<button class="p-1.5 hover:bg-slate-100 rounded-lg transition-all text-text-subtext flex items-center justify-center" title="Smart Features">
+<span class="material-symbols-outlined text-[20px]" data-icon="auto_awesome">auto_awesome</span>
+</button>
+</div>
+<div class="flex items-center gap-3">
+<button class="p-1.5 hover:bg-slate-100 rounded-lg transition-all text-text-subtext flex items-center justify-center" title="Voice Input">
+<span class="material-symbols-outlined text-[20px]" data-icon="mic">mic</span>
+</button>
+<button class="bg-button-bg text-button-text w-10 h-10 rounded-full flex items-center justify-center hover:bg-button-hover active:scale-95 transition-all shadow-sm">
+<span class="material-symbols-outlined text-[22px]" data-icon="send" style="font-variation-settings: 'FILL' 1, 'wght' 600;">send</span>
+</button>
+</div>
+</div>
+</div>
+<p class="text-xs text-text-subtext px-1">Press <kbd class="font-sans font-medium">Enter</kbd> to run command</p>
+</div>
+</body></html>

@@ -699,9 +699,6 @@ export default function App() {
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
-  const [sandboxToolAction, setSandboxToolAction] = useState('command.run');
-  const [sandboxToolPayload, setSandboxToolPayload] = useState('{"cmd":"ls"}');
-  const [sandboxToolResult, setSandboxToolResult] = useState<unknown>(null);
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
   const [sandboxDirectoryPath, setSandboxDirectoryPath] = useState('/');
@@ -1095,7 +1092,6 @@ export default function App() {
         const detail = await loadSandboxRuntimeDetail(sandboxId);
         setSandboxDetailTab('overview');
         setSandboxConnectivityResult(null);
-        setSandboxToolResult(null);
         setSandboxTerminalOutput('');
         setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
         setSandboxFilePath('');
@@ -1247,18 +1243,6 @@ export default function App() {
     },
     [loadSandboxRuntimeDetail, loadSandboxSection, sandboxRuntimeDetail?.runtime.sandboxId]
   );
-
-  const runSandboxTool = useCallback(async () => {
-    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    if (!sandboxId) return;
-    try {
-      const payload = sandboxToolPayload.trim() ? (JSON.parse(sandboxToolPayload) as Record<string, unknown>) : undefined;
-      const result = await api.runSandboxToolAction(sandboxId, sandboxToolAction, payload);
-      setSandboxToolResult(result);
-    } catch (toolError) {
-      setError(toolError instanceof Error ? toolError.message : '执行工具操作失败');
-    }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxToolAction, sandboxToolPayload]);
 
   const runSandboxCommand = useCallback(async () => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
@@ -5794,78 +5778,6 @@ export default function App() {
                       </pre>
                     </article>
                   </section>
-
-                  <details className="debug-disclosure">
-                    <summary>原始工具动作</summary>
-                    <div className="debug-disclosure-body">
-                      <div className="debug-raw-grid">
-                        <select
-                          className="text-input"
-                          value={sandboxToolAction}
-                          onChange={(event) => setSandboxToolAction(event.target.value)}
-                        >
-                          {[
-                            'command.list',
-                            'command.run',
-                            'command.kill',
-                            'command.stdin',
-                            'files.list',
-                            'files.read',
-                            'files.write',
-                            'files.writeFiles',
-                            'files.remove',
-                            'files.mkdir',
-                            'files.rename',
-                            'files.exists',
-                            'files.info',
-                            'git.status',
-                            'git.branches',
-                            'git.clone',
-                            'git.init',
-                            'git.remoteAdd',
-                            'git.remoteGet',
-                            'git.createBranch',
-                            'git.checkoutBranch',
-                            'git.deleteBranch',
-                            'git.add',
-                            'git.commit',
-                            'git.reset',
-                            'git.restore',
-                            'git.pull',
-                            'git.push',
-                            'git.setConfig',
-                            'git.getConfig',
-                            'git.configureUser',
-                            'git.dangerouslyAuthenticate',
-                            'system.process.list',
-                            'system.process.kill',
-                            'system.ports.inspect',
-                            'sandbox.host',
-                            'sandbox.uploadUrl',
-                            'sandbox.downloadUrl',
-                          ].map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
-                        <textarea
-                          className="input-area"
-                          rows={5}
-                          value={sandboxToolPayload}
-                          onChange={(event) => setSandboxToolPayload(event.target.value)}
-                        />
-                      </div>
-                      <div className="action-inline">
-                        <button type="button" className="primary-btn" onClick={() => void runSandboxTool()}>
-                          执行工具动作
-                        </button>
-                      </div>
-                      <pre className="json-block debug-output-block">
-                        {toJsonText(sandboxToolResult || { tip: '原始 tool action 返回会显示在这里' })}
-                      </pre>
-                    </div>
-                  </details>
 
                   <details className="debug-disclosure">
                     <summary>Runtime Metadata</summary>

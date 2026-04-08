@@ -73,6 +73,7 @@ type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
 const NEW_PROFILE_ID = "__new__";
+const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -134,9 +135,13 @@ function buildConnectorRedirectUri(
   search: string,
   connectorKey: ConnectorKey,
   profileId?: string | null,
-  targetSessionId?: string | null
+  targetSessionId?: string | null,
+  options?: {
+    callbackPath?: string;
+  }
 ) {
-  const url = new URL(location, window.location.origin);
+  const callbackPath = asText(options?.callbackPath) || location;
+  const url = new URL(callbackPath, window.location.origin);
   const params = new URLSearchParams(search);
   [
     "code",
@@ -176,7 +181,8 @@ function cleanupConnectorQuery(location: string, search: string) {
     "settingsTab",
   ].forEach((key) => params.delete(key));
   url.search = params.toString();
-  return `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}`;
+  const nextPath = url.pathname === NOTION_FIXED_CALLBACK_PATH ? "/home" : url.pathname;
+  return `${nextPath}${url.search ? `?${url.searchParams.toString()}` : ""}`;
 }
 
 function getFieldValue(
@@ -416,7 +422,12 @@ export function ConnectorCenterPanel({
           search,
           connector,
           profileId,
-          effectiveTargetSessionId
+          effectiveTargetSessionId,
+          connector === "notion"
+            ? {
+                callbackPath: NOTION_FIXED_CALLBACK_PATH,
+              }
+            : undefined
         );
         let completedProfileId = profileId || null;
         let attachTarget: string | null | undefined = effectiveTargetSessionId;
@@ -706,7 +717,12 @@ export function ConnectorCenterPanel({
           search,
           detailItem.key,
           null,
-          effectiveTargetSessionId
+          effectiveTargetSessionId,
+          detailItem.key === "notion"
+            ? {
+                callbackPath: NOTION_FIXED_CALLBACK_PATH,
+              }
+            : undefined
         );
         const { authUrl } = await startConnectorOauth(detailItem.key, {
           redirectUri,

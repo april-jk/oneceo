@@ -17,10 +17,12 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
   const clientId = asText(process.env.NOTION_CONNECTOR_CLIENT_ID);
   const clientSecret = asText(process.env.NOTION_CONNECTOR_CLIENT_SECRET);
   if (!clientId || !clientSecret) return undefined;
+  const redirectUri = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
   return {
     provider: 'notion',
     clientId,
     clientSecret,
+    redirectUri: redirectUri || undefined,
     authorizationUrl:
       asText(process.env.NOTION_CONNECTOR_AUTHORIZE_URL) ||
       'https://api.notion.com/v1/oauth/authorize',
@@ -43,13 +45,17 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
 export function buildNotionDefinition(): ConnectorDefinition {
   const oauth = resolveNotionOauthProvider();
   const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
-  const oauthConfigured = Boolean(oauth);
+  const oauthClientConfigured = Boolean(oauth);
+  const redirectUriConfigured = Boolean(asText(oauth?.redirectUri));
+  const oauthConfigured = oauthClientConfigured && redirectUriConfigured;
   const hasRemoteUrl = Boolean(remoteUrl);
   const available = hasRemoteUrl && oauthConfigured;
   const availabilityReason = !hasRemoteUrl
     ? '部署环境未配置 Notion MCP remote URL'
-    : !oauthConfigured
+    : !oauthClientConfigured
       ? '部署环境未配置 Notion OAuth client'
+      : !redirectUriConfigured
+        ? '部署环境未配置 Notion OAuth 固定回调地址'
       : undefined;
   return {
     key: 'notion',
@@ -80,7 +86,7 @@ export function buildNotionDefinition(): ConnectorDefinition {
       },
     ],
     oauth: {
-      supported: Boolean(oauth),
+      supported: oauthConfigured,
       provider: oauth?.provider,
     },
     activityMatcherVerified: true,

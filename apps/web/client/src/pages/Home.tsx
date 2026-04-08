@@ -6082,14 +6082,40 @@ function getManagedToolDisplayName(toolName: string) {
   }
 }
 
+function readManagedWriteFileProgress(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const progress = toRecord(metadata.writeFileProgress);
+  const path = asText(progress.path);
+  const generatedCharsRaw = progress.generatedChars;
+  const generatedChars =
+    typeof generatedCharsRaw === "number" && Number.isFinite(generatedCharsRaw)
+      ? Math.max(0, Math.floor(generatedCharsRaw))
+      : typeof generatedCharsRaw === "string" && generatedCharsRaw.trim()
+        ? Math.max(0, Math.floor(Number(generatedCharsRaw)))
+        : 0;
+  const preview = asText(progress.preview);
+  return {
+    path,
+    generatedChars,
+    preview,
+  };
+}
+
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
   if (toolName === "shell_execute") {
     return asText(args.command) || "执行 shell 命令";
   }
   if (toolName === "write_file") {
-    return asText(args.path) || "写入文件";
+    const path = asText(args.path) || writeFileProgress.path;
+    if (writeFileProgress.generatedChars > 0) {
+      return [path || "写入文件", `生成中 ${writeFileProgress.generatedChars} 字符`]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    return path || "写入文件";
   }
   if (toolName === "read_file") {
     return asText(args.path) || "读取文件";
@@ -6115,6 +6141,7 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
 
   if (error) return error;
@@ -6126,6 +6153,9 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   }
 
   if (toolName === "write_file") {
+    if (writeFileProgress.preview) {
+      return writeFileProgress.preview;
+    }
     const bytes = asText(output.bytes);
     return bytes ? `写入 ${bytes} bytes` : asText(output.path) || "已写入目标文件";
   }
@@ -6153,6 +6183,7 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
   const lines: string[] = [];
   const pushLine = (label: string, value: unknown) => {
@@ -6171,7 +6202,9 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine("输出", output.stdout);
     pushLine("错误输出", output.stderr);
   } else if (toolName === "write_file") {
-    pushLine("目标文件", args.path || output.path);
+    pushLine("目标文件", args.path || output.path || writeFileProgress.path);
+    pushLine("已生成字符", writeFileProgress.generatedChars > 0 ? String(writeFileProgress.generatedChars) : "");
+    pushLine("代码预览", writeFileProgress.preview);
     pushLine("写入大小", output.bytes);
   } else if (toolName === "read_file") {
     pushLine("目标文件", args.path || output.path);

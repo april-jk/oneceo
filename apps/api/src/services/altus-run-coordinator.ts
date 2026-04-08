@@ -43,6 +43,87 @@ type StreamedToolCallState = {
   };
 };
 
+type ExtractedJsonStringField = {
+  value: string;
+  closed: boolean;
+};
+
+function decodeJsonStringFragment(value: string) {
+  if (!value) return '';
+  return value
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+function extractJsonStringField(raw: string, field: string): ExtractedJsonStringField {
+  if (!raw || !field) {
+    return { value: '', closed: false };
+  }
+  const marker = `"${field}"`;
+  const markerIndex = raw.indexOf(marker);
+  if (markerIndex < 0) {
+    return { value: '', closed: false };
+  }
+  const colonIndex = raw.indexOf(':', markerIndex + marker.length);
+  if (colonIndex < 0) {
+    return { value: '', closed: false };
+  }
+  let quoteIndex = colonIndex + 1;
+  while (quoteIndex < raw.length && /\s/.test(raw[quoteIndex]!)) {
+    quoteIndex += 1;
+  }
+  if (raw[quoteIndex] !== '"') {
+    return { value: '', closed: false };
+  }
+
+  let escaped = false;
+  let closed = false;
+  let cursor = quoteIndex + 1;
+  let collected = '';
+  while (cursor < raw.length) {
+    const char = raw[cursor]!;
+    if (escaped) {
+      collected += char;
+      escaped = false;
+      cursor += 1;
+      continue;
+    }
+    if (char === '\\') {
+      collected += char;
+      escaped = true;
+      cursor += 1;
+      continue;
+    }
+    if (char === '"') {
+      closed = true;
+      break;
+    }
+    collected += char;
+    cursor += 1;
+  }
+
+  return {
+    value: decodeJsonStringFragment(collected),
+    closed,
+  };
+}
+
+function buildWriteFileProgress(rawArguments: string) {
+  const pathField = extractJsonStringField(rawArguments, 'path');
+  const contentField = extractJsonStringField(rawArguments, 'content');
+  const generatedChars = contentField.value.length;
+  const preview = contentField.value;
+  return {
+    path: pathField.value || '',
+    generatedChars,
+    preview,
+    contentClosed: contentField.closed,
+  };
+}
+
 function sanitizeMessagesForModel(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (!Array.isArray(message.content)) {
@@ -578,10 +659,18 @@ export class AltusRunCoordinator {
           const rawArguments = typeof toolCall?.function?.arguments === 'string' ? toolCall.function.arguments : '';
           const previousLength = toolProgressLengths.get(toolCallId) || 0;
           const currentLength = rawArguments.length;
-          if (previousLength > 0 && currentLength - previousLength < 48) {
+          const minDeltaLength = toolName === 'write_file' ? 64 : 48;
+          if (previousLength > 0 && currentLength - previousLength < minDeltaLength) {
             return;
           }
           toolProgressLengths.set(toolCallId, currentLength);
+          const parsedArguments = parseToolArguments(rawArguments);
+          const writeFileProgress =
+            toolName === 'write_file' ? buildWriteFileProgress(rawArguments) : null;
+          const progressContent =
+            toolName === 'write_file'
+              ? `正在生成文件 ${writeFileProgress?.path || asText(parsedArguments.path) || '(待确认路径)'}（已生成 ${writeFileProgress?.generatedChars || 0} 字符）`
+              : `正在准备工具 ${toolName}`;
           await this.eventWriter.appendRunEvent(
             state.input.runId,
             state.input.sessionId,
@@ -589,10 +678,11 @@ export class AltusRunCoordinator {
             'tool_call_progress',
             {
             toolName,
-            content: `正在准备工具 ${toolName}`,
-            arguments: parseToolArguments(rawArguments),
+            content: progressContent,
+            arguments: parsedArguments,
             rawArguments,
             toolCallId,
+            ...(writeFileProgress ? { writeFileProgress } : {}),
             }
           );
         },

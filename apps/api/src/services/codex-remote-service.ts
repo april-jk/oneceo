@@ -1073,7 +1073,7 @@ fi
 
     await osacAgentService.interruptExecutor(runtimeOrchestratorSessionId, {
       executor: 'codex',
-      executorSessionId: runtimeExecutorSessionId || undefined,
+      executorSessionId: runtimeExecutorSessionId || '',
     });
     await touchSandbox(runtimeOrchestratorSessionId, 'codex_interrupt');
     return true;

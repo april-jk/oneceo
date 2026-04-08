@@ -2129,6 +2129,7 @@ function mergeCodexRuntimeMetadata(
   runtime: {
     generation?: number;
     executor?: string;
+    transport?: string;
     executorSessionId?: string;
     opencodeSessionId?: string;
     codexRestoreStatus?: string;
@@ -2142,6 +2143,7 @@ function mergeCodexRuntimeMetadata(
   const metadata = pickRecord(environmentMetadata);
   return {
     ...runtime,
+    transport: asText(metadata.transport) || runtime.transport,
     codexRestoreStatus: asText(metadata.codexRestoreStatus) || runtime.codexRestoreStatus,
     codexRestoreAt: asText(metadata.codexRestoreAt) || runtime.codexRestoreAt,
     codexRestoreSourceKey: asText(metadata.codexRestoreSourceKey) || runtime.codexRestoreSourceKey,
@@ -4281,7 +4283,7 @@ router.post('/sessions/:sessionId/runtime/interrupt', async (req, res) => {
     if (executor === 'opencode' || executor === 'claudecode') {
       await osacAgentService.interruptExecutor(orchestratorSessionId, {
         executor: executor as 'opencode' | 'claudecode',
-        executorSessionId: executorSessionId || undefined,
+        executorSessionId: executorSessionId || '',
       });
       await touchSandbox(orchestratorSessionId, `${executor}_interrupt`);
       return res.json({
@@ -5167,7 +5169,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
       const redisCached = await taskSessionRedisCacheService.getWorkspaceDir({
         sessionId,
-        userId: currentUser.userId || tenantKey,
+        userId: currentUser?.userId || tenantKey,
         tenantKey,
         cacheKey: buildWorkspaceDirCacheKey({
           path: dirPath,

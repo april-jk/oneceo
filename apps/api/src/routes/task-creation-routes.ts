@@ -843,9 +843,16 @@ async function reconcileRecoveredOpencodeCompletion(
     return session;
   }
 
-  const nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
-    allowProvision: true,
-  });
+  let nativeProgress: Awaited<ReturnType<typeof opencodeRemoteService.inspectNativeSessionProgress>> | null = null;
+  try {
+    nativeProgress = await opencodeRemoteService.inspectNativeSessionProgress(session.id, {
+      // 会话详情/历史接口不应触发 sandbox provision，否则会因为运行时依赖缺失导致 500。
+      allowProvision: false,
+    });
+  } catch (error) {
+    console.warn('[TASK_CREATION_NATIVE_PROGRESS_CHECK_FAILED]', { sessionId: session.id, error });
+    return session;
+  }
 
   if (
     !nativeProgress?.assistantObserved ||

@@ -109,10 +109,12 @@ async function startServer() {
   });
 
   app.use("/api", (req, res) => {
+    req.url = req.originalUrl || req.url;
     proxy.web(req, res, { target: apiProxyTarget });
   });
 
   app.use("/socket.io", (req, res) => {
+    req.url = req.originalUrl || req.url;
     proxy.web(req, res, { target: apiProxyTarget });
   });
 

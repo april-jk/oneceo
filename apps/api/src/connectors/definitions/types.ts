@@ -25,6 +25,7 @@ export type ConnectorOauthProvider = {
   provider: 'github' | 'slack' | 'notion' | 'supabase' | 'figma' | 'vercel';
   clientId: string;
   clientSecret: string;
+  redirectUri?: string;
   authorizationUrl: string;
   tokenUrl: string;
   pkceMethod?: 'S256';

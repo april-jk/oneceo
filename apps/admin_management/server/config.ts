@@ -53,7 +53,11 @@ function isPrivateIpv4(hostname: string) {
 }
 
 const envSchema = z.object({
-  ADMIN_MANAGEMENT_PORT: z.coerce.number().int().positive().default(9310),
+  ADMIN_MANAGEMENT_PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(Number(asText(process.env.PORT) || '9310')),
   KVM_ORCHESTRATOR_URL: z.string().url().default('http://192.168.10.128:8500'),
   KVM_ORCH_TOKEN: z.string().default(''),
   KVM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),

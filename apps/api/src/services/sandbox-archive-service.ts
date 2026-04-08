@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { e2bConnector } from '../connectors/e2b-connector';
-import { downloadFromR2, existsInR2, listR2Keys, uploadToR2 } from './r2-client';
+import { downloadFromR2, existsInR2, getPresignedDownloadUrl, listR2Keys, uploadToR2 } from './r2-client';
 import {
   resolveLegacyOpencodeStatePath,
   resolveOpencodeStatePath,
@@ -53,6 +53,19 @@ type ArchiveManifest = {
   reason: string;
 };
 
+type SnapshotMetadata = {
+  version: number;
+  sandboxId: string;
+  taskSessionId?: string;
+  archivedAt: string;
+  snapshotKey: string;
+  archiveKey: string;
+  metadataKey: string;
+  sha256: string;
+  sizeBytes: number;
+  reason: string;
+};
+
 export type SandboxArchiveHistoryEntry = {
   snapshotKey: string;
   archiveKey?: string | null;
@@ -65,9 +78,21 @@ export type SandboxArchiveHistoryEntry = {
   isCurrent: boolean;
 };
 
+export type SandboxArchiveDownloadSpec = {
+  key: string;
+  fileName: string;
+  downloadUrl: string;
+  expiresInSeconds: number;
+};
+
+type RestoreWorkspaceOptions = {
+  snapshotKey?: string;
+};
+
 type SandboxArchiveServiceDeps = {
   e2bConnector: typeof e2bConnector;
   downloadFromR2: typeof downloadFromR2;
+  getPresignedDownloadUrl: typeof getPresignedDownloadUrl;
   existsInR2: typeof existsInR2;
   listR2Keys: typeof listR2Keys;
   uploadToR2: typeof uploadToR2;
@@ -82,6 +107,7 @@ type SandboxArchiveServiceDeps = {
 const defaultSandboxArchiveServiceDeps: SandboxArchiveServiceDeps = {
   e2bConnector,
   downloadFromR2,
+  getPresignedDownloadUrl,
   existsInR2,
   listR2Keys,
   uploadToR2,
@@ -140,6 +166,10 @@ function buildSnapshotPrefix(taskSessionId: string | null, sandboxId: string): s
     return `sessions/${taskSessionId}/snapshots/`;
   }
   return `sandboxes/${sandboxId}/snapshots/`;
+}
+
+function buildSnapshotMetadataKey(snapshotKey: string): string {
+  return snapshotKey.endsWith('.tar.gz') ? snapshotKey.slice(0, -'.tar.gz'.length) + '.meta.json' : `${snapshotKey}.meta.json`;
 }
 
 function buildMetadataKey(taskSessionId: string | null, sandboxId: string): string {
@@ -231,6 +261,18 @@ fi
 function parseManifest(raw: Buffer): Partial<ArchiveManifest> {
   try {
     const parsed = JSON.parse(raw.toString('utf8')) as Partial<ArchiveManifest>;
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function parseSnapshotMetadata(raw: Buffer): Partial<SnapshotMetadata> {
+  try {
+    const parsed = JSON.parse(raw.toString('utf8')) as Partial<SnapshotMetadata>;
     if (!parsed || typeof parsed !== 'object') {
       return {};
     }
@@ -465,6 +507,22 @@ rm -rf ${shellEscape(bundleRoot)}
     reason,
   };
   await sandboxArchiveServiceDeps.uploadToR2(metadataKey, Buffer.from(JSON.stringify(manifest, null, 2)));
+  const snapshotMetadata: SnapshotMetadata = {
+    version: 1,
+    sandboxId,
+    taskSessionId: taskSessionId || undefined,
+    archivedAt,
+    snapshotKey: storedSnapshotKey,
+    archiveKey,
+    metadataKey,
+    sha256: hash,
+    sizeBytes,
+    reason,
+  };
+  await sandboxArchiveServiceDeps.uploadToR2(
+    buildSnapshotMetadataKey(storedSnapshotKey),
+    Buffer.from(JSON.stringify(snapshotMetadata, null, 2))
+  );
 
   await sandboxArchiveServiceDeps.e2bConnector.runCommand(
     sandboxId,
@@ -511,7 +569,10 @@ rm -rf ${shellEscape(bundleRoot)}
   };
 }
 
-export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boolean> {
+export async function restoreWorkspaceIfArchived(
+  sandboxId: string,
+  options?: RestoreWorkspaceOptions
+): Promise<boolean> {
   if (!isArchiveEnabled() || !isArchiveStorageConfigured()) {
     return false;
   }
@@ -529,7 +590,11 @@ export async function restoreWorkspaceIfArchived(sandboxId: string): Promise<boo
     }
   }
 
-  const candidates = listRestoreCandidates(taskSessionId, sandboxId, manifest);
+  const requestedSnapshotKey = asText(options?.snapshotKey);
+  const candidates = [
+    ...(requestedSnapshotKey ? [requestedSnapshotKey] : []),
+    ...listRestoreCandidates(taskSessionId, sandboxId, manifest),
+  ];
   let restoreKey = '';
   for (const key of candidates) {
     if (await sandboxArchiveServiceDeps.existsInR2(key)) {
@@ -649,5 +714,110 @@ export async function listSandboxArchiveHistory(sandboxId: string): Promise<Sand
     });
   }
 
-  return rows;
+  const enrichLimitRaw = Number(process.env.SANDBOX_ARCHIVE_HISTORY_ENRICH_MAX || 200);
+  const enrichLimit = Number.isFinite(enrichLimitRaw) ? Math.max(0, Math.floor(enrichLimitRaw)) : 200;
+  let enrichedCount = 0;
+
+  const enrichedRows = await Promise.all(
+    rows.map(async (row): Promise<SandboxArchiveHistoryEntry> => {
+      if (row.sizeBytes != null && row.sha256) {
+        return row;
+      }
+
+      const sidecarKey = buildSnapshotMetadataKey(row.snapshotKey);
+      if (await sandboxArchiveServiceDeps.existsInR2(sidecarKey).catch(() => false)) {
+        const sidecar = parseSnapshotMetadata(await sandboxArchiveServiceDeps.downloadFromR2(sidecarKey));
+        return {
+          ...row,
+          archiveKey: row.archiveKey ?? sidecar.archiveKey ?? null,
+          metadataKey: row.metadataKey ?? sidecar.metadataKey ?? null,
+          archivedAt: row.archivedAt ?? sidecar.archivedAt ?? null,
+          sizeBytes: row.sizeBytes ?? sidecar.sizeBytes ?? null,
+          sha256: row.sha256 ?? sidecar.sha256 ?? null,
+          reason: row.reason ?? sidecar.reason ?? null,
+        };
+      }
+
+      if (enrichedCount >= enrichLimit) {
+        return row;
+      }
+      enrichedCount += 1;
+
+      try {
+        const archiveBytes = await sandboxArchiveServiceDeps.downloadFromR2(row.snapshotKey);
+        return {
+          ...row,
+          sizeBytes: row.sizeBytes ?? archiveBytes.length,
+          sha256: row.sha256 ?? sha256(archiveBytes),
+        };
+      } catch {
+        return row;
+      }
+    })
+  );
+
+  return enrichedRows;
+}
+
+function fileNameFromR2Key(key: string): string {
+  const lastSlash = key.lastIndexOf('/');
+  const name = lastSlash >= 0 ? key.slice(lastSlash + 1) : key;
+  return name || `sandbox-${Date.now()}.tar.gz`;
+}
+
+export async function getSandboxCurrentArchiveDownloadSpec(
+  sandboxId: string,
+  expiresInSeconds = 3600
+): Promise<SandboxArchiveDownloadSpec> {
+  return getSandboxArchiveDownloadSpec(sandboxId, {
+    expiresInSeconds,
+  });
+}
+
+export async function getSandboxArchiveDownloadSpec(
+  sandboxId: string,
+  options?: { snapshotKey?: string; expiresInSeconds?: number }
+): Promise<SandboxArchiveDownloadSpec> {
+  if (!isArchiveStorageConfigured()) {
+    throw new Error('R2 archive storage not configured');
+  }
+
+  const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
+  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const requestedSnapshotKey = asText(options?.snapshotKey);
+
+  const history = await listSandboxArchiveHistory(sandboxId).catch(() => []);
+  const current = history.find((item) => item.isCurrent) || history[0] || null;
+
+  const candidates = [
+    requestedSnapshotKey,
+    current?.snapshotKey,
+    current?.archiveKey || undefined,
+    asText((metadata as any).r2ArchiveSnapshotKey),
+    asText((metadata as any).snapshotKey),
+    asText((metadata as any).r2ArchiveKey),
+  ]
+    .map((value) => asText(value))
+    .filter(Boolean);
+
+  let selectedKey = '';
+  for (const candidate of candidates) {
+    if (await sandboxArchiveServiceDeps.existsInR2(candidate)) {
+      selectedKey = candidate;
+      break;
+    }
+  }
+
+  if (!selectedKey) {
+    throw new Error(requestedSnapshotKey ? '指定快照不存在或不可下载' : '当前 Sandbox 没有可下载的归档快照');
+  }
+
+  const safeExpires = Math.max(60, Math.min(86_400, Math.floor(options?.expiresInSeconds || 3600)));
+  const downloadUrl = await sandboxArchiveServiceDeps.getPresignedDownloadUrl(selectedKey, safeExpires);
+  return {
+    key: selectedKey,
+    fileName: fileNameFromR2Key(selectedKey),
+    downloadUrl,
+    expiresInSeconds: safeExpires,
+  };
 }

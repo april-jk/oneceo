@@ -23,6 +23,7 @@
 - 启动：`npm run dev`
 - Web 默认端口：`http://localhost:5174`
 - API 默认端口：`http://127.0.0.1:9310`
+- Web host 优先读取 `ADMIN_MANAGEMENT_WEB_HOST`，未配置时回退到 `ADMIN_MANAGEMENT_BIND_HOST`，最终默认 `0.0.0.0`
 - 配置来源：
   - `apps/admin_management/web/vite.config.ts`
   - `apps/admin_management/server/config.ts`

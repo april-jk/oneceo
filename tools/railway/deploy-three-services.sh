@@ -99,10 +99,10 @@ main() {
   # API service (monorepo root deploy + workspace-aware commands)
   set_service_commands "api" \
     "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
-    "RAILPACK_BUILD_COMMAND=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
+    "RAILPACK_BUILD_COMMAND=pnpm --filter @oneceo/shared build && pnpm --filter api exec esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist" \
     "RAILPACK_START_COMMAND=pnpm --filter api start" \
     "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
-    "RAILPACK_BUILD_CMD=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
+    "RAILPACK_BUILD_CMD=pnpm --filter @oneceo/shared build && pnpm --filter api exec esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist" \
     "RAILPACK_START_CMD=pnpm --filter api start"
   show_service_commands "api"
 

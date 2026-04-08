@@ -250,7 +250,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
-const API_HOST = (process.env.API_HOST || '0.0.0.0').trim() || '0.0.0.0';
+const API_HOST = (process.env.API_HOST || '::').trim() || '::';
+const API_HOST_DISPLAY = API_HOST.includes(':') ? `[${API_HOST}]` : API_HOST;
 let shuttingDown = false;
 let isListening = false;
 let listenRetryTimer: NodeJS.Timeout | null = null;
@@ -353,10 +354,10 @@ async function startServer() {
     console.log('');
     console.log('🚀 oneceo.ai API Server');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`📡 API server running on http://${API_HOST}:${PORT}`);
-    console.log(`🔌 WebSocket server running on ws://${API_HOST}:${PORT}`);
-    console.log(`🔌 Task Creation WebSocket: ws://${API_HOST}:${PORT}/ws/task-creation`);
-    console.log(`🏥 Health check: http://${API_HOST}:${PORT}/health`);
+    console.log(`📡 API server running on http://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 WebSocket server running on ws://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 Task Creation WebSocket: ws://${API_HOST_DISPLAY}:${PORT}/ws/task-creation`);
+    console.log(`🏥 Health check: http://${API_HOST_DISPLAY}:${PORT}/health`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // 启动后先进行数据库连通性重试检测

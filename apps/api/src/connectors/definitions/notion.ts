@@ -13,11 +13,31 @@ function parseScopes(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+function resolveNotionRedirectUri(): string {
+  const configured = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
+  if (!configured) return '';
+
+  // Backward-compatible: allow full URL, but prefer path + FRONTEND_URL.
+  if (/^https?:\/\//i.test(configured)) {
+    return configured;
+  }
+
+  const frontendBaseUrl = asText(process.env.FRONTEND_URL);
+  if (!frontendBaseUrl) return '';
+
+  try {
+    const normalizedPath = configured.startsWith('/') ? configured : `/${configured}`;
+    return new URL(normalizedPath, frontendBaseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
 export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined {
   const clientId = asText(process.env.NOTION_CONNECTOR_CLIENT_ID);
   const clientSecret = asText(process.env.NOTION_CONNECTOR_CLIENT_SECRET);
   if (!clientId || !clientSecret) return undefined;
-  const redirectUri = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
+  const redirectUri = resolveNotionRedirectUri();
   return {
     provider: 'notion',
     clientId,
@@ -45,6 +65,7 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
 export function buildNotionDefinition(): ConnectorDefinition {
   const oauth = resolveNotionOauthProvider();
   const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
+  const redirectUriRaw = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
   const oauthClientConfigured = Boolean(oauth);
   const redirectUriConfigured = Boolean(asText(oauth?.redirectUri));
   const oauthConfigured = oauthClientConfigured && redirectUriConfigured;
@@ -54,8 +75,10 @@ export function buildNotionDefinition(): ConnectorDefinition {
     ? '部署环境未配置 Notion MCP remote URL'
     : !oauthClientConfigured
       ? '部署环境未配置 Notion OAuth client'
+      : !redirectUriRaw
+        ? '部署环境未配置 Notion OAuth 回调路径'
       : !redirectUriConfigured
-        ? '部署环境未配置 Notion OAuth 固定回调地址'
+        ? 'Notion OAuth 回调地址解析失败，请检查 FRONTEND_URL 与 NOTION_CONNECTOR_REDIRECT_URI'
       : undefined;
   return {
     key: 'notion',

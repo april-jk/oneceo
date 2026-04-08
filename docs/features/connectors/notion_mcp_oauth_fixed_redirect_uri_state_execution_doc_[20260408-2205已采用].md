@@ -160,7 +160,8 @@ v1.<base64url({rid, sid, ts, nonce})>
 - `NOTION_CONNECTOR_CLIENT_SECRET`
 - `NOTION_CONNECTOR_SCOPES`
 - `NOTION_MCP_REMOTE_URL`
-- `NOTION_CONNECTOR_REDIRECT_URI=https://dev.oneceo.ai/notion/callback`
+- `FRONTEND_URL`（例如 `https://dev.oneceo.ai`）
+- `NOTION_CONNECTOR_REDIRECT_URI`（仅路径，例如 `/notion/callback`，最终会拼接为 `FRONTEND_URL + NOTION_CONNECTOR_REDIRECT_URI`）
 
 ## 7.2 发布前检查
 

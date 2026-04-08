@@ -31,7 +31,7 @@ ADMIN_MANAGEMENT_CORS_ORIGINS=http://localhost:5174,http://127.0.0.1:5174,http:/
 配置约定：
 
 - `ADMIN_MANAGEMENT_BIND_HOST`：后台 API 实际监听地址，局域网访问建议保持 `0.0.0.0`
-- `ADMIN_MANAGEMENT_WEB_HOST`：Vite 开发服务器监听地址，局域网访问建议保持 `0.0.0.0`
+- `ADMIN_MANAGEMENT_WEB_HOST`：Vite 开发服务器监听地址，局域网访问建议保持 `0.0.0.0`；未配置时会回退到 `ADMIN_MANAGEMENT_BIND_HOST`
 - `ADMIN_MANAGEMENT_API_PROXY_HOST`：Vite 反向代理后台 API 时使用的本机连接地址，默认应为 `127.0.0.1`
 - `ADMIN_MANAGEMENT_CORS_ORIGINS`：后台允许的前端来源列表，逗号分隔；未配置时默认允许 `localhost`、`127.0.0.1` 和同端口私网 IP 来源
 

@@ -631,6 +631,9 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
   completed_at TIMESTAMP
 );
 
+-- 连接器相关表与补丁必须在 runtime_events 外键表之前创建
+${connectorTablesSQL}
+
 -- 对话消息表
 CREATE TABLE IF NOT EXISTS conversation_messages (
   id UUID PRIMARY KEY,
@@ -1059,7 +1062,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
   ON user_custom_skill_documents(custom_skill_id, document_path);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
   ON user_custom_skill_documents(custom_skill_id, sort_order);
-${connectorTablesSQL}
 `;
 
 const deliverableTablesSQL = `
@@ -1397,17 +1399,4 @@ export async function dropAllTables() {
     console.error('❌ 删除表失败:', error);
     throw error;
   }
-}
-
-// 如果直接运行此脚本，执行迁移
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runMigration()
-    .then(() => {
-      console.log('迁移完成，退出...');
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.error('迁移失败:', error);
-      process.exit(1);
-    });
 }

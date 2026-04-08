@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type * as React from 'react';
 import {
   Bar,
   BarChart,
@@ -15,6 +15,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+
+// 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
 import type { AdminUser } from './api';
 import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
@@ -44,6 +46,8 @@ import type {
 
 type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
+
+// 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
   timestamp: number;
   timeLabel: string;
@@ -52,6 +56,7 @@ type HostTrendPoint = {
   storage: number;
 };
 
+// 顶部导航模块配置，用于渲染卡片列表与权限/体验文案。
 const NAV_GROUPS: Array<{ key: NavGroupKey; label: string; description: string }> = [
   { key: 'runtime', label: '运行管理', description: '运行状态与操作记录' },
   { key: 'platform', label: '平台配置', description: '能力、策略与发布配置' },
@@ -140,6 +145,7 @@ const NAV_ITEMS: Array<{
   },
 ];
 
+// 运行态状态色板：统一 KVM/Sandbox 运行状态的可视化语义。
 const VM_STATE_COLORS: Record<string, string> = {
   running: '#0f766e',
   stopped: '#94a3b8',
@@ -147,9 +153,11 @@ const VM_STATE_COLORS: Record<string, string> = {
   error: '#dc2626',
 };
 
+// 列表默认分页和“加载更多”步长，控制 Sandbox 运行时列表的性能与体验。
 const SANDBOX_RUNTIME_PAGE_SIZE = 80;
 const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
 
+// 运行时列表排序参数。
 type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active';
 type RuntimeSortDirection = 'asc' | 'desc';
 type RuntimeSortState = {
@@ -775,7 +783,7 @@ export default function App() {
   }, []);
 
   const beginRuntimeColumnResize = useCallback(
-    (columnKey: RuntimeColumnKey, event: ReactMouseEvent<HTMLSpanElement>) => {
+    (columnKey: RuntimeColumnKey, event: React.MouseEvent<HTMLSpanElement>) => {
       event.preventDefault();
       event.stopPropagation();
       const startWidth = runtimeColumnWidths[columnKey] || DEFAULT_RUNTIME_COLUMN_WIDTHS[columnKey];
@@ -825,7 +833,7 @@ export default function App() {
   }, []);
 
   const beginArchiveColumnResize = useCallback(
-    (columnKey: ArchiveColumnKey, event: ReactMouseEvent<HTMLSpanElement>) => {
+    (columnKey: ArchiveColumnKey, event: React.MouseEvent<HTMLSpanElement>) => {
       event.preventDefault();
       event.stopPropagation();
       const startWidth = archiveColumnWidths[columnKey] || DEFAULT_ARCHIVE_COLUMN_WIDTHS[columnKey];
@@ -1711,7 +1719,7 @@ export default function App() {
   }, [conversationGovernanceFilter]);
 
   const handleAdminLogin = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
+    async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       setAuthSubmitting(true);
       setAuthError(null);

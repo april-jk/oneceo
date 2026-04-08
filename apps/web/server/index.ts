@@ -7,6 +7,45 @@ import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const EXCLUSIVE_ENV_PREFIXES = [
+  "ONECEO_",
+  "AGENT_",
+  "LLM_",
+  "OPENCODE_",
+  "NOTION_",
+  "KVM_",
+  "CONNECTOR_",
+  "WEB_BFF_",
+  "OSAC_",
+  "SUPABASE_",
+  "OPENAI_",
+  "ANTHROPIC_",
+  "GOOGLE_",
+  "GEMINI_",
+  "AZURE_OPENAI_",
+  "REDIS_",
+  "DATABASE_",
+  "FRONTEND_",
+  "ADMIN_",
+  "CORS_",
+  "SESSION_",
+  "JWT_",
+  "E2B_",
+  "VITE_",
+] as const;
+const EXCLUSIVE_ENV_KEYS = new Set([
+  "DATABASE_URL",
+  "REDIS_URL",
+  "PORT",
+  "API_HOST",
+  "FRONTEND_URL",
+  "ONECEO_API_URL",
+  "WEB_BFF_API_TARGET",
+  "OSAC_LLM_PROXY_PORT",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+]);
 
 function parseEnvLine(line: string): { key: string; value: string } | null {
   const trimmed = line.trim();
@@ -22,6 +61,18 @@ function parseEnvLine(line: string): { key: string; value: string } | null {
   return { key, value };
 }
 
+function isExclusiveBusinessEnvKey(key: string): boolean {
+  if (EXCLUSIVE_ENV_KEYS.has(key)) return true;
+  return EXCLUSIVE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+function clearExclusiveBusinessEnvKeys(): void {
+  for (const key of Object.keys(process.env)) {
+    if (!isExclusiveBusinessEnvKey(key)) continue;
+    delete process.env[key];
+  }
+}
+
 function loadWebEnv(): string | null {
   const candidates = [
     path.resolve(process.cwd(), '.env'),
@@ -35,22 +86,26 @@ function loadWebEnv(): string | null {
 
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
+    clearExclusiveBusinessEnvKeys();
     const raw = fs.readFileSync(candidate, 'utf8');
     for (const line of raw.split(/\r?\n/)) {
       const parsed = parseEnvLine(line);
       if (!parsed) continue;
-      // .env has higher priority than injected env vars.
       process.env[parsed.key] = parsed.value;
     }
+    process.env.ONECEO_ENV_SOURCE = "dotenv";
     return candidate;
   }
 
+  process.env.ONECEO_ENV_SOURCE = "process_env";
   return null;
 }
 
 const loadedWebEnv = loadWebEnv();
 if (!loadedWebEnv) {
   console.warn('[WEB_ENV] 未找到 Web .env，继续使用系统环境变量');
+} else {
+  console.log(`[WEB_ENV] 检测到 .env，已进入 dotenv 模式: ${loadedWebEnv}`);
 }
 
 function trimTrailingSlash(value: string): string {

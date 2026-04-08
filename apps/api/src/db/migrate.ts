@@ -1400,16 +1400,3 @@ export async function dropAllTables() {
     throw error;
   }
 }
-
-// 如果直接运行此脚本，执行迁移
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runMigration()
-    .then(() => {
-      console.log('迁移完成，退出...');
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.error('迁移失败:', error);
-      process.exit(1);
-    });
-}

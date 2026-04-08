@@ -305,6 +305,33 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asRawText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+export function resolveManagedStreamDisplayContent(input: {
+  payload: Record<string, unknown>;
+  envelope: Record<string, unknown>;
+}): string {
+  const candidates = [
+    input.payload.content,
+    input.payload.message,
+    input.payload.text,
+    input.payload.delta,
+    input.payload.output,
+    input.envelope.content,
+    input.envelope.message,
+    input.envelope.text,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return '';
+}
+
 function asFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -3152,15 +3179,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       setIsConnected(true);
       let nextSessionStatus: string | undefined;
 
-      const content =
-        asText(payload.content) ||
-        asText(payload.message) ||
-        asText(payload.text) ||
-        asText(payload.delta) ||
-        asText(payload.output) ||
-        asText(envelope.content) ||
-        asText(envelope.message) ||
-        asText(envelope.text);
+      const content = resolveManagedStreamDisplayContent({
+        payload,
+        envelope,
+      });
 
       const toolCallId = asText(payload.toolCallId) || asText(envelope.toolCallId);
       const isManagedToolEvent = isManagedToolEventType(eventType);
@@ -3257,7 +3279,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         };
       } else if (eventType === 'clarification_requested') {
         nextSessionStatus = 'waiting_user';
-        const question = content || asText(payload.question) || asText(envelope.question);
+        const question = content || asRawText(payload.question) || asRawText(envelope.question);
         const rawOptions = payload.options || envelope.options;
         const options = Array.isArray(rawOptions)
           ? rawOptions.map((item) => asText(item)).filter(Boolean)
@@ -3348,7 +3370,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
 
       if (eventType === 'clarification_requested') {
-        const question = content || asText(payload.question) || asText(envelope.question) || '';
+        const question = content || asRawText(payload.question) || asRawText(envelope.question) || '';
         const rawOptions = payload.options || envelope.options;
         const options = Array.isArray(rawOptions)
           ? rawOptions.map((item) => asText(item)).filter(Boolean)

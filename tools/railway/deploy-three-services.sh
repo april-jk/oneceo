@@ -91,21 +91,21 @@ main() {
 
   # API service (monorepo root deploy + workspace-aware commands)
   set_service_commands "api" \
-    "NIXPACKS_INSTALL_CMD=pnpm install --frozen-lockfile" \
-    "NIXPACKS_BUILD_CMD=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
-    "NIXPACKS_START_CMD=pnpm --filter api start"
+    "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_CMD=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
+    "RAILPACK_START_CMD=pnpm --filter api start"
 
   # Web service
   set_service_commands "web" \
-    "NIXPACKS_INSTALL_CMD=pnpm install --frozen-lockfile" \
-    "NIXPACKS_BUILD_CMD=pnpm --filter web build" \
-    "NIXPACKS_START_CMD=pnpm --filter web start"
+    "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_CMD=pnpm --filter web build" \
+    "RAILPACK_START_CMD=pnpm --filter web start"
 
   # Admin management service
   set_service_commands "admin-management" \
-    "NIXPACKS_INSTALL_CMD=pnpm install --frozen-lockfile" \
-    "NIXPACKS_BUILD_CMD=pnpm --filter oneceo-admin-management build" \
-    "NIXPACKS_START_CMD=pnpm --filter oneceo-admin-management start"
+    "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_CMD=pnpm --filter oneceo-admin-management build" \
+    "RAILPACK_START_CMD=pnpm --filter oneceo-admin-management start"
 
   if [[ "$deploy_now" == "true" ]]; then
     deploy_service "api"

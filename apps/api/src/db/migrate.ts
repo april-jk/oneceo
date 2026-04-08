@@ -631,6 +631,9 @@ CREATE TABLE IF NOT EXISTS task_creation_sessions (
   completed_at TIMESTAMP
 );
 
+-- 连接器相关表与补丁必须在 runtime_events 外键表之前创建
+${connectorTablesSQL}
+
 -- 对话消息表
 CREATE TABLE IF NOT EXISTS conversation_messages (
   id UUID PRIMARY KEY,
@@ -1059,7 +1062,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_path
   ON user_custom_skill_documents(custom_skill_id, document_path);
 CREATE INDEX IF NOT EXISTS idx_user_custom_skill_documents_skill_sort
   ON user_custom_skill_documents(custom_skill_id, sort_order);
-${connectorTablesSQL}
 `;
 
 const deliverableTablesSQL = `

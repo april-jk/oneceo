@@ -519,11 +519,12 @@ export class OneceoApiConnector {
     );
   }
 
-  restoreSandboxEnvironment(sessionId: string) {
+  restoreSandboxEnvironment(sessionId: string, payload?: { snapshotKey?: string }) {
     return this.request<Record<string, unknown>>(
       `/api/sandbox/environment/${encodeURIComponent(sessionId)}/restore`,
       {
         method: 'POST',
+        body: payload ? JSON.stringify(payload) : undefined,
       }
     );
   }
@@ -532,6 +533,19 @@ export class OneceoApiConnector {
     return this.request<Array<Record<string, unknown>>>(
       `/api/internal/sandbox/${encodeURIComponent(sessionId)}/archive-history`
     );
+  }
+
+  getSandboxArchiveDownloadUrl(sessionId: string, expiresInSeconds = 3600, snapshotKey?: string) {
+    const ttl = Number.isFinite(expiresInSeconds) ? Math.max(60, Math.min(86_400, Math.floor(expiresInSeconds))) : 3600;
+    const suffix = snapshotKey
+      ? `?expiresInSeconds=${ttl}&snapshotKey=${encodeURIComponent(snapshotKey)}`
+      : `?expiresInSeconds=${ttl}`;
+    return this.request<{
+      key: string;
+      fileName: string;
+      downloadUrl: string;
+      expiresInSeconds: number;
+    }>(`/api/internal/sandbox/${encodeURIComponent(sessionId)}/archive-download-url${suffix}`);
   }
 
   checkSandboxConnectivity(sessionId: string) {

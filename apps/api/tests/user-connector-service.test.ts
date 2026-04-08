@@ -8,6 +8,9 @@ import { userConnectorService } from '../src/services/user-connector-service';
 const originalFetch = global.fetch;
 const originalVercelClientId = process.env.VERCEL_CONNECTOR_CLIENT_ID;
 const originalVercelClientSecret = process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
+const originalNotionClientId = process.env.NOTION_CONNECTOR_CLIENT_ID;
+const originalNotionClientSecret = process.env.NOTION_CONNECTOR_CLIENT_SECRET;
+const originalNotionRedirectUri = process.env.NOTION_CONNECTOR_REDIRECT_URI;
 
 afterEach(() => {
   mock.reset();
@@ -22,7 +25,26 @@ afterEach(() => {
   } else {
     process.env.VERCEL_CONNECTOR_CLIENT_SECRET = originalVercelClientSecret;
   }
+  if (originalNotionClientId === undefined) {
+    delete process.env.NOTION_CONNECTOR_CLIENT_ID;
+  } else {
+    process.env.NOTION_CONNECTOR_CLIENT_ID = originalNotionClientId;
+  }
+  if (originalNotionClientSecret === undefined) {
+    delete process.env.NOTION_CONNECTOR_CLIENT_SECRET;
+  } else {
+    process.env.NOTION_CONNECTOR_CLIENT_SECRET = originalNotionClientSecret;
+  }
+  if (originalNotionRedirectUri === undefined) {
+    delete process.env.NOTION_CONNECTOR_REDIRECT_URI;
+  } else {
+    process.env.NOTION_CONNECTOR_REDIRECT_URI = originalNotionRedirectUri;
+  }
 });
+
+function encodeStatePayload(payload: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
 
 test('saveUserConnector validates GitHub token and persists resolved profile name', async () => {
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
@@ -250,4 +272,85 @@ test('completeOAuthByProfile uses stored PKCE verifier for vercel oauth token ex
     )?.accessToken,
     'vercel-access-token'
   );
+});
+
+test('startOAuthForProfile uses fixed redirect uri and state payload for notion', async () => {
+  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
+  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
+  process.env.NOTION_CONNECTOR_REDIRECT_URI = 'https://dev.oneceo.ai/notion/callback';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-notion',
+    userId: 'user-1',
+    connectorKey: 'notion',
+    profileName: 'Notion Default',
+    authMode: 'oauth',
+    authStatus: 'needs_auth',
+  }) as any);
+  let capturedCreate: Record<string, unknown> | null = null;
+  mock.method(connectorAuthRequestDAO, 'create', async (input: any) => {
+    capturedCreate = input;
+    return input;
+  });
+
+  const result = await userConnectorService.startOAuthForProfile('user-1', 'profile-notion', {
+    redirectUri: 'https://unexpected.example.com/callback',
+    returnToSessionId: 'session-xyz',
+  });
+
+  const authUrl = new URL(result.authUrl);
+  assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/notion/callback');
+  assert.equal(capturedCreate?.returnToSessionId, 'session-xyz');
+  assert.match(String(result.state), /^oneceo_notion_v1\./);
+  assert.equal(result.state, capturedCreate?.state);
+});
+
+test('completeOAuthByProfile rejects notion oauth when state payload does not match request session', async () => {
+  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
+  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
+  process.env.NOTION_CONNECTOR_REDIRECT_URI = 'https://dev.oneceo.ai/notion/callback';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-notion',
+    userId: 'user-1',
+    connectorKey: 'notion',
+    profileName: 'Notion Default',
+    displayName: null,
+  }) as any);
+
+  const state = `oneceo_notion_v1.${encodeStatePayload({
+    rid: 'request-1',
+    sid: 'session-from-state',
+    ts: Date.now(),
+    nonce: 'nonce-1',
+  })}`;
+
+  mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
+    requestId: 'request-1',
+    userId: 'user-1',
+    connectorKey: 'notion',
+    profileId: 'profile-notion',
+    state,
+    returnToSessionId: 'session-from-db',
+    expiresAt: new Date(Date.now() + 60_000),
+  }) as any);
+
+  const markFailedMock = mock.method(
+    connectorAuthRequestDAO,
+    'markFailedByState',
+    async () => ({}) as any
+  );
+
+  await assert.rejects(
+    () =>
+      userConnectorService.completeOAuthByProfile('user-1', 'profile-notion', {
+        state,
+        code: 'code-1',
+        redirectUri: 'https://unexpected.example.com/callback',
+      }),
+    /OAuth state 校验失败/
+  );
+  assert.equal(markFailedMock.mock.callCount(), 1);
 });

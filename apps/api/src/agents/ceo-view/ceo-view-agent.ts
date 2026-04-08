@@ -134,7 +134,7 @@ export class CEOViewAgent extends BaseAgent {
       // ======================================================================
       // 工具配置（见下方 initializeTools 方法）
       // ======================================================================
-      tools: this.initializeTools(),
+      tools: [],
       
       // ======================================================================
       // LLM 参数配置
@@ -502,7 +502,7 @@ ${question}`;
       risk: '请生成项目风险评估报告',
     };
 
-    return await this.executeStream(prompts[reportType], [], onToken);
+    return await this.executeStream(prompts[reportType], onToken);
   }
 }
 

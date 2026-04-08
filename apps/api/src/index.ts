@@ -250,6 +250,8 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // ============================================================================
 
 const PORT = process.env.PORT || 4000;
+const API_HOST = (process.env.API_HOST || '::').trim() || '::';
+const API_HOST_DISPLAY = API_HOST.includes(':') ? `[${API_HOST}]` : API_HOST;
 let shuttingDown = false;
 let isListening = false;
 let listenRetryTimer: NodeJS.Timeout | null = null;
@@ -323,7 +325,7 @@ httpServer.on('error', (error: any) => {
       listenRetryTimer = setTimeout(() => {
         listenRetryTimer = null;
         if (!shuttingDown && !isListening) {
-          httpServer.listen(PORT);
+          httpServer.listen(Number(PORT), API_HOST);
         }
       }, listenRetryDelayMs);
       return;
@@ -346,16 +348,16 @@ async function startServer() {
   await connectorStorageBootstrap.ensureReady();
   await connectorGuideService.ensureBuiltinPolicies();
 
-  httpServer.listen(PORT, () => {
+  httpServer.listen(Number(PORT), API_HOST, () => {
     isListening = true;
     listenAttempts = 0;
     console.log('');
     console.log('🚀 oneceo.ai API Server');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`📡 API server running on http://localhost:${PORT}`);
-    console.log(`🔌 WebSocket server running on ws://localhost:${PORT}`);
-    console.log(`🔌 Task Creation WebSocket: ws://localhost:${PORT}/ws/task-creation`);
-    console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+    console.log(`📡 API server running on http://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 WebSocket server running on ws://${API_HOST_DISPLAY}:${PORT}`);
+    console.log(`🔌 Task Creation WebSocket: ws://${API_HOST_DISPLAY}:${PORT}/ws/task-creation`);
+    console.log(`🏥 Health check: http://${API_HOST_DISPLAY}:${PORT}/health`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // 启动后先进行数据库连通性重试检测

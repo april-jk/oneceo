@@ -122,7 +122,7 @@ export class TaskCreationAgent extends BaseAgent {
       // ======================================================================
       // 工具配置（见下方 initializeTools 方法）
       // ======================================================================
-      tools: this.initializeTools(),
+      tools: [],
       
       // ======================================================================
       // LLM 参数配置
@@ -316,7 +316,7 @@ ${description}`;
    */
   async analyzeTaskStream(description: string, onToken: (token: string) => void) {
     const input = `请分析以下任务描述：${description}`;
-    return await this.executeStream(input, [], onToken);
+    return await this.executeStream(input, onToken);
   }
 }
 

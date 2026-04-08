@@ -73,6 +73,13 @@ set_service_commands() {
   run_railway variable set --service "$service_name" --skip-deploys "$@" >/dev/null
 }
 
+show_service_commands() {
+  local service_name="$1"
+  log "当前服务关键变量: ${service_name}"
+  run_railway variable list --service "$service_name" -k | \
+    grep -E '^(RAILPACK_(INSTALL|BUILD|START)_(CMD|COMMAND)|RAILPACK_SPA_OUTPUT_DIR)=' || true
+}
+
 deploy_service() {
   local service_name="$1"
   log "开始部署服务: ${service_name}"
@@ -91,21 +98,33 @@ main() {
 
   # API service (monorepo root deploy + workspace-aware commands)
   set_service_commands "api" \
+    "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_COMMAND=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
+    "RAILPACK_START_COMMAND=pnpm --filter api start" \
     "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_CMD=pnpm --filter @oneceo/shared build && pnpm --filter api build" \
     "RAILPACK_START_CMD=pnpm --filter api start"
+  show_service_commands "api"
 
   # Web service
   set_service_commands "web" \
+    "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_COMMAND=pnpm --filter web build" \
+    "RAILPACK_START_COMMAND=pnpm --filter web start" \
     "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_CMD=pnpm --filter web build" \
     "RAILPACK_START_CMD=pnpm --filter web start"
+  show_service_commands "web"
 
   # Admin management service
   set_service_commands "admin-management" \
+    "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
+    "RAILPACK_BUILD_COMMAND=pnpm --filter oneceo-admin-management build" \
+    "RAILPACK_START_COMMAND=pnpm --filter oneceo-admin-management start" \
     "RAILPACK_INSTALL_CMD=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_CMD=pnpm --filter oneceo-admin-management build" \
     "RAILPACK_START_CMD=pnpm --filter oneceo-admin-management start"
+  show_service_commands "admin-management"
 
   if [[ "$deploy_now" == "true" ]]; then
     deploy_service "api"

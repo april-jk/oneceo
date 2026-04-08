@@ -13,7 +13,7 @@
 1. 检查 Railway 登录态（未登录则触发 `railway login`）
 2. 检查当前目录是否已绑定 Railway 项目
 3. 自动创建并绑定 3 个服务（若不存在）
-4. 为每个服务写入 `RAILPACK_INSTALL_CMD` / `RAILPACK_BUILD_CMD` / `RAILPACK_START_CMD`
+4. 为每个服务写入 `RAILPACK_*_COMMAND` 与 `RAILPACK_*_CMD`（双写，兼容不同 Railpack 版本）
 5. 顺序部署 3 个服务
 
 ## 使用方式

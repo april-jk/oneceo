@@ -98,6 +98,7 @@ main() {
 
   # API service (monorepo root deploy + workspace-aware commands)
   set_service_commands "api" \
+    "RAILPACK_NODE_VERSION=20" \
     "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_COMMAND=pnpm --filter @oneceo/shared build && pnpm --filter api exec esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist" \
     "RAILPACK_START_COMMAND=pnpm --filter api start" \
@@ -108,6 +109,7 @@ main() {
 
   # Web service
   set_service_commands "web" \
+    "RAILPACK_NODE_VERSION=20" \
     "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_COMMAND=pnpm --filter web build" \
     "RAILPACK_START_COMMAND=pnpm --filter web start" \
@@ -118,6 +120,7 @@ main() {
 
   # Admin management service
   set_service_commands "admin-management" \
+    "RAILPACK_NODE_VERSION=20" \
     "RAILPACK_INSTALL_COMMAND=pnpm install --frozen-lockfile" \
     "RAILPACK_BUILD_COMMAND=pnpm --filter oneceo-admin-management build" \
     "RAILPACK_START_COMMAND=pnpm --filter oneceo-admin-management start" \

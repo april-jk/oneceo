@@ -98,7 +98,7 @@ export class PlanningAgent extends BaseAgent {
       ? `默认交付模板（可根据场景调整）：\n- ${route.deliverableTemplate.join('\n- ')}\n`
       : '';
 
-    const routePrompt = `当前规划路由：${route.intentType}
+    const routePrompt = `当前规划路由：${intentResult.intent_type}
 规划身份：${route.roleName}
 身份提示（占位，可后续替换为具体领域规划智能体提示词）：
 ${route.personaPrompt}

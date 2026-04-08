@@ -1,26 +1,11 @@
-import dotenv from 'dotenv';
 import fs from 'fs';
-import path from 'path';
 import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
 import { getProxyEnv, isGlobalProxyEnabled } from './proxy';
+import { loadApiEnv } from './load-env';
 
-const candidates = [
-  path.resolve(process.cwd(), 'apps', '.env'),
-  path.resolve(process.cwd(), '..', '.env'),
-  path.resolve(process.cwd(), '..', '..', 'apps', '.env'),
-];
-
-let loaded = false;
-for (const candidate of candidates) {
-  if (fs.existsSync(candidate)) {
-    dotenv.config({ path: candidate });
-    loaded = true;
-    break;
-  }
-}
-
-if (!loaded) {
-  console.warn('[ENV] 未找到 apps/.env，将继续使用当前进程环境变量');
+const envLoadResult = loadApiEnv();
+if (!envLoadResult.loadedPath) {
+  console.warn('[ENV] 未找到 API .env，继续使用系统环境变量');
 }
 
 const insecureTls = String(process.env.E2B_INSECURE_TLS || '').trim().toLowerCase() === 'true';
@@ -83,7 +68,7 @@ if (shouldConfigureTls || shouldConfigureProxy) {
     }
 
     // Override global fetch to use undici with the custom dispatcher.
-    const wrappedFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const wrappedFetch: typeof fetch = (async (input: any, init?: any) => {
       if (input instanceof Request) {
         const headers: Record<string, string> = {};
         input.headers.forEach((value, key) => {
@@ -94,10 +79,10 @@ if (shouldConfigureTls || shouldConfigureProxy) {
           method: input.method,
           headers,
           body,
-          redirect: input.redirect as RequestRedirect,
+          redirect: input.redirect as any,
         });
       }
-      return undiciFetch(input as string, init as RequestInit);
+      return undiciFetch(input as string, init as any);
     }) as typeof fetch;
 
     globalThis.fetch = wrappedFetch;

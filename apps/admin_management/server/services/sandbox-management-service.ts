@@ -139,6 +139,168 @@ function asText(value: unknown): string | null {
   return normalized || null;
 }
 
+function shellEscape(value: string): string {
+  if (!value) return "''";
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function buildBashCommand(script: string): string {
+  return `bash -lc ${shellEscape(script)}`;
+}
+
+function extractCommandText(value: unknown, key: 'stdout' | 'stderr'): string {
+  if (!value || typeof value !== 'object') return '';
+  const text = (value as Record<string, unknown>)[key];
+  return typeof text === 'string' ? text : '';
+}
+
+function extractCommandExitCode(value: unknown): number | null {
+  if (!value || typeof value !== 'object') return null;
+  const exitCode = (value as Record<string, unknown>).exitCode;
+  return typeof exitCode === 'number' && Number.isFinite(exitCode) ? exitCode : null;
+}
+
+function buildDirectoryListScript(path: string): string {
+  return [
+    'set -euo pipefail',
+    `target=${shellEscape(path)}`,
+    'if [ ! -e "$target" ]; then',
+    "  printf '__ONECEO_NOT_FOUND__\\n'",
+    '  exit 44',
+    'fi',
+    'if [ ! -d "$target" ]; then',
+    "  printf '__ONECEO_NOT_DIR__\\n'",
+    '  exit 45',
+    'fi',
+    'find "$target" -mindepth 1 -maxdepth 1 \\( -type d -o -type f -o -type l \\) -printf \'%P\\t%p\\t%y\\t%s\\t%T@\\n\' | sort',
+  ].join('\n');
+}
+
+function parseDirectoryEntries(stdout: string, basePath: string) {
+  const normalizedBasePath = basePath.trim().replace(/\/+$/, '') || '/';
+  const items = stdout
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const [name = '', path = '', type = '', sizeText = '0', modifiedAtText = ''] = line.split('\t');
+      const normalizedType = type === 'd' ? 'dir' : type === 'f' ? 'file' : 'item';
+      const size = Number(sizeText);
+      const modifiedAtUnix = Number(modifiedAtText);
+      return {
+        name,
+        path,
+        type: normalizedType,
+        sizeBytes: Number.isFinite(size) ? size : null,
+        modifiedAt:
+          Number.isFinite(modifiedAtUnix) && modifiedAtUnix > 0
+            ? new Date(modifiedAtUnix * 1000).toISOString()
+            : null,
+      };
+    });
+
+  return {
+    path: normalizedBasePath,
+    parentPath: normalizedBasePath === '/'
+      ? '/'
+      : `/${normalizedBasePath.split('/').filter(Boolean).slice(0, -1).join('/')}` || '/',
+    items,
+  };
+}
+
+function buildProcessListScript(): string {
+  return [
+    'set -euo pipefail',
+    'ps -eo pid=,ppid=,user=,%cpu=,%mem=,etime=,stat=,comm=,args= --sort=-%cpu,-%mem -ww',
+  ].join('\n');
+}
+
+function parseProcessEntries(stdout: string) {
+  const items = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(/\s+/, 9);
+      if (parts.length < 8) {
+        return null;
+      }
+
+      const [pidText, ppidText, user = '', cpuText = '', memoryText = '', elapsed = '', state = '', command = '', args = ''] = parts;
+      const pid = Number(pidText);
+      const ppid = Number(ppidText);
+      const cpuPercent = Number(cpuText);
+      const memoryPercent = Number(memoryText);
+
+      return {
+        pid: Number.isFinite(pid) ? pid : null,
+        ppid: Number.isFinite(ppid) ? ppid : null,
+        user,
+        cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent.toFixed(1) : null,
+        memoryPercent: Number.isFinite(memoryPercent) ? memoryPercent.toFixed(1) : null,
+        elapsed,
+        state,
+        command,
+        args,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  return {
+    source: 'ps',
+    generatedAt: new Date().toISOString(),
+    items,
+  };
+}
+
+function buildProcessKillScript(pid: number): string {
+  return [
+    'set -euo pipefail',
+    `pid=${Math.floor(pid)}`,
+    'if ! kill -0 "$pid" 2>/dev/null; then',
+    '  echo "PID_NOT_FOUND:$pid"',
+    '  exit 44',
+    'fi',
+    'kill -9 "$pid"',
+    'echo "PID_KILLED:$pid"',
+  ].join('\n');
+}
+
+function buildPortScanScript(): string {
+  return [
+    'set -euo pipefail',
+    'if command -v ss >/dev/null 2>&1; then',
+    '  echo "__ONECEO_SCANNER__:ss"',
+    '  ss -ltnpH',
+    'elif command -v netstat >/dev/null 2>&1; then',
+    '  echo "__ONECEO_SCANNER__:netstat"',
+    '  netstat -ltnp 2>/dev/null | tail -n +3',
+    'else',
+    '  echo "__ONECEO_SCANNER__:lsof"',
+    '  lsof -i -P -n 2>/dev/null | tail -n +2',
+    'fi',
+  ].join('\n');
+}
+
+function parsePortScanOutput(stdout: string) {
+  const lines = stdout
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  let scanner = 'unknown';
+  if (lines[0]?.startsWith('__ONECEO_SCANNER__:')) {
+    scanner = lines.shift()?.replace('__ONECEO_SCANNER__:', '').trim() || 'unknown';
+  }
+
+  return {
+    scanner,
+    generatedAt: new Date().toISOString(),
+    lines,
+    output: lines.join('\n'),
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -716,8 +878,23 @@ export class SandboxManagementService {
           return sandbox.commands.kill(Number(payload?.pid), payload as any);
         case 'command.stdin':
           return sandbox.commands.sendStdin(Number(payload?.pid), String(payload?.data ?? ''), payload as any);
-        case 'files.list':
-          return sandbox.files.list(String(payload?.path ?? '/'), payload as any);
+        case 'files.list': {
+          const targetPath = String(payload?.path ?? '/');
+          const result = await sandbox.commands.run(buildBashCommand(buildDirectoryListScript(targetPath)), payload as any);
+          const stdout = extractCommandText(result, 'stdout');
+          const stderr = extractCommandText(result, 'stderr');
+          const exitCode = extractCommandExitCode(result);
+          if (exitCode === 44 || stdout.includes('__ONECEO_NOT_FOUND__')) {
+            throw new AppError(400, `目录不存在：${targetPath}`);
+          }
+          if (exitCode === 45 || stdout.includes('__ONECEO_NOT_DIR__')) {
+            throw new AppError(400, `当前路径不是目录：${targetPath}`);
+          }
+          if (exitCode !== null && exitCode !== 0) {
+            throw new AppError(400, stderr || stdout || `查看目录失败：${targetPath}`);
+          }
+          return parseDirectoryEntries(stdout, targetPath);
+        }
         case 'files.read':
           return sandbox.files.read(String(payload?.path ?? ''), payload as any);
         case 'files.write':
@@ -777,6 +954,49 @@ export class SandboxManagementService {
           return sandbox.git.configureUser(String(payload?.name ?? ''), String(payload?.email ?? ''), payload as any);
         case 'git.dangerouslyAuthenticate':
           return sandbox.git.dangerouslyAuthenticate(payload as any);
+        case 'system.process.list':
+        {
+          const result = await sandbox.commands.run(buildBashCommand(buildProcessListScript()), payload as any);
+          const stdout = extractCommandText(result, 'stdout');
+          const stderr = extractCommandText(result, 'stderr');
+          const exitCode = extractCommandExitCode(result);
+          if (exitCode !== null && exitCode !== 0) {
+            throw new AppError(400, stderr || '获取进程列表失败');
+          }
+          return parseProcessEntries(stdout);
+        }
+        case 'system.process.kill': {
+          const pid = Number(payload?.pid);
+          if (!Number.isFinite(pid) || pid <= 0) {
+            throw new AppError(400, 'PID 非法，无法结束进程');
+          }
+          const result = await sandbox.commands.run(buildBashCommand(buildProcessKillScript(pid)), payload as any);
+          const stdout = extractCommandText(result, 'stdout');
+          const stderr = extractCommandText(result, 'stderr');
+          const exitCode = extractCommandExitCode(result);
+          if (exitCode === 44 || stdout.includes('PID_NOT_FOUND:')) {
+            throw new AppError(400, `PID 不存在：${pid}`);
+          }
+          if (exitCode !== null && exitCode !== 0) {
+            throw new AppError(400, stderr || stdout || `结束进程失败：${pid}`);
+          }
+          return {
+            pid,
+            success: true,
+            signal: 'SIGKILL',
+            generatedAt: new Date().toISOString(),
+          };
+        }
+        case 'system.ports.inspect': {
+          const result = await sandbox.commands.run(buildBashCommand(buildPortScanScript()), payload as any);
+          const stdout = extractCommandText(result, 'stdout');
+          const stderr = extractCommandText(result, 'stderr');
+          const exitCode = extractCommandExitCode(result);
+          if (exitCode !== null && exitCode !== 0) {
+            throw new AppError(400, stderr || '查看端口失败');
+          }
+          return parsePortScanOutput(stdout);
+        }
         case 'sandbox.host':
           return sandbox.getHost(Number(payload?.port));
         case 'sandbox.uploadUrl':

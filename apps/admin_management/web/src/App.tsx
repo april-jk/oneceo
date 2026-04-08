@@ -382,6 +382,8 @@ type SandboxFileItem = {
   path: string;
   label: string;
   kind: 'dir' | 'file' | 'item';
+  sizeBytes?: number | null;
+  modifiedAt?: string | null;
 };
 
 function normalizeSandboxFileItems(value: unknown, basePath: string): SandboxFileItem[] {
@@ -413,6 +415,8 @@ function normalizeSandboxFileItems(value: unknown, basePath: string): SandboxFil
       path,
       label,
       kind: isDir ? 'dir' : typeRaw ? 'file' : 'item',
+      sizeBytes: typeof record.sizeBytes === 'number' ? record.sizeBytes : null,
+      modifiedAt: typeof record.modifiedAt === 'string' ? record.modifiedAt : null,
     });
   }
 
@@ -421,6 +425,15 @@ function normalizeSandboxFileItems(value: unknown, basePath: string): SandboxFil
     if (a.kind !== 'dir' && b.kind === 'dir') return 1;
     return a.label.localeCompare(b.label);
   });
+}
+
+function parentPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '/') return '/';
+  const normalized = trimmed.replace(/\/+$/, '');
+  const segments = normalized.split('/').filter(Boolean);
+  if (segments.length <= 1) return '/';
+  return `/${segments.slice(0, -1).join('/')}`;
 }
 
 function formatTerminalEntry(command: string, result: unknown) {
@@ -438,6 +451,97 @@ function formatTerminalEntry(command: string, result: unknown) {
     lines.push(toJsonText(result));
   }
   return lines.join('\n');
+}
+
+function formatBytes(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '-';
+  }
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  return `${(value / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function formatFileItemMeta(item: SandboxFileItem) {
+  const parts: string[] = [];
+  if (item.kind !== 'dir' && item.sizeBytes !== null && item.sizeBytes !== undefined) {
+    parts.push(formatBytes(item.sizeBytes));
+  }
+  if (item.modifiedAt) {
+    parts.push(formatDateTime(item.modifiedAt));
+  }
+  return parts.join(' · ');
+}
+
+function formatSandboxProcessResult(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return toJsonText(value || { tip: '进程列表和 kill 结果在这里展示' });
+  }
+
+  const record = value as Record<string, unknown>;
+  const items = Array.isArray(record.items) ? record.items : null;
+  if (!items) {
+    return toJsonText(value);
+  }
+
+  const lines = [
+    'PID      PPID   USER       CPU%   MEM%   ELAPSED      STATE   COMMAND',
+    '--------------------------------------------------------------------------',
+  ];
+
+  for (const item of items.slice(0, 80)) {
+    if (!item || typeof item !== 'object') continue;
+    const process = item as Record<string, unknown>;
+    const pid = String(process.pid ?? '-').padEnd(8);
+    const ppid = String(process.ppid ?? '-').padEnd(6);
+    const user = String(process.user ?? '-').slice(0, 10).padEnd(10);
+    const cpu = String(process.cpuPercent ?? '-').padEnd(6);
+    const memory = String(process.memoryPercent ?? '-').padEnd(6);
+    const elapsed = String(process.elapsed ?? '-').slice(0, 12).padEnd(12);
+    const state = String(process.state ?? '-').slice(0, 7).padEnd(7);
+    const command = String(process.command ?? process.args ?? '-');
+    const args = String(process.args ?? '').trim();
+    lines.push(`${pid} ${ppid} ${user} ${cpu} ${memory} ${elapsed} ${state} ${command}`);
+    if (args && args !== command) {
+      lines.push(`  args: ${args}`);
+    }
+  }
+
+  if (!items.length) {
+    lines.push('当前没有读到进程信息。');
+  }
+
+  if (typeof record.generatedAt === 'string') {
+    lines.push('');
+    lines.push(`更新时间: ${formatDateTime(record.generatedAt)}`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatSandboxPortResult(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return toJsonText(value || { tip: '端口扫描和 host 映射结果在这里展示' });
+  }
+
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.lines)) {
+    const lines = [`扫描器: ${String(record.scanner ?? 'unknown')}`];
+    const listeners = (record.lines as unknown[]).filter((line): line is string => typeof line === 'string');
+    if (listeners.length) {
+      lines.push('');
+      lines.push(...listeners);
+    } else {
+      lines.push('', '未发现监听端口。');
+    }
+    if (typeof record.generatedAt === 'string') {
+      lines.push('', `更新时间: ${formatDateTime(record.generatedAt)}`);
+    }
+    return lines.join('\n');
+  }
+
+  return toJsonText(value);
 }
 
 function summarizeText(value: string | undefined, max = 260) {
@@ -600,9 +704,11 @@ export default function App() {
   const [sandboxToolResult, setSandboxToolResult] = useState<unknown>(null);
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
-  const [sandboxFilePath, setSandboxFilePath] = useState('/');
+  const [sandboxDirectoryPath, setSandboxDirectoryPath] = useState('/');
+  const [sandboxFilePath, setSandboxFilePath] = useState('');
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
   const [sandboxFileContent, setSandboxFileContent] = useState('');
+  const [sandboxFileStatus, setSandboxFileStatus] = useState('等待加载目录');
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
   const [sandboxPortInput, setSandboxPortInput] = useState('3000');
@@ -991,9 +1097,11 @@ export default function App() {
         setSandboxConnectivityResult(null);
         setSandboxToolResult(null);
         setSandboxTerminalOutput('');
-        setSandboxFilePath(detail.connectivity.workspaceRoot?.trim() || '/');
+        setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
+        setSandboxFilePath('');
         setSandboxFileContent('');
         setSandboxFileItems([]);
+        setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
         setSandboxProcessResult(null);
         setSandboxPortResult(null);
         setSandboxModalOpen(true);
@@ -1171,7 +1279,8 @@ export default function App() {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
     if (!sandboxId) return;
     try {
-      const result = await api.runSandboxToolAction(sandboxId, 'command.list');
+      setError(null);
+      const result = await api.runSandboxToolAction(sandboxId, 'system.process.list');
       setSandboxProcessResult(result);
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '获取进程列表失败');
@@ -1183,43 +1292,60 @@ export default function App() {
     const pid = Number(sandboxPidInput);
     if (!sandboxId || !Number.isFinite(pid) || pid <= 0) return;
     try {
-      const result = await api.runSandboxToolAction(sandboxId, 'command.kill', { pid });
-      setSandboxProcessResult(result);
+      setError(null);
+      await api.runSandboxToolAction(sandboxId, 'system.process.kill', { pid });
+      setSandboxTerminalOutput((prev) => `${prev}${prev ? '\n\n' : ''}[process] killed ${pid}`);
       setSandboxPidInput('');
+      await loadSandboxProcesses();
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '结束进程失败');
     }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxPidInput]);
+  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxPidInput, loadSandboxProcesses]);
 
-  const listSandboxFiles = useCallback(async () => {
+  const listSandboxFiles = useCallback(async (targetPath?: string) => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    if (!sandboxId || !sandboxFilePath.trim()) return;
+    const directoryPath = (targetPath ?? sandboxDirectoryPath).trim();
+    if (!sandboxId || !directoryPath) return;
     try {
       setError(null);
+      setSandboxFileStatus(`正在刷新目录 ${directoryPath}`);
       const result = await api.runSandboxToolAction(sandboxId, 'files.list', {
-        path: sandboxFilePath.trim(),
+        path: directoryPath,
       });
-      const items = normalizeSandboxFileItems(result, sandboxFilePath.trim());
+      const items = normalizeSandboxFileItems(result, directoryPath);
+      const resolvedPath =
+        result && typeof result === 'object' && typeof (result as Record<string, unknown>).path === 'string'
+          ? String((result as Record<string, unknown>).path)
+          : directoryPath;
+      setSandboxDirectoryPath(resolvedPath);
       setSandboxFileItems(items);
+      setSandboxFileStatus(items.length ? `${resolvedPath} · ${items.length} 项` : `${resolvedPath} 为空目录`);
     } catch (toolError) {
       setSandboxFileItems([]);
+      setSandboxFileStatus('目录读取失败');
       setError(toolError instanceof Error ? toolError.message : '查看目录失败');
     }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath]);
+  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxDirectoryPath]);
 
-  const readSandboxFile = useCallback(async () => {
+  const readSandboxFile = useCallback(async (targetPath?: string) => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    if (!sandboxId || !sandboxFilePath.trim()) return;
+    const filePath = (targetPath ?? sandboxFilePath).trim();
+    if (!sandboxId || !filePath) return;
     try {
+      setError(null);
       const result = await api.runSandboxToolAction(sandboxId, 'files.read', {
-        path: sandboxFilePath.trim(),
+        path: filePath,
       });
+      setSandboxFilePath(filePath);
       if (typeof result === 'string') {
         setSandboxFileContent(result);
       } else if (result && typeof result === 'object' && 'content' in (result as Record<string, unknown>)) {
         const content = (result as Record<string, unknown>).content;
         setSandboxFileContent(typeof content === 'string' ? content : toJsonText(content));
+      } else {
+        setSandboxFileContent(toJsonText(result));
       }
+      setSandboxFileStatus(`已读取文件 ${filePath}`);
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '读取文件失败');
     }
@@ -1229,23 +1355,40 @@ export default function App() {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
     if (!sandboxId || !sandboxFilePath.trim()) return;
     try {
+      setError(null);
       await api.runSandboxToolAction(sandboxId, 'files.write', {
         path: sandboxFilePath.trim(),
         data: sandboxFileContent,
       });
+      setSandboxFileStatus(`已保存文件 ${sandboxFilePath.trim()}`);
       setSandboxTerminalOutput((prev) => `${prev}${prev ? '\n\n' : ''}[file] saved ${sandboxFilePath.trim()}`);
+      await listSandboxFiles(parentPath(sandboxFilePath));
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '下发文件失败');
     }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath, sandboxFileContent]);
+  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath, sandboxFileContent, listSandboxFiles]);
+
+  const goSandboxFileParent = useCallback(async () => {
+    await listSandboxFiles(parentPath(sandboxDirectoryPath));
+  }, [listSandboxFiles, sandboxDirectoryPath]);
+
+  const openSandboxFileItem = useCallback(async (item: SandboxFileItem) => {
+    if (item.kind === 'dir') {
+      setSandboxFilePath('');
+      setSandboxFileContent('');
+      await listSandboxFiles(item.path);
+      return;
+    }
+
+    await readSandboxFile(item.path);
+  }, [listSandboxFiles, readSandboxFile]);
 
   const inspectSandboxPorts = useCallback(async () => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
     if (!sandboxId) return;
     try {
-      const result = await api.runSandboxToolAction(sandboxId, 'command.run', {
-        cmd: `sh -lc "ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null || lsof -i -P -n 2>/dev/null"`,
-      });
+      setError(null);
+      const result = await api.runSandboxToolAction(sandboxId, 'system.ports.inspect');
       setSandboxPortResult(result);
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '查看端口失败');
@@ -1260,7 +1403,9 @@ export default function App() {
       const result = await api.runSandboxToolAction(sandboxId, 'sandbox.host', {
         port,
       });
-      setSandboxPortResult(result);
+      setSandboxPortResult({
+        stdout: `端口 ${port} 对外地址：https://${String(result)}`,
+      });
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '查询端口映射失败');
     }
@@ -1514,6 +1659,21 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+
+  useEffect(() => {
+    if (!sandboxModalOpen || sandboxDetailTab !== 'advanced') {
+      return;
+    }
+    if (!sandboxDirectoryPath.trim()) {
+      return;
+    }
+    if (sandboxFileItems.length > 0) {
+      return;
+    }
+    void listSandboxFiles().catch((toolError) => {
+      setError(toolError instanceof Error ? toolError.message : '加载目录失败');
+    });
+  }, [sandboxModalOpen, sandboxDetailTab, sandboxDirectoryPath, sandboxFileItems.length, listSandboxFiles]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -5502,15 +5662,65 @@ export default function App() {
                       <div className="inspector-card-header">
                         <div>
                           <h2>File Manager</h2>
-                          <span className="panel-caption">目录菜单 + 文件编辑器</span>
+                          <span className="panel-caption">目录浏览与文件读写分离，避免路径语义互相污染</span>
                         </div>
                       </div>
                       <div className="file-manager-layout">
                         <aside className="file-manager-menu">
-                          <div className="button-grid-three file-manager-actions">
+                          <div className="file-manager-path-group">
+                            <span className="panel-caption">当前目录</span>
+                            <input
+                              className="text-input"
+                              value={sandboxDirectoryPath}
+                              onChange={(event) => setSandboxDirectoryPath(event.target.value)}
+                              placeholder="/workspace"
+                            />
+                          </div>
+                          <div className="file-manager-actions">
+                            <button type="button" className="secondary-btn" onClick={() => void goSandboxFileParent()}>
+                              返回上级
+                            </button>
                             <button type="button" className="secondary-btn" onClick={() => void listSandboxFiles()}>
                               刷新目录
                             </button>
+                          </div>
+                          <div className="file-manager-status">{sandboxFileStatus}</div>
+                          <div className="file-manager-list">
+                            {sandboxFileItems.length ? (
+                              sandboxFileItems.map((item) => (
+                                <button
+                                  key={item.path}
+                                  type="button"
+                                  className={`file-entry-btn ${
+                                    sandboxFilePath === item.path || sandboxDirectoryPath === item.path ? 'active' : ''
+                                  }`}
+                                  onClick={() => void openSandboxFileItem(item)}
+                                >
+                                  <span className="mono">{item.kind === 'dir' ? 'DIR' : 'FILE'}</span>
+                                  <span className="file-entry-text">
+                                    <span>{item.label}</span>
+                                    {formatFileItemMeta(item) ? (
+                                      <span className="file-entry-meta">{formatFileItemMeta(item)}</span>
+                                    ) : null}
+                                  </span>
+                                </button>
+                              ))
+                            ) : (
+                              <p className="empty">当前目录暂无内容，或请先执行“刷新目录”。</p>
+                            )}
+                          </div>
+                        </aside>
+                        <div className="file-manager-editor">
+                          <div className="file-manager-path-group">
+                            <span className="panel-caption">文件路径</span>
+                            <input
+                              className="text-input"
+                              value={sandboxFilePath}
+                              onChange={(event) => setSandboxFilePath(event.target.value)}
+                              placeholder={`${sandboxDirectoryPath.replace(/\/+$/, '') || '/workspace'}/index.ts`}
+                            />
+                          </div>
+                          <div className="file-manager-actions editor-actions">
                             <button type="button" className="secondary-btn" onClick={() => void readSandboxFile()}>
                               读取文件
                             </button>
@@ -5518,31 +5728,9 @@ export default function App() {
                               保存文件
                             </button>
                           </div>
-                          <div className="file-manager-list">
-                            {sandboxFileItems.length ? (
-                              sandboxFileItems.map((item) => (
-                                <button
-                                  key={item.path}
-                                  type="button"
-                                  className={`file-entry-btn ${sandboxFilePath === item.path ? 'active' : ''}`}
-                                  onClick={() => setSandboxFilePath(item.path)}
-                                >
-                                  <span className="mono">{item.kind === 'dir' ? 'DIR' : 'FILE'}</span>
-                                  <span>{item.label}</span>
-                                </button>
-                              ))
-                            ) : (
-                              <p className="empty">暂无目录项，请先执行“刷新目录”。</p>
-                            )}
+                          <div className="file-manager-directory-hint">
+                            目录刷新只作用于左侧当前目录，读取与保存只作用于右侧文件路径。
                           </div>
-                        </aside>
-                        <div className="file-manager-editor">
-                          <input
-                            className="text-input"
-                            value={sandboxFilePath}
-                            onChange={(event) => setSandboxFilePath(event.target.value)}
-                            placeholder="/workspace/app/index.ts"
-                          />
                           <textarea
                             className="input-area"
                             rows={11}
@@ -5558,7 +5746,7 @@ export default function App() {
                       <div className="inspector-card-header">
                         <div>
                           <h2>进程</h2>
-                          <span className="panel-caption">查看并结束指定 PID</span>
+                          <span className="panel-caption">真实系统进程视图，按 PID 发送终止信号</span>
                         </div>
                       </div>
                       <div className="debug-inline-grid">
@@ -5576,7 +5764,7 @@ export default function App() {
                         </button>
                       </div>
                       <pre className="json-block debug-output-block">
-                        {toJsonText(sandboxProcessResult || { tip: '进程列表和 kill 结果在这里展示' })}
+                        {formatSandboxProcessResult(sandboxProcessResult)}
                       </pre>
                     </article>
 
@@ -5601,9 +5789,9 @@ export default function App() {
                           查询映射
                         </button>
                       </div>
-                        <pre className="json-block debug-output-block">
-                          {toJsonText(sandboxPortResult || { tip: '端口扫描和 host 映射结果在这里展示' })}
-                        </pre>
+                      <pre className="json-block debug-output-block">
+                        {formatSandboxPortResult(sandboxPortResult)}
+                      </pre>
                     </article>
                   </section>
 
@@ -5649,6 +5837,9 @@ export default function App() {
                             'git.getConfig',
                             'git.configureUser',
                             'git.dangerouslyAuthenticate',
+                            'system.process.list',
+                            'system.process.kill',
+                            'system.ports.inspect',
                             'sandbox.host',
                             'sandbox.uploadUrl',
                             'sandbox.downloadUrl',

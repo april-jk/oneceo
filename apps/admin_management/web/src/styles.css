@@ -3000,8 +3000,29 @@ tbody tr:hover {
   gap: 10px;
 }
 
+.file-manager-path-group {
+  display: grid;
+  gap: 6px;
+}
+
 .file-manager-actions {
-  grid-template-columns: 1fr;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.file-manager-actions.editor-actions {
+  margin-top: 2px;
+}
+
+.file-manager-status {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(147, 197, 253, 0.5);
+  background: rgba(239, 246, 255, 0.88);
+  color: #1d4ed8;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .file-manager-list {
@@ -3038,8 +3059,30 @@ tbody tr:hover {
   background: rgba(219, 234, 254, 0.55);
 }
 
+.file-entry-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.file-entry-meta {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .file-manager-editor .input-area {
   min-height: 280px;
+}
+
+.file-manager-directory-hint {
+  color: #475569;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(241, 245, 249, 0.9);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .debug-inline-grid {

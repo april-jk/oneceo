@@ -6,29 +6,15 @@
 
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
+import { loadApiEnv } from './load-env';
 
-const envCandidates = [
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), '..', '.env'),
-  path.resolve(process.cwd(), 'apps', 'api', '.env'),
-  path.resolve(process.cwd(), 'apps', '.env'),
-];
-
-for (const candidate of envCandidates) {
-  if (fs.existsSync(candidate)) {
-    dotenv.config({ path: candidate });
-    break;
-  }
-}
+loadApiEnv();
 
 /**
  * 数据库连接配置
  */
 if (!process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL is required. Please configure it in apps/api/.env');
+  throw new Error('DATABASE_URL is required. Set it in apps/api/.env or provide it via system environment variables.');
 }
 
 const DATABASE_URL = process.env.DATABASE_URL;

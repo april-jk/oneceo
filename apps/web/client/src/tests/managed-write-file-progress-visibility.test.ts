@@ -52,5 +52,18 @@ describe("managed write_file progress visibility", () => {
     expect(toolItem?.detail).toContain("代码预览");
     expect(toolItem?.detail).toContain("const app = createApp()");
   });
-});
 
+  it("keeps full write_file preview content without truncated marker", () => {
+    const longPreview = `${"x".repeat(1400)}\n// tail-visible`;
+    const items = buildChatItems([
+      createWriteFileProgressMessage({
+        generatedChars: 1400 + "// tail-visible".length,
+        preview: longPreview,
+      }),
+    ]);
+    const toolItem = items.find((item): item is Extract<ChatItem, { kind: "managed_tool" }> => item.kind === "managed_tool");
+    expect(toolItem).toBeTruthy();
+    expect(toolItem?.detail).toContain("// tail-visible");
+    expect(toolItem?.detail).not.toContain("[truncated]");
+  });
+});

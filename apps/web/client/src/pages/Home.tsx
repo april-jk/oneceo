@@ -5619,6 +5619,27 @@ function ManagedToolCard({
       : item.status === "completed"
         ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
         : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
+  const writeFileProgress = readManagedWriteFileProgress(item.metadata);
+  const isWriteFileExpanded =
+    shouldExpandManagedWriteFileCard({
+      toolName: item.toolName,
+      status: item.status,
+      metadata: item.metadata,
+    });
+  const writeFilePath = writeFileProgress.path || summaryText || "写入文件";
+  const writeFileGeneratedLabel =
+    writeFileProgress.generatedChars > 0
+      ? `已生成 ${writeFileProgress.generatedChars} 字符`
+      : "正在生成代码";
+  const writeFilePreview = writeFileProgress.preview || previewText || "正在生成代码片段...";
+  const writeFilePreviewRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isWriteFileExpanded) return;
+    const node = writeFilePreviewRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [isWriteFileExpanded, writeFilePreview]);
 
   return (
     <motion.div
@@ -5636,24 +5657,69 @@ function ManagedToolCard({
                 onOpenReplay(item.runId, item.toolCallId);
               }
             }}
-            className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
+            data-managed-tool-layout={isWriteFileExpanded ? "expanded" : "compact"}
+            className={
+              isWriteFileExpanded
+                ? `group w-full max-w-full lg:max-w-[min(86vw,720px)] rounded-2xl border p-0 text-left transition ${chipToneClass}`
+                : `group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`
+            }
           >
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
-              <Icon className="h-3.5 w-3.5" />
-            </span>
-            <span className="min-w-0 flex items-center gap-2 overflow-hidden">
-              <span className="shrink-0 text-[11px] font-medium leading-5">
-                {displayName}
-              </span>
-              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
-                {statusLabel}
-              </span>
-              {summaryText ? (
-                <span className="truncate text-[11px] leading-5 opacity-75">
-                  {summaryText}
+            {isWriteFileExpanded ? (
+              <div className="w-full">
+                <div className="flex h-[190px] w-full flex-col lg:h-[220px]">
+                  <div className="flex items-center justify-between gap-3 border-b border-current/15 px-3 py-2">
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium leading-5">
+                          写入文件
+                        </div>
+                        <div className="truncate text-[11px] leading-5 opacity-75">
+                          {writeFilePath}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                        {statusLabel}
+                      </span>
+                      <div className="mt-1 text-[10px] leading-4 opacity-75">
+                        {writeFileGeneratedLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex-1 px-3 py-2">
+                    <div
+                      ref={writeFilePreviewRef}
+                      className="h-[126px] overflow-auto rounded-xl border border-current/15 bg-background/70 px-3 py-2 font-mono text-[11px] leading-5 whitespace-pre-wrap break-all lg:h-[152px]"
+                    >
+                      {writeFilePreview}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                  <Icon className="h-3.5 w-3.5" />
                 </span>
-              ) : null}
-            </span>
+                <span className="min-w-0 flex items-center gap-2 overflow-hidden">
+                  <span className="shrink-0 text-[11px] font-medium leading-5">
+                    {displayName}
+                  </span>
+                  <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                    {statusLabel}
+                  </span>
+                  {summaryText ? (
+                    <span className="truncate text-[11px] leading-5 opacity-75">
+                      {summaryText}
+                    </span>
+                  ) : null}
+                </span>
+              </>
+            )}
           </button>
         </HoverCardTrigger>
         <HoverCardContent
@@ -6080,6 +6146,27 @@ function getManagedToolDisplayName(toolName: string) {
     default:
       return toolName || "工具调用";
   }
+}
+
+export function shouldExpandManagedWriteFileCard(input: {
+  toolName: string;
+  status: string;
+  metadataRaw?: unknown;
+  metadata?: unknown;
+}) {
+  if (input.toolName !== "write_file") return false;
+  if (input.status !== "running") return false;
+  const metadata = toRecord(input.metadataRaw ?? input.metadata);
+  const progress = toRecord(metadata.writeFileProgress);
+  const generatedCharsRaw = progress.generatedChars;
+  const generatedChars =
+    typeof generatedCharsRaw === "number" && Number.isFinite(generatedCharsRaw)
+      ? generatedCharsRaw
+      : typeof generatedCharsRaw === "string" && generatedCharsRaw.trim()
+        ? Number(generatedCharsRaw)
+        : 0;
+  const preview = asText(progress.preview);
+  return generatedChars > 0 || Boolean(preview);
 }
 
 function readManagedWriteFileProgress(metadataRaw: unknown) {

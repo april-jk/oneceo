@@ -115,7 +115,7 @@ function buildWriteFileProgress(rawArguments: string) {
   const pathField = extractJsonStringField(rawArguments, 'path');
   const contentField = extractJsonStringField(rawArguments, 'content');
   const generatedChars = contentField.value.length;
-  const preview = truncate(contentField.value, 1200);
+  const preview = contentField.value;
   return {
     path: pathField.value || '',
     generatedChars,

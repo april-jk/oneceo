@@ -173,3 +173,7 @@
 ## 12. 方案采用状态
 - 当前状态：20260407-1640 已采用。
 - 实施说明：本次已按文档进入代码实现阶段，后续变更以本方案为准执行与验收。
+
+## 13. 补充方案
+- Notion 固定回调地址与 state 动态会话绑定已采用，详见：
+  - docs/features/connectors/notion_mcp_oauth_fixed_redirect_uri_state_execution_doc_[20260408-2205已采用].md

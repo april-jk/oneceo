@@ -592,8 +592,8 @@ export class SandboxManagementService {
     };
   }
 
-  async restoreEnvironment(sandboxId: string) {
-    return oneceoApiConnector.restoreSandboxEnvironment(sandboxId);
+  async restoreEnvironment(sandboxId: string, options?: { snapshotKey?: string }) {
+    return oneceoApiConnector.restoreSandboxEnvironment(sandboxId, options);
   }
 
   async openEnvironment(sandboxId: string) {
@@ -634,6 +634,15 @@ export class SandboxManagementService {
 
   async getArchiveHistory(sandboxId: string): Promise<SandboxArchiveHistoryEntry[]> {
     return oneceoApiConnector.getSandboxArchiveHistory(sandboxId) as Promise<SandboxArchiveHistoryEntry[]>;
+  }
+
+  async getArchiveDownloadUrl(sandboxId: string, expiresInSeconds = 3600, snapshotKey?: string): Promise<{
+    key: string;
+    fileName: string;
+    downloadUrl: string;
+    expiresInSeconds: number;
+  }> {
+    return oneceoApiConnector.getSandboxArchiveDownloadUrl(sandboxId, expiresInSeconds, snapshotKey);
   }
 
   async connectivityCheck(sandboxId: string) {

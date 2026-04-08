@@ -17,6 +17,7 @@ const envBackup = {
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
   NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
   NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
+  FRONTEND_URL: process.env.FRONTEND_URL,
   VERCEL_MCP_REMOTE_URL: process.env.VERCEL_MCP_REMOTE_URL,
   VERCEL_MCP_REMOTE_HEADERS_JSON: process.env.VERCEL_MCP_REMOTE_HEADERS_JSON,
   VERCEL_CONNECTOR_CLIENT_ID: process.env.VERCEL_CONNECTOR_CLIENT_ID,
@@ -38,7 +39,8 @@ beforeEach(() => {
   process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
   process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
-  process.env.NOTION_CONNECTOR_REDIRECT_URI = 'https://dev.oneceo.ai/notion/callback';
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
   process.env.VERCEL_MCP_REMOTE_URL = 'https://vercel-mcp.example.com';
   process.env.VERCEL_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}","X-Test":"1"}';
   process.env.VERCEL_CONNECTOR_CLIENT_ID = 'vercel-client';
@@ -74,11 +76,13 @@ function buildAccount(
 
 test('connector registry exposes built-in connectors with availability metadata', () => {
   const catalog = connectorRegistry.listCatalog();
+  const notionProvider = connectorRegistry.getOauthProvider('notion');
   assert.equal(catalog.length, 7);
   assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
   assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
   assert.equal(catalog.find((item) => item.key === 'slack')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'notion')?.available, true);
+  assert.equal(notionProvider?.redirectUri, 'https://dev.oneceo.ai/notion/callback');
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.oauth?.supported, true);
   assert.equal(catalog.find((item) => item.key === 'postgres')?.visibleInMenu, false);
@@ -151,7 +155,15 @@ test('notion catalog is unavailable when fixed redirect uri is missing', () => {
   delete process.env.NOTION_CONNECTOR_REDIRECT_URI;
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
-  assert.match(String(notion?.availabilityReason || ''), /固定回调地址/);
+  assert.match(String(notion?.availabilityReason || ''), /回调路径/);
+});
+
+test('notion catalog is unavailable when redirect path is set but frontend base url is missing', () => {
+  delete process.env.FRONTEND_URL;
+  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/notion/callback';
+  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
+  assert.equal(notion?.available, false);
+  assert.match(String(notion?.availabilityReason || ''), /解析失败/);
 });
 
 test('connector registry falls back to official vercel mcp url when remote url env is missing', () => {

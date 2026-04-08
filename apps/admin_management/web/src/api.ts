@@ -596,6 +596,15 @@ export const api = {
     request<SandboxArchiveHistoryEntry[]>(
       `/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/archive-history`
     ),
+  getSandboxArchiveDownloadUrl: (sandboxId: string, expiresInSeconds = 3600, snapshotKey?: string) =>
+    request<{
+      key: string;
+      fileName: string;
+      downloadUrl: string;
+      expiresInSeconds: number;
+    }>(
+      `/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/archive-download-url?expiresInSeconds=${Math.max(60, Math.min(86400, Math.floor(expiresInSeconds || 3600)))}${snapshotKey ? `&snapshotKey=${encodeURIComponent(snapshotKey)}` : ''}`
+    ),
   getSandboxEnvironment: (sandboxId: string) =>
     request<E2bSandboxDetail>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}`),
   getSandboxFullInfo: (sandboxId: string) =>
@@ -630,9 +639,10 @@ export const api = {
     request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/restart`, {
       method: 'POST',
     }),
-  restoreSandboxEnvironment: (sandboxId: string) =>
+  restoreSandboxEnvironment: (sandboxId: string, payload?: { snapshotKey?: string }) =>
     request<Record<string, unknown>>(`/api/sandbox-management/environments/${encodeURIComponent(sandboxId)}/restore`, {
       method: 'POST',
+      body: JSON.stringify(payload || {}),
     }),
   checkSandboxConnectivity: (sandboxId: string) =>
     request<Record<string, unknown>>(

@@ -83,7 +83,7 @@ if (shouldConfigureTls || shouldConfigureProxy) {
     }
 
     // Override global fetch to use undici with the custom dispatcher.
-    const wrappedFetch: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const wrappedFetch: typeof fetch = (async (input: any, init?: any) => {
       if (input instanceof Request) {
         const headers: Record<string, string> = {};
         input.headers.forEach((value, key) => {
@@ -94,10 +94,10 @@ if (shouldConfigureTls || shouldConfigureProxy) {
           method: input.method,
           headers,
           body,
-          redirect: input.redirect as RequestRedirect,
+          redirect: input.redirect as any,
         });
       }
-      return undiciFetch(input as string, init as RequestInit);
+      return undiciFetch(input as string, init as any);
     }) as typeof fetch;
 
     globalThis.fetch = wrappedFetch;

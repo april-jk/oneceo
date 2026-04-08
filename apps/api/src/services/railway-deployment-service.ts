@@ -441,14 +441,17 @@ export async function getRailwayDeploymentPanel(
     binding.environmentName;
 
   const deployments = normalizeDeploymentItems(
-    deploymentsResult.deployments?.edges?.map((edge) => ({
-      id: edge?.node?.id,
-      status: edge?.node?.status,
-      createdAt: edge?.node?.createdAt,
-      serviceName: edge?.node?.service?.name,
-      commitMessage: edge?.node?.meta?.commitMessage,
-      commitAuthor: edge?.node?.meta?.commitAuthor,
-    })) || [],
+    deploymentsResult.deployments?.edges?.map((edge) => {
+      const node: any = edge?.node || {};
+      return {
+        id: node.id,
+        status: node.status,
+        createdAt: node.createdAt,
+        serviceName: node.service?.name,
+        commitMessage: node.meta?.commitMessage,
+        commitAuthor: node.meta?.commitAuthor,
+      };
+    }) || [],
     resolvedServiceName
   );
 

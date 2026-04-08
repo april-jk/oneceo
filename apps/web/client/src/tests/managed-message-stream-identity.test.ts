@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeHistoryAgentMessages,
   mergeRealtimeMessage,
+  resolveManagedStreamDisplayContent,
   resolveManagedStreamMessageKey,
   type AgentMessage,
 } from '@/hooks/useTaskCreationAgent';
@@ -9,6 +10,26 @@ import {
 const WELCOME_MESSAGE = 'welcome';
 
 describe('managed message stream identity', () => {
+  it('preserves leading newline and whitespace in managed stream content chunks', () => {
+    const newlineChunk = resolveManagedStreamDisplayContent({
+      payload: {
+        content: '\n-技术规划：整理需求',
+      },
+      envelope: {},
+    });
+
+    expect(newlineChunk).toBe('\n-技术规划：整理需求');
+
+    const spaceChunk = resolveManagedStreamDisplayContent({
+      payload: {
+        delta: ' ',
+      },
+      envelope: {},
+    });
+
+    expect(spaceChunk).toBe(' ');
+  });
+
   it('keeps optimistic user input visible when run_ack carries source message metadata', () => {
     const userMessage: AgentMessage = {
       type: 'user_input',

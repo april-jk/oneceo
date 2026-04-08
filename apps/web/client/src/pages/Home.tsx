@@ -5776,6 +5776,33 @@ function extractManagedDeliverables(
   return Array.from(unique.values());
 }
 
+function collectManagedWebArtifacts(input: {
+  deliverables: TaskCreationDeliverableArtifact[];
+  managedArtifacts: AltusArtifactFile[];
+}): AltusArtifactFile[] {
+  const unique = new Map<string, AltusArtifactFile>();
+  const pushArtifact = (pathRaw: string, previewType?: AltusArtifactFile["previewType"]) => {
+    const path = String(pathRaw || "").trim().replace(/\\/g, "/");
+    if (!path) return;
+    const resolvedPreviewType = previewType || inferManagedArtifactPreviewType(path);
+    if (resolvedPreviewType !== "web") return;
+    if (unique.has(path)) return;
+    unique.set(path, {
+      path,
+      previewType: "web",
+    });
+  };
+
+  for (const deliverable of input.deliverables) {
+    pushArtifact(deliverable.path);
+  }
+  for (const artifact of input.managedArtifacts) {
+    pushArtifact(artifact.path, artifact.previewType);
+  }
+
+  return Array.from(unique.values());
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
@@ -5793,7 +5820,26 @@ export function buildManagedCompletionCardItem(input: {
     return null;
   }
 
+  const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
+  const managedArtifacts = managedArtifactsByRun.get(runId) || [];
+  const webArtifacts = collectManagedWebArtifacts({
+    deliverables,
+    managedArtifacts,
+  });
+  const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const isRunCompletedContext = message.type === "status_update" && eventType === "run_completed";
+  if ((shouldEmitFromDeliverablesContext || isRunCompletedContext) && webArtifacts.length > 0) {
+    emittedManagedCompletionRuns.add(runId);
+    return {
+      kind: "managed_artifact_card",
+      sessionId,
+      runId,
+      artifacts: webArtifacts,
+      messageKey: `managed:${runId}:artifact_card`,
+    };
+  }
+
   if (deliverables.length > 0) {
     emittedManagedCompletionRuns.add(runId);
     return {
@@ -5805,15 +5851,11 @@ export function buildManagedCompletionCardItem(input: {
     };
   }
 
-  const eventType = asText(metadata.eventType).toLowerCase();
-  if (message.type !== "status_update" || eventType !== "run_completed") {
+  if (!isRunCompletedContext) {
     return null;
   }
 
-  const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
-    (artifact) => artifact.previewType === "web",
-  );
-  if (artifacts.length === 0) {
+  if (webArtifacts.length === 0) {
     return null;
   }
 
@@ -5822,7 +5864,7 @@ export function buildManagedCompletionCardItem(input: {
     kind: "managed_artifact_card",
     sessionId,
     runId,
-    artifacts,
+    artifacts: webArtifacts,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }

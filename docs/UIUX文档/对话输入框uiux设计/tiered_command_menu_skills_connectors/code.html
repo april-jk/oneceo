@@ -1,0 +1,178 @@
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Ethereal AI - Slash Commands</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+          tailwind.config = {
+            darkMode: "class",
+            theme: {
+              extend: {
+                "colors": {
+                        "page-bg": "#F8FAFC",
+                        "input-bg": "#FFFFFF",
+                        "input-border": "#CBD5E1",
+                        "input-border-hover": "#94A3B8",
+                        "input-border-focus": "#2563EB",
+                        "body-text": "#0F172A",
+                        "placeholder-text": "#94A3B8",
+                        "help-text": "#64748B",
+                        "panel-bg": "#FFFFFF",
+                        "item-hover": "#F1F5F9",
+                        "item-active": "#DBEAFE",
+                        "item-active-text": "#1D4ED8",
+                        "btn-bg": "#0F172A",
+                        "btn-text": "#FFFFFF",
+                        "btn-hover": "#1E293B"
+                },
+                "borderRadius": {
+                        "DEFAULT": "0.5rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "2xl": "1rem",
+                        "3xl": "1.5rem",
+                        "full": "9999px"
+                },
+                "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                }
+              },
+            },
+          }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .command-menu-shadow {
+            box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+        }
+        .input-container {
+            border: 1px solid #CBD5E1;
+            transition: all 0.2s ease;
+        }
+        .input-container:hover {
+            border-color: #94A3B8;
+        }
+        .input-container:focus-within {
+            border-color: #2563EB;
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18);
+        }
+    </style>
+</head>
+<body class="bg-page-bg font-body text-body-text min-h-screen flex items-center justify-center p-6">
+<div class="w-full max-w-2xl relative flex flex-col items-center">
+<!-- Floating Command Menu: Narrower than input and positioned immediately above -->
+<div class="w-[92%] mb-2 z-40">
+<div class="bg-panel-bg rounded-2xl command-menu-shadow border border-input-border overflow-hidden p-2 flex flex-col gap-1">
+<!-- Skills Section -->
+<div>
+<div class="px-3 py-2 text-help-text text-[10px] font-bold uppercase tracking-widest">Skills</div>
+<!-- Command Item: Active/Highlighted -->
+<div class="flex items-center gap-3 p-3 bg-item-active rounded-xl cursor-pointer transition-all">
+<div class="w-10 h-10 rounded-lg bg-item-active-text flex items-center justify-center text-white">
+<span class="material-symbols-outlined">terminal</span>
+</div>
+<div class="flex-grow">
+<div class="flex items-center gap-2">
+<span class="font-bold text-sm text-item-active-text">Vercel:workflow</span>
+<span class="bg-item-active-text/10 text-item-active-text text-[10px] px-2 py-0.5 rounded-full font-bold">Recommended</span>
+</div>
+<p class="text-xs text-item-active-text opacity-80">Deploy current branch to production environment</p>
+</div>
+<span class="material-symbols-outlined text-item-active-text">chevron_right</span>
+</div>
+<!-- Command Item -->
+<div class="flex items-center gap-3 p-3 hover:bg-item-hover rounded-xl cursor-pointer transition-all group">
+<div class="w-10 h-10 rounded-lg bg-item-hover flex items-center justify-center text-help-text group-hover:bg-input-border">
+<span class="material-symbols-outlined">psychology</span>
+</div>
+<div class="flex-grow">
+<div class="font-bold text-sm text-body-text">Model:select</div>
+<p class="text-xs text-help-text">Switch between Claude, GPT-4, or Llama 3</p>
+</div>
+<span class="text-[10px] font-mono text-placeholder-text bg-item-hover px-2 py-1 rounded">⌘M</span>
+</div>
+</div>
+<!-- Separator -->
+<div class="h-px bg-[#CBD5E1] mx-2 my-1"></div>
+<!-- Connectors Section -->
+<div>
+<div class="px-3 py-2 text-help-text text-[10px] font-bold uppercase tracking-widest">Connectors</div>
+<!-- Connector Item -->
+<div class="flex items-center gap-3 p-3 hover:bg-item-hover rounded-xl cursor-pointer transition-all group">
+<div class="w-10 h-10 rounded-lg bg-item-hover flex items-center justify-center text-help-text group-hover:bg-input-border">
+<span class="material-symbols-outlined">hub</span>
+</div>
+<div class="flex-grow">
+<div class="font-bold text-sm text-body-text">GitHub</div>
+<p class="text-xs text-help-text">Sync repositories and manage issues</p>
+</div>
+</div>
+<!-- Connector Item -->
+<div class="flex items-center gap-3 p-3 hover:bg-item-hover rounded-xl cursor-pointer transition-all group">
+<div class="w-10 h-10 rounded-lg bg-item-hover flex items-center justify-center text-help-text group-hover:bg-input-border">
+<span class="material-symbols-outlined">forum</span>
+</div>
+<div class="flex-grow">
+<div class="font-bold text-sm text-body-text">Slack</div>
+<p class="text-xs text-help-text">Send notifications and message threads</p>
+</div>
+</div>
+<!-- Connector Item -->
+<div class="flex items-center gap-3 p-3 hover:bg-item-hover rounded-xl cursor-pointer transition-all group">
+<div class="w-10 h-10 rounded-lg bg-item-hover flex items-center justify-center text-help-text group-hover:bg-input-border">
+<span class="material-symbols-outlined">database</span>
+</div>
+<div class="flex-grow">
+<div class="font-bold text-sm text-body-text">Database</div>
+<p class="text-xs text-help-text">Connect to PostgreSQL or MongoDB</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Redesigned Input Area: Full width of the container -->
+<div class="w-full bg-input-bg rounded-[2rem] p-4 input-container command-menu-shadow flex flex-col gap-3">
+<!-- Line 1: Text Input -->
+<div class="flex items-start gap-4 px-2">
+<div class="pt-1">
+<span class="text-item-active-text font-bold text-xl leading-none">/</span>
+</div>
+<textarea class="w-full bg-transparent border-none focus:ring-0 p-0 text-body-text placeholder:text-placeholder-text text-lg resize-none min-h-[28px]" placeholder="What's on your mind?" rows="1">vercel</textarea>
+</div>
+<!-- Divider -->
+<div class="h-px bg-item-hover mx-2"></div>
+<!-- Line 2: Functional Icons and Actions -->
+<div class="flex items-center justify-between px-2">
+<div class="flex items-center gap-1">
+<!-- Plus Icon -->
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-help-text hover:bg-item-hover transition-all">
+<span class="material-symbols-outlined text-xl">add</span>
+</button>
+<!-- Electrical Plug -->
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-help-text hover:bg-item-hover transition-all">
+<span class="material-symbols-outlined text-xl">power</span>
+</button>
+<!-- Sparkles/Stars Icon -->
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-help-text hover:bg-item-hover transition-all">
+<span class="material-symbols-outlined text-xl">auto_awesome</span>
+</button>
+</div>
+<div class="flex items-center gap-3">
+<!-- Microphone preserved -->
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-help-text hover:bg-item-hover transition-all">
+<span class="material-symbols-outlined text-xl">mic</span>
+</button>
+<!-- Send Button -->
+<button class="bg-btn-bg hover:bg-btn-hover text-btn-text w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 shadow-md shadow-btn-bg/10">
+<span class="material-symbols-outlined text-xl">arrow_upward</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</body></html>

@@ -182,11 +182,20 @@ export function normalizePlatformSkillSelections(value: unknown): Array<{ skillI
 export class PlatformSkillService {
   private seeded = false;
 
+  private isUniqueViolation(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    const payload = error as { code?: unknown; cause?: { code?: unknown } };
+    return payload.code === '23505' || payload.cause?.code === '23505';
+  }
+
   async ensureSeeded() {
     if (this.seeded) return;
-    const count = await platformSkillDAO.countSkills();
-    if (count === 0) {
-      for (const seed of PLATFORM_SKILL_SEEDS) {
+    for (const seed of PLATFORM_SKILL_SEEDS) {
+      const existed = await platformSkillDAO.getSkillBySlug(seed.slug);
+      if (existed) {
+        continue;
+      }
+      try {
         await platformSkillDAO.createSkillWithRevision({
           skill: {
             slug: seed.slug,
@@ -211,6 +220,12 @@ export class PlatformSkillService {
               }))
             : [],
         });
+      } catch (error) {
+        if (this.isUniqueViolation(error)) {
+          // 并发启动时可能同时写入同一个 seed，唯一键冲突可安全忽略。
+          continue;
+        }
+        throw error;
       }
     }
     this.seeded = true;

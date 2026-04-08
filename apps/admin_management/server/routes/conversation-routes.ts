@@ -22,11 +22,26 @@ export function createConversationRoutes(service: ConversationManagementService)
   router.get(
     '/sessions/:sessionId',
     asyncHandler(async (req, res) => {
-      const result = await service.getSessionDetail(req.params.sessionId);
+      const result = await service.getSessionCore(req.params.sessionId);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/sessions/:sessionId/core',
+    asyncHandler(async (req, res) => {
+      const result = await service.getSessionCore(req.params.sessionId);
+      return ok(res, result);
+    })
+  );
+
+  router.get(
+    '/sessions/:sessionId/infra',
+    asyncHandler(async (req, res) => {
+      const result = await service.getSessionInfra(req.params.sessionId);
       return ok(res, result);
     })
   );
 
   return router;
 }
-

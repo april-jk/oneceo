@@ -48,17 +48,14 @@ router.get('/catalog', async (req, res) => {
 router.get('/me', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
-    const [catalog, profiles] = await Promise.all([
-      userConnectorService.listCatalog(),
-      userConnectorService.listUserProfiles(currentUser.userId),
-    ]);
+    const snapshot = await userConnectorService.getMeSnapshot(currentUser.userId);
     return res.json({
       success: true,
       data: {
         userId: currentUser.userId,
         source: currentUser.source,
-        catalog,
-        profiles,
+        catalog: snapshot.catalog,
+        profiles: snapshot.profiles,
       },
     });
   } catch (error) {
@@ -267,7 +264,7 @@ router.post('/:connectorKey/oauth/callback', async (req, res) => {
       code: String(req.body?.code || '').trim(),
       redirectUri: String(req.body?.redirectUri || '').trim(),
     });
-    const profileId = result.account?.defaultProfileId || result.account?.profileId;
+    const profileId = result.account?.defaultProfileId;
     const runtimeRefreshQueued = Boolean(profileId && result.account?.authStatus === 'authorized');
     if (runtimeRefreshQueued && profileId) {
       queueProfileRuntimeRefresh(

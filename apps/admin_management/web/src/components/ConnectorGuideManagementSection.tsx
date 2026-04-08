@@ -48,6 +48,20 @@ function toEditorState(detail: ConnectorGuidePolicyDetail, revision?: ConnectorG
   };
 }
 
+function guideStatusLabel(status: string) {
+  if (status === 'draft') return '草稿';
+  if (status === 'active') return '启用';
+  if (status === 'archived') return '已归档';
+  return status;
+}
+
+function triggerModeLabel(mode: string) {
+  if (mode === 'on_attach') return '接入时';
+  if (mode === 'on_active_use') return '活跃使用时';
+  if (mode === 'on_attach_and_active_use') return '接入时和活跃使用时';
+  return mode;
+}
+
 export function ConnectorGuideManagementSection({ onError }: Props) {
   const [policies, setPolicies] = useState<ConnectorGuidePolicy[]>([]);
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
@@ -246,7 +260,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
       <section className="panel fade-in">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Connector Guides</p>
+            <p className="eyebrow">连接器引导规则</p>
             <h2>连接器 Guide 管理</h2>
             <p className="subtitle">管理 GitHub / Supabase / Vercel 的隐式 guide 文本，并控制发布版本。</p>
           </div>
@@ -274,7 +288,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
             value={filters.connectorKey}
             onChange={(event) => setFilters((prev) => ({ ...prev, connectorKey: event.target.value }))}
           >
-            <option value="">全部 connector</option>
+            <option value="">全部连接器</option>
             {connectorOptions.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -287,13 +301,13 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
             onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}
           >
             <option value="all">全部状态</option>
-            <option value="draft">draft</option>
-            <option value="active">active</option>
-            <option value="archived">archived</option>
+            <option value="draft">草稿</option>
+            <option value="active">启用</option>
+            <option value="archived">已归档</option>
           </select>
           <input
             className="control-input"
-            placeholder="按 connector 搜索"
+            placeholder="按连接器搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
           />
@@ -306,17 +320,17 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
           <table className="skill-table">
             <thead>
               <tr>
-                <th>Connector</th>
+                <th>连接器</th>
                 <th>状态</th>
                 <th>触发</th>
-                <th>Published</th>
+                <th>发布</th>
               </tr>
             </thead>
             <tbody>
               {policies.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="table-empty">
-                    暂无 connector guide policy
+                    暂无连接器引导规则
                   </td>
                 </tr>
               ) : (
@@ -331,9 +345,9 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                       <div className="cell-subtle">{item.description || '-'}</div>
                     </td>
                     <td>
-                      <span className={`status-pill status-${item.status}`}>{item.status}</span>
+                      <span className={`status-pill status-${item.status}`}>{guideStatusLabel(item.status)}</span>
                     </td>
-                    <td>{item.triggerMode}</td>
+                    <td>{triggerModeLabel(item.triggerMode)}</td>
                     <td>{item.publishedRevisionId ? '已发布' : '-'}</td>
                   </tr>
                 ))
@@ -347,7 +361,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
         <section className="panel fade-in">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Connector Guide Editor</p>
+              <p className="eyebrow">连接器引导规则编辑器</p>
               <h2>{detail.connectorKey}</h2>
               <p className="subtitle">
                 当前 published: {detail.publishedRevision ? `v${detail.publishedRevision.versionNumber}` : '未发布'} ·
@@ -377,35 +391,35 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
               </div>
               <div className="skill-form-grid">
                 <label className="form-field">
-                  <span>connectorKey</span>
+                  <span>连接器标识</span>
                   <input className="control-input" value={detail.connectorKey} disabled />
                 </label>
                 <label className="form-field">
-                  <span>triggerMode</span>
+                  <span>触发模式</span>
                   <select
                     className="control-input"
                     value={editor.triggerMode}
                     onChange={(event) => setEditor((prev) => ({ ...prev, triggerMode: event.target.value }))}
                   >
-                    <option value="on_attach">on_attach</option>
-                    <option value="on_active_use">on_active_use</option>
-                    <option value="on_attach_and_active_use">on_attach_and_active_use</option>
+                    <option value="on_attach">接入时</option>
+                    <option value="on_active_use">活跃使用时</option>
+                    <option value="on_attach_and_active_use">接入时和活跃使用时</option>
                   </select>
                 </label>
                 <label className="form-field">
-                  <span>status</span>
+                  <span>状态</span>
                   <select
                     className="control-input"
                     value={editor.status}
                     onChange={(event) => setEditor((prev) => ({ ...prev, status: event.target.value }))}
                   >
-                    <option value="draft">draft</option>
-                    <option value="active">active</option>
-                    <option value="archived">archived</option>
+                    <option value="draft">草稿</option>
+                    <option value="active">启用</option>
+                    <option value="archived">已归档</option>
                   </select>
                 </label>
                 <label className="form-field field-span-2">
-                  <span>description</span>
+                  <span>说明</span>
                   <input
                     className="control-input"
                     value={editor.description}
@@ -418,14 +432,14 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                 <div>
                   <h3>Revision 文本</h3>
                   <p className="cell-subtle">
-                    当前编辑 revision: {revision ? `v${revision.versionNumber} · ${revision.status}` : '暂无 revision'}
+                    当前编辑版本：{revision ? `v${revision.versionNumber} · ${guideStatusLabel(revision.status)}` : '暂无版本'}
                   </p>
                 </div>
               </div>
 
               <div className="skill-form-grid">
                 <label className="form-field field-span-2">
-                  <span>serverInstructionsMarkdown</span>
+                  <span>服务端说明 Markdown</span>
                   <textarea
                     className="control-textarea"
                     rows={10}
@@ -436,7 +450,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                   />
                 </label>
                 <label className="form-field field-span-2">
-                  <span>guideReminderMarkdown</span>
+                  <span>引导提醒 Markdown</span>
                   <textarea
                     className="control-textarea"
                     rows={8}
@@ -447,7 +461,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                   />
                 </label>
                 <label className="form-field field-span-2">
-                  <span>blockingRulesMarkdown</span>
+                  <span>阻断规则 Markdown</span>
                   <textarea
                     className="control-textarea"
                     rows={8}

@@ -88,6 +88,16 @@ type ConnectorGuidePromptSections = {
   reminderSection: string;
 };
 
+export type ActiveConnectorGuide = {
+  connectorKey: string;
+  policyId: string;
+  revisionId: string;
+  triggerMode: string;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -109,6 +119,16 @@ function formatGuideSection(title: string, items: Array<{ connectorKey: string; 
 }
 
 export class ConnectorGuideService {
+  private collectActiveConnectorKeysFromBindings(bindings: Array<{ connectorKey: string; desiredState: string }>) {
+    return Array.from(
+      new Set(
+        bindings
+          .filter((binding) => binding.desiredState === 'attached' && isSupportedConnectorKey(binding.connectorKey))
+          .map((binding) => binding.connectorKey)
+      )
+    ) as SupportedConnectorKey[];
+  }
+
   private assertSupportedConnectorKey(connectorKey: string) {
     if (!isSupportedConnectorKey(connectorKey)) {
       throw new Error('首批仅支持 github、supabase、vercel 三个 connector guide');
@@ -329,13 +349,7 @@ export class ConnectorGuideService {
 
   async recomputeSessionGuides(taskSessionId: string) {
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
-    const activeConnectorKeys = Array.from(
-      new Set(
-        bindings
-          .filter((binding) => binding.desiredState === 'attached' && isSupportedConnectorKey(binding.connectorKey))
-          .map((binding) => binding.connectorKey)
-      )
-    ) as SupportedConnectorKey[];
+    const activeConnectorKeys = this.collectActiveConnectorKeysFromBindings(bindings);
 
     writeConnectorDebugLog('[CONNECTOR_GUIDE_RECOMPUTE_START]', {
       taskSessionId,
@@ -369,6 +383,25 @@ export class ConnectorGuideService {
       appliedCount: guides.length,
     });
     return result;
+  }
+
+  async ensureSessionGuidesUpToDate(taskSessionId: string) {
+    const [bindings, sessionGuides] = await Promise.all([
+      taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId),
+      connectorGuideDAO.listSessionGuides(taskSessionId),
+    ]);
+    const activeConnectorKeys = this.collectActiveConnectorKeysFromBindings(bindings).sort();
+    const currentGuideConnectorKeys = Array.from(
+      new Set(sessionGuides.map((item) => asText(item.sessionGuide.connectorKey)).filter(Boolean))
+    ).sort();
+    const needsRecompute =
+      activeConnectorKeys.length !== currentGuideConnectorKeys.length ||
+      activeConnectorKeys.some((connectorKey, index) => connectorKey !== currentGuideConnectorKeys[index]);
+    if (!needsRecompute) {
+      return false;
+    }
+    await this.recomputeSessionGuides(taskSessionId);
+    return true;
   }
 
   async listSessionGuides(taskSessionId: string) {
@@ -406,14 +439,29 @@ export class ConnectorGuideService {
   }
 
   async getBlockingRulesForConnector(taskSessionId: string, connectorKey: string) {
+    const guide = await this.getActiveGuideForConnector(taskSessionId, connectorKey);
+    return guide ? guide.blockingRulesMarkdown : '';
+  }
+
+  async getActiveGuideForConnector(taskSessionId: string, connectorKey: string): Promise<ActiveConnectorGuide | null> {
     const guides = await connectorGuideDAO.listSessionGuides(taskSessionId);
     const matched = guides.find((item) => item.sessionGuide.connectorKey === connectorKey);
-    return matched ? asText(matched.revision.blockingRulesMarkdown) : '';
+    if (!matched) return null;
+    return {
+      connectorKey: matched.sessionGuide.connectorKey,
+      policyId: matched.sessionGuide.policyId,
+      revisionId: matched.sessionGuide.revisionId,
+      triggerMode: matched.sessionGuide.triggerMode,
+      serverInstructionsMarkdown: asText(matched.revision.serverInstructionsMarkdown),
+      guideReminderMarkdown: asText(matched.revision.guideReminderMarkdown),
+      blockingRulesMarkdown: asText(matched.revision.blockingRulesMarkdown),
+    };
   }
 
   async ensureBuiltinPolicies() {
     const createdPolicies: string[] = [];
     const createdRevisions: string[] = [];
+    const touchedConnectorKeys = new Set<SupportedConnectorKey>();
 
     for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
       const builtin = BUILTIN_CONNECTOR_GUIDES[connectorKey];
@@ -428,6 +476,7 @@ export class ConnectorGuideService {
           createdBy: 'system_builtin',
         });
         createdPolicies.push(connectorKey);
+        touchedConnectorKeys.add(connectorKey);
       }
 
       const revisions = await connectorGuideDAO.listRevisions(policy.id);
@@ -445,17 +494,21 @@ export class ConnectorGuideService {
         });
         createdRevisions.push(`${connectorKey}:1`);
         await connectorGuideDAO.publishRevision(policy.id, revision.id);
+        touchedConnectorKeys.add(connectorKey);
       }
-    }
-
-    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
-      await this.recomputeSessionsForConnector(connectorKey);
     }
 
     return {
       createdPolicies,
       createdRevisions,
+      touchedConnectorKeys: Array.from(touchedConnectorKeys),
     };
+  }
+
+  async recomputeBuiltinPolicySessions() {
+    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
+      await this.recomputeSessionsForConnector(connectorKey);
+    }
   }
 
   private async recomputeSessionsForConnector(connectorKey: string) {

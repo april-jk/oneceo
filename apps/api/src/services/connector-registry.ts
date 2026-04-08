@@ -6,6 +6,10 @@ import {
   type ConnectorKey,
   type ConnectorOauthProvider,
 } from '../connectors/definitions';
+import {
+  buildSupabaseBridgeEnvironment,
+  buildSupabaseStdioBridgeCommand,
+} from '../connectors/bridges/supabase-stdio-bridge';
 
 export { CONNECTOR_KEYS, type ConnectorKey };
 
@@ -70,6 +74,14 @@ export type ConnectorRuntimeConfig =
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
 }
 
 function normalizeRepositoryFullName(value: unknown): string {
@@ -227,7 +239,6 @@ function buildRemoteHeaders(
   item: ConnectorCatalogItem,
   input: {
     accessToken?: string;
-    projectRef?: string;
     teamId?: string;
   }
 ): Record<string, string> {
@@ -235,12 +246,10 @@ function buildRemoteHeaders(
     ? parseHeadersTemplate(process.env[item.runtime.headersEnv])
     : {};
   const accessToken = asText(input.accessToken);
-  const projectRef = asText(input.projectRef);
   const teamId = asText(input.teamId);
   if (Object.keys(template).length > 0) {
     return renderHeaders(template, {
       token: accessToken,
-      projectRef,
       teamId,
     });
   }
@@ -266,7 +275,6 @@ function buildRemoteUrl(
   item: ConnectorCatalogItem,
   input: {
     connectorKey: ConnectorKey;
-    projectRef?: string;
     teamId?: string;
   }
 ): string {
@@ -276,13 +284,6 @@ function buildRemoteUrl(
     throw new Error(`${item.name} MCP remote URL 未配置`);
   }
   const url = new URL(baseUrl);
-  if (input.connectorKey === 'supabase') {
-    const projectRef = asText(input.projectRef);
-    if (!projectRef) {
-      throw new Error('Supabase 连接器缺少 project ref');
-    }
-    url.searchParams.set('project_ref', projectRef);
-  }
   if (input.connectorKey === 'vercel') {
     const teamId = asText(input.teamId);
     if (teamId) {
@@ -359,18 +360,38 @@ export class ConnectorRegistry {
       };
     }
 
+    if (connectorKey === 'supabase') {
+      const accessToken = asText(secret.accessToken);
+      if (!accessToken) {
+        throw new Error('Supabase 连接器缺少 access token');
+      }
+      const proxyEnabled = toBool(
+        process.env.ONECEO_PROXY_ENABLED ?? process.env.E2B_PROXY_ENABLED ?? 'true',
+        true
+      );
+      return {
+        type: 'local',
+        enabled: true,
+        command: ['node', '-e', buildSupabaseStdioBridgeCommand()],
+        environment: buildSupabaseBridgeEnvironment({
+          accessToken,
+          projectUrl: asText(configJson.projectUrl) || asText(configJson.supabaseUrl),
+          mcpUrl: asText(configJson.mcpUrl),
+          proxyEnabled,
+        }),
+      };
+    }
+
     const accessToken = asText(secret.accessToken);
     if (!accessToken) {
       throw new Error(`${item.name} 连接器缺少 access token`);
     }
     const url = buildRemoteUrl(item, {
       connectorKey,
-      projectRef: asText(configJson.projectRef),
       teamId: asText(configJson.teamId),
     });
     const headers = buildRemoteHeaders(connectorKey, item, {
       accessToken,
-      projectRef: asText(configJson.projectRef),
       teamId: asText(configJson.teamId),
     });
     return {

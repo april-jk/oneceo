@@ -152,7 +152,7 @@ export class TaskDetailAgent extends BaseAgent {
       // ======================================================================
       // 工具配置（见下方 initializeTools 方法）
       // ======================================================================
-      tools: this.initializeTools(),
+      tools: [],
       
       // ======================================================================
       // LLM 参数配置
@@ -605,7 +605,7 @@ ${stagePrompts[currentStage]}
    */
   async assistStream(taskId: string, message: string, onToken: (token: string) => void) {
     const input = `任务 ID: ${taskId}\n\n用户消息: ${message}`;
-    return await this.executeStream(input, [], onToken);
+    return await this.executeStream(input, onToken);
   }
 
   /**

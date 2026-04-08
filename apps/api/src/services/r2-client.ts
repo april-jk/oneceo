@@ -1,4 +1,4 @@
-import { S3Client, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Upload } from '@aws-sdk/lib-storage';
 import { Readable } from 'stream';
@@ -93,4 +93,30 @@ export async function existsInR2(key: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+export async function listR2Keys(prefix: string, maxKeys = 200): Promise<string[]> {
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+
+  while (keys.length < maxKeys) {
+    const response = await getR2Client().send(
+      new ListObjectsV2Command({
+        Bucket: bucketName(),
+        Prefix: prefix,
+        MaxKeys: Math.min(1000, maxKeys - keys.length),
+        ContinuationToken: continuationToken,
+      })
+    );
+    for (const item of response.Contents || []) {
+      if (item.Key) keys.push(item.Key);
+      if (keys.length >= maxKeys) break;
+    }
+    if (!response.IsTruncated || !response.NextContinuationToken) {
+      break;
+    }
+    continuationToken = response.NextContinuationToken;
+  }
+
+  return keys;
 }

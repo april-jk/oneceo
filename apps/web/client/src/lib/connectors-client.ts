@@ -40,6 +40,11 @@ export type ConnectorCatalogItem = {
   activityMatcherVerified: boolean;
   visibleInMenu?: boolean;
   deprecated?: boolean;
+  runtime?: {
+    type?: string;
+    urlDefault?: string;
+    headerTemplate?: string;
+  };
 };
 
 export type ConnectorProfile = {
@@ -71,6 +76,11 @@ export type UserConnectorAccount = {
   defaultProfileId?: string | null;
   defaultProfileName?: string | null;
   profilesCount?: number;
+};
+
+export type ConnectorOauthAccount = ConnectorProfile & {
+  defaultProfileId?: string | null;
+  defaultProfileName?: string | null;
 };
 
 export type SessionConnectorStatus = {
@@ -112,6 +122,15 @@ export type GithubConnectorRepository = {
     triage?: boolean;
     pull?: boolean;
   };
+};
+
+export type SessionConnectorDraftEntry = {
+  connectorKey: ConnectorKey;
+  profileId?: string | null;
+  desiredState?: "attached" | "detached";
+  enabledTools?: string[];
+  sessionConfig?: Record<string, unknown> | null;
+  updatedAt?: string;
 };
 
 export type ConnectorProfileInput = {
@@ -395,13 +414,13 @@ export async function completeConnectorOauth(
     redirectUri: string;
   }
 ): Promise<{
-  account?: ConnectorProfile;
+  account?: ConnectorOauthAccount;
   returnToSessionId?: string | null;
 }> {
   const result = await requestJson<{
     data?: {
-      account?: ConnectorProfile;
-      profile?: ConnectorProfile;
+      account?: ConnectorOauthAccount;
+      profile?: ConnectorOauthAccount;
       returnToSessionId?: string | null;
     };
   }>(`${getApiBaseUrl()}/api/connectors/${encodeURIComponent(connectorKey)}/oauth/callback`, {
@@ -502,4 +521,56 @@ export async function detachSessionConnector(
     }
   );
   return result.data?.connector || null;
+}
+
+export async function saveSessionConnectorDraft(
+  draftId: string,
+  entries: SessionConnectorDraftEntry[]
+): Promise<{ draftId: string; entryCount: number; redisEnabled: boolean; updatedAt: string }> {
+  const result = await requestJson<{
+    data?: {
+      draftId?: string;
+      entryCount?: number;
+      redisEnabled?: boolean;
+      updatedAt?: string;
+    };
+  }>(`${getApiBaseUrl()}/api/task-creation/connector-drafts/${encodeURIComponent(draftId)}`, {
+    method: "POST",
+    body: { entries },
+  });
+  return {
+    draftId: String(result.data?.draftId || draftId),
+    entryCount: Number(result.data?.entryCount || 0),
+    redisEnabled: Boolean(result.data?.redisEnabled),
+    updatedAt: String(result.data?.updatedAt || new Date().toISOString()),
+  };
+}
+
+export async function applySessionConnectorDraft(
+  draftId: string,
+  input: {
+    sessionId: string;
+    entries?: SessionConnectorDraftEntry[];
+  }
+): Promise<{ accepted: number; runtimeQueued: boolean }> {
+  const result = await requestJson<{
+    data?: {
+      accepted?: number;
+      runtimeQueued?: boolean;
+    };
+  }>(`${getApiBaseUrl()}/api/task-creation/connector-drafts/${encodeURIComponent(draftId)}/apply`, {
+    method: "POST",
+    body: input,
+  });
+  return {
+    accepted: Number(result.data?.accepted || 0),
+    runtimeQueued: Boolean(result.data?.runtimeQueued),
+  };
+}
+
+export async function clearSessionConnectorDraft(draftId: string): Promise<void> {
+  await requestJson(
+    `${getApiBaseUrl()}/api/task-creation/connector-drafts/${encodeURIComponent(draftId)}`,
+    { method: "DELETE" }
+  );
 }

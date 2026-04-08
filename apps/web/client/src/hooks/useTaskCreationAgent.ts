@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation, useSearch } from 'wouter';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   createTaskCreationSession,
   createTaskCreationDraftSession,
@@ -27,6 +28,15 @@ import {
   type TaskCreationHistoryMessage,
   type OsacMessageRecord,
 } from '@/lib/task-creation-client';
+import {
+  applySessionConnectorDraft,
+  clearSessionConnectorDraft,
+} from '@/lib/connectors-client';
+import {
+  clearSessionConnectorDraftState,
+  getSessionConnectorDraftState,
+  listSessionConnectorDraftEntries,
+} from '@/lib/session-connector-draft';
 
 export interface AgentMessage {
   id?: string;
@@ -118,6 +128,54 @@ export function resolveChatInputSessionId(input: {
   const path = asText(input.locationPath);
   const pathMatch = path.match(/^\/session\/([^/?#]+)/);
   return pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+}
+
+export function resolveSessionRouteState(input: {
+  locationPath?: string | null;
+  search?: string | null;
+}) {
+  const search = typeof input.search === 'string' ? input.search : '';
+  const params = new URLSearchParams(search);
+  const querySessionId = params.get('sessionId')?.trim() || '';
+  const createNewToken = params.get('new')?.trim() || '';
+  const locationPath = asText(input.locationPath);
+  const pathMatch = locationPath.match(/^\/session\/([^/?#]+)/);
+  const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+  return {
+    querySessionId,
+    createNewToken,
+    pathSessionId,
+    resolvedSessionId: pathSessionId || querySessionId || '',
+  };
+}
+
+export function shouldDeferPendingSessionRouteSync(input: {
+  pendingSessionId?: string | null;
+  locationPath?: string | null;
+  search?: string | null;
+}): boolean {
+  const pendingSessionId = asText(input.pendingSessionId);
+  if (!pendingSessionId) return false;
+  const route = resolveSessionRouteState({
+    locationPath: input.locationPath,
+    search: input.search,
+  });
+  if (route.createNewToken) {
+    return true;
+  }
+  if (!route.resolvedSessionId) {
+    return true;
+  }
+  if (route.resolvedSessionId !== pendingSessionId) {
+    return true;
+  }
+  if (route.pathSessionId !== pendingSessionId) {
+    return true;
+  }
+  if (route.querySessionId) {
+    return true;
+  }
+  return false;
 }
 
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
@@ -1385,6 +1443,7 @@ function isManagedSystemEventType(eventType: string): boolean {
   return (
     eventType === 'run_ack' ||
     eventType === 'run_status' ||
+    eventType === 'deliverables_ready' ||
     eventType === 'run_completed' ||
     eventType === 'run_failed' ||
     eventType === 'run_stopped' ||
@@ -1408,6 +1467,14 @@ export function resolveManagedStreamMessageKey(input: {
 
   if (isManagedToolEventType(eventType) && runId && toolCallId) {
     return `managed:${runId}:tool:${toolCallId}`;
+  }
+
+  if (eventType === 'clarification_requested') {
+    return (
+      payloadMessageKey ||
+      envelopeMessageKey ||
+      (runId ? `managed:${runId}:clarification` : 'managed:clarification')
+    );
   }
 
   if (isManagedSystemEventType(eventType)) {
@@ -1448,13 +1515,219 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
   };
 }
 
+function isManagedAssistantMessage(message: Partial<AgentMessage>): boolean {
+  if (message.type !== 'agent_message') return false;
+  const metadata = toRecord(message.metadata);
+  const eventType = asText(metadata.eventType).toLowerCase();
+  if (eventType === 'assistant_delta' || eventType === 'assistant_message') {
+    return true;
+  }
+  const agent = asText(message.agent).toLowerCase();
+  const messageKey = resolveAgentMessageKey(message);
+  return agent === 'altus' && messageKey.startsWith('managed:');
+}
+
+function resolveManagedAssistantBaseKey(message: Partial<AgentMessage>): string {
+  const metadata = toRecord(message.metadata);
+  const runId = asText(metadata.runId);
+  if (runId) {
+    return `managed:${runId}:assistant`;
+  }
+  const messageKey = resolveAgentMessageKey(message);
+  const marker = ':assistant';
+  const markerIndex = messageKey.indexOf(marker);
+  if (markerIndex >= 0) {
+    return messageKey.slice(0, markerIndex + marker.length);
+  }
+  return messageKey;
+}
+
+function isManagedAssistantSegmentKeyForBase(messageKey: string, baseKey: string): boolean {
+  if (!messageKey || !baseKey) return false;
+  return messageKey === baseKey || messageKey.startsWith(`${baseKey}:segment:`);
+}
+
+function buildManagedAssistantSegmentKey(
+  prev: AgentMessage[],
+  baseKey: string,
+  metadata: Record<string, unknown>
+): string {
+  const sequence =
+    asPositiveInt(metadata.sequence) ??
+    asPositiveInt(metadata.sessionEventSeq) ??
+    asPositiveInt(metadata.seq) ??
+    asPositiveInt(metadata.timestamp);
+  if (sequence !== null) {
+    return `${baseKey}:segment:${sequence}`;
+  }
+  const prefix = `${baseKey}:segment:`;
+  let next = 1;
+  for (const item of prev) {
+    const key = resolveAgentMessageKey(item);
+    if (!key.startsWith(prefix)) continue;
+    const parsed = Number(key.slice(prefix.length));
+    if (Number.isFinite(parsed) && parsed >= next) {
+      next = Math.floor(parsed) + 1;
+    }
+  }
+  return `${baseKey}:segment:${next}`;
+}
+
+function normalizeManagedAssistantMessageIdentity(prev: AgentMessage[], message: AgentMessage): AgentMessage {
+  if (!isManagedAssistantMessage(message)) {
+    return message;
+  }
+  const metadata = toRecord(message.metadata);
+  const baseKey = resolveManagedAssistantBaseKey(message);
+  const currentKey = resolveAgentMessageKey(message) || baseKey;
+  const lastMessage = prev[prev.length - 1];
+  const lastKey = lastMessage ? resolveAgentMessageKey(lastMessage) : '';
+  const shouldContinueTail =
+    !!lastMessage &&
+    isManagedAssistantMessage(lastMessage) &&
+    isManagedAssistantSegmentKeyForBase(lastKey, baseKey);
+  if (shouldContinueTail) {
+    if (lastKey === currentKey) return message;
+    return normalizeAgentMessageIdentity({
+      ...message,
+      messageKey: lastKey,
+      metadata: {
+        ...metadata,
+        messageKey: lastKey,
+      },
+    });
+  }
+  const hasExistingSegments = prev.some((item) => {
+    const key = resolveAgentMessageKey(item);
+    return isManagedAssistantSegmentKeyForBase(key, baseKey);
+  });
+  if (hasExistingSegments && isManagedAssistantSegmentKeyForBase(currentKey, baseKey)) {
+    const segmentKey = buildManagedAssistantSegmentKey(prev, baseKey, metadata);
+    if (segmentKey === currentKey) return message;
+    return normalizeAgentMessageIdentity({
+      ...message,
+      messageKey: segmentKey,
+      metadata: {
+        ...metadata,
+        messageKey: segmentKey,
+      },
+    });
+  }
+  return message;
+}
+
+function shouldPreserveExistingManagedAssistantContent(
+  existing: AgentMessage,
+  incoming: AgentMessage
+): boolean {
+  if (!isManagedAssistantMessage(existing) || !isManagedAssistantMessage(incoming)) {
+    return false;
+  }
+  const incomingMeta = toRecord(incoming.metadata);
+  if (incomingMeta.streamDelta === true) return false;
+  const existingContent = asText(existing.content);
+  const incomingContent = asText(incoming.content);
+  if (!existingContent) return false;
+  if (!incomingContent) return true;
+  return incomingContent.length < existingContent.length;
+}
+
+function resolveMergedAgentMessageContent(existing: AgentMessage, incoming: AgentMessage): string | undefined {
+  if (shouldPreserveExistingManagedAssistantContent(existing, incoming)) {
+    return existing.content;
+  }
+  if (typeof incoming.content === 'string') {
+    if (!asText(incoming.content) && asText(existing.content)) {
+      return existing.content;
+    }
+    return incoming.content;
+  }
+  return existing.content;
+}
+
+function mergeMessageWithExistingIdentity(existing: AgentMessage, incoming: AgentMessage): AgentMessage {
+  return normalizeAgentMessageIdentity({
+    ...existing,
+    ...incoming,
+    content: resolveMergedAgentMessageContent(existing, incoming),
+    metadata: {
+      ...toRecord(existing.metadata),
+      ...toRecord(incoming.metadata),
+    },
+  });
+}
+
+function normalizeClarificationComparableText(value: unknown): string {
+  const text = asText(value);
+  if (!text) return '';
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\*\*需要补充信息\*\*/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildClarificationSemanticKey(value: unknown): string {
+  return normalizeClarificationComparableText(value).replace(/\s+/g, '');
+}
+
+function stripDuplicateManagedAssistantForClarification(
+  prev: AgentMessage[],
+  clarificationMessage: AgentMessage
+): AgentMessage[] {
+  const clarificationMeta = toRecord(clarificationMessage.metadata);
+  const runId = asText(clarificationMeta.runId);
+  const questionText = normalizeClarificationComparableText(
+    (clarificationMessage as { question?: unknown }).question ||
+      clarificationMessage.content ||
+      clarificationMeta.question
+  );
+  const questionSemanticKey = buildClarificationSemanticKey(
+    (clarificationMessage as { question?: unknown }).question ||
+      clarificationMessage.content ||
+      clarificationMeta.question
+  );
+  if (!runId || !questionText) {
+    return prev;
+  }
+  let removed = false;
+  const next = prev.filter((item) => {
+    if (!isManagedAssistantMessage(item)) return true;
+    const itemMeta = toRecord(item.metadata);
+    if (asText(itemMeta.runId) !== runId) return true;
+    const assistantText = normalizeClarificationComparableText(item.content);
+    const assistantSemanticKey = buildClarificationSemanticKey(item.content);
+    if (!assistantText) return true;
+    if (
+      assistantText === questionText ||
+      (questionSemanticKey &&
+        assistantSemanticKey &&
+        assistantSemanticKey === questionSemanticKey)
+    ) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return removed ? next : prev;
+}
+
 export function mergeRealtimeMessage(
   prev: AgentMessage[],
   message: AgentMessage,
   welcomeMessage: string
 ): AgentMessage[] {
   message = normalizeAgentMessageIdentity(normalizeTerminalDisplayMessage(message));
+  message = normalizeManagedAssistantMessageIdentity(prev, message);
+  if (message.type === 'clarification_request') {
+    const dedupedPrev = stripDuplicateManagedAssistantForClarification(prev, message);
+    if (dedupedPrev !== prev) {
+      return mergeRealtimeMessage(dedupedPrev, message, welcomeMessage);
+    }
+  }
   const messageKey = resolveAgentMessageKey(message);
+  const metadata = toRecord(message.metadata);
   if (message.type === 'error') {
     const errorText = (message.message || message.content || '').trim();
     if (!shouldDisplayErrorText(errorText)) {
@@ -1476,16 +1749,29 @@ export function mergeRealtimeMessage(
   }
   const lastMessage = prev[prev.length - 1];
   const existingIndexByKey = prev.findIndex((item) => resolveAgentMessageKey(item) === messageKey);
-  if (existingIndexByKey >= 0 && message.type !== 'opencode_event') {
+  if (existingIndexByKey >= 0 && message.type === 'agent_message' && metadata.streamDelta === true) {
     const next = [...prev];
+    const existing = next[existingIndexByKey];
+    const existingMeta = toRecord(existing?.metadata);
+    const chunkSignature = `${asFiniteNumber(metadata.sequence) ?? 'na'}:${message.content || ''}`;
+    if (chunkSignature !== 'na:' && asText(existingMeta._streamChunkSignature) === chunkSignature) {
+      return prev;
+    }
     next[existingIndexByKey] = normalizeAgentMessageIdentity({
-      ...next[existingIndexByKey],
+      ...existing,
       ...message,
+      content: `${existing?.content || ''}${message.content || ''}`,
       metadata: {
-        ...toRecord(next[existingIndexByKey].metadata),
-        ...toRecord(message.metadata),
+        ...existingMeta,
+        ...metadata,
+        _streamChunkSignature: chunkSignature !== 'na:' ? chunkSignature : undefined,
       },
     });
+    return next;
+  }
+  if (existingIndexByKey >= 0 && message.type !== 'opencode_event') {
+    const next = [...prev];
+    next[existingIndexByKey] = mergeMessageWithExistingIdentity(next[existingIndexByKey], message);
     return next;
   }
   const isDuplicateWelcome =
@@ -1530,8 +1816,6 @@ export function mergeRealtimeMessage(
   if (isDuplicateExecutorTail) {
     return prev;
   }
-
-  const metadata = toRecord(message.metadata);
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) {
     const hasSameSessionEventSeq = prev.some((item) => {
@@ -1892,29 +2176,46 @@ const HISTORY_VIEW_CACHE_LIMIT = 300;
 const MANAGED_RUN_RECOVERY_PREFIX = 'task_creation_managed_run_recovery:';
 const MANAGED_RUN_RECOVERY_VERSION = 1;
 const HISTORY_PAGE_SIZE = 50;
+type HistoryLoadReason = 'initial' | 'replay' | 'reconcile' | 'managed_recovery';
+
+export function shouldUseManagedRecoveryHistoryReconcile(input: {
+  reason: HistoryLoadReason;
+  recentNewestCursor?: number | null;
+  historyNewestCursor?: number | null;
+  recentMessageCount: number;
+  historyMessageCount: number;
+  recentLatestMessageKey?: string | null;
+  historyLatestMessageKey?: string | null;
+}): boolean {
+  if (input.reason !== 'managed_recovery') return false;
+  const recentNewest = asPositiveInt(input.recentNewestCursor) ?? 0;
+  const historyNewest = asPositiveInt(input.historyNewestCursor) ?? 0;
+  if (historyNewest > recentNewest) return true;
+  if (input.historyMessageCount > input.recentMessageCount) return true;
+  const recentLatestMessageKey = asText(input.recentLatestMessageKey);
+  const historyLatestMessageKey = asText(input.historyLatestMessageKey);
+  if (historyLatestMessageKey && historyLatestMessageKey !== recentLatestMessageKey) {
+    return true;
+  }
+  return false;
+}
 
 function getHistoryMessageKey(message: Partial<AgentMessage>): string {
   return resolveAgentMessageKey(message);
 }
 
-function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
+export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentMessage[]): AgentMessage[] {
   const merged = [...base];
   const indexByKey = new Map<string, number>();
   base.forEach((item, index) => {
     indexByKey.set(getHistoryMessageKey(item), index);
   });
-  for (const item of incoming) {
+  for (const rawItem of incoming) {
+    const item = normalizeManagedAssistantMessageIdentity(merged, rawItem);
     const key = getHistoryMessageKey(item);
     const existingIndex = indexByKey.get(key);
     if (existingIndex !== undefined) {
-      merged[existingIndex] = normalizeAgentMessageIdentity({
-        ...merged[existingIndex],
-        ...item,
-        metadata: {
-          ...toRecord(merged[existingIndex]?.metadata),
-          ...toRecord(item?.metadata),
-        },
-      });
+      merged[existingIndex] = mergeMessageWithExistingIdentity(merged[existingIndex], item);
       continue;
     }
     indexByKey.set(key, merged.length);
@@ -2087,6 +2388,15 @@ function clearManagedRunRecoveryState(sessionId: string) {
 
 export function readPersistedManagedRunRecoveryState(sessionId: string): PersistedManagedRunRecovery | null {
   return readManagedRunRecoveryState(sessionId);
+}
+
+export function shouldAwaitManagedRunRecoveryRunId(
+  recovery: PersistedManagedRunRecovery | null | undefined
+): boolean {
+  if (!recovery?.processing) {
+    return false;
+  }
+  return !asText(recovery.runId);
 }
 
 export function primeManagedRunRecoveryState(input: {
@@ -2320,6 +2630,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
   const [location] = useLocation();
   const search = useSearch();
+  const { user } = useAuth();
 
   const wsRef = useRef<WebSocket | null>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -2341,6 +2652,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const managedRunSequenceRef = useRef<number>(0);
   const managedRunReconnectTimerRef = useRef<number | null>(null);
   const managedRunReconnectAttemptRef = useRef(0);
+  const managedRunRefreshPollTimerRef = useRef<number | null>(null);
   const openManagedRunStreamRef = useRef<(targetRunId: string) => void>(() => {});
   const closeManagedRunStreamRef = useRef<(options?: { preserveSequence?: boolean }) => void>(() => {});
   const handleManagedRunStreamEventRef = useRef<
@@ -2367,6 +2679,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const olderHistoryRequestRef = useRef<{ sessionId: string; before: number } | null>(null);
   const isLoadingOlderHistoryRef = useRef(false);
   const loadHistoryRequestRef = useRef<{ sessionId: string; promise: Promise<void> } | null>(null);
+  const loadHistoryRef = useRef<
+    (
+      historySessionId: string,
+      options?: { reason?: HistoryLoadReason }
+    ) => Promise<void> | undefined
+  >(() => undefined);
   const historyExpandedRef = useRef(false);
   const pendingSandboxPromptRef = useRef<PendingSandboxPrompt | null>(null);
   const dispatchedPendingSandboxPromptsRef = useRef<Set<string>>(new Set());
@@ -2578,12 +2896,21 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(search);
-    const querySessionId = params.get('sessionId')?.trim();
-    const createNewToken = params.get('new')?.trim();
-    const pathMatch = location.match(/^\/session\/([^/?#]+)/);
-    const pathSessionId = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
-    const resolvedSessionId = pathSessionId || querySessionId || '';
+    const routeState = resolveSessionRouteState({
+      locationPath: location,
+      search,
+    });
+    const { querySessionId, createNewToken, resolvedSessionId } = routeState;
+
+    if (
+      shouldDeferPendingSessionRouteSync({
+        pendingSessionId: pendingSessionSyncRef.current,
+        locationPath: location,
+        search,
+      })
+    ) {
+      return;
+    }
 
     if (createNewToken) {
       pendingSessionSyncRef.current = null;
@@ -2609,10 +2936,18 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [location, search, sessionId, messages.length, resetConversationState]);
 
   useEffect(() => {
-    if (pendingSessionSyncRef.current && pendingSessionSyncRef.current === sessionId) {
+    if (
+      pendingSessionSyncRef.current &&
+      pendingSessionSyncRef.current === sessionId &&
+      !shouldDeferPendingSessionRouteSync({
+        pendingSessionId: pendingSessionSyncRef.current,
+        locationPath: location,
+        search,
+      })
+    ) {
       pendingSessionSyncRef.current = null;
     }
-  }, [sessionId]);
+  }, [location, search, sessionId]);
 
   useEffect(() => {
     setRuntimeEnabled(autoRuntime);
@@ -2653,6 +2988,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     if (managedRunReconnectTimerRef.current) {
       window.clearTimeout(managedRunReconnectTimerRef.current);
       managedRunReconnectTimerRef.current = null;
+    }
+  }, []);
+
+  const clearManagedRunRefreshPollTimer = useCallback(() => {
+    if (managedRunRefreshPollTimerRef.current) {
+      window.clearTimeout(managedRunRefreshPollTimerRef.current);
+      managedRunRefreshPollTimerRef.current = null;
     }
   }, []);
 
@@ -2712,6 +3054,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       const url = getTaskCreationManagedRunStreamUrl(runId, {
         afterSequence,
         clientId: sseClientIdRef.current,
+        userId: user?.id || null,
       });
       const source = new EventSource(url, { withCredentials: true });
       managedRunStreamRef.current = source;
@@ -2727,6 +3070,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         'heartbeat',
         'run_ack',
         'run_status',
+        'deliverables_ready',
         'assistant_delta',
         'assistant_message',
         'tool_call_started',
@@ -2766,6 +3110,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       clearManagedRunReconnectTimer,
       closeManagedRunStream,
       scheduleManagedRunReconnect,
+      user?.id,
     ]
   );
 
@@ -2891,6 +3236,25 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             streamDelta: eventType === 'assistant_delta',
           },
         };
+      } else if (eventType === 'deliverables_ready') {
+        nextSessionStatus = 'in_progress';
+        if (sessionKey) {
+          writeManagedRunRecoveryState({
+            sessionId: sessionKey,
+            runId,
+            status: 'in_progress',
+            processing: true,
+          });
+        }
+        nextMessage = {
+          type: 'status_update',
+          content: content || '交付文件已生成',
+          message: content || '交付文件已生成',
+          stage: 'reviewing',
+          tone: 'review',
+          sessionId: sessionKey,
+          metadata: baseMetadata,
+        };
       } else if (eventType === 'clarification_requested') {
         nextSessionStatus = 'waiting_user';
         const question = content || asText(payload.question) || asText(envelope.question);
@@ -3000,6 +3364,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setIsProcessing(false);
         setManagedRunStreaming(false);
         setManagedRunStatus('waiting_user');
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3016,6 +3383,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunStatus('completed');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3026,6 +3396,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunError(content || 'managed run failed');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
@@ -3035,12 +3408,16 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         setManagedRunStatus('stopped');
         setCurrentQuestion(null);
         closeManagedRunStreamRef.current({ preserveSequence: true });
+        if (sessionKey) {
+          void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
+        }
         return;
       }
 
       if (
         eventType === 'assistant_delta' ||
         eventType === 'assistant_message' ||
+        eventType === 'deliverables_ready' ||
         eventType === 'tool_call_started' ||
         eventType === 'tool_call_progress' ||
         eventType === 'tool_call_completed' ||
@@ -3903,7 +4280,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const loadHistory = useCallback(async (
     historySessionId: string,
     options?: {
-      reason?: 'initial' | 'replay' | 'reconcile';
+      reason?: HistoryLoadReason;
     }
   ) => {
     const reason = options?.reason ?? 'initial';
@@ -3915,80 +4292,126 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       return inFlight.promise;
     }
     const task = (async () => {
-    activeHistorySessionRef.current = historySessionId;
-    olderHistoryRequestRef.current = null;
-    isLoadingOlderHistoryRef.current = false;
-    setIsLoadingOlderHistory(false);
-    const cached = readHistoryViewCache(historySessionId);
-    const cachedMessages = cached
-      ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
-      : null;
-    if (cached) {
-      oldestHistoryCursorRef.current = cached.oldestCursor;
-      setHasOlderHistory(cached.hasOlderHistory);
-      setMessages(cachedMessages || cached.messages);
-      syncQuestionAndRuntimeState(cachedMessages || cached.messages);
-    }
-    try {
-      const recent = await getTaskCreationRecentMessages(historySessionId);
-      const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
-      const shouldFallbackToHistory =
-        normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
-      if (shouldFallbackToHistory) {
-        throw new Error('recent cache empty');
-      }
-      const merged = cachedMessages
-        ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
-        : normalizedRecent;
-      const cachedExpanded = cached
-        ? cached.messages.length > normalizedRecent.length ||
-          ((cached.oldestCursor ?? 0) > 0 &&
-            (recent.oldestCursor ?? 0) > 0 &&
-            (cached.oldestCursor ?? 0) < (recent.oldestCursor ?? 0))
-        : false;
-      historyExpandedRef.current = cachedExpanded;
-      const nextOldestCursor =
-        cached?.oldestCursor ??
-        recent.oldestCursor ??
-        (merged.length > 0 ? asPositiveInt(toRecord(merged[0].metadata).sessionEventSeq) : null);
-      applyHistoryState(historySessionId, merged, {
-        oldestCursor: nextOldestCursor,
-        hasOlderHistory: recent.hasOlderHistory,
-      });
-    } catch (error) {
-      if (!isAbortLikeError(error)) {
-        console.error('[TaskCreationAgent] 加载最近历史失败:', error);
+      activeHistorySessionRef.current = historySessionId;
+      olderHistoryRequestRef.current = null;
+      isLoadingOlderHistoryRef.current = false;
+      setIsLoadingOlderHistory(false);
+      const cached = readHistoryViewCache(historySessionId);
+      const cachedMessages = cached
+        ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
+        : null;
+      if (cached) {
+        oldestHistoryCursorRef.current = cached.oldestCursor;
+        setHasOlderHistory(cached.hasOlderHistory);
+        setMessages(cachedMessages || cached.messages);
+        syncQuestionAndRuntimeState(cachedMessages || cached.messages);
       }
       try {
-        const page = await getTaskCreationOlderMessages(historySessionId, {
-          limit: HISTORY_PAGE_SIZE,
-        });
-        const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
-        const mergedFallback = cachedMessages
-          ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
-          : normalizedFallback;
+        const recent = await getTaskCreationRecentMessages(historySessionId);
+        const normalizedRecent = normalizeHistoryMessages(historySessionId, recent.messages || []);
+        const shouldFallbackToHistory =
+          normalizedRecent.length === 0 && (!cachedMessages || cachedMessages.length === 0);
+        if (shouldFallbackToHistory) {
+          throw new Error('recent cache empty');
+        }
+        const merged = cachedMessages
+          ? mergeHistoryAgentMessages(cachedMessages, normalizedRecent)
+          : normalizedRecent;
         const cachedExpanded = cached
-          ? cached.messages.length > normalizedFallback.length ||
+          ? cached.messages.length > normalizedRecent.length ||
             ((cached.oldestCursor ?? 0) > 0 &&
-              (page.oldestCursor ?? 0) > 0 &&
-              (cached.oldestCursor ?? 0) < (page.oldestCursor ?? 0))
+              (recent.oldestCursor ?? 0) > 0 &&
+              (cached.oldestCursor ?? 0) < (recent.oldestCursor ?? 0))
           : false;
         historyExpandedRef.current = cachedExpanded;
-        const fallbackOldestCursor =
+        const nextOldestCursor =
           cached?.oldestCursor ??
-          page.oldestCursor ??
-          (mergedFallback.length > 0 ? asPositiveInt(toRecord(mergedFallback[0].metadata).sessionEventSeq) : null);
-        applyHistoryState(historySessionId, mergedFallback, {
-          oldestCursor: fallbackOldestCursor,
-          hasOlderHistory: page.hasMore,
+          recent.oldestCursor ??
+          (merged.length > 0 ? asPositiveInt(toRecord(merged[0].metadata).sessionEventSeq) : null);
+        applyHistoryState(historySessionId, merged, {
+          oldestCursor: nextOldestCursor,
+          hasOlderHistory: recent.hasOlderHistory,
         });
-      } catch (fallbackError) {
-        if (isAbortLikeError(fallbackError)) {
-          return;
+
+        if (reason === 'managed_recovery') {
+          try {
+            const recoveryPage = await getTaskCreationOlderMessages(historySessionId, {
+              limit: HISTORY_PAGE_SIZE,
+            });
+            const normalizedRecovery = normalizeHistoryMessages(historySessionId, recoveryPage.messages || []);
+            const shouldReconcile = shouldUseManagedRecoveryHistoryReconcile({
+              reason,
+              recentNewestCursor: recent.newestCursor,
+              historyNewestCursor: recoveryPage.newestCursor,
+              recentMessageCount: normalizedRecent.length,
+              historyMessageCount: normalizedRecovery.length,
+              recentLatestMessageKey:
+                normalizedRecent.length > 0 ? normalizedRecent[normalizedRecent.length - 1]?.messageKey : null,
+              historyLatestMessageKey:
+                normalizedRecovery.length > 0
+                  ? normalizedRecovery[normalizedRecovery.length - 1]?.messageKey
+                  : null,
+            });
+            if (shouldReconcile) {
+              const reconciled = mergeHistoryAgentMessages(merged, normalizedRecovery);
+              const reconcileOldestCursor =
+                cached?.oldestCursor ??
+                recent.oldestCursor ??
+                recoveryPage.oldestCursor ??
+                (reconciled.length > 0
+                  ? asPositiveInt(toRecord(reconciled[0].metadata).sessionEventSeq)
+                  : null);
+              historyExpandedRef.current =
+                historyExpandedRef.current ||
+                recoveryPage.hasMore ||
+                normalizedRecovery.length > normalizedRecent.length;
+              applyHistoryState(historySessionId, reconciled, {
+                oldestCursor: reconcileOldestCursor,
+                hasOlderHistory: recent.hasOlderHistory || recoveryPage.hasMore,
+              });
+            }
+          } catch (reconcileError) {
+            if (!isAbortLikeError(reconcileError)) {
+              console.warn('[TaskCreationAgent] managed recovery 对账 history 失败:', reconcileError);
+            }
+          }
         }
-        console.error('[TaskCreationAgent] recent 失败后回退 history 也失败:', fallbackError);
+      } catch (error) {
+        if (!isAbortLikeError(error)) {
+          console.error('[TaskCreationAgent] 加载最近历史失败:', error);
+        }
+        try {
+          const page = await getTaskCreationOlderMessages(historySessionId, {
+            limit: HISTORY_PAGE_SIZE,
+          });
+          const normalizedFallback = normalizeHistoryMessages(historySessionId, page.messages || []);
+          const mergedFallback = cachedMessages
+            ? mergeHistoryAgentMessages(cachedMessages, normalizedFallback)
+            : normalizedFallback;
+          const cachedExpanded = cached
+            ? cached.messages.length > normalizedFallback.length ||
+              ((cached.oldestCursor ?? 0) > 0 &&
+                (page.oldestCursor ?? 0) > 0 &&
+                (cached.oldestCursor ?? 0) < (page.oldestCursor ?? 0))
+            : false;
+          historyExpandedRef.current = cachedExpanded;
+          const fallbackOldestCursor =
+            cached?.oldestCursor ??
+            page.oldestCursor ??
+            (mergedFallback.length > 0
+              ? asPositiveInt(toRecord(mergedFallback[0].metadata).sessionEventSeq)
+              : null);
+          applyHistoryState(historySessionId, mergedFallback, {
+            oldestCursor: fallbackOldestCursor,
+            hasOlderHistory: page.hasMore,
+          });
+        } catch (fallbackError) {
+          if (isAbortLikeError(fallbackError)) {
+            return;
+          }
+          console.error('[TaskCreationAgent] recent 失败后回退 history 也失败:', fallbackError);
+        }
       }
-    }
     })().finally(() => {
       if (loadHistoryRequestRef.current?.promise === task) {
         loadHistoryRequestRef.current = null;
@@ -4000,6 +4423,10 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     };
     return task;
   }, [applyHistoryState, normalizeHistoryMessages, syncQuestionAndRuntimeState]);
+
+  useEffect(() => {
+    loadHistoryRef.current = loadHistory;
+  }, [loadHistory]);
 
   const loadOlderHistory = useCallback(async () => {
     const historySessionId = (sessionId || '').trim();
@@ -4129,7 +4556,12 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [runtimeStarting, sessionId, runtimeEnabled, runtimeReady, syncRuntime]);
 
   const refreshManagedRun = useCallback(
-    async (targetSessionId?: string) => {
+    async (
+      targetSessionId?: string,
+      options?: {
+        preservePendingRecovery?: boolean;
+      }
+    ) => {
       const sid = (targetSessionId || sessionId || '').trim();
       if (!sid || !isManagedAltusMode()) {
         setManagedRunId(null);
@@ -4143,6 +4575,19 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       try {
         const latest = await getLatestTaskCreationManagedRun(sid);
         if (!latest?.id) {
+          const persisted = readManagedRunRecoveryState(sid);
+          if (options?.preservePendingRecovery || shouldAwaitManagedRunRecoveryRunId(persisted)) {
+            const persistedRunId = asText(persisted?.runId) || null;
+            const persistedStatus = normalizeManagedRunStatus(persisted?.status);
+            setManagedRunId(persistedRunId);
+            managedRunIdRef.current = persistedRunId;
+            setManagedRunStatus(persistedStatus);
+            managedRunStatusRef.current = persistedStatus;
+            setManagedRunStreaming(false);
+            setManagedRunError(null);
+            setIsProcessing(Boolean(persisted?.processing));
+            return;
+          }
           setManagedRunId(null);
           setManagedRunStatus(null);
           setManagedRunStreaming(false);
@@ -4174,6 +4619,14 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         } else {
           setManagedRunStreaming(false);
           closeManagedRunStreamRef.current();
+          if (
+            nextStatus === 'waiting_user' ||
+            nextStatus === 'completed' ||
+            nextStatus === 'failed' ||
+            nextStatus === 'stopped'
+          ) {
+            void loadHistory(sid, { reason: 'managed_recovery' });
+          }
           if (nextStatus === 'completed' || nextStatus === 'failed' || nextStatus === 'stopped') {
             clearManagedRunRecoveryState(sid);
           }
@@ -4185,7 +4638,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         console.warn('[TaskCreationAgent] 获取 managed run 状态失败:', error);
       }
     },
-    [sessionId]
+    [loadHistory, sessionId]
   );
 
   useEffect(() => {
@@ -4321,6 +4774,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       setManagedRunError(null);
       closeManagedRunStreamRef.current();
       clearManagedRunReconnectTimer();
+      clearManagedRunRefreshPollTimer();
       return;
     }
 
@@ -4337,11 +4791,39 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
     }
 
-    void refreshManagedRun(sessionId);
+    void refreshManagedRun(sessionId, {
+      preservePendingRecovery: shouldAwaitManagedRunRecoveryRunId(persisted),
+    });
     return () => {
       clearManagedRunReconnectTimer();
+      clearManagedRunRefreshPollTimer();
     };
-  }, [clearManagedRunReconnectTimer, refreshManagedRun, sessionId]);
+  }, [clearManagedRunReconnectTimer, clearManagedRunRefreshPollTimer, refreshManagedRun, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !isManagedAltusMode() || managedRunId) {
+      clearManagedRunRefreshPollTimer();
+      return;
+    }
+
+    const persisted = readManagedRunRecoveryState(sessionId);
+    if (!shouldAwaitManagedRunRecoveryRunId(persisted)) {
+      clearManagedRunRefreshPollTimer();
+      return;
+    }
+
+    const tick = () => {
+      void refreshManagedRun(sessionId, { preservePendingRecovery: true });
+      managedRunRefreshPollTimerRef.current = window.setTimeout(tick, 1000);
+    };
+
+    clearManagedRunRefreshPollTimer();
+    managedRunRefreshPollTimerRef.current = window.setTimeout(tick, 1000);
+
+    return () => {
+      clearManagedRunRefreshPollTimer();
+    };
+  }, [clearManagedRunRefreshPollTimer, managedRunId, refreshManagedRun, sessionId]);
 
   useEffect(() => {
     if (isManagedAltusMode()) {
@@ -4569,6 +5051,26 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     });
   }, [autoRuntime, runtimeEnabled, runtimeReady, runtimeStarting, ensureRuntime, orchestratorSessionId, sendOrQueueMessage, sessionId, trackPendingLocalMessage]);
 
+  const applyPendingConnectorDraftAsync = useCallback((targetSessionId: string) => {
+    const state = getSessionConnectorDraftState();
+    const draftId = asText(state?.draftId);
+    const entries = listSessionConnectorDraftEntries();
+    if (!draftId || entries.length === 0) {
+      return;
+    }
+    void applySessionConnectorDraft(draftId, {
+      sessionId: targetSessionId,
+      entries,
+    })
+      .then(async () => {
+        clearSessionConnectorDraftState();
+        await clearSessionConnectorDraft(draftId).catch(() => undefined);
+      })
+      .catch((error) => {
+        console.warn('[TaskCreationAgent] apply connector draft failed:', error);
+      });
+  }, []);
+
   const sendChatInput = useCallback(async (input: string, options?: SendInputOptions) => {
     const text = input.trim();
     if (!text) return;
@@ -4597,6 +5099,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         activeSessionId = createdSessionId;
         shouldBindCreatedSession = true;
+        applyPendingConnectorDraftAsync(createdSessionId);
       }
 
       const messageKey = generateClientMessageKey('user');
@@ -4685,6 +5188,34 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         if (!nextRunId) {
           throw new Error('managed run id missing');
         }
+        const runAckKey = resolveManagedStreamMessageKey({
+          eventType: 'run_ack',
+          runId: nextRunId,
+        });
+        setMessages((prev) =>
+          mergeRealtimeMessage(
+            prev,
+            {
+              messageKey: runAckKey,
+              type: 'status_update',
+              content: 'managed run 已创建',
+              message: 'managed run 已创建',
+              stage: 'executing',
+              tone: 'system',
+              sessionId: activeSessionId || undefined,
+              metadata: {
+                eventType: 'run_ack',
+                runId: nextRunId,
+                status: normalizeManagedRunStatus(run?.status) || 'queued',
+                sourceMessageKey: messageKey,
+                messageKey: runAckKey,
+                executor: 'altus',
+                executionMode: 'managed',
+              },
+            },
+            WELCOME_MESSAGE
+          )
+        );
         if (activeSessionId && shouldAttemptSessionTitleResolve(text)) {
           void resolveTaskCreationSessionTitle(activeSessionId, text)
             .then((resolved) => {
@@ -4787,6 +5318,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
                 }),
           });
           prePersistedUserInput = executor !== 'codex';
+          applyPendingConnectorDraftAsync(activeSessionId);
           dispatchTaskCreationSessionUpdated({
             sessionId: activeSessionId,
             status: 'in_progress',
@@ -4927,6 +5459,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       sessionId: activeSessionId || options?.sessionId || undefined,
     });
   }, [
+    applyPendingConnectorDraftAsync,
     bindSessionId,
     location,
     orchestratorSessionId,

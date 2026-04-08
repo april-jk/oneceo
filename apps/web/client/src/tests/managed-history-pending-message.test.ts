@@ -5,6 +5,8 @@ import {
   reconcileHistoryWithPendingLocalMessages,
   readPersistedManagedRunRecoveryState,
   readPersistedHistoryViewCache,
+  shouldUseManagedRecoveryHistoryReconcile,
+  shouldAwaitManagedRunRecoveryRunId,
   type AgentMessage,
 } from '@/hooks/useTaskCreationAgent';
 
@@ -125,5 +127,55 @@ describe('managed history reconciliation', () => {
     expect(persisted?.processing).toBe(true);
     expect(cached?.status).toBe('starting');
     expect(cached?.runId).toBe('run-managed-1');
+  });
+
+  it('keeps waiting for managed recovery when processing run id is not known yet', () => {
+    const persisted = primeManagedRunRecoveryState({
+      sessionId: 'session-managed-pending',
+      runId: null,
+      status: 'starting',
+      processing: true,
+    });
+
+    expect(shouldAwaitManagedRunRecoveryRunId(persisted)).toBe(true);
+  });
+
+  it('does not wait for managed recovery once run id is known', () => {
+    const persisted = primeManagedRunRecoveryState({
+      sessionId: 'session-managed-ready',
+      runId: 'run-managed-2',
+      status: 'running',
+      processing: true,
+    });
+
+    expect(shouldAwaitManagedRunRecoveryRunId(persisted)).toBe(false);
+  });
+
+  it('reconciles managed recovery when history cursor is newer than recent', () => {
+    const shouldReconcile = shouldUseManagedRecoveryHistoryReconcile({
+      reason: 'managed_recovery',
+      recentNewestCursor: 100,
+      historyNewestCursor: 120,
+      recentMessageCount: 10,
+      historyMessageCount: 10,
+      recentLatestMessageKey: 'managed:run-1:assistant',
+      historyLatestMessageKey: 'managed:run-1:assistant',
+    });
+
+    expect(shouldReconcile).toBe(true);
+  });
+
+  it('does not force reconcile for non-managed recovery load reasons', () => {
+    const shouldReconcile = shouldUseManagedRecoveryHistoryReconcile({
+      reason: 'initial',
+      recentNewestCursor: 200,
+      historyNewestCursor: 200,
+      recentMessageCount: 12,
+      historyMessageCount: 12,
+      recentLatestMessageKey: 'k-1',
+      historyLatestMessageKey: 'k-1',
+    });
+
+    expect(shouldReconcile).toBe(false);
   });
 });

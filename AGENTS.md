@@ -35,6 +35,7 @@
 - `docs/AGENTS_GUIDE/03_sandbox_e2b.md`
 - `docs/AGENTS_GUIDE/04_agent_flow.md`
 - `docs/AGENTS_GUIDE/05_系统调试与测试指南.md`
+- `docs/AGENTS_GUIDE/06_分支与部署环境简要规范.md`
 - `docs/AGENTS_GUIDE/AGENTS_git操作与提交指南.md`
 - `docs/AGENTS_GUIDE/AGENTS_git协作开发指南.md`
 - `docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md`

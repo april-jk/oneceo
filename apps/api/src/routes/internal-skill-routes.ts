@@ -32,7 +32,7 @@ router.post('/skills/import/folder-preview', async (req, res) => {
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     const data = platformSkillImportService.parseFolderImport({
       rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
-      files: files.map((item) => ({
+      files: files.map((item: any) => ({
         relativePath: item?.relativePath,
         content: item?.content,
       })),
@@ -51,7 +51,7 @@ router.post('/skills/import/folder', async (req, res) => {
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     const data = await platformSkillService.importSkillFolder({
       rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
-      files: files.map((item) => ({
+      files: files.map((item: any) => ({
         relativePath: item?.relativePath,
         content: item?.content,
       })),
@@ -72,7 +72,7 @@ router.post('/skills/import/folder-jobs', async (req, res) => {
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
     const data = await platformSkillImportJobService.start({
       rootFolderName: asText(req.body?.rootFolderName) || 'imported-skill',
-      files: files.map((item) => ({
+      files: files.map((item: any) => ({
         relativePath: item?.relativePath,
         content: item?.content,
       })),

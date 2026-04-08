@@ -1,26 +1,7 @@
 import { z } from 'zod';
-import dotenv from 'dotenv';
-import path from 'node:path';
-import fs from 'node:fs';
+import { loadAdminEnv } from './load-env';
 
-const envCandidates = [
-  path.resolve(process.cwd(), '..', '.env'),
-  path.resolve(process.cwd(), 'apps', '.env'),
-  path.resolve(process.cwd(), '..', '..', 'apps', '.env'),
-];
-
-let loaded = false;
-for (const candidate of envCandidates) {
-  if (fs.existsSync(candidate)) {
-    dotenv.config({ path: candidate });
-    loaded = true;
-    break;
-  }
-}
-
-if (!loaded) {
-  dotenv.config();
-}
+loadAdminEnv();
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';

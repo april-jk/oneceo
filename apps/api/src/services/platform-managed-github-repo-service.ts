@@ -57,10 +57,10 @@ function resolveDefaultBranch() {
 async function githubRequest<T>(
   token: string,
   path: string,
-  init?: RequestInit & { allowNotFound?: boolean }
+  init?: { method?: string; headers?: Record<string, string>; body?: string; allowNotFound?: boolean }
 ): Promise<T | null> {
   const url = new URL(`https://api.github.com${path}`);
-  const headers = {
+  const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${token}`,
     'User-Agent': 'oneceo-platform-deployment',
@@ -86,7 +86,7 @@ async function githubRequest<T>(
         method: init?.method || 'GET',
         headers: {
           ...headers,
-          ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+          ...(body ? { 'Content-Length': String(Buffer.byteLength(body)) } : {}),
         },
       },
       (res) => {

@@ -1,5 +1,8 @@
 import cors from 'cors';
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config, isAllowedCorsOrigin } from './config';
 import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connector';
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
@@ -28,6 +31,11 @@ import { errorMiddleware, fail } from './utils/http';
 import { createAdminAuthMiddleware } from './middleware/admin-auth-middleware';
 
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const adminWebDistPath = path.resolve(__dirname, '..', 'web', 'dist');
+const adminWebIndexPath = path.resolve(adminWebDistPath, 'index.html');
+const hasBuiltAdminWeb = fs.existsSync(adminWebIndexPath);
 const jsonBodyLimitMbRaw = Number(process.env.ADMIN_JSON_BODY_LIMIT_MB || 16);
 const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
   ? Math.min(64, Math.max(1, Math.floor(jsonBodyLimitMbRaw)))
@@ -58,6 +66,9 @@ app.use(
   })
 );
 app.use(express.json({ limit: jsonBodyLimit }));
+if (hasBuiltAdminWeb) {
+  app.use(express.static(adminWebDistPath));
+}
 
 app.use((req, res, next) => {
   const startedAt = Date.now();
@@ -96,6 +107,16 @@ app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManageme
 app.use('/api/skill-management', createSkillManagementRoutes(skillManagementService));
 app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));
 app.use('/api/osac-releases', createOsacReleaseRoutes(osacReleaseManagementService));
+
+if (hasBuiltAdminWeb) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path === '/health') {
+      next();
+      return;
+    }
+    res.sendFile(adminWebIndexPath);
+  });
+}
 
 app.use((req, res) => {
   return fail(res, 404, `Route ${req.method} ${req.path} not found`);

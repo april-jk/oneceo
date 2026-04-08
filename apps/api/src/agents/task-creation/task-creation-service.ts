@@ -8,12 +8,17 @@ import { IntentRecognitionAgent } from './layers/intent-recognition-agent';
 import { PlanningAgent } from './layers/planning-agent';
 import { ExecutionPlanAgent } from './layers/execution-plan-agent';
 import { executionReviewAgent } from './layers/execution-review-agent';
-import type { ExecutionPlan, WebSocketMessage, MessageType } from './types/intent';
+import type { ExecutionPlan, WebSocketMessage, MessageType, IntentRecognitionResult } from './types/intent';
 import { taskCreationSessionDAO } from '../../db/dao';
 import { ensureDatabaseConnection } from '../../config/database';
 import { getPublicErrorMessage } from '../../utils/error-response';
 import { normalizeOpencodeModel } from '../../utils/opencode-model';
-import { InterruptedTaskError, isAwaitingUserInputError, RecoverableAgentError } from './errors';
+import {
+  InterruptedTaskError,
+  isAwaitingUserInputError,
+  isInterruptedTaskError,
+  RecoverableAgentError,
+} from './errors';
 import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provision-service';
 import { osacAgentService } from '../../services/osac-agent-service';
 import { opencodeRemoteService } from '../../services/opencode-remote-service';
@@ -154,7 +159,7 @@ export class TaskCreationService {
       console.log('[TaskCreationService] 开始 Layer 1: 意图识别');
       this.setStage('collecting');
       this.throwIfCancelled();
-      let intentResult;
+      let intentResult: IntentRecognitionResult;
       if (existingIntentRecord) {
         intentResult = {
           intent_type: existingIntentRecord.intentType,
@@ -314,10 +319,9 @@ export class TaskCreationService {
         throw new Error('数据库中未找到任务描述记录');
       }
       const estimatedTotalHoursRaw = executionPlan.project.estimated_total_hours;
-      const estimatedTotalHours = Number.isFinite(estimatedTotalHoursRaw)
-        ? Number(estimatedTotalHoursRaw)
-        : typeof estimatedTotalHoursRaw === 'string' && estimatedTotalHoursRaw.trim() !== ''
-          ? Number(estimatedTotalHoursRaw)
+      const estimatedTotalHours =
+        typeof estimatedTotalHoursRaw === 'number' && Number.isFinite(estimatedTotalHoursRaw)
+          ? estimatedTotalHoursRaw
           : undefined;
 
       await this.runDbOperation(

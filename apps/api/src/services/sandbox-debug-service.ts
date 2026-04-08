@@ -67,6 +67,8 @@ type EnsureDebugResult = {
   port: number;
   display: string;
   cdpPort: number;
+  screenWidth?: number;
+  screenHeight?: number;
   message?: string;
 };
 

@@ -188,17 +188,20 @@ export async function ensureSandboxRuntimeMetadata(
       osacConnectionMode = 'direct';
       osacAuthToken = bridge.osacAuthToken;
       needsMetadataUpdate = true;
-      void waitForOsacBridgeReady({
-        endpoint: bridge.osacEndpoint,
-        authToken: bridge.osacAuthToken,
-      }).catch((error) => {
+      try {
+        await waitForOsacBridgeReady({
+          endpoint: bridge.osacEndpoint,
+          authToken: bridge.osacAuthToken,
+        });
+      } catch (error) {
         writeConnectorDebugLog('[OSAC_BRIDGE_READY_WAIT_FAILED]', {
           orchestratorSessionId,
           taskSessionId: boundTaskSessionId || null,
           endpoint: bridge.osacEndpoint,
           error: error instanceof Error ? error.message : String(error),
         }, 'error');
-      });
+        throw error;
+      }
     }
   }
 

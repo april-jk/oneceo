@@ -31,7 +31,7 @@ ADMIN_MANAGEMENT_CORS_ORIGINS=http://localhost:5174,http://127.0.0.1:5174,http:/
 配置约定：
 
 - `ADMIN_MANAGEMENT_BIND_HOST`：后台 API 实际监听地址，局域网访问建议保持 `0.0.0.0`
-- `ADMIN_MANAGEMENT_WEB_HOST`：Vite 开发服务器监听地址，局域网访问建议保持 `0.0.0.0`
+- `ADMIN_MANAGEMENT_WEB_HOST`：Vite 开发服务器监听地址，局域网访问建议保持 `0.0.0.0`；未配置时会回退到 `ADMIN_MANAGEMENT_BIND_HOST`
 - `ADMIN_MANAGEMENT_API_PROXY_HOST`：Vite 反向代理后台 API 时使用的本机连接地址，默认应为 `127.0.0.1`
 - `ADMIN_MANAGEMENT_CORS_ORIGINS`：后台允许的前端来源列表，逗号分隔；未配置时默认允许 `localhost`、`127.0.0.1` 和同端口私网 IP 来源
 
@@ -57,7 +57,26 @@ npm run type-check
 npm run build
 ```
 
-## 4. 目录结构
+## 4. Railway 部署建议（单服务）
+
+管理端在 Railway 建议作为**单服务**部署，避免同一服务里并行启动多个端口导致平台仅识别一个监听端口。
+
+推荐配置：
+
+1. Root Directory：`apps/admin_management`
+2. Build Command：`npm ci && npm run build`
+3. Start Command：`npm start`
+4. 环境变量：
+   - `PORT`：由 Railway 注入（代码已自动回退到 `PORT` 作为 `ADMIN_MANAGEMENT_PORT`）
+   - `ONECEO_API_URL`：指向你的 API 服务域名（例如 `https://api-develop.oneceo.ai`）
+   - `ONECEO_INTERNAL_TOKEN`：与 API 服务保持一致
+
+说明：
+
+- `npm start` 启动的是管理端 API 服务，同时会托管 `web/dist` 的静态前端文件，外部只暴露一个端口。
+- 前端请求 `/api/*` 走同域，不依赖 Vite 开发代理。
+
+## 5. 目录结构
 
 ```text
 admin_management/

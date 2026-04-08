@@ -14,11 +14,14 @@ import { AltusManagedSetupService, altusManagedSetupService } from './altus-mana
 import { AltusRunEventWriter, altusRunEventWriter } from './altus-run-event-writer';
 import { AltusRunLifecycleService, altusRunLifecycleService } from './altus-run-lifecycle-service';
 import { AltusRunState } from './altus-run-state';
+import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   TaskSessionDeliverableService,
   taskSessionDeliverableService,
 } from './task-session-deliverable-service';
+
+const DELIVERABLES_READY_TEXT = '交付文件已生成';
 
 type StreamedToolCallDelta = {
   index?: number;
@@ -201,6 +204,7 @@ export class AltusRunCoordinator {
   }
 
   private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
+    const clarificationMessageKey = `managed:${state.input.runId}:clarification`;
     await taskCreationFileMemoryStore.setPendingClarification(
       state.input.sessionId,
       input.question,
@@ -216,7 +220,7 @@ export class AltusRunCoordinator {
         options: input.options,
         runId: state.input.runId,
       },
-      messageKey: `managed:${state.input.runId}:clarification`,
+      messageKey: clarificationMessageKey,
     });
     await this.eventWriter.appendRunEvent(
       state.input.runId,
@@ -227,6 +231,7 @@ export class AltusRunCoordinator {
       question: input.question,
       options: input.options,
       content: input.question,
+      messageKey: clarificationMessageKey,
       }
     );
     return {
@@ -241,6 +246,7 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || '4000'}/api/llm-proxy/v1/chat/completions`;
@@ -273,6 +279,7 @@ export class AltusRunCoordinator {
         response,
         signal: input.signal,
         onToolCallDelta: input.onToolCallDelta,
+        onAssistantTextDelta: input.onAssistantTextDelta,
       });
     }
 
@@ -292,6 +299,7 @@ export class AltusRunCoordinator {
     signal: AbortSignal;
     mcpProviders?: any[];
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
     fallbackModel?: string | null;
   }) {
     const maxAttempts = Math.max(1, this.getModelRetryLimit() + 1);
@@ -400,6 +408,7 @@ export class AltusRunCoordinator {
     response: Response;
     signal: AbortSignal;
     onToolCallDelta?: (toolCall: ToolCall) => Promise<void> | void;
+    onAssistantTextDelta?: (deltaText: string, fullText: string) => Promise<void> | void;
   }) {
     const decoder = new TextDecoder();
     let buffer = '';
@@ -421,6 +430,9 @@ export class AltusRunCoordinator {
 
       if (typeof delta?.content === 'string' && delta.content) {
         assistantContent += delta.content;
+        if (input.onAssistantTextDelta) {
+          await input.onAssistantTextDelta(delta.content, assistantContent);
+        }
       }
 
       if (Array.isArray(delta?.tool_calls)) {
@@ -520,6 +532,7 @@ export class AltusRunCoordinator {
       compositeSystemPrompt
     );
     let plainTextRecoveryUsed = false;
+    const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
 
     for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
       if (signal.aborted) {
@@ -545,6 +558,19 @@ export class AltusRunCoordinator {
         signal,
         mcpProviders: state.input.mcpProviders,
         fallbackModel: state.input.model,
+        onAssistantTextDelta: async (deltaText, fullText) => {
+          await this.eventWriter.appendRunEvent(
+            state.input.runId,
+            state.input.sessionId,
+            state.input.userId,
+            'assistant_delta',
+            {
+              content: deltaText,
+              fullContent: fullText,
+              messageKey: assistantStreamMessageKey,
+            }
+          );
+        },
         onToolCallDelta: async (toolCall) => {
           const toolName = asText(toolCall?.function?.name);
           const toolCallId = asText(toolCall?.id);
@@ -647,6 +673,35 @@ export class AltusRunCoordinator {
             });
             state.deliverables = deliverables;
             const finalContent = this.buildCompletionMessage(result.summary, result.verification);
+            if (deliverables.length > 0) {
+              await this.setupService.persistTimelineMessage({
+                sessionId: state.input.sessionId,
+                role: 'system',
+                messageType: 'status_update',
+                content: DELIVERABLES_READY_TEXT,
+                metadata: {
+                  stage: 'reviewing',
+                  tone: 'review',
+                  eventType: 'deliverables_ready',
+                  runId: state.input.runId,
+                  sessionId: state.input.sessionId,
+                  executor: 'altus',
+                  executionMode: 'managed',
+                  deliverables,
+                },
+                messageKey: `managed:${state.input.runId}:deliverables_ready`,
+              });
+              await this.eventWriter.appendRunEvent(
+                state.input.runId,
+                state.input.sessionId,
+                state.input.userId,
+                'deliverables_ready',
+                {
+                  content: DELIVERABLES_READY_TEXT,
+                  deliverables,
+                }
+              );
+            }
             await this.setupService.persistTimelineMessage({
               sessionId: state.input.sessionId,
               role: 'agent',
@@ -658,7 +713,7 @@ export class AltusRunCoordinator {
                 verification: result.verification,
                 deliverables,
               },
-              messageKey: `managed:${state.input.runId}:assistant_final`,
+              messageKey: assistantStreamMessageKey,
             });
             await this.eventWriter.appendRunEvent(
               state.input.runId,
@@ -688,7 +743,7 @@ export class AltusRunCoordinator {
               'assistant_message',
               {
               content: finalContent,
-              messageKey: `managed:${state.input.runId}:assistant_final`,
+              messageKey: assistantStreamMessageKey,
               deliverables,
               }
             );
@@ -746,10 +801,33 @@ export class AltusRunCoordinator {
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      await this.eventWriter.appendRunEvent(
+        state.input.runId,
+        state.input.sessionId,
+        state.input.userId,
+        'run_status',
+        {
+          status: 'starting',
+          content: '正在准备 sandbox 与运行环境',
+        }
+      );
       const sandbox = await this.setupService.ensureSandbox(
         state.input.sessionId,
         state.input.sessionTitle
       );
+      if (state.input.skills.length > 0) {
+        await sandboxSkillSyncService.syncResolvedSkills({
+          taskSessionId: state.input.sessionId,
+          orchestratorSessionId: sandbox.sandboxId,
+          skills: state.input.skills,
+        });
+        writeConnectorDebugLog('[ALTUS_RUN_SKILL_SYNC_READY]', {
+          sessionId: state.input.sessionId,
+          runId: state.input.runId,
+          orchestratorSessionId: sandbox.sandboxId,
+          resolvedSkillCount: state.input.skills.length,
+        });
+      }
       state.markRunning({
         sandboxId: sandbox.sandboxId,
         workspaceRoot: sandbox.workspaceRoot,

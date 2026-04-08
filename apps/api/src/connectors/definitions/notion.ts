@@ -43,6 +43,14 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
 export function buildNotionDefinition(): ConnectorDefinition {
   const oauth = resolveNotionOauthProvider();
   const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
+  const oauthConfigured = Boolean(oauth);
+  const hasRemoteUrl = Boolean(remoteUrl);
+  const available = hasRemoteUrl && oauthConfigured;
+  const availabilityReason = !hasRemoteUrl
+    ? '部署环境未配置 Notion MCP remote URL'
+    : !oauthConfigured
+      ? '部署环境未配置 Notion OAuth client'
+      : undefined;
   return {
     key: 'notion',
     category: 'app',
@@ -51,33 +59,24 @@ export function buildNotionDefinition(): ConnectorDefinition {
     icon: 'notion',
     featured: true,
     sortOrder: 20,
-    authMode: oauth ? 'oauth' : 'token',
-    available: Boolean(remoteUrl),
-    availabilityReason: remoteUrl ? undefined : '部署环境未配置 Notion MCP remote URL',
+    authMode: 'oauth',
+    available,
+    availabilityReason,
     configFields: [
       {
         key: 'profileName',
         label: 'Profile Name',
         type: 'text',
-        required: true,
-        placeholder: 'Notion Workspace',
-        description: '用于区分不同 Notion workspace 的配置档案。',
+        required: false,
+        placeholder: 'Notion Default',
+        description: '可选。留空时系统会自动生成默认 profile 名称。',
       },
       {
         key: 'displayName',
         label: 'Display Name',
         type: 'text',
-        placeholder: 'Product Docs',
-        description: '显示名称。',
-      },
-      {
-        key: 'accessToken',
-        label: oauth ? 'Notion Token / Secret (Optional)' : 'Notion Access Token',
-        type: 'password',
-        required: !oauth,
-        secret: true,
-        placeholder: 'secret_xxx',
-        description: '填写 Internal Integration Secret、access token，或由平台 OAuth 回填。',
+        placeholder: 'Workspace Alias',
+        description: '可选。OAuth 成功后会优先用 Notion workspace 信息自动回填。',
       },
     ],
     oauth: {

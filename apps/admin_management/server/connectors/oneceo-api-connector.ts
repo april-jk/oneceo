@@ -13,6 +13,7 @@ type OneceoEnvelope<T> = {
 
 export type TaskCreationSession = {
   id: string;
+  userId?: string | null;
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' | string;
@@ -356,10 +357,12 @@ export class OneceoApiConnector {
 
   private async request<T>(
     path: string,
-    options?: { method?: HttpMethod; body?: unknown; headers?: Record<string, string> }
+    options?: { method?: HttpMethod; body?: unknown; headers?: Record<string, string>; timeoutMs?: number; retries?: number }
   ): Promise<T> {
     const method = options?.method || 'GET';
-    const maxAttempts = Math.max(1, this.retries + 1);
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const retries = options?.retries ?? this.retries;
+    const maxAttempts = Math.max(1, retries + 1);
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -370,14 +373,12 @@ export class OneceoApiConnector {
             method,
             headers: {
               'content-type': 'application/json',
-              ...(config.oneceoInternalToken
-                ? { 'x-oneceo-internal-token': config.oneceoInternalToken }
-                : {}),
+              'x-oneceo-internal-token': config.oneceoInternalToken,
               ...(options?.headers || {}),
             },
             body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
           },
-          this.timeoutMs
+          timeoutMs
         );
 
         const payload = (await response.json().catch(() => ({}))) as OneceoEnvelope<unknown>;
@@ -454,45 +455,53 @@ export class OneceoApiConnector {
     return this.request<SandboxEnvironmentRecord[]>(`/api/sandbox/environment?limit=${limit}`);
   }
 
+  listSandboxEnvironmentRegistry(limit = 20) {
+    return this.request<SandboxEnvironmentRecord[]>(`/api/internal/sandbox/environment-registry?limit=${limit}`);
+  }
+
   listTaskCreationSessions(limit = 20) {
-    return this.request<TaskCreationSession[]>(`/api/task-creation/sessions?limit=${limit}`);
+    return this.request<TaskCreationSession[]>(`/api/internal/task-creation/admin/sessions?limit=${limit}`);
   }
 
   getTaskCreationSession(sessionId: string) {
-    return this.request<TaskCreationSession>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}`);
+    return this.request<TaskCreationSession>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   getTaskCreationMessages(sessionId: string) {
     return this.request<TaskCreationSession['messages']>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/messages`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/messages`
     );
   }
 
   getTaskCreationIntent(sessionId: string) {
-    return this.request<Record<string, unknown>>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}/intent`);
+    return this.request<Record<string, unknown>>(
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/intent`
+    );
   }
 
   getTaskCreationTaskDescription(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/task-description`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/task-description`
     );
   }
 
   getTaskCreationExecutionPlan(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/execution-plan`
+      `/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/execution-plan`
     );
   }
 
   getTaskCreationDebug(sessionId: string) {
-    return this.request<TaskDebugInfo>(`/api/task-creation/sessions/${encodeURIComponent(sessionId)}/debug`);
+    return this.request<TaskDebugInfo>(`/api/internal/task-creation/admin/sessions/${encodeURIComponent(sessionId)}/debug`);
   }
 
   startTaskCreationRuntime(sessionId: string) {
     return this.request<Record<string, unknown>>(
-      `/api/task-creation/sessions/${encodeURIComponent(sessionId)}/runtime/start`,
+      `/api/internal/task-creation/sessions/${encodeURIComponent(sessionId)}/runtime/start`,
       {
         method: 'POST',
+        timeoutMs: 60_000,
+        retries: 0,
       }
     );
   }
@@ -510,13 +519,33 @@ export class OneceoApiConnector {
     );
   }
 
-  restoreSandboxEnvironment(sessionId: string) {
+  restoreSandboxEnvironment(sessionId: string, payload?: { snapshotKey?: string }) {
     return this.request<Record<string, unknown>>(
       `/api/sandbox/environment/${encodeURIComponent(sessionId)}/restore`,
       {
         method: 'POST',
+        body: payload ? JSON.stringify(payload) : undefined,
       }
     );
+  }
+
+  getSandboxArchiveHistory(sessionId: string) {
+    return this.request<Array<Record<string, unknown>>>(
+      `/api/internal/sandbox/${encodeURIComponent(sessionId)}/archive-history`
+    );
+  }
+
+  getSandboxArchiveDownloadUrl(sessionId: string, expiresInSeconds = 3600, snapshotKey?: string) {
+    const ttl = Number.isFinite(expiresInSeconds) ? Math.max(60, Math.min(86_400, Math.floor(expiresInSeconds))) : 3600;
+    const suffix = snapshotKey
+      ? `?expiresInSeconds=${ttl}&snapshotKey=${encodeURIComponent(snapshotKey)}`
+      : `?expiresInSeconds=${ttl}`;
+    return this.request<{
+      key: string;
+      fileName: string;
+      downloadUrl: string;
+      expiresInSeconds: number;
+    }>(`/api/internal/sandbox/${encodeURIComponent(sessionId)}/archive-download-url${suffix}`);
   }
 
   checkSandboxConnectivity(sessionId: string) {

@@ -4,9 +4,7 @@ function trimTrailingSlash(value: string): string {
 
 function resolveDefaultApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    const protocol = window.location.protocol || "http:";
-    const hostname = window.location.hostname || "127.0.0.1";
-    return `${protocol}//${hostname}:4000`;
+    return window.location.origin || "http://127.0.0.1:3000";
   }
   return "http://127.0.0.1:4000";
 }

@@ -770,7 +770,7 @@ export async function getLatestTaskCreationManagedRun(
 
 export function getTaskCreationManagedRunStreamUrl(
   runId: string,
-  options?: { afterSequence?: number | null; clientId?: string }
+  options?: { afterSequence?: number | null; clientId?: string; userId?: string | null }
 ): string {
   const safeRunId = encodeURIComponent(runId);
   const params = new URLSearchParams();
@@ -779,6 +779,9 @@ export function getTaskCreationManagedRunStreamUrl(
   }
   if (options?.clientId) {
     params.set("clientId", options.clientId);
+  }
+  if (typeof options?.userId === "string" && options.userId.trim()) {
+    params.set("userId", options.userId.trim());
   }
   const query = params.toString();
   const suffix = query ? `?${query}` : "";

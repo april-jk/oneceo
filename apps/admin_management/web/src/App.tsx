@@ -28,6 +28,7 @@ import type {
   AuditDetailResponse,
   AuditLogEntry,
   AuditResponse,
+  ConversationMessage,
   ConversationSession,
   ConversationSessionDetailResponse,
   DashboardOverview,
@@ -67,6 +68,8 @@ type AuditFilterState = {
   from: string;
   to: string;
 };
+
+type ConversationMessageView = 'interaction' | 'raw';
 
 // 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
@@ -306,6 +309,7 @@ function conversationPhaseLabel(phase?: string | null) {
 
 function conversationRoleLabel(role?: string | null) {
   if (role === 'user') return '用户';
+  if (role === 'agent') return '智能体';
   if (role === 'assistant') return '助手';
   if (role === 'system') return '系统';
   if (role === 'tool') return '工具';
@@ -315,6 +319,21 @@ function conversationRoleLabel(role?: string | null) {
 }
 
 function conversationMessageTypeLabel(messageType?: string | null) {
+  if (messageType === 'user_input') return '用户输入';
+  if (messageType === 'user_response') return '用户补充';
+  if (messageType === 'assistant_message') return '助手回复';
+  if (messageType === 'agent_message') return '智能体回复';
+  if (messageType === 'clarification_request') return '澄清请求';
+  if (messageType === 'executor_event') return '执行事件';
+  if (messageType === 'opencode_event') return 'OpenCode 事件';
+  if (messageType === 'opencode_status') return 'OpenCode 状态';
+  if (messageType === 'opencode_error') return 'OpenCode 异常';
+  if (messageType === 'opencode_user_input') return '执行器转发输入';
+  if (messageType === 'codex_user_input') return 'Codex 转发输入';
+  if (messageType === 'status_update') return '状态更新';
+  if (messageType === 'session_started') return '会话开始';
+  if (messageType === 'error') return '错误';
+  if (messageType === 'plan_generated') return '计划生成';
   if (messageType === 'user') return '用户消息';
   if (messageType === 'assistant') return '助手回复';
   if (messageType === 'system') return '系统消息';
@@ -702,6 +721,401 @@ function summarizeText(value: string | undefined, max = 260) {
   return `${compact.slice(0, max)}...`;
 }
 
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function messageRunId(message: ConversationMessage): string | null {
+  return metadataString(toRecord(message.metadata), 'runId');
+}
+
+function messageEventType(message: ConversationMessage): string | null {
+  return metadataString(toRecord(message.metadata), 'eventType');
+}
+
+function messageToolName(message: ConversationMessage): string | null {
+  return metadataString(toRecord(message.metadata), 'toolName');
+}
+
+function messageExecutor(message: ConversationMessage): string | null {
+  return metadataString(toRecord(message.metadata), 'executor');
+}
+
+function messageSessionLocator(message: ConversationMessage): string | null {
+  const metadata = toRecord(message.metadata);
+  return (
+    metadataString(metadata, 'orchestratorSessionId') ||
+    metadataString(metadata, 'opencodeSessionId') ||
+    metadataString(metadata, 'workspacePath')
+  );
+}
+
+function isUserFacingMessage(message: ConversationMessage): boolean {
+  return [
+    'user_input',
+    'user_response',
+    'assistant_message',
+    'agent_message',
+    'clarification_request',
+    'error',
+    'opencode_error',
+  ].includes(String(message.messageType || ''));
+}
+
+function isStatusTimelineMessage(message: ConversationMessage): boolean {
+  return ['status_update', 'session_started'].includes(String(message.messageType || ''));
+}
+
+function isExecutionTraceMessage(message: ConversationMessage): boolean {
+  return [
+    'executor_event',
+    'opencode_status',
+    'opencode_user_input',
+    'codex_user_input',
+  ].includes(String(message.messageType || ''));
+}
+
+function isOpencodeNoiseMessage(message: ConversationMessage): boolean {
+  return String(message.messageType || '') === 'opencode_event';
+}
+
+function isFailureMessage(message: ConversationMessage): boolean {
+  if (['error', 'opencode_error'].includes(String(message.messageType || ''))) return true;
+  if (String(message.messageType || '') === 'executor_event') {
+    return messageEventType(message) === 'tool_call_failed';
+  }
+  if (String(message.messageType || '') === 'status_update') {
+    return metadataString(toRecord(message.metadata), 'stage') === 'failed';
+  }
+  return false;
+}
+
+function deriveMessageOutcome(messages: ConversationMessage[]): string {
+  const hasFailure = messages.some(isFailureMessage);
+  if (hasFailure) return '失败';
+  const hasWaiting = messages.some((message) => String(message.messageType || '') === 'clarification_request');
+  if (hasWaiting) return '等待用户';
+  const latestStatus = [...messages].reverse().find((message) => String(message.messageType || '') === 'status_update');
+  const latestStage = latestStatus ? metadataString(toRecord(latestStatus.metadata), 'stage') : null;
+  if (latestStage === 'completed') return '已完成';
+  if (latestStage === 'reviewing') return '待确认';
+  const hasAssistantReply = messages.some((message) =>
+    ['assistant_message', 'agent_message'].includes(String(message.messageType || ''))
+  );
+  if (hasAssistantReply) return '已回复';
+  return '处理中';
+}
+
+function messageContentPreview(message: ConversationMessage, max = 220): string {
+  const summary = summarizeText(message.content, max);
+  if (summary) return summary;
+  const metadata = toRecord(message.metadata);
+  const outputPreview = metadataString(metadata, 'outputPreview');
+  if (outputPreview) return summarizeText(outputPreview, max);
+  const question = metadataString(metadata, 'question');
+  if (question) return summarizeText(question, max);
+  const eventType = metadataString(metadata, 'eventType');
+  if (eventType) return `事件: ${eventType}`;
+  return '无正文';
+}
+
+function parseJsonMaybe(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function messageOutputPreviewRecord(message: ConversationMessage): Record<string, unknown> | null {
+  const metadata = toRecord(message.metadata);
+  const parsed = parseJsonMaybe(metadataString(metadata, 'outputPreview'));
+  const record = toRecord(parsed);
+  return Object.keys(record).length > 0 ? record : null;
+}
+
+function clarificationOptions(message: ConversationMessage): string[] {
+  const metadata = toRecord(message.metadata);
+  return asStringArray(metadata.options);
+}
+
+function clarificationQuestion(message: ConversationMessage): string {
+  const metadata = toRecord(message.metadata);
+  return metadataString(metadata, 'question') || summarizeText(message.content, 360) || '待补充信息';
+}
+
+function clarificationOptionsSummary(message: ConversationMessage, max = 4): string {
+  const options = clarificationOptions(message);
+  if (options.length === 0) return '未提供可选项';
+  return options.slice(0, max).join(' / ');
+}
+
+function messageSummaryLabel(message: ConversationMessage): string | null {
+  const type = String(message.messageType || '');
+  if (type === 'clarification_request') return '等待用户确认';
+  if (type === 'assistant_message') return '主回复';
+  if (type === 'agent_message') return '智能体回复';
+  if (type === 'user_input') return '用户发起';
+  if (type === 'user_response') return '用户补充';
+  if (type === 'opencode_error' || type === 'error') return '执行异常';
+  if (type === 'status_update') {
+    const eventType = messageEventType(message);
+    if (eventType === 'deliverables_ready') return '交付已生成';
+    if (eventType === 'run_completed') return '运行完成';
+  }
+  return null;
+}
+
+type CompletionSummary = {
+  summary: string;
+  verification: string[];
+  deliverables: Array<{ name: string; path: string }>;
+};
+
+function completionSummaryFromGroup(group: ConversationInteractionGroup): CompletionSummary | null {
+  const completionEvent = [...group.executionMessages]
+    .reverse()
+    .find((message) => messageToolName(message) === 'complete_task');
+  if (!completionEvent) return null;
+  const output = messageOutputPreviewRecord(completionEvent);
+  if (!output) return null;
+  const summary = metadataString(output, 'summary') || '';
+  const verification = asStringArray(output.verification);
+  const deliverablesSource = Array.isArray(output.deliverables) ? output.deliverables : Array.isArray(output.attachments) ? output.attachments : [];
+  const deliverables = deliverablesSource
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      name:
+        (typeof item.name === 'string' && item.name) ||
+        (typeof item.displayName === 'string' && item.displayName) ||
+        (typeof item.path === 'string' && item.path.split('/').filter(Boolean).at(-1)) ||
+        '未命名交付',
+      path: typeof item.path === 'string' ? item.path : '',
+    }));
+  if (!summary && verification.length === 0 && deliverables.length === 0) return null;
+  return { summary, verification, deliverables };
+}
+
+type ConversationInteractionGroup = {
+  id: string;
+  runId: string | null;
+  sessionLocator: string | null;
+  messages: ConversationMessage[];
+  primaryMessages: ConversationMessage[];
+  statusMessages: ConversationMessage[];
+  executionMessages: ConversationMessage[];
+  eventMessages: ConversationMessage[];
+  failedMessages: ConversationMessage[];
+  toolNames: string[];
+  outcome: string;
+  startedAt: string;
+  endedAt: string;
+};
+
+function buildConversationInteractionGroups(messages: ConversationMessage[]): ConversationInteractionGroup[] {
+  const groups: ConversationInteractionGroup[] = [];
+  const groupOrder = new Map<string, ConversationInteractionGroup>();
+  let fallbackCounter = 0;
+  let lastGroup: ConversationInteractionGroup | null = null;
+
+  for (const message of messages) {
+    const runId = messageRunId(message);
+    const sessionLocator = messageSessionLocator(message);
+    const role = String(message.role || '');
+    const type = String(message.messageType || '');
+    const startsOwnFallbackGroup = role === 'user' || ['session_started', 'opencode_error', 'error'].includes(type);
+    const groupKey: string =
+      runId ||
+      (sessionLocator && !startsOwnFallbackGroup ? `locator:${sessionLocator}` : null) ||
+      (lastGroup && !startsOwnFallbackGroup ? lastGroup.id : `fallback:${fallbackCounter++}`);
+
+    let group = groupOrder.get(groupKey);
+    if (!group) {
+      group = {
+        id: groupKey,
+        runId,
+        sessionLocator,
+        messages: [],
+        primaryMessages: [],
+        statusMessages: [],
+        executionMessages: [],
+        eventMessages: [],
+        failedMessages: [],
+        toolNames: [],
+        outcome: '处理中',
+        startedAt: message.createdAt,
+        endedAt: message.createdAt,
+      };
+      groupOrder.set(groupKey, group);
+      groups.push(group);
+    }
+
+    group.messages.push(message);
+    group.endedAt = message.createdAt;
+    if (isUserFacingMessage(message)) group.primaryMessages.push(message);
+    if (isStatusTimelineMessage(message)) group.statusMessages.push(message);
+    if (isExecutionTraceMessage(message)) group.executionMessages.push(message);
+    if (isOpencodeNoiseMessage(message)) group.eventMessages.push(message);
+    if (isFailureMessage(message)) group.failedMessages.push(message);
+    const toolName = messageToolName(message);
+    if (toolName && !group.toolNames.includes(toolName)) {
+      group.toolNames.push(toolName);
+    }
+    group.outcome = deriveMessageOutcome(group.messages);
+    lastGroup = group;
+  }
+
+  return groups;
+}
+
+function messageMetaSummary(message: ConversationMessage): string[] {
+  const metadata = toRecord(message.metadata);
+  const parts: string[] = [];
+  const eventType = metadataString(metadata, 'eventType');
+  const toolName = metadataString(metadata, 'toolName');
+  const executor = messageExecutor(message);
+  const stage = metadataString(metadata, 'stage');
+  const tone = metadataString(metadata, 'tone');
+  const runId = metadataString(metadata, 'runId');
+  const outputPreview = metadataString(metadata, 'outputPreview');
+  const question = metadataString(metadata, 'question');
+
+  if (toolName) parts.push(`工具: ${toolName}`);
+  if (eventType) parts.push(`事件: ${eventType}`);
+  if (executor) parts.push(`执行器: ${executorLabel(executor)}`);
+  if (stage) parts.push(`阶段: ${conversationStageLabel(stage)}`);
+  if (tone) parts.push(`语气: ${conversationToneLabel(tone)}`);
+  if (runId) parts.push(`Run: ${runId.slice(0, 8)}`);
+  if (!parts.length && question) parts.push(`问题: ${summarizeText(question, 80)}`);
+  if (!parts.length && outputPreview) parts.push(`输出: ${summarizeText(outputPreview, 80)}`);
+  return parts;
+}
+
+type ConversationDiagnosticLevel = 'error' | 'warning' | 'success' | 'info';
+
+function messageDiagnosticLevel(message: ConversationMessage): ConversationDiagnosticLevel {
+  if (isFailureMessage(message)) return 'error';
+  const type = String(message.messageType || '');
+  const eventType = messageEventType(message);
+  if (type === 'clarification_request' || eventType === 'deliverables_ready') return 'warning';
+  if (
+    type === 'assistant_message' ||
+    (type === 'status_update' && eventType === 'run_completed') ||
+    (type === 'executor_event' && messageToolName(message) === 'complete_task' && eventType === 'tool_call_completed')
+  ) {
+    return 'success';
+  }
+  return 'info';
+}
+
+function diagnosticLevelLabel(level: ConversationDiagnosticLevel): string {
+  if (level === 'error') return '阻塞';
+  if (level === 'warning') return '关注';
+  if (level === 'success') return '完成';
+  return '信息';
+}
+
+function diagnosticSortScore(message: ConversationMessage): number {
+  const level = messageDiagnosticLevel(message);
+  if (level === 'error') return 0;
+  if (level === 'warning') return 1;
+  if (level === 'success') return 2;
+  return 3;
+}
+
+function sortRawMessagesForDiagnostics(messages: ConversationMessage[]): ConversationMessage[] {
+  return [...messages].sort((left, right) => {
+    const severityDiff = diagnosticSortScore(left) - diagnosticSortScore(right);
+    if (severityDiff !== 0) return severityDiff;
+    return toTimestamp(right.createdAt) - toTimestamp(left.createdAt);
+  });
+}
+
+function messageDiagnosticSummary(message: ConversationMessage): string | null {
+  const type = String(message.messageType || '');
+  const eventType = messageEventType(message);
+  const toolName = messageToolName(message);
+  const metadata = toRecord(message.metadata);
+  if (type === 'opencode_error') {
+    return '执行器链路异常，优先确认 sandbox 端口、订阅状态和 OpenCode 可达性。';
+  }
+  if (type === 'error') {
+    return '当前轮次出现显式错误，需要结合 metadata 与时间线继续排障。';
+  }
+  if (type === 'clarification_request') {
+    return '当前轮次在等待用户补充信息或确认下一步。';
+  }
+  if (type === 'executor_event' && eventType === 'tool_call_failed') {
+    return `${toolName || '工具'} 执行失败，优先检查参数、workspace 与 runtime 状态。`;
+  }
+  if (type === 'executor_event' && eventType === 'tool_call_completed') {
+    return `${toolName || '工具'} 已完成，可结合 outputPreview 判断是否产生有效结果。`;
+  }
+  if (type === 'status_update' && metadataString(metadata, 'stage') === 'failed') {
+    return '会话进入 failed 阶段，本轮已终止。';
+  }
+  if (type === 'status_update' && eventType === 'deliverables_ready') {
+    return '交付已生成，建议核对文件与最终回复是否一致。';
+  }
+  if (type === 'status_update' && eventType === 'run_completed') {
+    return '本轮 managed run 已结束。';
+  }
+  if (type === 'opencode_event') {
+    return '执行器原始事件，通常用于补充上下文，不代表用户可见主回复。';
+  }
+  return null;
+}
+
+function metadataHighlights(message: ConversationMessage): string[] {
+  const metadata = toRecord(message.metadata);
+  const output = messageOutputPreviewRecord(message);
+  const outputRecord = output || {};
+  const highlights: string[] = [];
+  const eventType = messageEventType(message);
+
+  const requestId = metadataString(metadata, 'requestId') || metadataString(outputRecord, 'requestId');
+  if (requestId) highlights.push(`请求 ${requestId.slice(0, 12)}`);
+
+  const responseTime =
+    (typeof output?.responseTime === 'number' && Number.isFinite(output.responseTime) ? `${output.responseTime}s` : null) ||
+    metadataString(metadata, 'responseTime');
+  if (responseTime) highlights.push(`耗时 ${responseTime}`);
+
+  if (eventType === 'tool_call_completed') {
+    const results = Array.isArray(output?.results) ? output.results : [];
+    const topTitles = results
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      .map((item) => (typeof item.title === 'string' ? item.title : ''))
+      .filter(Boolean)
+      .slice(0, 3);
+    highlights.push(...topTitles.map((title) => summarizeText(title, 42)));
+  }
+
+  const errorMessage =
+    metadataString(metadata, 'error') ||
+    metadataString(metadata, 'errorMessage') ||
+    metadataString(outputRecord, 'error') ||
+    metadataString(outputRecord, 'message');
+  if (errorMessage && highlights.length < 4) {
+    highlights.push(summarizeText(errorMessage, 56));
+  }
+
+  return highlights.slice(0, 4);
+}
+
 function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
   const status = statusLabel(snapshot?.status || '-');
   const stage = conversationStageLabel(snapshot?.stage);
@@ -900,6 +1314,7 @@ export default function App() {
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
   const [conversationWorkspaceTab, setConversationWorkspaceTab] = useState<'transitions' | 'timeline' | 'messages' | 'llm'>('transitions');
+  const [conversationMessageView, setConversationMessageView] = useState<ConversationMessageView>('interaction');
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
@@ -2276,6 +2691,7 @@ export default function App() {
 
   useEffect(() => {
     setConversationWorkspaceTab('transitions');
+    setConversationMessageView('interaction');
     setTransitionView('timeline');
     setTransitionQuery('');
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
@@ -2368,6 +2784,49 @@ export default function App() {
     messages: conversationDetail?.messages.length || 0,
     llm: conversationDetail?.trace?.llm.length || 0,
   };
+  const conversationMessages = asArray(conversationDetail?.messages);
+  const conversationRawMessages = sortRawMessagesForDiagnostics(conversationMessages);
+  const conversationInteractionGroups = buildConversationInteractionGroups(conversationMessages);
+  const conversationMessageSummary = (() => {
+    const latestUserMessage = [...conversationMessages].reverse().find((message) =>
+      ['user_input', 'user_response'].includes(String(message.messageType || ''))
+    );
+    const latestAssistantMessage = [...conversationMessages].reverse().find((message) =>
+      ['assistant_message', 'agent_message', 'clarification_request'].includes(String(message.messageType || ''))
+    );
+    const latestFailure = [...conversationMessages].reverse().find(isFailureMessage);
+    const latestClarification = [...conversationMessages].reverse().find(
+      (message) => String(message.messageType || '') === 'clarification_request'
+    );
+    const latestStatusUpdate = [...conversationMessages].reverse().find(
+      (message) => String(message.messageType || '') === 'status_update'
+    );
+    const failedToolNames = Array.from(
+      new Set(
+        conversationMessages
+          .filter(isFailureMessage)
+          .map((message) => messageToolName(message))
+          .filter((value): value is string => Boolean(value))
+      )
+    );
+    return {
+      latestUserSummary: latestUserMessage ? messageContentPreview(latestUserMessage, 120) : '暂无用户输入',
+      latestAssistantSummary: latestAssistantMessage ? messageContentPreview(latestAssistantMessage, 120) : '暂无主回复',
+      latestFailureSummary: latestFailure ? messageContentPreview(latestFailure, 120) : '',
+      latestFailureAt: latestFailure?.createdAt || null,
+      latestClarificationSummary: latestClarification ? messageContentPreview(latestClarification, 120) : '',
+      latestStatusStage: latestStatusUpdate ? metadataString(toRecord(latestStatusUpdate.metadata), 'stage') : null,
+      userCount: conversationMessages.filter((message) => message.role === 'user').length,
+      assistantCount: conversationMessages.filter((message) =>
+        ['assistant_message', 'agent_message', 'clarification_request'].includes(String(message.messageType || ''))
+      ).length,
+      executionCount: conversationMessages.filter(
+        (message) => isExecutionTraceMessage(message) || isOpencodeNoiseMessage(message)
+      ).length,
+      failureCount: conversationMessages.filter(isFailureMessage).length,
+      failedToolNames,
+    };
+  })();
   const conversationSwitching = Boolean(
     conversationDetailLoading &&
       selectedSessionId &&
@@ -2957,7 +3416,7 @@ export default function App() {
   );
 
   const renderConversationSection = () => (
-    <main className="content-stack">
+    <main className="content-stack conversation-content-stack">
       <section className="page-intro-grid fade-in">
         <article className="panel hero-panel">
           <div className="panel-header panel-header-stack">
@@ -3974,7 +4433,7 @@ export default function App() {
     const osacMessages = conversationDetail?.trace?.osac.messages || [];
 
     return (
-      <main className="content-stack">
+      <main className="content-stack conversation-content-stack">
         <section className="summary-strip summary-strip-four fade-in">
           <article className="summary-card summary-card-emphasis">
             <span className="summary-card-label">总会话</span>
@@ -4356,19 +4815,327 @@ export default function App() {
                 ) : null}
 
                 {conversationWorkspaceTab === 'messages' ? (
-                  <div className="message-list message-list-large">
-                    {conversationDetail.messages.length === 0 ? (
-                      <p className="empty">无消息</p>
-                    ) : (
-                      conversationDetail.messages.map((message) => (
-                        <article key={message.id} className="message-item">
-                          <p className="message-head">
-                            <strong>{conversationRoleLabel(message.role)}</strong> · {formatDateTime(message.createdAt)}
+                  <div className="conversation-message-stack">
+                    <section className="sub-panel conversation-message-summary">
+                      <div className="panel-subtitle-row">
+                        <h3 className="panel-subtitle">消息视图</h3>
+                        <div className="workspace-tabs conversation-message-view-tabs">
+                          <button
+                            type="button"
+                            className={`workspace-tab ${conversationMessageView === 'interaction' ? 'active' : ''}`}
+                            onClick={() => setConversationMessageView('interaction')}
+                          >
+                            交互视图
+                          </button>
+                          <button
+                            type="button"
+                            className={`workspace-tab ${conversationMessageView === 'raw' ? 'active' : ''}`}
+                            onClick={() => setConversationMessageView('raw')}
+                          >
+                            原始流
+                          </button>
+                        </div>
+                      </div>
+                      <div className="detail-grid conversation-message-summary-grid">
+                        <div>
+                          <p className="kpi-title">最近用户输入</p>
+                          <p>{conversationMessageSummary.latestUserSummary}</p>
+                        </div>
+                        <div>
+                          <p className="kpi-title">当前会话状态</p>
+                          <p>{statusLabel(conversationDetail.session.status)}</p>
+                        </div>
+                        <div>
+                          <p className="kpi-title">最近轮次结果</p>
+                          <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
+                        </div>
+                        <div>
+                          <p className="kpi-title">最近阶段</p>
+                          <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail.session.stage)}</p>
+                        </div>
+                      </div>
+                      {conversationMessageSummary.latestClarificationSummary || conversationDetail.runtime?.pendingQuestion ? (
+                        <div className="conversation-message-inline-card">
+                          <p className="kpi-title">当前待确认问题</p>
+                          <p className="message-content">
+                            {conversationDetail.runtime?.pendingQuestion ||
+                              conversationMessageSummary.latestClarificationSummary}
                           </p>
-                          <p className="message-content">{message.content}</p>
-                          {message.metadata !== undefined ? <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre> : null}
-                        </article>
-                      ))
+                          {conversationDetail.runtime?.pendingOptions?.length ? (
+                            <div className="conversation-message-summary-stats">
+                              {conversationDetail.runtime.pendingOptions.map((option) => (
+                                <span key={option} className="session-status">{option}</span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div className="conversation-message-summary-stats">
+                        <span className="session-status">用户消息 {conversationMessageSummary.userCount}</span>
+                        <span className="session-status">主回复 {conversationMessageSummary.assistantCount}</span>
+                        <span className="session-status">执行事件 {conversationMessageSummary.executionCount}</span>
+                        <span className={`session-status ${conversationMessageSummary.failureCount > 0 ? 'state-error' : ''}`}>
+                          失败事件 {conversationMessageSummary.failureCount}
+                        </span>
+                        {conversationMessageSummary.failedToolNames.slice(0, 3).map((toolName) => (
+                          <span key={toolName} className="session-status">{toolName}</span>
+                        ))}
+                      </div>
+                      {conversationMessageSummary.latestFailureSummary ? (
+                        <p className="panel-caption">
+                          最近阻塞: {conversationMessageSummary.latestFailureSummary}
+                          {conversationMessageSummary.latestFailureAt ? ` · ${formatDateTime(conversationMessageSummary.latestFailureAt)}` : ''}
+                        </p>
+                      ) : conversationMessageSummary.latestClarificationSummary ? (
+                        <p className="panel-caption">
+                          最近等待用户: {summarizeText(conversationMessageSummary.latestClarificationSummary, 140)}
+                        </p>
+                      ) : (
+                        <p className="panel-caption">最近主回复: {conversationMessageSummary.latestAssistantSummary}</p>
+                      )}
+                    </section>
+
+                    {conversationMessageView === 'interaction' ? (
+                      <div className="message-list message-list-large conversation-interaction-list">
+                        {conversationInteractionGroups.length === 0 ? (
+                          <p className="empty">无消息</p>
+                        ) : (
+                          conversationInteractionGroups.map((group, index) => {
+                            const latestStatus = [...group.statusMessages].reverse()[0];
+                            const latestFailure = [...group.failedMessages].reverse()[0];
+                            const latestPrimary = [...group.primaryMessages].reverse()[0];
+                            const completionSummary = completionSummaryFromGroup(group);
+                            const completedTools = group.executionMessages.filter(
+                              (message) => messageEventType(message) === 'tool_call_completed'
+                            ).length;
+                            const failedTools = group.executionMessages.filter(
+                              (message) => messageEventType(message) === 'tool_call_failed'
+                            ).length;
+                            const eventTypes = uniqueSorted(
+                              group.eventMessages.map((message) => messageEventType(message)).filter(Boolean)
+                            );
+                            const userTransferMessage = group.executionMessages.find((message) =>
+                              ['opencode_user_input', 'codex_user_input'].includes(String(message.messageType || ''))
+                            );
+                            return (
+                              <article key={group.id} className="message-item conversation-interaction-group">
+                                <div className="message-head conversation-interaction-head">
+                                  <div>
+                                    <strong>轮次 {index + 1}</strong>
+                                    <span className="panel-caption">
+                                      {formatDateTime(group.startedAt)}
+                                      {group.startedAt !== group.endedAt ? ` -> ${formatDateTime(group.endedAt)}` : ''}
+                                    </span>
+                                  </div>
+                                  <div className="trace-head">
+                                    <span className={`session-status ${group.outcome === '失败' ? 'state-error' : ''}`}>{group.outcome}</span>
+                                    {group.runId ? <span className="mono session-status">Run {group.runId.slice(0, 8)}</span> : null}
+                                    {group.sessionLocator ? <span className="mono session-status">{summarizeText(group.sessionLocator, 36)}</span> : null}
+                                  </div>
+                                </div>
+
+                                <div className="conversation-bubble-stack">
+                                  {group.primaryMessages.length > 0 ? (
+                                    group.primaryMessages.map((message) => (
+                                      <article
+                                        key={message.id}
+                                        className={`conversation-bubble conversation-bubble-${message.role === 'user' ? 'user' : isFailureMessage(message) ? 'error' : 'agent'}`}
+                                      >
+                                        <p className="message-head">
+                                          <strong>{conversationRoleLabel(message.role)}</strong>
+                                          <span>{conversationMessageTypeLabel(message.messageType)}</span>
+                                          <span>{formatDateTime(message.createdAt)}</span>
+                                        </p>
+                                        {messageSummaryLabel(message) ? (
+                                          <span className="conversation-bubble-tag">{messageSummaryLabel(message)}</span>
+                                        ) : null}
+                                        {String(message.messageType || '') !== 'clarification_request' ? (
+                                          <p className="message-content">{messageContentPreview(message, 360)}</p>
+                                        ) : null}
+                                        {String(message.messageType || '') === 'clarification_request' ? (
+                                          <div className="conversation-message-inline-card">
+                                            <p className="panel-caption">该轮次当前要求用户补充信息或确认下一步。</p>
+                                            <p className="message-content">{clarificationQuestion(message)}</p>
+                                            {clarificationOptions(message).length > 0 ? (
+                                              <div className="conversation-message-summary-stats">
+                                                {clarificationOptions(message).map((option) => (
+                                                  <span key={option} className="session-status">{option}</span>
+                                                ))}
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
+                                        {String(message.messageType || '') === 'assistant_message' && completionSummary?.summary ? (
+                                          <div className="conversation-message-inline-card">
+                                            <p className="kpi-title">交付摘要</p>
+                                            <p className="message-content">{summarizeText(completionSummary.summary, 220)}</p>
+                                          </div>
+                                        ) : null}
+                                      </article>
+                                    ))
+                                  ) : latestFailure ? (
+                                    <article className="conversation-bubble conversation-bubble-error">
+                                      <p className="message-head">
+                                        <strong>系统阻塞</strong>
+                                        <span>{conversationMessageTypeLabel(latestFailure.messageType)}</span>
+                                        <span>{formatDateTime(latestFailure.createdAt)}</span>
+                                      </p>
+                                      <p className="message-content">{messageContentPreview(latestFailure, 360)}</p>
+                                      <p className="panel-caption">用户已进入本轮，但执行器未产出可读主回复。</p>
+                                    </article>
+                                  ) : (
+                                    <article className="conversation-bubble conversation-bubble-system">
+                                      <p className="message-head">
+                                        <strong>执行事件密集</strong>
+                                        <span>{group.eventMessages.length} 条 OpenCode 事件</span>
+                                      </p>
+                                      <p className="message-content">当前轮次主要是执行器事件流，暂无可直接呈现给用户的主回复。</p>
+                                    </article>
+                                  )}
+                                </div>
+
+                                <section className="sub-panel conversation-execution-summary">
+                                  <div className="panel-subtitle-row">
+                                    <h4 className="panel-subtitle">执行摘要</h4>
+                                    <div className="trace-head">
+                                      <span className="session-status">成功工具 {completedTools}</span>
+                                      <span className={`session-status ${failedTools > 0 ? 'state-error' : ''}`}>失败工具 {failedTools}</span>
+                                      <span className="session-status">OpenCode 事件 {group.eventMessages.length}</span>
+                                    </div>
+                                  </div>
+                                  <div className="detail-grid">
+                                    <div>
+                                      <p className="kpi-title">最近主结果</p>
+                                      <p>{latestPrimary ? messageContentPreview(latestPrimary, 160) : '暂无主回复'}</p>
+                                    </div>
+                                    <div>
+                                      <p className="kpi-title">最近状态</p>
+                                      <p>{latestStatus ? `${conversationMessageTypeLabel(latestStatus.messageType)} · ${messageContentPreview(latestStatus, 120)}` : '暂无状态消息'}</p>
+                                    </div>
+                                  </div>
+                                  {completionSummary ? (
+                                    <div className="conversation-message-inline-card">
+                                      <p className="kpi-title">完成摘要</p>
+                                      {completionSummary.summary ? (
+                                        <p className="message-content">{summarizeText(completionSummary.summary, 220)}</p>
+                                      ) : (
+                                        <p className="message-content">本轮已完成，但未返回摘要。</p>
+                                      )}
+                                      {completionSummary.verification.length > 0 ? (
+                                        <div className="conversation-message-summary-stats">
+                                          {completionSummary.verification.slice(0, 4).map((item) => (
+                                            <span key={item} className="session-status">{summarizeText(item, 40)}</span>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                      {completionSummary.deliverables.length > 0 ? (
+                                        <div className="conversation-deliverable-list">
+                                          {completionSummary.deliverables.slice(0, 4).map((item) => (
+                                            <article key={`${item.name}-${item.path}`} className="conversation-deliverable-item">
+                                              <strong>{item.name}</strong>
+                                              <span className="mono">{item.path || '-'}</span>
+                                            </article>
+                                          ))}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                  <div className="conversation-message-summary-stats">
+                                    {group.toolNames.slice(0, 6).map((toolName) => (
+                                      <span key={toolName} className="session-status">{toolName}</span>
+                                    ))}
+                                    {eventTypes.slice(0, 4).map((eventType) => (
+                                      <span key={eventType} className="session-status">{eventType}</span>
+                                    ))}
+                                  </div>
+                                  {userTransferMessage ? (
+                                    <p className="panel-caption">
+                                      已转发执行器: {conversationMessageTypeLabel(userTransferMessage.messageType)}
+                                      {messageExecutor(userTransferMessage) ? ` · ${executorLabel(messageExecutor(userTransferMessage))}` : ''}
+                                    </p>
+                                  ) : null}
+                                  {latestFailure ? (
+                                    <p className="panel-caption">
+                                      最近失败: {messageToolName(latestFailure) || conversationMessageTypeLabel(latestFailure.messageType)} · {messageContentPreview(latestFailure, 180)}
+                                    </p>
+                                  ) : null}
+                                </section>
+
+                                <details className="sub-panel conversation-debug-drawer">
+                                  <summary>
+                                    查看执行细节 ({group.executionMessages.length + group.eventMessages.length + group.statusMessages.length})
+                                  </summary>
+                                  <div className="message-list conversation-debug-list">
+                                    {[...group.statusMessages, ...group.executionMessages, ...group.eventMessages].map((message) => (
+                                      <article key={message.id} className="message-item conversation-debug-item">
+                                        <p className="message-head">
+                                          <strong>{conversationMessageTypeLabel(message.messageType)}</strong>
+                                          <span>{conversationRoleLabel(message.role)}</span>
+                                          <span>{formatDateTime(message.createdAt)}</span>
+                                        </p>
+                                        {messageMetaSummary(message).length > 0 ? (
+                                          <p className="panel-caption">{messageMetaSummary(message).join(' · ')}</p>
+                                        ) : null}
+                                        <p className="message-content">{messageContentPreview(message, 260)}</p>
+                                        {message.metadata !== undefined ? (
+                                          <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre>
+                                        ) : null}
+                                      </article>
+                                    ))}
+                                  </div>
+                                </details>
+                              </article>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : (
+                      <div className="message-list message-list-large">
+                        {conversationRawMessages.length === 0 ? (
+                          <p className="empty">无消息</p>
+                        ) : (
+                          conversationRawMessages.map((message) => {
+                            const diagnosticLevel = messageDiagnosticLevel(message);
+                            const diagnosticSummary = messageDiagnosticSummary(message);
+                            return (
+                            <article key={message.id} className={`message-item conversation-raw-item conversation-raw-item-${diagnosticLevel}`}>
+                              <p className="message-head">
+                                <strong>{conversationRoleLabel(message.role)}</strong>
+                                <span className={traceLevelClass(diagnosticLevel)}>{diagnosticLevelLabel(diagnosticLevel)}</span>
+                                <span>{conversationMessageTypeLabel(message.messageType)}</span>
+                                <span>{formatDateTime(message.createdAt)}</span>
+                              </p>
+                              {messageMetaSummary(message).length > 0 ? (
+                                <p className="panel-caption">{messageMetaSummary(message).join(' · ')}</p>
+                              ) : null}
+                              {diagnosticSummary ? <p className="panel-caption">{diagnosticSummary}</p> : null}
+                              <p className="message-content">{messageContentPreview(message, 360)}</p>
+                              {metadataHighlights(message).length > 0 ? (
+                                <div className="conversation-message-summary-stats">
+                                  {metadataHighlights(message).map((item) => (
+                                    <span key={`${message.id}-${item}`} className="session-status">{item}</span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {String(message.messageType || '') === 'clarification_request' ? (
+                                <div className="conversation-message-inline-card">
+                                  <p className="kpi-title">待确认问题</p>
+                                  <p className="message-content">{clarificationQuestion(message)}</p>
+                                  <p className="panel-caption">
+                                    可选项: {clarificationOptionsSummary(message)}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {message.metadata !== undefined ? (
+                                <details className="conversation-debug-drawer">
+                                  <summary>查看 metadata JSON</summary>
+                                  <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre>
+                                </details>
+                              ) : null}
+                            </article>
+                          )})
+                        )}
+                      </div>
                     )}
                   </div>
                 ) : null}
@@ -6865,29 +7632,25 @@ export default function App() {
           </div>
         </aside>
 
-        <section className="main-area">
+        <section className={`main-area ${activeSection === 'conversation' ? 'conversation-main-area' : ''}`}>
           <header className="top-header fade-in">
-            <div className="top-header-bar">
-              <div className="top-header-meta">
+            <div className="page-header-shell page-header-compact-bar">
+              <div className="header-main page-header-mainline">
                 <span className="topbar-pill">{activeNavGroup.label}</span>
-                <span className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</span>
-              </div>
-              <div className="top-header-meta">
-                <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
-                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
-                </span>
-                <span className="updated-at">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</span>
-              </div>
-            </div>
-            <div className="page-header-shell">
-              <div className="header-main">
                 <p className="eyebrow">
                   {activeNavGroup.label} / {breadcrumbTitle}
                 </p>
                 <h1>{breadcrumbTitle}</h1>
                 <p className="subtitle">{activeNavItem.description}</p>
               </div>
-              <div className="header-actions">
+              <div className="page-header-compact-meta">
+                <span className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</span>
+                <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
+                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
+                </span>
+                <span className="updated-at">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</span>
+              </div>
+              <div className="header-actions page-header-compact-actions">
                 <button
                   type="button"
                   className="primary-btn"

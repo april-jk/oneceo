@@ -77,6 +77,9 @@ type HostTrendPoint = {
   storage: number;
 };
 
+const SIDEBAR_STACK_BREAKPOINT = 920;
+const WHEEL_LINE_HEIGHT_PX = 16;
+
 // 顶部导航模块配置，用于渲染卡片列表与权限/体验文案。
 const NAV_GROUPS: Array<{ key: NavGroupKey; label: string; description: string }> = [
   { key: 'runtime', label: '运行管理', description: '运行状态与操作记录' },
@@ -999,6 +1002,7 @@ export default function App() {
   const auditAppliedFiltersRef = useRef(DEFAULT_AUDIT_FILTERS);
   const toastIdRef = useRef(1);
   const lastErrorToastRef = useRef<string | null>(null);
+  const sidebarNavRef = useRef<HTMLElement | null>(null);
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -2565,6 +2569,46 @@ export default function App() {
       // error is routed to banner and toast
     }
   }, [loadAuditSection, runBlockingTask]);
+
+  const handleSidebarWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
+    if (typeof window !== 'undefined' && window.innerWidth <= SIDEBAR_STACK_BREAKPOINT) {
+      return;
+    }
+
+    const sidebarNav = sidebarNavRef.current;
+    if (!sidebarNav) {
+      return;
+    }
+
+    const maxScrollTop = sidebarNav.scrollHeight - sidebarNav.clientHeight;
+    if (maxScrollTop <= 0) {
+      return;
+    }
+
+    const dominantDeltaY = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : 0;
+    if (dominantDeltaY === 0) {
+      return;
+    }
+
+    const scrollFactor =
+      event.deltaMode === 1
+        ? WHEEL_LINE_HEIGHT_PX
+        : event.deltaMode === 2
+          ? sidebarNav.clientHeight
+          : 1;
+    const nextScrollTop = Math.min(
+      maxScrollTop,
+      Math.max(0, sidebarNav.scrollTop + dominantDeltaY * scrollFactor)
+    );
+
+    if (Math.abs(nextScrollTop - sidebarNav.scrollTop) < 0.5) {
+      event.preventDefault();
+      return;
+    }
+
+    sidebarNav.scrollTop = nextScrollTop;
+    event.preventDefault();
+  }, []);
 
   if (authStatus === 'loading') {
     return (
@@ -6777,7 +6821,7 @@ export default function App() {
     <div className="page-shell">
       <div className="background-glow" aria-hidden="true" />
       <div className="app-layout">
-        <aside className="sidebar fade-in">
+        <aside className="sidebar fade-in" onWheelCapture={handleSidebarWheel}>
           <div className="sidebar-brand">
             <div className="sidebar-brand-row">
               <div>
@@ -6788,7 +6832,7 @@ export default function App() {
             </div>
             <p className="sidebar-copy">按运行模块和平台配置分组展示后台模块。</p>
           </div>
-          <nav className="sidebar-nav" aria-label="Primary">
+          <nav className="sidebar-nav" aria-label="Primary" ref={sidebarNavRef}>
             {NAV_GROUPS.map((group) => (
               <section key={group.key} className="nav-group">
                 <div className="nav-group-header">

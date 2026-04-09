@@ -122,6 +122,11 @@ export class TaskCreationService {
             } as any)
           );
         } else {
+          if (userId) {
+            await this.runDbOperation('bindUserIfMissing', () =>
+              taskCreationSessionDAO.bindUserIfMissing(this.sessionId!, userId)
+            );
+          }
           await this.runDbOperation(
             'updateSessionStatus:in_progress',
             () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
@@ -980,7 +985,7 @@ export class TaskCreationService {
     );
   }
 
-  async resumeTask(sessionId: string, latestUserInput?: string): Promise<void> {
+  async resumeTask(sessionId: string, latestUserInput?: string, userId?: string): Promise<void> {
     this.sessionId = sessionId;
     await ensureDatabaseConnection({ retries: 3, delayMs: 1200 });
 
@@ -1004,7 +1009,7 @@ export class TaskCreationService {
 
       this.setStage('collecting');
       this.sendStatus('intent', '上下文不足，正在重新发起任务流程...');
-      await this.createTask(restartInput, undefined, sessionId, 'user_response');
+      await this.createTask(restartInput, userId, sessionId, 'user_response');
       return;
     }
 

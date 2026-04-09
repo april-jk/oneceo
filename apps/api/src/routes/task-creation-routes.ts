@@ -51,7 +51,7 @@ import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registr
 import { sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
-import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
+import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
   inferFilenameFromResponse,
   resolveRemoteAttachmentTarget,
@@ -1208,7 +1208,7 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
   });
   await syncTaskSessionSandboxBinding(sessionId, provision.sessionId, workspaceRoot);
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
-  await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
+  await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
   await reconcileTaskSessionDuplicateEnvironments(sessionId, provision.sessionId);
 
@@ -3430,7 +3430,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       asText(session?.mode) === 'sandbox' &&
       (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
     if (!shouldPreferOpencodeNativeHistory) {
-      const redisCachedPage = await taskSessionRedisCacheService.getRecentMessagesPage({
+      const redisCachedPage = await taskSessionCacheFacade.getRecentMessagesPage({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -3491,7 +3491,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         hasOlderHistory: mayHaveOlderHistory,
         source: 'resolved_recent',
       };
-      await taskSessionRedisCacheService.setRecentMessagesPage({
+      await taskSessionCacheFacade.setRecentMessagesPage({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -3516,9 +3516,9 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
     const responsePayload = {
       ...page,
       hasOlderHistory: mayHaveOlderHistory,
-      source: 'recent_cache',
+      source: taskSessionCacheFacade.isRedisEnabled() ? 'recent_cache' : 'recent_db_no_redis',
     };
-    await taskSessionRedisCacheService.setRecentMessagesPage({
+    await taskSessionCacheFacade.setRecentMessagesPage({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -3575,7 +3575,7 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
         : fullTimeline;
     const pageMessages = olderMessages.slice(Math.max(olderMessages.length - limit, 0));
     const page = buildTimelinePage(pageMessages);
-    await taskSessionRedisCacheService.setHistoryCursor({
+    await taskSessionCacheFacade.setHistoryCursor({
       sessionId,
       userId: currentUser.userId,
       tenantKey: resolveTenantKey(currentUser),
@@ -4968,7 +4968,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     });
     const redisCachedPage = !parseRefreshFlag(req.query.refresh)
       ? asWorkspaceDirectoryCachePayload(
-          await taskSessionRedisCacheService.getWorkspaceDir({
+          await taskSessionCacheFacade.getWorkspaceDir({
             sessionId,
             userId: currentUser.userId,
             tenantKey,
@@ -5042,7 +5042,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
           const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
           if (restored) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
-            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
+            await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
             nodes = await listWorkspaceNodes();
           }
         } catch (restoreError) {
@@ -5125,7 +5125,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
-      await taskSessionRedisCacheService.setWorkspaceDir({
+      await taskSessionCacheFacade.setWorkspaceDir({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5174,7 +5174,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
     if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceDir({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceDir({
         sessionId,
         userId: currentUser?.userId || tenantKey,
         tenantKey,
@@ -5244,7 +5244,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceTree({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5349,7 +5349,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       60000
     );
     await taskCreationCacheStore.setWorkspaceTree(tenantKey, sessionId, parsed, ttlMs);
-    await taskSessionRedisCacheService.setWorkspaceTree({
+    await taskSessionCacheFacade.setWorkspaceTree({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -5383,7 +5383,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (tenantKey && currentUser) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceTree({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5460,7 +5460,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceFile({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5647,7 +5647,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
-    await taskSessionRedisCacheService.setWorkspaceFile({
+    await taskSessionCacheFacade.setWorkspaceFile({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -5683,7 +5683,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (tenantKey && currentUser) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceFile({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -6040,7 +6040,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   if (replayCursor) {
     try {
-      const redisHistory = await taskSessionRedisCacheService.listSessionEvents({
+      const redisHistory = await taskSessionCacheFacade.listSessionEvents({
         sessionId,
         userId: currentUser?.userId || '',
         tenantKey: currentUser ? resolveTenantKey(currentUser) : '',

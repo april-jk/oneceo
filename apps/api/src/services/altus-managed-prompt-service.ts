@@ -310,7 +310,7 @@ export class AltusManagedPromptService {
       '- If a PPT task lacks enough information for meaningful visuals after one focused retrieval attempt, ask one precise question instead of silently downgrading to an all-text deck.',
       '',
       '# Completion rules',
-      '- Use complete_task with a concise summary and optional verification points once the task is actually complete.',
+      '- Use complete_task once the task is actually complete. The `summary` must be a user-facing final answer with enough detail to stand alone (use structured bullets when helpful), not a one-line placeholder.',
       '- For downloadable deliverables, complete_task.attachments is part of the completion contract, not an optional note.',
       '- complete_task.attachments must be a real JSON array of attachment objects. Never wrap the attachments array as a string.',
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',

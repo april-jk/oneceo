@@ -69,7 +69,7 @@ type AuditFilterState = {
   to: string;
 };
 
-type ConversationMessageView = 'interaction' | 'raw';
+type ConversationDialogTab = 'overview' | 'interaction' | 'infra' | 'raw' | 'transitions';
 
 // 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
@@ -728,6 +728,10 @@ function toRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
 }
@@ -1116,6 +1120,1166 @@ function metadataHighlights(message: ConversationMessage): string[] {
   return highlights.slice(0, 4);
 }
 
+type ConversationReplayCapsuleTone = 'system' | 'intent' | 'planning' | 'execution' | 'review' | 'error';
+type ConversationReplayToolStatus = 'running' | 'completed' | 'failed' | 'unknown';
+
+type ConversationReplayItem =
+  | {
+      id: string;
+      kind: 'user';
+      text: string;
+      timestamp: string;
+      messageKey?: string;
+    }
+  | {
+      id: string;
+      kind: 'agent_plain';
+      text: string;
+      timestamp: string;
+      author: string;
+      options?: string[];
+      messageKey?: string;
+      showAuthor?: boolean;
+    }
+  | {
+      id: string;
+      kind: 'capsule';
+      label: string;
+      timestamp: string;
+      tone: ConversationReplayCapsuleTone;
+      loading?: boolean;
+      segments?: string[];
+      messageKey?: string;
+    }
+  | {
+      id: string;
+      kind: 'clarification_notice';
+      text: string;
+      timestamp: string;
+      messageKey?: string;
+    }
+  | {
+      id: string;
+      kind: 'managed_tool';
+      timestamp: string;
+      runId: string;
+      toolCallId: string;
+      eventType: string;
+      toolName: string;
+      status: ConversationReplayToolStatus;
+      summary: string;
+      preview: string;
+      detail: string;
+      artifactPaths: string[];
+      expandWrite: boolean;
+      messageKey?: string;
+    }
+  | {
+      id: string;
+      kind: 'opencode_tool';
+      timestamp: string;
+      variant: 'chip' | 'card';
+      iconLabel: string;
+      title: string;
+      subtitle?: string;
+      statusLabel?: string;
+      tone?: 'default' | 'success' | 'error';
+      command?: string;
+      preview?: string;
+      previewMode?: 'code' | 'plain';
+      detail?: string;
+      messageKey?: string;
+    }
+  | {
+      id: string;
+      kind: 'error';
+      text: string;
+      timestamp: string;
+      author: string;
+      messageKey?: string;
+      showAuthor?: boolean;
+    };
+
+type ConversationOpencodeEventInfo = {
+  eventType: string;
+  event: Record<string, unknown>;
+  properties: Record<string, unknown>;
+  part: Record<string, unknown>;
+  partType: string;
+  toolName: string;
+};
+
+function conversationMessageKey(message: ConversationMessage): string {
+  return metadataString(toRecord(message.metadata), 'messageKey') || message.id;
+}
+
+function normalizeConversationReplayText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function normalizeConversationClarificationText(value: string): string {
+  return value
+    .replace(/[\s\u3000]+/g, ' ')
+    .replace(/[。！？!?.:：]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function extractConversationReplayCapsule(content: string): { label: string; rest: string } | null {
+  const text = content.trim();
+  const match = text.match(/^\{([^{}]+)\}\s*([\s\S]*)$/);
+  if (match) {
+    return {
+      label: match[1].trim(),
+      rest: (match[2] || '').trim(),
+    };
+  }
+
+  const statusCapsules = [
+    '构思阶段',
+    '分析阶段',
+    '开发阶段',
+    '测试阶段',
+    '修复阶段',
+    '交付阶段',
+    '正在分析您的任务需求',
+    '正在分析您的任务需求...',
+    '已识别任务类型',
+    '正在规划任务详情',
+    '正在规划任务详情...',
+    '任务规划完成',
+    '任务规划完成：',
+    '正在生成执行计划',
+    '正在生成执行计划...',
+    '执行计划已生成',
+  ];
+  for (const status of statusCapsules) {
+    if (text.includes(status)) {
+      return { label: text, rest: '' };
+    }
+  }
+
+  const fallbackLabels = ['意图识别', '任务规划', '执行计划', '系统', '错误'];
+  for (const label of fallbackLabels) {
+    if (text.startsWith(label)) {
+      return {
+        label,
+        rest: text
+          .slice(label.length)
+          .replace(/^[:：\-\s]+/, '')
+          .trim(),
+      };
+    }
+  }
+
+  return null;
+}
+
+function isConversationProgressStatusLabel(label: string): boolean {
+  const text = label.trim();
+  if (!text) return false;
+  if (text.includes('错误') || text.includes('失败') || text.toLowerCase().includes('error')) {
+    return false;
+  }
+  const keywords = [
+    '构思阶段',
+    '分析阶段',
+    '开发阶段',
+    '测试阶段',
+    '修复阶段',
+    '交付阶段',
+    '正在分析您的任务需求',
+    '已识别任务类型',
+    '正在规划任务详情',
+    '任务规划完成',
+    '正在生成执行计划',
+    '执行计划已生成',
+    '开始执行',
+    '执行完成',
+    '继续工作',
+    '处理中',
+  ];
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function conversationReplayCapsuleTone(message: ConversationMessage, label: string): ConversationReplayCapsuleTone {
+  if (isFailureMessage(message)) return 'error';
+  const metadata = toRecord(message.metadata);
+  const rawTone = metadataString(metadata, 'tone');
+  if (rawTone === 'intent' || rawTone === 'planning' || rawTone === 'execution' || rawTone === 'review' || rawTone === 'error') {
+    return rawTone;
+  }
+  if (label.includes('意图') || label.includes('分析')) return 'intent';
+  if (label.includes('规划')) return 'planning';
+  if (label.includes('执行') || label.includes('运行')) return 'execution';
+  if (label.includes('交付') || label.includes('完成')) return 'review';
+  if (label.includes('错误') || label.includes('失败')) return 'error';
+  return 'system';
+}
+
+function truncateConversationReplayText(value: string, max = 1200): { text: string; truncated: boolean } {
+  const text = value.trim();
+  if (!text) return { text: '', truncated: false };
+  if (text.length <= max) return { text, truncated: false };
+  return { text: `${text.slice(0, max)}...`, truncated: true };
+}
+
+function parseConversationReplayOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {
+  if (!outputPreviewRaw) return {};
+  if (typeof outputPreviewRaw === 'string') {
+    const trimmed = outputPreviewRaw.trim();
+    if (!trimmed) return {};
+    try {
+      return toRecord(JSON.parse(trimmed));
+    } catch {
+      return {};
+    }
+  }
+  return toRecord(outputPreviewRaw);
+}
+
+function getConversationReplayFilename(path: string | undefined) {
+  if (!path) return '';
+  const parts = path.split(/[/\\]+/);
+  return parts[parts.length - 1] || path;
+}
+
+function normalizeConversationReplayShellCommand(command: string): string {
+  const trimmed = command.trim();
+  if (!trimmed) return '';
+  const bashLcMatch = trimmed.match(/^(?:\/bin\/)?(?:ba)?sh\s+-lc\s+(.+)$/i);
+  if (bashLcMatch?.[1]) {
+    return bashLcMatch[1].trim().replace(/^['"]|['"]$/g, '');
+  }
+  return trimmed;
+}
+
+function inferConversationReplayCommandCategory(command: string): 'list' | 'search' | 'read' | 'write' | 'command' {
+  const normalized = normalizeConversationReplayShellCommand(command).toLowerCase();
+  if (!normalized) return 'command';
+  if (normalized.startsWith('ls') || normalized.startsWith('tree') || normalized.startsWith('find ')) {
+    return 'list';
+  }
+  if (normalized.startsWith('rg ') || normalized.startsWith('grep ') || normalized.includes(' grep ') || normalized.includes(' rg ')) {
+    return 'search';
+  }
+  if (normalized.startsWith('cat ') || normalized.startsWith('sed ') || normalized.startsWith('head ') || normalized.startsWith('tail ')) {
+    return 'read';
+  }
+  if (normalized.includes('>') || normalized.includes('tee ') || normalized.includes('cat <<') || normalized.startsWith('cp ') || normalized.startsWith('mv ')) {
+    return 'write';
+  }
+  return 'command';
+}
+
+function getConversationReplayCommandCard(command: string): { category: 'list' | 'search' | 'read' | 'write' | 'command'; title: string; iconLabel: string } {
+  const category = inferConversationReplayCommandCategory(command);
+  switch (category) {
+    case 'list':
+      return { category, title: '目录检查', iconLabel: '目' };
+    case 'search':
+      return { category, title: '搜索', iconLabel: '搜' };
+    case 'read':
+      return { category, title: '文件查看', iconLabel: '读' };
+    case 'write':
+      return { category, title: '文件修改', iconLabel: '写' };
+    default:
+      return { category, title: 'Shell 执行', iconLabel: '命' };
+  }
+}
+
+function conversationReplayMapFileChangeLabel(kind: string): string {
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === 'add' || normalized === 'create' || normalized === 'created') {
+    return '新建文件';
+  }
+  if (normalized === 'delete' || normalized === 'deleted' || normalized === 'remove' || normalized === 'removed') {
+    return '删除文件';
+  }
+  return '更新文件';
+}
+
+function getConversationReplayOpencodeEventInfo(metadata: Record<string, unknown>): ConversationOpencodeEventInfo {
+  const rawPayload = toRecord(metadata.rawPayload);
+  const eventFromMeta = toRecord(metadata.event);
+  const eventFromPayload = toRecord(rawPayload.event);
+  const event = Object.keys(eventFromMeta).length > 0 ? eventFromMeta : eventFromPayload;
+  const eventType = asText(metadata.eventType) || asText(event.type);
+  const properties = toRecord(event.properties);
+  const part = toRecord(properties.part);
+  const partType = (asText(part.type) || asText(properties.type)).toLowerCase();
+  const toolName = asText(part.tool) || asText(part.name) || asText(properties.tool) || asText(metadata.toolName);
+  return {
+    eventType,
+    event,
+    properties,
+    part,
+    partType,
+    toolName,
+  };
+}
+
+function isManagedConversationExecutionEvent(message: ConversationMessage): boolean {
+  const metadata = toRecord(message.metadata);
+  return asText(metadata.executionMode).toLowerCase() === 'managed' || asText(metadata.executor).toLowerCase() === 'altus';
+}
+
+function collectConversationReplayArtifactPaths(toolName: string, metadataRaw: unknown): string[] {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseConversationReplayOutputPreview(metadata.outputPreview);
+  const paths = new Set<string>();
+  const pushPath = (value: unknown) => {
+    const path = asText(value).replace(/\\/g, '/');
+    if (!path) return;
+    paths.add(path);
+  };
+
+  if (toolName === 'write_file' || toolName === 'read_file') {
+    pushPath(args.path);
+    pushPath(output.path);
+  }
+
+  if (toolName === 'complete_task' && Array.isArray((args as { attachments?: unknown[] }).attachments)) {
+    for (const item of (args as { attachments?: unknown[] }).attachments || []) {
+      const record = toRecord(item);
+      pushPath(record.path);
+      pushPath(record.filePath);
+    }
+  }
+
+  return Array.from(paths);
+}
+
+function getConversationManagedToolDisplayName(toolName: string): string {
+  switch (toolName) {
+    case 'shell_execute':
+      return '命令执行';
+    case 'write_file':
+      return '写入文件';
+    case 'read_file':
+      return '读取文件';
+    case 'list_directory':
+      return '列出目录';
+    case 'search_code':
+      return '代码搜索';
+    case 'ask_user':
+      return '请求澄清';
+    case 'complete_task':
+      return '完成任务';
+    default:
+      return toolName || '工具调用';
+  }
+}
+
+function readConversationManagedWriteFileProgress(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const progress = toRecord(metadata.writeFileProgress);
+  const path = asText(progress.path);
+  const generatedCharsRaw = progress.generatedChars;
+  const generatedChars =
+    typeof generatedCharsRaw === 'number' && Number.isFinite(generatedCharsRaw)
+      ? Math.max(0, Math.floor(generatedCharsRaw))
+      : typeof generatedCharsRaw === 'string' && generatedCharsRaw.trim()
+        ? Math.max(0, Math.floor(Number(generatedCharsRaw)))
+        : 0;
+  const preview = asText(progress.preview);
+  return {
+    path,
+    generatedChars,
+    preview,
+  };
+}
+
+function shouldExpandConversationManagedWriteFileCard(toolName: string, status: ConversationReplayToolStatus, metadataRaw: unknown) {
+  if (toolName !== 'write_file' || status !== 'running') return false;
+  const progress = readConversationManagedWriteFileProgress(metadataRaw);
+  return progress.generatedChars > 0 || Boolean(progress.preview);
+}
+
+function formatConversationManagedToolSummary(toolName: string, metadataRaw: unknown): string {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const writeFileProgress = readConversationManagedWriteFileProgress(metadata);
+  if (toolName === 'shell_execute') {
+    return asText(args.command) || '执行 shell 命令';
+  }
+  if (toolName === 'write_file') {
+    const path = asText(args.path) || writeFileProgress.path;
+    if (writeFileProgress.generatedChars > 0) {
+      return [path || '写入文件', `生成中 ${writeFileProgress.generatedChars} 字符`].filter(Boolean).join(' · ');
+    }
+    return path || '写入文件';
+  }
+  if (toolName === 'read_file') {
+    return asText(args.path) || '读取文件';
+  }
+  if (toolName === 'list_directory') {
+    return asText(args.path) || '列出目录';
+  }
+  if (toolName === 'search_code') {
+    const query = asText(args.query);
+    const target = asText(args.path);
+    return [query, target ? `@ ${target}` : ''].filter(Boolean).join(' ');
+  }
+  if (toolName === 'ask_user') {
+    return asText(args.question) || '请求用户澄清';
+  }
+  if (toolName === 'complete_task') {
+    return asText(args.summary) || '输出最终完成总结';
+  }
+  return asText(metadata.content) || toolName;
+}
+
+function formatConversationManagedToolPreview(toolName: string, metadataRaw: unknown): string {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseConversationReplayOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readConversationManagedWriteFileProgress(metadata);
+  const error = asText(metadata.error);
+
+  if (error) return error;
+
+  if (toolName === 'shell_execute') {
+    return asText(output.stdout) || asText(output.stderr) || asText(args.command) || '执行命令';
+  }
+
+  if (toolName === 'write_file') {
+    if (writeFileProgress.preview) {
+      return writeFileProgress.preview;
+    }
+    return asText(output.path) || '已写入目标文件';
+  }
+
+  if (toolName === 'read_file') {
+    return asText(output.content) || asText(output.path) || '已读取目标文件';
+  }
+
+  if (toolName === 'list_directory') {
+    return asText(output.output) || asText(output.path) || '已返回目录内容';
+  }
+
+  if (toolName === 'search_code') {
+    return asText(output.output) || asText(args.query) || '已返回搜索结果';
+  }
+
+  if (toolName === 'complete_task') {
+    return asText(args.summary) || '任务已完成';
+  }
+
+  return asText(metadata.outputPreview) || asText(metadata.content);
+}
+
+function formatConversationManagedToolDetail(toolName: string, metadataRaw: unknown): string {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  const output = parseConversationReplayOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readConversationManagedWriteFileProgress(metadata);
+  const error = asText(metadata.error);
+  const lines: string[] = [];
+  const pushLine = (label: string, value: unknown) => {
+    const text = asText(value);
+    if (text) {
+      lines.push(`${label}: ${text}`);
+    }
+  };
+
+  lines.push(`工具: ${getConversationManagedToolDisplayName(toolName)} (${toolName})`);
+
+  if (toolName === 'shell_execute') {
+    pushLine('命令', args.command);
+    pushLine('目录', output.cwd || args.cwd);
+    pushLine('退出码', output.exitCode);
+    pushLine('输出', output.stdout);
+    pushLine('错误输出', output.stderr);
+  } else if (toolName === 'write_file') {
+    pushLine('目标文件', args.path || output.path || writeFileProgress.path);
+    pushLine('已生成字符', writeFileProgress.generatedChars > 0 ? String(writeFileProgress.generatedChars) : '');
+    pushLine('代码预览', writeFileProgress.preview);
+  } else if (toolName === 'read_file') {
+    pushLine('目标文件', args.path || output.path);
+    pushLine('内容预览', output.content);
+  } else if (toolName === 'list_directory') {
+    pushLine('目标目录', args.path || output.path);
+    pushLine('递归深度', output.depth || args.depth);
+    pushLine('结果预览', output.output);
+  } else if (toolName === 'search_code') {
+    pushLine('搜索词', args.query);
+    pushLine('搜索范围', args.path || output.path);
+    pushLine('结果预览', output.output);
+  } else if (toolName === 'ask_user') {
+    pushLine('问题', args.question);
+    if (Array.isArray(args.options)) {
+      const options = (args.options as unknown[]).map((item) => asText(item)).filter(Boolean).join(' / ');
+      pushLine('建议选项', options);
+    }
+  } else if (toolName === 'complete_task') {
+    pushLine('完成摘要', args.summary);
+    if (Array.isArray(args.verification)) {
+      const checks = (args.verification as unknown[]).map((item) => asText(item)).filter(Boolean).join(' / ');
+      pushLine('验证', checks);
+    }
+  } else {
+    pushLine('摘要', asText(metadata.content));
+  }
+
+  if (error) {
+    pushLine('失败原因', error);
+  }
+
+  if (lines.length === 1) {
+    pushLine('摘要', formatConversationManagedToolSummary(toolName, metadata));
+  }
+
+  return lines.join('\n');
+}
+
+function getConversationReplayToolStatusLabel(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'failed' || normalized === 'error') return '失败';
+  if (normalized === 'completed' || normalized === 'success') return '已完成';
+  if (normalized === 'pending') return '等待中';
+  if (normalized === 'running') return '进行中';
+  return '执行中';
+}
+
+function buildConversationManagedToolItem(message: ConversationMessage): ConversationReplayItem | null {
+  const metadata = toRecord(message.metadata);
+  const eventType = (messageEventType(message) || '').toLowerCase();
+  if (!['tool_call_started', 'tool_call_progress', 'tool_call_completed', 'tool_call_failed'].includes(eventType)) {
+    return null;
+  }
+  const toolName = messageToolName(message) || 'tool';
+  const runId = messageRunId(message) || 'unknown-run';
+  const toolCallId = metadataString(metadata, 'toolCallId') || conversationMessageKey(message);
+  const status: ConversationReplayToolStatus =
+    eventType === 'tool_call_failed'
+      ? 'failed'
+      : eventType === 'tool_call_completed'
+        ? 'completed'
+        : eventType === 'tool_call_started' || eventType === 'tool_call_progress'
+          ? 'running'
+          : 'unknown';
+  return {
+    id: message.id,
+    kind: 'managed_tool',
+    timestamp: message.createdAt,
+    runId,
+    toolCallId,
+    eventType,
+    toolName,
+    status,
+    summary: formatConversationManagedToolSummary(toolName, metadata),
+    preview: formatConversationManagedToolPreview(toolName, metadata),
+    detail: formatConversationManagedToolDetail(toolName, metadata),
+    artifactPaths: collectConversationReplayArtifactPaths(toolName, metadata),
+    expandWrite: shouldExpandConversationManagedWriteFileCard(toolName, status, metadata),
+    messageKey: conversationMessageKey(message),
+  };
+}
+
+function buildConversationOpencodeToolCard(input: {
+  message: ConversationMessage;
+  eventType: string;
+  toolName: string;
+  properties: Record<string, unknown>;
+  part: Record<string, unknown>;
+  content: string;
+  metadata: Record<string, unknown>;
+}): ConversationReplayItem {
+  const { message, eventType, toolName, properties, part, content, metadata } = input;
+  const toolState = toRecord(part.state);
+  const rawInput = toolState.input ?? part.input;
+  const toolInput =
+    typeof rawInput === 'string' && rawInput.trim()
+      ? { command: rawInput }
+      : toRecord(rawInput);
+  const toolKey = toolName.toLowerCase();
+  const filePath =
+    asText(toolInput.filePath) ||
+    asText(toolInput.path) ||
+    asText(properties.file) ||
+    asText(properties.path);
+  const commandText =
+    asText(toolInput.command) ||
+    asText(toolInput.cmd) ||
+    asText(properties.command) ||
+    asText(properties.cmd);
+  const outputText =
+    asText(toolState.output) ||
+    asText(properties.output) ||
+    asText(properties.stdout) ||
+    asText(metadata.outputPreview) ||
+    content;
+  const errorText = asText(toolState.error) || asText(properties.error) || asText(metadata.error);
+  const statusText =
+    asText(toolState.status) ||
+    asText(properties.status) ||
+    (errorText ? 'failed' : commandText || outputText ? 'completed' : '');
+  const statusLabel = statusText ? getConversationReplayToolStatusLabel(statusText) : undefined;
+
+  if (eventType === 'command.executed' || toolKey === 'bash') {
+    const commandCard = getConversationReplayCommandCard(commandText);
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'card',
+      iconLabel: commandCard.iconLabel,
+      title: commandCard.title,
+      subtitle: statusLabel,
+      statusLabel,
+      tone: errorText ? 'error' : statusLabel === '已完成' ? 'success' : 'default',
+      command: commandText,
+      preview: truncateConversationReplayText(outputText, 900).text,
+      previewMode: 'code',
+      detail: [commandText ? `命令: ${commandText}` : '', outputText ? `输出: ${truncateConversationReplayText(outputText, 1800).text}` : '']
+        .filter(Boolean)
+        .join('\n'),
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'write' || toolKey === 'edit') {
+    const title = toolKey === 'write' ? '写入文件' : '编辑文件';
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'chip',
+      iconLabel: toolKey === 'write' ? '写' : '改',
+      title,
+      subtitle: getConversationReplayFilename(filePath) || '文件',
+      statusLabel,
+      tone: errorText ? 'error' : 'default',
+      preview: filePath || undefined,
+      previewMode: 'plain',
+      detail: filePath ? `目标文件: ${filePath}` : undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'read') {
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'chip',
+      iconLabel: '读',
+      title: '读取文件',
+      subtitle: getConversationReplayFilename(filePath) || '文件',
+      statusLabel,
+      preview: filePath || undefined,
+      previewMode: 'plain',
+      detail: filePath ? `目标文件: ${filePath}` : undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'list') {
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'chip',
+      iconLabel: '列',
+      title: '列出目录',
+      subtitle: filePath || '/',
+      statusLabel,
+      preview: filePath || undefined,
+      previewMode: 'plain',
+      detail: filePath ? `目标目录: ${filePath}` : undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'grep' || toolKey === 'glob' || toolKey === 'search_code') {
+    const pattern = asText(toolInput.pattern) || asText(toolInput.query) || asText(properties.pattern);
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'chip',
+      iconLabel: '搜',
+      title: toolKey === 'glob' ? '匹配文件' : '代码搜索',
+      subtitle: pattern || getConversationReplayFilename(filePath) || '搜索',
+      statusLabel,
+      preview: filePath || undefined,
+      previewMode: 'plain',
+      detail: [pattern ? `搜索模式: ${pattern}` : '', filePath ? `范围: ${filePath}` : ''].filter(Boolean).join('\n') || undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'question') {
+    const question = asText(toolInput.question) || content || '待确认';
+    const options = Array.isArray((toolInput as { options?: unknown[] }).options)
+      ? ((toolInput as { options?: unknown[] }).options || []).map((item) => asText(item)).filter(Boolean)
+      : [];
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'card',
+      iconLabel: '问',
+      title: '待确认',
+      subtitle: statusLabel,
+      statusLabel,
+      tone: 'default',
+      preview: [question, options.length ? options.map((option) => `- ${option}`).join('\n') : ''].filter(Boolean).join('\n\n'),
+      previewMode: 'plain',
+      detail: question,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (toolKey === 'todowrite') {
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'card',
+      iconLabel: '待',
+      title: '待办',
+      subtitle: statusLabel,
+      statusLabel,
+      tone: 'default',
+      preview: truncateConversationReplayText(outputText || content, 800).text || '已更新待办列表',
+      previewMode: 'plain',
+      detail: truncateConversationReplayText(outputText || content, 1600).text || undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  if (eventType === 'file.changed' || eventType.startsWith('file.') || toolKey === 'apply_patch') {
+    const files = Array.isArray((properties as { files?: unknown[] }).files)
+      ? ((properties as { files?: unknown[] }).files || [])
+          .map((item) => toRecord(item))
+          .map((item) => ({
+            kind: asText(item.kind) || asText(item.status),
+            path: asText(item.path) || asText(item.file),
+          }))
+          .filter((item) => item.path)
+      : [];
+    const primary = files[0];
+    const primaryPath = primary?.path || filePath;
+    const label =
+      asText(properties.label) ||
+      (primary?.kind ? conversationReplayMapFileChangeLabel(primary.kind) : toolKey === 'apply_patch' ? '应用补丁' : '文件变更');
+    const detail =
+      files.length > 0
+        ? files
+            .slice(0, 6)
+            .map((item) => `${conversationReplayMapFileChangeLabel(item.kind)}: ${item.path}`)
+            .join('\n')
+        : primaryPath
+          ? `目标文件: ${primaryPath}`
+          : '';
+    return {
+      id: message.id,
+      kind: 'opencode_tool',
+      timestamp: message.createdAt,
+      variant: 'chip',
+      iconLabel: toolKey === 'apply_patch' ? '补' : '文',
+      title: label,
+      subtitle:
+        files.length > 1
+          ? `${files.length} 个文件`
+          : getConversationReplayFilename(primaryPath) || getConversationReplayFilename(filePath) || '文件',
+      statusLabel,
+      tone: errorText ? 'error' : 'default',
+      preview: detail || undefined,
+      previewMode: 'plain',
+      detail: detail || undefined,
+      messageKey: conversationMessageKey(message),
+    };
+  }
+
+  return {
+    id: message.id,
+    kind: 'opencode_tool',
+    timestamp: message.createdAt,
+    variant: 'chip',
+    iconLabel: toolKey ? toolKey.slice(0, 1).toUpperCase() : '工',
+    title: toolName || eventType || '工具调用',
+    subtitle: summarizeText(outputText || content, 48) || statusLabel,
+    statusLabel,
+    tone: errorText ? 'error' : 'default',
+    preview: outputText ? truncateConversationReplayText(outputText, 800).text : undefined,
+    previewMode: 'plain',
+    detail: outputText ? truncateConversationReplayText(outputText, 1600).text : undefined,
+    messageKey: conversationMessageKey(message),
+  };
+}
+
+function conversationReplayMessageText(message: ConversationMessage): string {
+  const direct = typeof message.content === 'string' ? message.content.trim() : '';
+  if (direct) {
+    return direct;
+  }
+  if (String(message.messageType || '') === 'clarification_request') {
+    return clarificationQuestion(message);
+  }
+  const metadata = toRecord(message.metadata);
+  const question = metadataString(metadata, 'question');
+  if (question) {
+    return question;
+  }
+  const outputPreview = metadataString(metadata, 'outputPreview');
+  if (outputPreview) {
+    return summarizeText(outputPreview, 600);
+  }
+  return messageContentPreview(message, 220);
+}
+
+function conversationReplayAuthor(message: ConversationMessage): string {
+  const metadata = toRecord(message.metadata);
+  const executor = messageExecutor(message);
+  const agent = metadataString(metadata, 'agent');
+  if (executor) {
+    return executorLabel(executor);
+  }
+  if (agent) {
+    return conversationAgentLabel(agent);
+  }
+  if (
+    String(message.messageType || '') === 'assistant_message' ||
+    String(message.role || '') === 'assistant'
+  ) {
+    return 'Altus';
+  }
+  return conversationRoleLabel(message.role);
+}
+
+function conversationReplayNoticeText(message: ConversationMessage): string {
+  const direct = typeof message.content === 'string' ? message.content.trim() : '';
+  if (direct) {
+    return direct;
+  }
+  const metadata = toRecord(message.metadata);
+  const stage = metadataString(metadata, 'stage');
+  const eventType = messageEventType(message);
+  const parts = [
+    conversationMessageTypeLabel(message.messageType),
+    stage ? conversationStageLabel(stage) : '',
+    eventType ? eventType : '',
+  ].filter(Boolean);
+  return parts.join(' · ') || '会话状态已更新';
+}
+
+function buildConversationReplayItems(messages: ConversationMessage[]): ConversationReplayItem[] {
+  const items: ConversationReplayItem[] = [];
+
+  const pushAgentPlain = (message: ConversationMessage, text: string, author: string, options: string[] = []) => {
+    const normalized = normalizeConversationReplayText(text);
+    if (!normalized) return;
+    const last = items[items.length - 1];
+    if (last?.kind === 'agent_plain' && normalizeConversationReplayText(last.text) === normalized && last.author === author) {
+      return;
+    }
+    items.push({
+      id: message.id,
+      kind: 'agent_plain',
+      text,
+      timestamp: message.createdAt,
+      author,
+      options,
+      messageKey: conversationMessageKey(message),
+    });
+  };
+
+  const pushCapsule = (message: ConversationMessage, label: string, segments?: string[]) => {
+    const text = label.trim();
+    if (!text) return;
+    items.push({
+      id: message.id,
+      kind: 'capsule',
+      label: text,
+      timestamp: message.createdAt,
+      tone: conversationReplayCapsuleTone(message, text),
+      loading: isConversationProgressStatusLabel(text),
+      segments,
+      messageKey: conversationMessageKey(message),
+    });
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const type = String(message.messageType || '');
+    if (type === 'user_input' || type === 'user_response') {
+      items.push({
+        id: message.id,
+        kind: 'user',
+        text: conversationReplayMessageText(message),
+        timestamp: message.createdAt,
+        messageKey: conversationMessageKey(message),
+      });
+      continue;
+    }
+
+    if (type === 'assistant_message' || type === 'agent_message') {
+      const text = conversationReplayMessageText(message);
+      const capsule = extractConversationReplayCapsule(text);
+      if (capsule) {
+        if (isConversationProgressStatusLabel(capsule.label) && !capsule.rest.trim()) {
+          pushCapsule(message, capsule.label);
+          continue;
+        }
+        pushCapsule(message, capsule.label);
+        if (capsule.rest.trim()) {
+          pushAgentPlain(message, capsule.rest, conversationReplayAuthor(message));
+        }
+        continue;
+      }
+      pushAgentPlain(message, text, conversationReplayAuthor(message));
+      continue;
+    }
+
+    if (type === 'clarification_request') {
+      const question = clarificationQuestion(message);
+      const options = clarificationOptions(message);
+      const previousMessage = index > 0 ? messages[index - 1] : null;
+      const previousContent =
+        previousMessage && ['assistant_message', 'agent_message'].includes(String(previousMessage.messageType || ''))
+          ? conversationReplayMessageText(previousMessage)
+          : '';
+      const currentRunId = messageRunId(message);
+      const previousRunId = previousMessage ? messageRunId(previousMessage) : null;
+      const sameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
+
+      if (
+        previousContent &&
+        sameRun &&
+        normalizeConversationClarificationText(previousContent) === normalizeConversationClarificationText(question)
+      ) {
+        items.push({
+          id: message.id,
+          kind: 'clarification_notice',
+          text: 'Altus 将在你回复后继续工作',
+          timestamp: message.createdAt,
+          messageKey: conversationMessageKey(message),
+        });
+        continue;
+      }
+
+      pushAgentPlain(message, question, conversationReplayAuthor(message), options);
+      items.push({
+        id: `${message.id}:notice`,
+        kind: 'clarification_notice',
+        text: 'Altus 将在你回复后继续工作',
+        timestamp: message.createdAt,
+        messageKey: conversationMessageKey(message),
+      });
+      continue;
+    }
+
+    if (type === 'status_update' || type === 'session_started') {
+      const output = messageOutputPreviewRecord(message);
+      const label = conversationReplayNoticeText(message);
+      const segments =
+        messageEventType(message) === 'deliverables_ready' && Array.isArray(output?.deliverables)
+          ? ['完成任务', '已完成', '对话已结束。']
+          : undefined;
+      pushCapsule(message, label, segments);
+      continue;
+    }
+
+    if (type === 'executor_event') {
+      if (isManagedConversationExecutionEvent(message)) {
+        const managedToolItem = buildConversationManagedToolItem(message);
+        if (managedToolItem) {
+          items.push(managedToolItem);
+          continue;
+        }
+      }
+
+      const metadata = toRecord(message.metadata);
+      const eventType = asText(metadata.eventType).toLowerCase();
+      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
+      const item = toRecord(toRecord(metadata.event).item);
+      const itemType = (asText(metadata.itemType) || asText(item.type)).toLowerCase();
+      const content =
+        asText(item.text) ||
+        asText(item.content) ||
+        asText(item.message) ||
+        conversationReplayMessageText(message);
+      const executorName = messageExecutor(message) ? executorLabel(messageExecutor(message) || '') : conversationReplayAuthor(message);
+
+      if (eventType === 'turn.started') {
+        pushCapsule(message, `${executorName} 开始执行`);
+        continue;
+      }
+
+      if (eventType === 'turn.completed') {
+        pushCapsule(message, `${executorName} 执行完成`);
+        continue;
+      }
+
+      if (eventType === 'turn.failed' || eventType === 'turn.interrupted') {
+        pushCapsule(message, content || `${executorName} 执行失败`);
+        continue;
+      }
+
+      if (eventType === 'turn/plan/updated' && content) {
+        pushAgentPlain(message, content, executorName);
+        continue;
+      }
+
+      if (eventType === 'stderr.line' || eventType === 'stdout.line' || eventType === 'item/filechange/outputdelta') {
+        continue;
+      }
+
+      if (itemType === 'approval_request' || itemType === 'approvalrequest') {
+        pushCapsule(message, '需要授权');
+        pushAgentPlain(message, content || `${executorName} 需要进一步授权后才能继续执行。`, executorName);
+        continue;
+      }
+
+      if (itemType === 'command_execution' || itemType === 'commandexecution') {
+        const commandText = asText(metadata.command) || asText(item.command);
+        items.push(
+          buildConversationOpencodeToolCard({
+            message,
+            eventType: 'command.executed',
+            toolName: 'bash',
+            properties: {
+              command: commandText,
+              stdout: asText(metadata.outputPreview) || asText(item.aggregated_output),
+              status: asText(metadata.itemStatus) || asText(item.status),
+            },
+            part: {},
+            content,
+            metadata,
+          }),
+        );
+        continue;
+      }
+
+      if (itemType === 'file_change' || itemType === 'filechange' || itemType === 'diff' || eventType === 'turn/diff/updated') {
+        const files = Array.isArray((metadata as { fileChanges?: unknown[] }).fileChanges)
+          ? ((metadata as { fileChanges?: unknown[] }).fileChanges || [])
+              .map((entry) => toRecord(entry))
+              .map((entry) => ({
+                kind: asText(entry.kind),
+                path: asText(entry.path) || asText(entry.file),
+              }))
+              .filter((entry) => entry.path)
+          : [];
+        items.push(
+          buildConversationOpencodeToolCard({
+            message,
+            eventType: 'file.changed',
+            toolName: asText(eventInfo.toolName) || 'apply_patch',
+            properties: {
+              label: files[0]?.kind ? conversationReplayMapFileChangeLabel(files[0].kind) : '文件变更',
+              files,
+              file: files[0]?.path || '',
+              path: files[0]?.path || '',
+              status: asText(metadata.itemStatus) || asText(item.status) || 'completed',
+            },
+            part: {},
+            content,
+            metadata,
+          }),
+        );
+        continue;
+      }
+
+      if (
+        eventInfo.partType === 'tool' ||
+        eventInfo.eventType.startsWith('file.') ||
+        eventInfo.eventType.startsWith('pty.') ||
+        eventInfo.eventType === 'command.executed' ||
+        content.startsWith('[Tool]')
+      ) {
+        items.push(
+          buildConversationOpencodeToolCard({
+            message,
+            eventType: eventInfo.eventType,
+            toolName: eventInfo.toolName,
+            properties: eventInfo.properties,
+            part: eventInfo.part,
+            content,
+            metadata,
+          }),
+        );
+        continue;
+      }
+
+      if (content) {
+        pushAgentPlain(message, content, executorName);
+      }
+      continue;
+    }
+
+    if (type === 'opencode_event') {
+      const metadata = toRecord(message.metadata);
+      const eventInfo = getConversationReplayOpencodeEventInfo(metadata);
+      const content = conversationReplayMessageText(message);
+      const normalizedContent = normalizeConversationReplayText(content);
+
+      if (eventInfo.eventType === 'message.final') {
+        if (!normalizedContent) continue;
+        pushAgentPlain(message, content, 'OpenCode');
+        continue;
+      }
+
+      if (eventInfo.partType === 'text') {
+        if (!normalizedContent) continue;
+        pushAgentPlain(message, content, 'OpenCode');
+        continue;
+      }
+
+      if (
+        eventInfo.partType === 'tool' ||
+        eventInfo.eventType.startsWith('file.') ||
+        eventInfo.eventType.startsWith('pty.') ||
+        eventInfo.eventType === 'command.executed' ||
+        content.startsWith('[Tool]')
+      ) {
+        items.push(
+          buildConversationOpencodeToolCard({
+            message,
+            eventType: eventInfo.eventType,
+            toolName: eventInfo.toolName,
+            properties: eventInfo.properties,
+            part: eventInfo.part,
+            content,
+            metadata,
+          }),
+        );
+      }
+      continue;
+    }
+
+    if (type === 'error' || type === 'opencode_error') {
+      items.push({
+        id: message.id,
+        kind: 'error',
+        text: conversationReplayMessageText(message),
+        timestamp: message.createdAt,
+        author: conversationReplayAuthor(message),
+        messageKey: conversationMessageKey(message),
+      });
+    }
+  }
+
+  let previousAuthor = '';
+  for (const item of items) {
+    if (item.kind === 'agent_plain' || item.kind === 'error') {
+      item.showAuthor = item.author !== previousAuthor;
+      previousAuthor = item.author;
+      continue;
+    }
+    if (item.kind === 'capsule') {
+      continue;
+    }
+    previousAuthor = '';
+  }
+
+  return items;
+}
+
 function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
   const status = statusLabel(snapshot?.status || '-');
   const stage = conversationStageLabel(snapshot?.stage);
@@ -1309,12 +2473,13 @@ export default function App() {
   const [conversationInfraError, setConversationInfraError] = useState<string | null>(null);
   const [conversationSearchQuery, setConversationSearchQuery] = useState('');
   const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
+  const [conversationStageFilter, setConversationStageFilter] = useState('all');
   const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
+  const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
-  const [conversationWorkspaceTab, setConversationWorkspaceTab] = useState<'transitions' | 'timeline' | 'messages' | 'llm'>('transitions');
-  const [conversationMessageView, setConversationMessageView] = useState<ConversationMessageView>('interaction');
+  const [conversationDialogTab, setConversationDialogTab] = useState<ConversationDialogTab>('overview');
   const [transitionView, setTransitionView] = useState<'timeline' | 'list'>('timeline');
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
@@ -1536,9 +2701,25 @@ export default function App() {
     }
   }, [selectedSessionId]);
 
-  const loadConversationDetail = useCallback(async (sessionId: string) => {
-    const detail = await api.getConversationSessionCore(sessionId);
-    setConversationDetail(detail);
+  const selectConversationSession = useCallback((sessionId: string) => {
+    if (selectedSessionId === sessionId) {
+      return;
+    }
+    setSelectedSessionId(sessionId);
+    setConversationDetailLoading(true);
+  }, [selectedSessionId]);
+
+  const openConversationDialog = useCallback(
+    (sessionId: string, initialTab: ConversationDialogTab = 'overview') => {
+      selectConversationSession(sessionId);
+      setConversationDialog({ sessionId });
+      setConversationDialogTab(initialTab);
+    },
+    [selectConversationSession]
+  );
+
+  const closeConversationDialog = useCallback(() => {
+    setConversationDialog(null);
   }, []);
 
   const exportConversationDetail = useCallback(() => {
@@ -2447,6 +3628,13 @@ export default function App() {
   }, [activeSection, authStatus, loadSection]);
 
   useEffect(() => {
+    if (activeSection === 'conversation') {
+      return;
+    }
+    setConversationDialog(null);
+  }, [activeSection]);
+
+  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
@@ -2690,8 +3878,7 @@ export default function App() {
   }, [activeSection, authStatus, selectedSessionId]);
 
   useEffect(() => {
-    setConversationWorkspaceTab('transitions');
-    setConversationMessageView('interaction');
+    setConversationDialogTab('overview');
     setTransitionView('timeline');
     setTransitionQuery('');
     setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
@@ -2759,10 +3946,21 @@ export default function App() {
 
     return summary;
   })();
+  const conversationQuickStatusFilters = [
+    { label: '全部', value: 'all', count: conversationSummary.total, meta: '全部会话' },
+    { label: '进行中', value: 'in_progress', count: conversationSummary.inProgress, meta: '执行中或处理中' },
+    { label: '待确认', value: 'waiting_user', count: conversationSummary.waitingUser, meta: '等待用户确认' },
+    { label: '失败', value: 'failed', count: conversationSummary.failed, meta: '存在阻塞错误' },
+    { label: '已完成', value: 'completed', count: conversationSummary.completed, meta: '已结束会话' },
+  ] as const;
+  const conversationStageOptions = uniqueSorted(conversationSessions.map((session) => session.stage));
   const filteredConversationSessions = (() => {
     const query = conversationSearchQuery.trim().toLowerCase();
     return conversationSessions.filter((session) => {
       if (conversationStatusFilter !== 'all' && session.status !== conversationStatusFilter) {
+        return false;
+      }
+      if (conversationStageFilter !== 'all' && (session.stage || '') !== conversationStageFilter) {
         return false;
       }
       if (!query) {
@@ -2772,6 +3970,8 @@ export default function App() {
         session.id,
         session.title,
         session.pendingQuestion || '',
+        session.stage || '',
+        session.status,
       ]
         .join(' ')
         .toLowerCase();
@@ -2780,9 +3980,7 @@ export default function App() {
   })();
   const conversationTabCounts = {
     transitions: conversationDetail?.trace?.stateTransitions?.length || 0,
-    timeline: conversationDetail?.trace?.timeline.length || 0,
     messages: conversationDetail?.messages.length || 0,
-    llm: conversationDetail?.trace?.llm.length || 0,
   };
   const conversationMessages = asArray(conversationDetail?.messages);
   const conversationRawMessages = sortRawMessagesForDiagnostics(conversationMessages);
@@ -2827,12 +4025,6 @@ export default function App() {
       failedToolNames,
     };
   })();
-  const conversationSwitching = Boolean(
-    conversationDetailLoading &&
-      selectedSessionId &&
-      conversationDetail &&
-      selectedSessionId !== conversationDetail.session.id
-  );
   const agentCapabilitySummary = (() => {
     const capabilities = agentOverview?.capabilities || [];
     return {
@@ -2856,6 +4048,115 @@ export default function App() {
   const auditOperatorOptions = auditResponseMeta.availableOperators || [];
 
   const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
+  const llmItems = conversationDetail?.trace?.llm || [];
+  const conversationDetailedLogs = (() => {
+    const entries = [
+      ...conversationRawMessages.map((message) => ({
+        id: `message-${message.id}`,
+        timestamp: message.createdAt,
+        entryType: 'conversation_message',
+        level: messageDiagnosticLevel(message),
+        summary: messageDiagnosticSummary(message),
+        payload: {
+          id: message.id,
+          role: message.role,
+          messageType: message.messageType,
+          content: message.content,
+          createdAt: message.createdAt,
+          metadata: message.metadata,
+        },
+      })),
+      ...llmItems.map((item) => ({
+        id: `llm-${item.id}`,
+        timestamp: item.createdAt,
+        entryType: 'llm_trace',
+        level: item.inferred ? 'info' : 'success',
+        summary: `${item.stage} / ${item.source}`,
+        payload: item,
+      })),
+    ].sort((left, right) => toTimestamp(right.timestamp) - toTimestamp(left.timestamp));
+
+    return {
+      sessionId: conversationDetail?.session.id || null,
+      exportedAt: new Date().toISOString(),
+      counts: {
+        messages: conversationRawMessages.length,
+        llm: llmItems.length,
+        total: entries.length,
+      },
+      entries,
+    };
+  })();
+  const osacMessages = conversationDetail?.trace?.osac?.messages || [];
+  const primaryEnvironment = conversationDetail?.trace?.sandbox.primaryEnvironment ?? null;
+  const relatedEnvironments = (conversationDetail?.trace?.sandbox.relatedEnvironments || []).filter(
+    (environment) => environment.id !== primaryEnvironment?.id
+  );
+  const primaryEnvironmentSandboxId = environmentSandboxId(primaryEnvironment);
+  const primaryEnvironmentTaskSessionId = environmentTaskSessionId(primaryEnvironment);
+  const primaryEnvironmentExecutor = environmentExecutor(primaryEnvironment);
+  const primaryEnvironmentArchiveStatus = environmentArchiveStatus(primaryEnvironment);
+  const primaryEnvironmentReplacementId = environmentReplacementSandboxId(primaryEnvironment);
+  const governanceGroups = Object.values(
+    relatedEnvironments.reduce<Record<string, { key: string; reason: string; items: SandboxEnvironmentItem[]; latestUpdatedAt: string }>>((groups, environment) => {
+      const reason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
+      const existing = groups[reason];
+      if (existing) {
+        existing.items.push(environment);
+        if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
+          existing.latestUpdatedAt = environment.updatedAt;
+        }
+        return groups;
+      }
+      groups[reason] = {
+        key: reason,
+        reason,
+        items: [environment],
+        latestUpdatedAt: environment.updatedAt,
+      };
+      return groups;
+    }, {})
+  ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
+  const relatedEnvironmentGroups = Object.values(
+    relatedEnvironments.reduce<Record<string, {
+      key: string;
+      status: string;
+      executor: string;
+      archiveStatus: string;
+      governanceReason: string;
+      items: SandboxEnvironmentItem[];
+      latestUpdatedAt: string;
+    }>>((groups, environment) => {
+      const executor = environmentExecutor(environment) || '-';
+      const archiveStatus = environmentArchiveStatus(environment) || '-';
+      const governanceReason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
+      const key = `${environment.status}__${executor}__${archiveStatus}__${governanceReason}`;
+      const existing = groups[key];
+      if (existing) {
+        existing.items.push(environment);
+        if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
+          existing.latestUpdatedAt = environment.updatedAt;
+        }
+        return groups;
+      }
+      groups[key] = {
+        key,
+        status: environment.status,
+        executor,
+        archiveStatus,
+        governanceReason,
+        items: [environment],
+        latestUpdatedAt: environment.updatedAt,
+      };
+      return groups;
+    }, {})
+  ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
+  const visibleRelatedEnvironmentGroups = conversationGovernanceFilter
+    ? relatedEnvironmentGroups.filter((group) => group.governanceReason === conversationGovernanceFilter)
+    : relatedEnvironmentGroups;
+  const finalVisibleRelatedEnvironmentGroups = conversationEnvironmentGroupFilter
+    ? visibleRelatedEnvironmentGroups.filter((group) => group.key === conversationEnvironmentGroupFilter)
+    : visibleRelatedEnvironmentGroups;
   const sortedTransitions = (() => {
     return [...stateTransitions].sort((a, b) => {
       const aTime = a.at ? Date.parse(a.at) : Number.MAX_SAFE_INTEGER;
@@ -2942,6 +4243,819 @@ export default function App() {
       phases: Array.from(phaseSet),
     };
   })();
+  const conversationReplayItems = buildConversationReplayItems(conversationMessages);
+  const conversationDialogDetail =
+    conversationDialog && conversationDetail?.session.id === conversationDialog.sessionId
+      ? conversationDetail
+      : null;
+  const conversationDialogLoading = Boolean(conversationDialog) && !conversationDialogDetail;
+
+  const renderConversationTransitionsPanel = () => (
+    <>
+      <div className="panel-subtitle panel-subtitle-row">
+        <span>状态机流转 ({stateTransitions.length})</span>
+        <div className="panel-subtitle-actions">
+          <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
+            时间轴
+          </button>
+          <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
+            列表
+          </button>
+          <button
+            type="button"
+            className="secondary-btn"
+            onClick={() => {
+              setTransitionQuery('');
+              setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+              setTransitionAdvancedFiltersOpen(false);
+            }}
+          >
+            重置筛选
+          </button>
+        </div>
+      </div>
+
+      <div className="state-filter">
+        <div className="state-filter-row">
+          <label className="state-filter-field">
+            <span>搜索</span>
+            <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
+          </label>
+          <label className="state-filter-field">
+            <span>开始时间</span>
+            <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
+          </label>
+          <label className="state-filter-field">
+            <span>结束时间</span>
+            <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
+          </label>
+        </div>
+        <div className="state-filter-advanced-toggle">
+          <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
+            {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
+          </button>
+        </div>
+        {transitionAdvancedFiltersOpen ? (
+          <div className="state-filter-grid">
+            <label className="state-filter-field">
+              <span>起始阶段</span>
+              <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>目标阶段</span>
+              <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>状态</span>
+              <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>阶段相位</span>
+              <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>消息类型</span>
+              <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>角色</span>
+              <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>智能体</span>
+              <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
+              </select>
+            </label>
+            <label className="state-filter-field">
+              <span>语气</span>
+              <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
+                <option value="all">全部</option>
+                {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
+              </select>
+            </label>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="kpi-grid conversation-kpi-grid">
+        <article className="kpi-card">
+          <p className="kpi-title">筛选后流转</p>
+          <p className="kpi-value">{transitionStats.filtered}</p>
+          <p className="kpi-meta">总计 {transitionStats.total} 条</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">命中阶段</p>
+          <p className="kpi-value">{transitionStats.stages.length}</p>
+          <p className="kpi-meta">{transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无'}</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">命中状态</p>
+          <p className="kpi-value">{transitionStats.statuses.length}</p>
+          <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无'}</p>
+        </article>
+        <article className="kpi-card">
+          <p className="kpi-title">命中阶段相位</p>
+          <p className="kpi-value">{transitionStats.phases.length}</p>
+          <p className="kpi-meta">{transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无'}</p>
+        </article>
+      </div>
+
+      {transitionView === 'timeline' ? (
+        <div className="state-timeline">
+          {filteredTransitions.length === 0 ? (
+            <p className="empty">当前筛选条件下无状态流转记录。</p>
+          ) : (
+            filteredTransitions.map((transition, index) => {
+              const trigger = transition.trigger || {};
+              const triggerSummary = [
+                trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+                trigger.messageId ? `id=${trigger.messageId}` : '',
+              ].filter(Boolean).join(' / ');
+              return (
+                <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
+                  <p className="state-timeline-head">
+                    <strong>{conversationStageLabel(transition.from?.stage)}</strong>
+                    <span>→</span>
+                    <strong>{conversationStageLabel(transition.to?.stage)}</strong>
+                    <span>{formatDateTime(transition.at)}</span>
+                  </p>
+                  <p className="state-timeline-meta">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
+                  <p className="state-transition-flow">
+                    <span className={stateClassName(transition.to?.status || 'unknown')}>{statusLabel(transition.to?.status || 'unknown')}</span>
+                    {transition.to?.phase ? <span className="session-status">{conversationPhaseLabel(transition.to.phase)}</span> : null}
+                    {trigger.messageType ? <span className="session-status">{conversationMessageTypeLabel(trigger.messageType)}</span> : null}
+                  </p>
+                  {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
+                  {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
+                </article>
+              );
+            })
+          )}
+        </div>
+      ) : (
+        <div className="trace-list">
+          {filteredTransitions.map((transition, index) => {
+            const trigger = transition.trigger || {};
+            const triggerSummary = [
+              trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+              trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+              trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+              trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+              trigger.messageId ? `id=${trigger.messageId}` : '',
+            ].filter(Boolean).join(' / ');
+            return (
+              <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
+                <p className="trace-head">
+                  <span className={traceLevelClass('info')}>state</span>
+                  <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
+                  <span>{formatDateTime(transition.at)}</span>
+                </p>
+                <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
+                {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
+                {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+
+  const renderConversationDetailedLogsPanel = () => (
+    <div className="sub-panel">
+      <pre className="json-block">{toJsonText(conversationDetailedLogs)}</pre>
+    </div>
+  );
+
+  const renderConversationInfraPanel = () => {
+    if (!conversationDetail) {
+      return <p className="empty">选择会话后，可在此查看运行绑定、Sandbox 分组与 OSAC 诊断信息。</p>;
+    }
+
+    return (
+      <div className="conversation-inspector-content conversation-dialog-infra">
+        {conversationInfraError ? (
+          <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
+        ) : null}
+        <article className="sub-panel">
+          <div className="panel-header">
+            <h3>当前会话</h3>
+            <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
+          </div>
+          <div className="detail-kv-list">
+            <div>
+              <span>阶段</span>
+              <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
+            </div>
+            <div>
+              <span>OpenCode ID</span>
+              <strong className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</strong>
+            </div>
+            <div>
+              <span>待补充问题</span>
+              <strong>{conversationDetail.runtime?.pendingQuestion || '-'}</strong>
+            </div>
+            <div>
+              <span>挂起原因</span>
+              <strong>{conversationDetail.runtime?.pendingResume?.reason || '-'}</strong>
+            </div>
+          </div>
+        </article>
+
+        <article className="sub-panel">
+          <div className="panel-header">
+            <h3>KVM / Sandbox 摘要</h3>
+          </div>
+          <div className="detail-kv-list">
+            <div>
+              <span>编排 ID</span>
+              {conversationDetail.runtime?.orchestratorSessionId ? (
+                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
+                  {conversationDetail.runtime.orchestratorSessionId}
+                </button>
+              ) : (
+                <strong className="mono">-</strong>
+              )}
+            </div>
+            <div>
+              <span>VM 名称</span>
+              <strong className="mono">{conversationDetail.runtime?.vmName || '-'}</strong>
+            </div>
+            <div>
+              <span>主 Sandbox</span>
+              {primaryEnvironmentSandboxId ? (
+                <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
+                  {primaryEnvironmentSandboxId}
+                </button>
+              ) : (
+                <strong className="mono">-</strong>
+              )}
+            </div>
+            <div>
+              <span>Executor</span>
+              <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
+            </div>
+            <div>
+              <span>归档状态</span>
+              <strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong>
+            </div>
+            <div>
+              <span>关联记录数</span>
+              <strong>{relatedEnvironments.length}</strong>
+            </div>
+          </div>
+          {primaryEnvironmentTaskSessionId ? (
+            <p className="session-meta">
+              主记录会话：
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(primaryEnvironmentTaskSessionId)}>
+                {primaryEnvironmentTaskSessionId}
+              </button>
+            </p>
+          ) : null}
+          {primaryEnvironmentReplacementId ? (
+            <p className="session-meta">
+              已由{' '}
+              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
+                {primaryEnvironmentReplacementId}
+              </button>{' '}
+              接管
+            </p>
+          ) : null}
+        </article>
+
+        <article className="sub-panel">
+          <div className="panel-header panel-header-stack">
+            <div>
+              <h3>Sandbox 分组</h3>
+              <span className="panel-caption">{conversationGovernanceFilter ? `当前筛选：${conversationGovernanceFilter}` : `共 ${governanceGroups.length} 类原因`}</span>
+            </div>
+            {conversationGovernanceFilter ? (
+              <button type="button" className="secondary-btn" onClick={() => setConversationGovernanceFilter(null)}>
+                清除
+              </button>
+            ) : null}
+          </div>
+          {governanceGroups.length === 0 ? (
+            <p className="empty">当前没有额外关联的 Sandbox 环境记录。</p>
+          ) : (
+            <div className="conversation-sandbox-governance-grid">
+              {governanceGroups.map((group) => (
+                <button
+                  key={group.key}
+                  type="button"
+                  className={`sub-panel conversation-sandbox-card conversation-sandbox-governance-card conversation-sandbox-governance-filter ${conversationGovernanceFilter === group.reason ? 'active' : ''}`}
+                  onClick={() => setConversationGovernanceFilter((prev) => (prev === group.reason ? null : group.reason))}
+                >
+                  <div className="trace-head">
+                    <strong>{group.reason}</strong>
+                    <span className="session-status session-status-governance">分组</span>
+                  </div>
+                  <p className="trace-meta">共 {group.items.length} 条 · 最近更新时间 {formatDateTime(group.latestUpdatedAt)}</p>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {finalVisibleRelatedEnvironmentGroups.length ? (
+            <div className="conversation-sandbox-list">
+              {finalVisibleRelatedEnvironmentGroups.map((group) => {
+                const groupSelected = conversationEnvironmentGroupFilter === group.key;
+                return (
+                  <article key={group.key} className={`sub-panel conversation-sandbox-card conversation-sandbox-group-filter ${groupSelected ? 'active' : ''}`}>
+                    <button
+                      type="button"
+                      className="conversation-sandbox-group-head"
+                      onClick={() => setConversationEnvironmentGroupFilter((prev) => (prev === group.key ? null : group.key))}
+                    >
+                      <div className="trace-head">
+                        <strong>
+                          {sandboxRuntimeStateLabel(group.status)} · {executorLabel(group.executor)}
+                        </strong>
+                        <span className="mono">{formatDateTime(group.latestUpdatedAt)}</span>
+                      </div>
+                      <p className="trace-meta">
+                        归档: {archiveStatusLabel(group.archiveStatus)} · 原因: {group.governanceReason} · 共 {group.items.length} 条
+                      </p>
+                    </button>
+                    <details open={groupSelected}>
+                      <summary>{groupSelected ? '收起该组 Sandbox' : '查看该组 Sandbox'}</summary>
+                      <div className="conversation-sandbox-list">
+                        {group.items.map((environment) => {
+                          const sandboxId = environmentSandboxId(environment);
+                          const taskSessionId = environmentTaskSessionId(environment);
+                          return (
+                            <article key={environment.id} className="sub-panel conversation-sandbox-card">
+                              <div className="trace-head">
+                                <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
+                                <span className="mono">{formatDateTime(environment.updatedAt)}</span>
+                              </div>
+                              <p className="trace-meta">
+                                Sandbox：
+                                {sandboxId ? (
+                                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
+                                    {sandboxId}
+                                  </button>
+                                ) : (
+                                  '-'
+                                )}
+                              </p>
+                              <p className="trace-meta">
+                                会话：
+                                {taskSessionId ? (
+                                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(taskSessionId)}>
+                                    {taskSessionId}
+                                  </button>
+                                ) : (
+                                  '-'
+                                )}
+                              </p>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+        </article>
+
+        <details className="sub-panel conversation-osac-panel">
+          <summary>
+            <div className="panel-header panel-header-stack">
+              <div>
+                <h3>OSAC / OpenCode</h3>
+                <span className="panel-caption">{osacMessages.length} 条消息</span>
+              </div>
+            </div>
+          </summary>
+          <div className="conversation-osac-panel-body">
+            <button type="button" className="secondary-btn" onClick={() => setShowOpencodePayload((prev) => !prev)}>
+              {showOpencodePayload ? '隐藏 payload' : '显示 payload'}
+            </button>
+            <div className="trace-list conversation-osac-list">
+              {osacMessages.length === 0 ? (
+                <p className="empty">无 OSAC 消息</p>
+              ) : (
+                osacMessages.map((message, index) => {
+                  const payload = (message.payload || {}) as Record<string, unknown>;
+                  const summary = summarizeText(
+                    [
+                      typeof payload.eventType === 'string' ? payload.eventType : '',
+                      typeof payload.message === 'string' ? payload.message : '',
+                      typeof payload.status === 'string' ? payload.status : '',
+                      typeof payload.output === 'string' ? payload.output : '',
+                    ].filter(Boolean).join(' | '),
+                    220
+                  );
+                  const payloadTimestamp =
+                    typeof payload.timestamp === 'string'
+                      ? payload.timestamp
+                      : typeof payload.time === 'string'
+                        ? payload.time
+                        : undefined;
+                  return (
+                    <article key={`${message.type}-${index}`} className="trace-item">
+                      <p className="trace-head">
+                        <span className="trace-level info">osac</span>
+                        <strong>{message.type}</strong>
+                        <span>{formatDateTime(payloadTimestamp)}</span>
+                      </p>
+                      {summary ? <p className="message-content">{summary}</p> : null}
+                      {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details className="sub-panel">
+          <summary>KVM / Sandbox 原始状态</summary>
+          <pre className="json-block">
+            {toJsonText({
+              kvm: {
+                orchestratorSessionId: conversationDetail.trace?.kvm.orchestratorSessionId,
+                vmName: conversationDetail.trace?.kvm.vmName,
+                quota: conversationDetail.trace?.kvm.quota,
+                session: conversationDetail.trace?.kvm.session,
+                sessionVm: conversationDetail.trace?.kvm.sessionVm,
+                sandbox: conversationDetail.trace?.kvm.sandbox,
+                sandboxIp: conversationDetail.trace?.kvm.sandboxIp,
+                sandboxPorts: conversationDetail.trace?.kvm.sandboxPorts,
+                vmDetail: conversationDetail.trace?.kvm.vmDetail,
+                vmMetrics: conversationDetail.trace?.kvm.vmMetrics,
+                errors: conversationDetail.trace?.kvm.errors,
+              },
+              sandbox: {
+                primaryEnvironment,
+                relatedEnvironments,
+              },
+            })}
+          </pre>
+        </details>
+      </div>
+    );
+  };
+
+  const renderConversationContentOverview = () => {
+    return (
+      <div className="conversation-dialog-overview">
+        <div className="detail-grid detail-grid-wide summary-grid conversation-summary-grid">
+          <div>
+            <p className="kpi-title">会话 ID</p>
+            <p className="mono">{conversationDetail?.session.id}</p>
+          </div>
+          <div>
+            <p className="kpi-title">状态</p>
+            <p>{conversationDetail ? statusLabel(conversationDetail.session.status) : '-'}</p>
+          </div>
+          <div>
+            <p className="kpi-title">阶段</p>
+            <p>{conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-'}</p>
+          </div>
+          <div>
+            <p className="kpi-title">OpenCode ID</p>
+            <p className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</p>
+          </div>
+          <div>
+            <p className="kpi-title">绑定更新时间</p>
+            <p>{formatDateTime(conversationDetail?.runtime?.bindingUpdatedAt)}</p>
+          </div>
+        </div>
+
+        <div className="conversation-message-summary-stats">
+          <span className="session-status">状态流转 {conversationTabCounts.transitions}</span>
+          <span className="session-status">对话消息 {conversationTabCounts.messages}</span>
+          <span className="session-status">详细日志 {conversationDetailedLogs.counts.total}</span>
+        </div>
+
+        <section className="sub-panel conversation-message-summary">
+          <div className="detail-grid conversation-message-summary-grid">
+            <div>
+              <p className="kpi-title">最近用户输入</p>
+              <p>{conversationMessageSummary.latestUserSummary}</p>
+            </div>
+            <div>
+              <p className="kpi-title">最近主回复</p>
+              <p>{conversationMessageSummary.latestAssistantSummary}</p>
+            </div>
+            <div>
+              <p className="kpi-title">最近轮次结果</p>
+              <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
+            </div>
+            <div>
+              <p className="kpi-title">最近阶段</p>
+              <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
+            </div>
+          </div>
+          {conversationMessageSummary.latestClarificationSummary || conversationDetail?.runtime?.pendingQuestion ? (
+            <div className="conversation-message-inline-card">
+              <p className="kpi-title">当前待确认问题</p>
+              <p className="message-content">
+                {conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary}
+              </p>
+            </div>
+          ) : null}
+        </section>
+      </div>
+    );
+  };
+
+  const renderConversationMessageSummaryCard = () => (
+    <section className="sub-panel conversation-message-summary conversation-dialog-message-summary">
+      <div className="detail-grid conversation-message-summary-grid">
+        <div>
+          <p className="kpi-title">最近用户输入</p>
+          <p>{conversationMessageSummary.latestUserSummary}</p>
+        </div>
+        <div>
+          <p className="kpi-title">当前会话状态</p>
+          <p>{conversationDetail ? statusLabel(conversationDetail.session.status) : '-'}</p>
+        </div>
+        <div>
+          <p className="kpi-title">最近轮次结果</p>
+          <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
+        </div>
+        <div>
+          <p className="kpi-title">最近阶段</p>
+          <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
+        </div>
+      </div>
+      {conversationMessageSummary.latestClarificationSummary || conversationDetail?.runtime?.pendingQuestion ? (
+        <div className="conversation-message-inline-card">
+          <p className="kpi-title">当前待确认问题</p>
+          <p className="message-content">
+            {conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary}
+          </p>
+          {conversationDetail?.runtime?.pendingOptions?.length ? (
+            <div className="conversation-message-summary-stats">
+              {conversationDetail.runtime.pendingOptions.map((option) => (
+                <span key={option} className="session-status">{option}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="conversation-message-summary-stats">
+        <span className="session-status">用户消息 {conversationMessageSummary.userCount}</span>
+        <span className="session-status">主回复 {conversationMessageSummary.assistantCount}</span>
+        <span className="session-status">执行事件 {conversationMessageSummary.executionCount}</span>
+        <span className={`session-status ${conversationMessageSummary.failureCount > 0 ? 'state-error' : ''}`}>
+          失败事件 {conversationMessageSummary.failureCount}
+        </span>
+        {conversationMessageSummary.failedToolNames.slice(0, 3).map((toolName) => (
+          <span key={toolName} className="session-status">{toolName}</span>
+        ))}
+      </div>
+      {conversationMessageSummary.latestFailureSummary ? (
+        <p className="panel-caption">
+          最近阻塞: {conversationMessageSummary.latestFailureSummary}
+          {conversationMessageSummary.latestFailureAt ? ` · ${formatDateTime(conversationMessageSummary.latestFailureAt)}` : ''}
+        </p>
+      ) : conversationMessageSummary.latestClarificationSummary ? (
+        <p className="panel-caption">
+          最近等待用户: {summarizeText(conversationMessageSummary.latestClarificationSummary, 140)}
+        </p>
+      ) : (
+        <p className="panel-caption">最近主回复: {conversationMessageSummary.latestAssistantSummary}</p>
+      )}
+    </section>
+  );
+
+  const renderConversationReplayPanel = () => (
+    <div className="conversation-replay-shell">
+      <div className="conversation-replay-scroll">
+        {conversationReplayItems.length === 0 ? (
+          <p className="empty">无可回放的用户态消息。</p>
+        ) : (
+          conversationReplayItems.map((item) => {
+            if (item.kind === 'user') {
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-user" title={formatDateTime(item.timestamp)}>
+                  <div className="conversation-replay-user-bubble">
+                    <span className="conversation-replay-user-text">{item.text}</span>
+                  </div>
+                </div>
+              );
+            }
+
+            if (item.kind === 'capsule') {
+              const segments = item.segments && item.segments.length > 0 ? item.segments : [item.label];
+              const lastIndex = segments.length - 1;
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                  <div className={`conversation-replay-capsule conversation-replay-capsule-${item.tone}`}>
+                    <span className="conversation-replay-capsule-content">
+                      {segments.map((segment, index) => (
+                        <span
+                          key={`${item.id}-${segment}-${index}`}
+                          className={item.loading && (segments.length === 1 || index < lastIndex) ? 'conversation-replay-capsule-loading' : ''}
+                        >
+                          {segment}
+                          {index < lastIndex ? <span className="conversation-replay-capsule-dot">·</span> : null}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                </div>
+              );
+            }
+
+            if (item.kind === 'clarification_notice') {
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                  <div className="conversation-replay-clarification">
+                    <span className="conversation-replay-clarification-icon" aria-hidden="true" />
+                    <span>{item.text}</span>
+                  </div>
+                </div>
+              );
+            }
+
+            if (item.kind === 'managed_tool') {
+              const statusLabel =
+                item.status === 'failed'
+                  ? '失败'
+                  : item.status === 'completed'
+                    ? '已完成'
+                    : item.status === 'running'
+                      ? '进行中'
+                      : '未知';
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                  <div className="conversation-replay-tool-block">
+                    <div
+                      className={`conversation-replay-managed-tool ${
+                        item.expandWrite ? 'conversation-replay-managed-tool-expanded' : 'conversation-replay-managed-tool-compact'
+                      } conversation-replay-managed-tool-${item.status}`}
+                    >
+                      {item.expandWrite ? (
+                        <>
+                          <div className="conversation-replay-managed-tool-header">
+                            <div className="conversation-replay-tool-title-group">
+                              <span className="conversation-replay-tool-icon-badge">写</span>
+                              <div>
+                                <div className="conversation-replay-tool-title">写入文件</div>
+                                <div className="conversation-replay-tool-subtitle">{item.summary}</div>
+                              </div>
+                            </div>
+                            <div className="conversation-replay-tool-status-stack">
+                              <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
+                              <span className="conversation-replay-tool-meta">{formatDateTime(item.timestamp)}</span>
+                            </div>
+                          </div>
+                          <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
+                            {item.preview || '正在生成代码片段...'}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="conversation-replay-tool-icon-badge">
+                            {item.toolName === 'shell_execute'
+                              ? '命'
+                              : item.toolName === 'write_file'
+                                ? '写'
+                                : item.toolName === 'read_file'
+                                  ? '读'
+                                  : item.toolName === 'search_code'
+                                    ? '搜'
+                                    : item.toolName === 'list_directory'
+                                      ? '列'
+                                      : item.toolName === 'ask_user'
+                                        ? '问'
+                                        : '工'}
+                          </span>
+                          <span className="conversation-replay-managed-tool-content">
+                            <span className="conversation-replay-managed-tool-label">{getConversationManagedToolDisplayName(item.toolName)}</span>
+                            <span className={`conversation-replay-tool-status conversation-replay-tool-status-${item.status}`}>{statusLabel}</span>
+                            {item.summary ? <span className="conversation-replay-managed-tool-summary">{item.summary}</span> : null}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {!item.expandWrite && item.status === 'failed' && item.preview ? (
+                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">
+                        {item.preview}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            }
+
+            if (item.kind === 'opencode_tool') {
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                  <div className="conversation-replay-tool-block">
+                    <div
+                      className={`conversation-replay-opencode-tool ${
+                        item.variant === 'card'
+                          ? 'conversation-replay-opencode-tool-card'
+                          : 'conversation-replay-opencode-tool-chip'
+                      } conversation-replay-opencode-tool-${item.tone || 'default'}`}
+                    >
+                      <div className="conversation-replay-tool-title-group">
+                        <span className="conversation-replay-tool-icon-badge">{item.iconLabel}</span>
+                        <div>
+                          <div className="conversation-replay-tool-title-row">
+                            <span className="conversation-replay-tool-title">{item.title}</span>
+                            {item.statusLabel ? (
+                              <span className="conversation-replay-tool-status conversation-replay-tool-status-compact">
+                                {item.statusLabel}
+                              </span>
+                            ) : null}
+                          </div>
+                          {item.subtitle ? <div className="conversation-replay-tool-subtitle">{item.subtitle}</div> : null}
+                        </div>
+                      </div>
+                      {item.command ? (
+                        <div className="conversation-replay-tool-preview conversation-replay-tool-preview-code">
+                          {item.command}
+                        </div>
+                      ) : null}
+                      {item.variant === 'card' && item.preview ? (
+                        <div
+                          className={`conversation-replay-tool-preview ${
+                            item.previewMode === 'code'
+                              ? 'conversation-replay-tool-preview-code'
+                              : 'conversation-replay-tool-preview-plain'
+                          }`}
+                        >
+                          {item.preview}
+                        </div>
+                      ) : null}
+                    </div>
+                    {item.variant === 'chip' && item.preview && item.detail && item.preview !== item.detail ? (
+                      <div className="conversation-replay-tool-preview conversation-replay-tool-preview-plain">{item.preview}</div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            }
+
+            if (item.kind === 'error') {
+              return (
+                <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                  <article className="conversation-replay-agent-block conversation-replay-agent-block-error">
+                    {item.showAuthor !== false ? (
+                      <div className="conversation-replay-author">{item.author || '智能体'}</div>
+                    ) : null}
+                    <div className="conversation-replay-agent-text">{item.text}</div>
+                  </article>
+                </div>
+              );
+            }
+
+            return (
+              <div key={item.id} className="conversation-replay-row conversation-replay-row-agent" title={formatDateTime(item.timestamp)}>
+                <article className="conversation-replay-agent-block">
+                  {item.showAuthor !== false ? (
+                    <div className="conversation-replay-author">{item.author || '智能体'}</div>
+                  ) : null}
+                  <div className="conversation-replay-agent-text">{item.text}</div>
+                  {item.options?.length ? (
+                    <div className="conversation-replay-option-list">
+                      {item.options.map((option) => (
+                        <span key={`${item.id}-${option}`} className="conversation-replay-option-chip">
+                          {option}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 
   const activeNavItem = NAV_ITEMS.find((item) => item.key === activeSection) || NAV_ITEMS[0];
   const activeNavGroup = NAV_GROUPS.find((group) => group.key === activeNavItem.group) || NAV_GROUPS[0];
@@ -3650,91 +5764,6 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="panel-subtitle">
-                全链路时间线 ({conversationDetail.trace?.timeline.length ?? 0})
-              </div>
-              <div className="trace-list">
-                {(conversationDetail.trace?.timeline || []).length === 0 ? (
-                  <p className="empty">无链路事件</p>
-                ) : (
-                  (conversationDetail.trace?.timeline || []).map((event) => {
-                    const badgeLabel = event.badge || event.level;
-                    const hasDecision = Boolean(event.decision?.layer || event.decision?.source || event.decision?.type);
-                    const hasDecisionIO = Boolean(event.decisionInput || event.decisionOutput);
-                    const hasExecution = Boolean(event.execution?.component || event.execution?.action || event.execution?.detail);
-                    const hasContext = Boolean(event.context?.trigger || event.context?.previous);
-                    const rawContent = event.rawContent || '';
-                    const showRaw = rawContent && rawContent !== event.content;
-                    return (
-                      <article key={event.id} className="trace-item">
-                        <p className="trace-head">
-                          <span className={traceLevelClass(event.level)}>{badgeLabel}</span>
-                          <strong>{event.title}</strong>
-                          <span>{formatDateTime(event.timestamp)}</span>
-                        </p>
-                        <p className="trace-meta mono">
-                          {event.source} / {event.category}
-                        </p>
-                        {hasDecision ? (
-                          <p className="trace-meta">
-                            决策层级: {event.decision?.layer || '-'}
-                            {event.decision?.name ? ` · 名称: ${event.decision.name}` : ''}
-                            · 来源: {event.decision?.source || '-'} · 类型: {event.decision?.type || '-'}
-                          </p>
-                        ) : null}
-                        {hasExecution ? (
-                          <p className="trace-meta">
-                            执行层: {event.execution?.component || '-'}
-                            {event.execution?.action ? ` · 动作: ${event.execution.action}` : ''}
-                            {event.execution?.detail ? ` · ${summarizeText(event.execution.detail, 180)}` : ''}
-                          </p>
-                        ) : null}
-                        {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
-                        {hasDecisionIO ? (
-                          <details>
-                            <summary>查看决策输入/输出</summary>
-                            {event.decisionInput ? (
-                              <>
-                                <p className="kpi-title">输入</p>
-                                <pre className="json-block">{toJsonText(event.decisionInput)}</pre>
-                              </>
-                            ) : null}
-                            {event.decisionOutput ? (
-                              <>
-                                <p className="kpi-title">输出</p>
-                                <pre className="json-block">{toJsonText(event.decisionOutput)}</pre>
-                              </>
-                            ) : null}
-                          </details>
-                        ) : null}
-                        {hasContext ? (
-                          <div className="trace-meta">
-                            {event.context?.trigger ? (
-                              <p>
-                                触发消息: {event.context.trigger.messageType || '-'} ·{' '}
-                                {summarizeText(event.context.trigger.content, 180)}
-                              </p>
-                            ) : null}
-                            {event.context?.previous ? (
-                              <p>
-                                前置消息: {event.context.previous.messageType || '-'} ·{' '}
-                                {summarizeText(event.context.previous.content, 180)}
-                              </p>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {showRaw ? (
-                          <details>
-                            <summary>查看原文</summary>
-                            <pre className="json-block">{rawContent}</pre>
-                          </details>
-                        ) : null}
-                      </article>
-                    );
-                  })
-                )}
-              </div>
-
               <div className="panel-subtitle panel-subtitle-row">
                 <span>状态机流转 ({stateTransitions.length})</span>
                 <div className="panel-subtitle-actions">
@@ -4045,28 +6074,6 @@ export default function App() {
                 )}
               </div>
 
-              <div className="panel-subtitle">LLM 调用轨迹 ({conversationDetail.trace?.llm.length ?? 0})</div>
-              <div className="llm-trace-list">
-                {(conversationDetail.trace?.llm || []).length === 0 ? (
-                  <p className="empty">无 LLM 调用轨迹</p>
-                ) : (
-                  (conversationDetail.trace?.llm || []).map((item) => (
-                    <article key={item.id} className="sub-panel">
-                      <div className="trace-head">
-                        <strong>{item.stage}</strong>
-                        <span className="mono">{item.source}</span>
-                        <span>{item.inferred ? '推断还原' : '真实命令'}</span>
-                      </div>
-                      <p className="trace-meta">时间: {formatDateTime(item.createdAt)}</p>
-                      <p className="kpi-title">请求内容</p>
-                      <pre className="json-block">{toJsonText(item.request)}</pre>
-                      <p className="kpi-title">返回内容</p>
-                      <pre className="json-block">{toJsonText(item.response)}</pre>
-                    </article>
-                  ))
-                )}
-              </div>
-
               <div className="panel-subtitle">KVM / Sandbox 调用状态</div>
               <div className="trace-columns">
                 <article className="sub-panel">
@@ -4359,110 +6366,16 @@ export default function App() {
   );
 
   const renderConversationOpsSection = () => {
-    const primaryEnvironment = conversationDetail?.trace?.sandbox.primaryEnvironment ?? null;
-    const relatedEnvironments = (conversationDetail?.trace?.sandbox.relatedEnvironments || []).filter(
-      (environment) => environment.id !== primaryEnvironment?.id
-    );
-    const primaryEnvironmentSandboxId = environmentSandboxId(primaryEnvironment);
-    const primaryEnvironmentTaskSessionId = environmentTaskSessionId(primaryEnvironment);
-    const primaryEnvironmentExecutor = environmentExecutor(primaryEnvironment);
-    const primaryEnvironmentArchiveStatus = environmentArchiveStatus(primaryEnvironment);
-    const primaryEnvironmentReplacementId = environmentReplacementSandboxId(primaryEnvironment);
-    const governanceGroups = Object.values(
-      relatedEnvironments.reduce<Record<string, { key: string; reason: string; items: SandboxEnvironmentItem[]; latestUpdatedAt: string }>>((groups, environment) => {
-        const reason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
-        const existing = groups[reason];
-        if (existing) {
-          existing.items.push(environment);
-          if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
-            existing.latestUpdatedAt = environment.updatedAt;
-          }
-          return groups;
-        }
-        groups[reason] = {
-          key: reason,
-          reason,
-          items: [environment],
-          latestUpdatedAt: environment.updatedAt,
-        };
-        return groups;
-      }, {})
-    ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
-    const relatedEnvironmentGroups = Object.values(
-      relatedEnvironments.reduce<Record<string, {
-        key: string;
-        status: string;
-        executor: string;
-        archiveStatus: string;
-        governanceReason: string;
-        items: SandboxEnvironmentItem[];
-        latestUpdatedAt: string;
-      }>>((groups, environment) => {
-        const executor = environmentExecutor(environment) || '-';
-        const archiveStatus = environmentArchiveStatus(environment) || '-';
-        const governanceReason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
-        const key = `${environment.status}__${executor}__${archiveStatus}__${governanceReason}`;
-        const existing = groups[key];
-        if (existing) {
-          existing.items.push(environment);
-          if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
-            existing.latestUpdatedAt = environment.updatedAt;
-          }
-          return groups;
-        }
-        groups[key] = {
-          key,
-          status: environment.status,
-          executor,
-          archiveStatus,
-          governanceReason,
-          items: [environment],
-          latestUpdatedAt: environment.updatedAt,
-        };
-        return groups;
-      }, {})
-    ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
-    const visibleRelatedEnvironmentGroups = conversationGovernanceFilter
-      ? relatedEnvironmentGroups.filter((group) => group.governanceReason === conversationGovernanceFilter)
-      : relatedEnvironmentGroups;
-    const finalVisibleRelatedEnvironmentGroups = conversationEnvironmentGroupFilter
-      ? visibleRelatedEnvironmentGroups.filter((group) => group.key === conversationEnvironmentGroupFilter)
-      : visibleRelatedEnvironmentGroups;
-    const timelineItems = conversationDetail?.trace?.timeline || [];
-    const llmItems = conversationDetail?.trace?.llm || [];
-    const osacMessages = conversationDetail?.trace?.osac.messages || [];
-
     return (
+      <>
       <main className="content-stack conversation-content-stack">
-        <section className="summary-strip summary-strip-four fade-in">
-          <article className="summary-card summary-card-emphasis">
-            <span className="summary-card-label">总会话</span>
-            <strong>{conversationSummary.total}</strong>
-            <p>最近 200 条会话索引</p>
-          </article>
-          <article className="summary-card">
-            <span className="summary-card-label">进行中</span>
-            <strong>{conversationSummary.inProgress}</strong>
-            <p>正在运行或处理中</p>
-          </article>
-          <article className="summary-card">
-            <span className="summary-card-label">待确认</span>
-            <strong>{conversationSummary.waitingUser}</strong>
-            <p>等待用户补充信息</p>
-          </article>
-          <article className="summary-card">
-            <span className="summary-card-label">当前阶段</span>
-            <strong>{conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '未选择'}</strong>
-            <p>{conversationDetail?.session.title || '从左侧选择会话'}</p>
-          </article>
-        </section>
-
         <section className="conversation-ops-layout fade-in">
           <article className="panel conversation-index-panel">
             <div className="panel-header panel-header-stack">
               <div>
                 <p className="section-tag">会话索引</p>
-                <h2>会话索引列</h2>
+                <h2>会话索引</h2>
+                <p className="panel-caption">主工作区使用高密度明细列表承载索引；会话详情、关联信息与排障视图直接从列表行进入。</p>
               </div>
               <label className="conversation-auto-refresh-toggle">
                 <input
@@ -4473,989 +6386,230 @@ export default function App() {
                 <span>{conversationAutoRefreshEnabled ? '自动刷新中' : '已暂停自动刷新'}</span>
               </label>
             </div>
-            <div className="conversation-index-toolbar">
-              <label className="state-filter-field">
-                <span>搜索会话</span>
-                <input
-                  type="search"
-                  placeholder="sessionId / 标题 / 待确认问题"
-                  value={conversationSearchQuery}
-                  onChange={(event) => setConversationSearchQuery(event.target.value)}
-                />
-              </label>
-              <div className="conversation-status-filter-group" role="group" aria-label="会话状态筛选">
-                {[
-                  { key: 'all', label: '全部' },
-                  { key: 'in_progress', label: '进行中' },
-                  { key: 'waiting_user', label: '待确认' },
-                  { key: 'failed', label: '失败' },
-                  { key: 'completed', label: '已完成' },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className={`toggle-btn ${conversationStatusFilter === item.key ? 'active' : ''}`}
-                    onClick={() => setConversationStatusFilter(item.key as typeof conversationStatusFilter)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-              <p className="panel-caption">按更新时间排序 · {filteredConversationSessions.length} / {conversationSessions.length}</p>
-            </div>
-            <div className="session-list">
-              {conversationSessions.length === 0 ? (
-                <p className="empty">暂无对话会话。</p>
-              ) : filteredConversationSessions.length === 0 ? (
-                <p className="empty">当前筛选条件下无会话。</p>
-              ) : (
-                filteredConversationSessions.map((session) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className={`session-item ${selectedSessionId === session.id ? 'active' : ''}`}
-                    onClick={() => {
-                      if (selectedSessionId === session.id) return;
-                      setSelectedSessionId(session.id);
-                      setConversationDetailLoading(true);
-                    }}
-                  >
-                    <div className="session-item-main">
-                      <p className="session-title">{session.title || session.id}</p>
-                      <p className="session-id mono">{truncateMiddle(session.id, 10, 8)}</p>
-                      <p className="session-note">{session.pendingQuestion ? summarizeText(session.pendingQuestion, 72) : '无待确认问题'}</p>
-                      <p className="session-meta">{formatDateTime(session.updatedAt)}</p>
-                    </div>
-                    <div className="session-item-side">
-                      <span className={stateClassName(session.status)}>{statusLabel(session.status)}</span>
-                      <span className="session-status">{conversationStageLabel(session.stage)}</span>
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
-          </article>
-
-          <article className="panel conversation-workspace-panel">
-            <div className="panel-header panel-header-stack">
-              <div>
-                <p className="section-tag">会话内容</p>
-                <h2>{conversationDetail?.session.title || conversationDetail?.session.id || '会话内容'}</h2>
-                <p className="panel-copy">状态流转、消息、时间线和 LLM 调用。</p>
-              </div>
-              {conversationDetail ? (
-                <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
-                  下载会话
+            <div className="runtime-quick-filters conversation-status-quick-filters" role="group" aria-label="会话状态快速筛选">
+              {conversationQuickStatusFilters.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  className={`toggle-btn conversation-status-chip ${conversationStatusFilter === item.value ? 'active' : ''}`}
+                  onClick={() => setConversationStatusFilter(item.value)}
+                >
+                  <span>{item.label}</span>
+                  <span className="conversation-status-chip-count">{item.count}</span>
                 </button>
-              ) : null}
+              ))}
             </div>
-
-            {!conversationDetail ? (
-              <p className="empty">请选择左侧会话查看。</p>
-            ) : (
-              <div className="conversation-workspace-content">
-                {conversationSwitching ? <div className="conversation-loading-mask">正在切换会话...</div> : null}
-                <div className="conversation-detail">
-                <div className="detail-grid detail-grid-wide summary-grid conversation-summary-grid">
-                  <div>
-                    <p className="kpi-title">会话 ID</p>
-                    <p className="mono">{conversationDetail.session.id}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">状态</p>
-                    <p>{statusLabel(conversationDetail.session.status)}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">阶段</p>
-                    <p>{conversationStageLabel(conversationDetail.session.stage)}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">OpenCode ID</p>
-                    <p className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="kpi-title">绑定更新时间</p>
-                    <p>{formatDateTime(conversationDetail.runtime?.bindingUpdatedAt)}</p>
-                  </div>
-                </div>
-
-                <div className="workspace-tab-strip">
-                  <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'transitions' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('transitions')}>
-                    状态流转 ({conversationTabCounts.transitions})
-                  </button>
-                  <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'timeline' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('timeline')}>
-                    全链路时间线 ({conversationTabCounts.timeline})
-                  </button>
-                  <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'messages' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('messages')}>
-                    对话消息 ({conversationTabCounts.messages})
-                  </button>
-                  <button type="button" className={`workspace-tab ${conversationWorkspaceTab === 'llm' ? 'active' : ''}`} onClick={() => setConversationWorkspaceTab('llm')}>
-                    LLM 调用 ({conversationTabCounts.llm})
-                  </button>
-                </div>
-
-                {conversationWorkspaceTab === 'transitions' ? (
-                  <>
-                    <div className="panel-subtitle panel-subtitle-row">
-                      <span>状态机流转 ({stateTransitions.length})</span>
-                      <div className="panel-subtitle-actions">
-                        <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
-                          时间轴
-                        </button>
-                        <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
-                          列表
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-btn"
-                          onClick={() => {
-                            setTransitionQuery('');
-                            setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
-                            setTransitionAdvancedFiltersOpen(false);
-                          }}
-                        >
-                          重置筛选
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="state-filter">
-                      <div className="state-filter-row">
-                        <label className="state-filter-field">
-                          <span>搜索</span>
-                          <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
-                        </label>
-                        <label className="state-filter-field">
-                          <span>开始时间</span>
-                          <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
-                        </label>
-                        <label className="state-filter-field">
-                          <span>结束时间</span>
-                          <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
-                        </label>
-                      </div>
-                      <div className="state-filter-advanced-toggle">
-                        <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
-                          {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
-                        </button>
-                      </div>
-                      {transitionAdvancedFiltersOpen ? (
-                        <div className="state-filter-grid">
-                          <label className="state-filter-field">
-                            <span>起始阶段</span>
-                            <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>目标阶段</span>
-                            <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>状态</span>
-                            <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>阶段相位</span>
-                            <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>消息类型</span>
-                            <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>角色</span>
-                            <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>智能体</span>
-                            <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
-                            </select>
-                          </label>
-                          <label className="state-filter-field">
-                            <span>语气</span>
-                            <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
-                              <option value="all">全部</option>
-                              {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
-                            </select>
-                          </label>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div className="kpi-grid conversation-kpi-grid">
-                      <article className="kpi-card">
-                        <p className="kpi-title">筛选后流转</p>
-                        <p className="kpi-value">{transitionStats.filtered}</p>
-                        <p className="kpi-meta">总计 {transitionStats.total} 条</p>
-                      </article>
-                      <article className="kpi-card">
-                        <p className="kpi-title">命中阶段</p>
-                        <p className="kpi-value">{transitionStats.stages.length}</p>
-                        <p className="kpi-meta">{transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无'}</p>
-                      </article>
-                      <article className="kpi-card">
-                        <p className="kpi-title">命中状态</p>
-                        <p className="kpi-value">{transitionStats.statuses.length}</p>
-                        <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无'}</p>
-                      </article>
-                      <article className="kpi-card">
-                        <p className="kpi-title">命中阶段相位</p>
-                        <p className="kpi-value">{transitionStats.phases.length}</p>
-                        <p className="kpi-meta">{transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无'}</p>
-                      </article>
-                    </div>
-
-                    {transitionView === 'timeline' ? (
-                      <div className="state-timeline">
-                        {filteredTransitions.length === 0 ? (
-                          <p className="empty">当前筛选条件下无状态流转记录。</p>
-                        ) : (
-                          filteredTransitions.map((transition, index) => {
-                            const trigger = transition.trigger || {};
-                            const triggerSummary = [
-                              trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-                              trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-                              trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-                              trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-                              trigger.messageId ? `id=${trigger.messageId}` : '',
-                            ].filter(Boolean).join(' / ');
-                            return (
-                              <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
-                                <p className="state-timeline-head">
-                                  <strong>{conversationStageLabel(transition.from?.stage)}</strong>
-                                  <span>→</span>
-                                  <strong>{conversationStageLabel(transition.to?.stage)}</strong>
-                                  <span>{formatDateTime(transition.at)}</span>
-                                </p>
-                                <p className="state-timeline-meta">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
-                                <p className="state-transition-flow">
-                                  <span className={stateClassName(transition.to?.status || 'unknown')}>{statusLabel(transition.to?.status || 'unknown')}</span>
-                                  {transition.to?.phase ? <span className="session-status">{conversationPhaseLabel(transition.to.phase)}</span> : null}
-                                  {trigger.messageType ? <span className="session-status">{conversationMessageTypeLabel(trigger.messageType)}</span> : null}
-                                </p>
-                                {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
-                                {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
-                              </article>
-                            );
-                          })
-                        )}
-                      </div>
-                    ) : (
-                      <div className="trace-list">
-                        {filteredTransitions.map((transition, index) => {
-                          const trigger = transition.trigger || {};
-                          const triggerSummary = [
-                            trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-                            trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-                            trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-                            trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-                            trigger.messageId ? `id=${trigger.messageId}` : '',
-                          ].filter(Boolean).join(' / ');
-                          return (
-                            <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
-                              <p className="trace-head">
-                                <span className={traceLevelClass('info')}>state</span>
-                                <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
-                                <span>{formatDateTime(transition.at)}</span>
-                              </p>
-                              <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
-                              {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
-                              {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
-                            </article>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                ) : null}
-
-                {conversationWorkspaceTab === 'timeline' ? (
-                  <div className="trace-list trace-list-tall">
-                    {timelineItems.length === 0 ? (
-                      <p className="empty">无链路事件</p>
-                    ) : (
-                      timelineItems.map((event) => (
-                        <article key={event.id} className="trace-item">
-                          <p className="trace-head">
-                            <span className={traceLevelClass(event.level)}>{event.badge || event.level}</span>
-                            <strong>{event.title}</strong>
-                            <span>{formatDateTime(event.timestamp)}</span>
-                          </p>
-                          <p className="trace-meta mono">{event.source} / {event.category}</p>
-                          {event.content ? <p className="message-content">{summarizeText(event.content, 360)}</p> : null}
-                          {event.rawContent && event.rawContent !== event.content ? (
-                            <details>
-                              <summary>查看原文</summary>
-                              <pre className="json-block">{event.rawContent}</pre>
-                            </details>
-                          ) : null}
-                        </article>
-                      ))
-                    )}
-                  </div>
-                ) : null}
-
-                {conversationWorkspaceTab === 'messages' ? (
-                  <div className="conversation-message-stack">
-                    <section className="sub-panel conversation-message-summary">
-                      <div className="panel-subtitle-row">
-                        <h3 className="panel-subtitle">消息视图</h3>
-                        <div className="workspace-tabs conversation-message-view-tabs">
-                          <button
-                            type="button"
-                            className={`workspace-tab ${conversationMessageView === 'interaction' ? 'active' : ''}`}
-                            onClick={() => setConversationMessageView('interaction')}
-                          >
-                            交互视图
-                          </button>
-                          <button
-                            type="button"
-                            className={`workspace-tab ${conversationMessageView === 'raw' ? 'active' : ''}`}
-                            onClick={() => setConversationMessageView('raw')}
-                          >
-                            原始流
-                          </button>
-                        </div>
-                      </div>
-                      <div className="detail-grid conversation-message-summary-grid">
-                        <div>
-                          <p className="kpi-title">最近用户输入</p>
-                          <p>{conversationMessageSummary.latestUserSummary}</p>
-                        </div>
-                        <div>
-                          <p className="kpi-title">当前会话状态</p>
-                          <p>{statusLabel(conversationDetail.session.status)}</p>
-                        </div>
-                        <div>
-                          <p className="kpi-title">最近轮次结果</p>
-                          <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
-                        </div>
-                        <div>
-                          <p className="kpi-title">最近阶段</p>
-                          <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail.session.stage)}</p>
-                        </div>
-                      </div>
-                      {conversationMessageSummary.latestClarificationSummary || conversationDetail.runtime?.pendingQuestion ? (
-                        <div className="conversation-message-inline-card">
-                          <p className="kpi-title">当前待确认问题</p>
-                          <p className="message-content">
-                            {conversationDetail.runtime?.pendingQuestion ||
-                              conversationMessageSummary.latestClarificationSummary}
-                          </p>
-                          {conversationDetail.runtime?.pendingOptions?.length ? (
-                            <div className="conversation-message-summary-stats">
-                              {conversationDetail.runtime.pendingOptions.map((option) => (
-                                <span key={option} className="session-status">{option}</span>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <div className="conversation-message-summary-stats">
-                        <span className="session-status">用户消息 {conversationMessageSummary.userCount}</span>
-                        <span className="session-status">主回复 {conversationMessageSummary.assistantCount}</span>
-                        <span className="session-status">执行事件 {conversationMessageSummary.executionCount}</span>
-                        <span className={`session-status ${conversationMessageSummary.failureCount > 0 ? 'state-error' : ''}`}>
-                          失败事件 {conversationMessageSummary.failureCount}
-                        </span>
-                        {conversationMessageSummary.failedToolNames.slice(0, 3).map((toolName) => (
-                          <span key={toolName} className="session-status">{toolName}</span>
-                        ))}
-                      </div>
-                      {conversationMessageSummary.latestFailureSummary ? (
-                        <p className="panel-caption">
-                          最近阻塞: {conversationMessageSummary.latestFailureSummary}
-                          {conversationMessageSummary.latestFailureAt ? ` · ${formatDateTime(conversationMessageSummary.latestFailureAt)}` : ''}
-                        </p>
-                      ) : conversationMessageSummary.latestClarificationSummary ? (
-                        <p className="panel-caption">
-                          最近等待用户: {summarizeText(conversationMessageSummary.latestClarificationSummary, 140)}
-                        </p>
-                      ) : (
-                        <p className="panel-caption">最近主回复: {conversationMessageSummary.latestAssistantSummary}</p>
-                      )}
-                    </section>
-
-                    {conversationMessageView === 'interaction' ? (
-                      <div className="message-list message-list-large conversation-interaction-list">
-                        {conversationInteractionGroups.length === 0 ? (
-                          <p className="empty">无消息</p>
-                        ) : (
-                          conversationInteractionGroups.map((group, index) => {
-                            const latestStatus = [...group.statusMessages].reverse()[0];
-                            const latestFailure = [...group.failedMessages].reverse()[0];
-                            const latestPrimary = [...group.primaryMessages].reverse()[0];
-                            const completionSummary = completionSummaryFromGroup(group);
-                            const completedTools = group.executionMessages.filter(
-                              (message) => messageEventType(message) === 'tool_call_completed'
-                            ).length;
-                            const failedTools = group.executionMessages.filter(
-                              (message) => messageEventType(message) === 'tool_call_failed'
-                            ).length;
-                            const eventTypes = uniqueSorted(
-                              group.eventMessages.map((message) => messageEventType(message)).filter(Boolean)
-                            );
-                            const userTransferMessage = group.executionMessages.find((message) =>
-                              ['opencode_user_input', 'codex_user_input'].includes(String(message.messageType || ''))
-                            );
-                            return (
-                              <article key={group.id} className="message-item conversation-interaction-group">
-                                <div className="message-head conversation-interaction-head">
-                                  <div>
-                                    <strong>轮次 {index + 1}</strong>
-                                    <span className="panel-caption">
-                                      {formatDateTime(group.startedAt)}
-                                      {group.startedAt !== group.endedAt ? ` -> ${formatDateTime(group.endedAt)}` : ''}
-                                    </span>
-                                  </div>
-                                  <div className="trace-head">
-                                    <span className={`session-status ${group.outcome === '失败' ? 'state-error' : ''}`}>{group.outcome}</span>
-                                    {group.runId ? <span className="mono session-status">Run {group.runId.slice(0, 8)}</span> : null}
-                                    {group.sessionLocator ? <span className="mono session-status">{summarizeText(group.sessionLocator, 36)}</span> : null}
-                                  </div>
-                                </div>
-
-                                <div className="conversation-bubble-stack">
-                                  {group.primaryMessages.length > 0 ? (
-                                    group.primaryMessages.map((message) => (
-                                      <article
-                                        key={message.id}
-                                        className={`conversation-bubble conversation-bubble-${message.role === 'user' ? 'user' : isFailureMessage(message) ? 'error' : 'agent'}`}
-                                      >
-                                        <p className="message-head">
-                                          <strong>{conversationRoleLabel(message.role)}</strong>
-                                          <span>{conversationMessageTypeLabel(message.messageType)}</span>
-                                          <span>{formatDateTime(message.createdAt)}</span>
-                                        </p>
-                                        {messageSummaryLabel(message) ? (
-                                          <span className="conversation-bubble-tag">{messageSummaryLabel(message)}</span>
-                                        ) : null}
-                                        {String(message.messageType || '') !== 'clarification_request' ? (
-                                          <p className="message-content">{messageContentPreview(message, 360)}</p>
-                                        ) : null}
-                                        {String(message.messageType || '') === 'clarification_request' ? (
-                                          <div className="conversation-message-inline-card">
-                                            <p className="panel-caption">该轮次当前要求用户补充信息或确认下一步。</p>
-                                            <p className="message-content">{clarificationQuestion(message)}</p>
-                                            {clarificationOptions(message).length > 0 ? (
-                                              <div className="conversation-message-summary-stats">
-                                                {clarificationOptions(message).map((option) => (
-                                                  <span key={option} className="session-status">{option}</span>
-                                                ))}
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                        ) : null}
-                                        {String(message.messageType || '') === 'assistant_message' && completionSummary?.summary ? (
-                                          <div className="conversation-message-inline-card">
-                                            <p className="kpi-title">交付摘要</p>
-                                            <p className="message-content">{summarizeText(completionSummary.summary, 220)}</p>
-                                          </div>
-                                        ) : null}
-                                      </article>
-                                    ))
-                                  ) : latestFailure ? (
-                                    <article className="conversation-bubble conversation-bubble-error">
-                                      <p className="message-head">
-                                        <strong>系统阻塞</strong>
-                                        <span>{conversationMessageTypeLabel(latestFailure.messageType)}</span>
-                                        <span>{formatDateTime(latestFailure.createdAt)}</span>
-                                      </p>
-                                      <p className="message-content">{messageContentPreview(latestFailure, 360)}</p>
-                                      <p className="panel-caption">用户已进入本轮，但执行器未产出可读主回复。</p>
-                                    </article>
-                                  ) : (
-                                    <article className="conversation-bubble conversation-bubble-system">
-                                      <p className="message-head">
-                                        <strong>执行事件密集</strong>
-                                        <span>{group.eventMessages.length} 条 OpenCode 事件</span>
-                                      </p>
-                                      <p className="message-content">当前轮次主要是执行器事件流，暂无可直接呈现给用户的主回复。</p>
-                                    </article>
-                                  )}
-                                </div>
-
-                                <section className="sub-panel conversation-execution-summary">
-                                  <div className="panel-subtitle-row">
-                                    <h4 className="panel-subtitle">执行摘要</h4>
-                                    <div className="trace-head">
-                                      <span className="session-status">成功工具 {completedTools}</span>
-                                      <span className={`session-status ${failedTools > 0 ? 'state-error' : ''}`}>失败工具 {failedTools}</span>
-                                      <span className="session-status">OpenCode 事件 {group.eventMessages.length}</span>
-                                    </div>
-                                  </div>
-                                  <div className="detail-grid">
-                                    <div>
-                                      <p className="kpi-title">最近主结果</p>
-                                      <p>{latestPrimary ? messageContentPreview(latestPrimary, 160) : '暂无主回复'}</p>
-                                    </div>
-                                    <div>
-                                      <p className="kpi-title">最近状态</p>
-                                      <p>{latestStatus ? `${conversationMessageTypeLabel(latestStatus.messageType)} · ${messageContentPreview(latestStatus, 120)}` : '暂无状态消息'}</p>
-                                    </div>
-                                  </div>
-                                  {completionSummary ? (
-                                    <div className="conversation-message-inline-card">
-                                      <p className="kpi-title">完成摘要</p>
-                                      {completionSummary.summary ? (
-                                        <p className="message-content">{summarizeText(completionSummary.summary, 220)}</p>
-                                      ) : (
-                                        <p className="message-content">本轮已完成，但未返回摘要。</p>
-                                      )}
-                                      {completionSummary.verification.length > 0 ? (
-                                        <div className="conversation-message-summary-stats">
-                                          {completionSummary.verification.slice(0, 4).map((item) => (
-                                            <span key={item} className="session-status">{summarizeText(item, 40)}</span>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                      {completionSummary.deliverables.length > 0 ? (
-                                        <div className="conversation-deliverable-list">
-                                          {completionSummary.deliverables.slice(0, 4).map((item) => (
-                                            <article key={`${item.name}-${item.path}`} className="conversation-deliverable-item">
-                                              <strong>{item.name}</strong>
-                                              <span className="mono">{item.path || '-'}</span>
-                                            </article>
-                                          ))}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  ) : null}
-                                  <div className="conversation-message-summary-stats">
-                                    {group.toolNames.slice(0, 6).map((toolName) => (
-                                      <span key={toolName} className="session-status">{toolName}</span>
-                                    ))}
-                                    {eventTypes.slice(0, 4).map((eventType) => (
-                                      <span key={eventType} className="session-status">{eventType}</span>
-                                    ))}
-                                  </div>
-                                  {userTransferMessage ? (
-                                    <p className="panel-caption">
-                                      已转发执行器: {conversationMessageTypeLabel(userTransferMessage.messageType)}
-                                      {messageExecutor(userTransferMessage) ? ` · ${executorLabel(messageExecutor(userTransferMessage))}` : ''}
-                                    </p>
-                                  ) : null}
-                                  {latestFailure ? (
-                                    <p className="panel-caption">
-                                      最近失败: {messageToolName(latestFailure) || conversationMessageTypeLabel(latestFailure.messageType)} · {messageContentPreview(latestFailure, 180)}
-                                    </p>
-                                  ) : null}
-                                </section>
-
-                                <details className="sub-panel conversation-debug-drawer">
-                                  <summary>
-                                    查看执行细节 ({group.executionMessages.length + group.eventMessages.length + group.statusMessages.length})
-                                  </summary>
-                                  <div className="message-list conversation-debug-list">
-                                    {[...group.statusMessages, ...group.executionMessages, ...group.eventMessages].map((message) => (
-                                      <article key={message.id} className="message-item conversation-debug-item">
-                                        <p className="message-head">
-                                          <strong>{conversationMessageTypeLabel(message.messageType)}</strong>
-                                          <span>{conversationRoleLabel(message.role)}</span>
-                                          <span>{formatDateTime(message.createdAt)}</span>
-                                        </p>
-                                        {messageMetaSummary(message).length > 0 ? (
-                                          <p className="panel-caption">{messageMetaSummary(message).join(' · ')}</p>
-                                        ) : null}
-                                        <p className="message-content">{messageContentPreview(message, 260)}</p>
-                                        {message.metadata !== undefined ? (
-                                          <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre>
-                                        ) : null}
-                                      </article>
-                                    ))}
-                                  </div>
-                                </details>
-                              </article>
-                            );
-                          })
-                        )}
-                      </div>
-                    ) : (
-                      <div className="message-list message-list-large">
-                        {conversationRawMessages.length === 0 ? (
-                          <p className="empty">无消息</p>
-                        ) : (
-                          conversationRawMessages.map((message) => {
-                            const diagnosticLevel = messageDiagnosticLevel(message);
-                            const diagnosticSummary = messageDiagnosticSummary(message);
-                            return (
-                            <article key={message.id} className={`message-item conversation-raw-item conversation-raw-item-${diagnosticLevel}`}>
-                              <p className="message-head">
-                                <strong>{conversationRoleLabel(message.role)}</strong>
-                                <span className={traceLevelClass(diagnosticLevel)}>{diagnosticLevelLabel(diagnosticLevel)}</span>
-                                <span>{conversationMessageTypeLabel(message.messageType)}</span>
-                                <span>{formatDateTime(message.createdAt)}</span>
-                              </p>
-                              {messageMetaSummary(message).length > 0 ? (
-                                <p className="panel-caption">{messageMetaSummary(message).join(' · ')}</p>
-                              ) : null}
-                              {diagnosticSummary ? <p className="panel-caption">{diagnosticSummary}</p> : null}
-                              <p className="message-content">{messageContentPreview(message, 360)}</p>
-                              {metadataHighlights(message).length > 0 ? (
-                                <div className="conversation-message-summary-stats">
-                                  {metadataHighlights(message).map((item) => (
-                                    <span key={`${message.id}-${item}`} className="session-status">{item}</span>
-                                  ))}
-                                </div>
-                              ) : null}
-                              {String(message.messageType || '') === 'clarification_request' ? (
-                                <div className="conversation-message-inline-card">
-                                  <p className="kpi-title">待确认问题</p>
-                                  <p className="message-content">{clarificationQuestion(message)}</p>
-                                  <p className="panel-caption">
-                                    可选项: {clarificationOptionsSummary(message)}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {message.metadata !== undefined ? (
-                                <details className="conversation-debug-drawer">
-                                  <summary>查看 metadata JSON</summary>
-                                  <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre>
-                                </details>
-                              ) : null}
-                            </article>
-                          )})
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-
-                {conversationWorkspaceTab === 'llm' ? (
-                  <div className="llm-trace-list">
-                    {llmItems.length === 0 ? (
-                      <p className="empty">无 LLM 调用轨迹</p>
-                    ) : (
-                      llmItems.map((item) => {
-                        const requestSize = Object.keys(item.request || {}).length;
-                        const responseSize = Object.keys(item.response || {}).length;
-                        return (
-                          <details key={item.id} className="sub-panel llm-trace-item">
-                            <summary>
-                              <div className="trace-head">
-                                <strong>{item.stage}</strong>
-                                <span className="mono">{item.source}</span>
-                                <span>{item.inferred ? '推断还原' : '真实命令'}</span>
-                                <span>{formatDateTime(item.createdAt)}</span>
+            <div className="conversation-index-toolbar">
+              <div className="runtime-filter-grid conversation-index-filter-grid">
+                <label className="state-filter-field">
+                  <span>搜索会话</span>
+                  <input
+                    type="search"
+                    placeholder="sessionId / 标题 / 阶段 / 待确认问题"
+                    value={conversationSearchQuery}
+                    onChange={(event) => setConversationSearchQuery(event.target.value)}
+                  />
+                </label>
+                <label className="state-filter-field">
+                  <span>阶段</span>
+                  <select value={conversationStageFilter} onChange={(event) => setConversationStageFilter(event.target.value)}>
+                    <option value="all">全部阶段</option>
+                    {conversationStageOptions.map((stage) => (
+                      <option key={stage} value={stage}>
+                        {conversationStageLabel(stage)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="secondary-btn conversation-index-reset-btn"
+                  onClick={() => {
+                    setConversationSearchQuery('');
+                    setConversationStatusFilter('all');
+                    setConversationStageFilter('all');
+                  }}
+                >
+                  重置筛选
+                </button>
+              </div>
+              <p className="panel-caption">
+                按更新时间排序 · 当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
+              </p>
+            </div>
+            <div className="table-wrap conversation-index-table-wrap">
+              <table className="conversation-index-table">
+                <colgroup>
+                  <col style={{ width: '46%' }} />
+                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '14%' }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>会话</th>
+                    <th>当前进度</th>
+                    <th>最近活跃</th>
+                    <th className="runtime-col-actions">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conversationSessions.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="empty">暂无对话会话。</td>
+                    </tr>
+                  ) : filteredConversationSessions.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="empty">当前筛选条件下无会话。</td>
+                    </tr>
+                  ) : (
+                    filteredConversationSessions.map((session) => {
+                      const isSelected = selectedSessionId === session.id;
+                      const stageLabel = conversationStageLabel(session.stage);
+                      const statusText = statusLabel(session.status);
+                      const stageDisplay = stageLabel !== '-' && stageLabel !== statusText ? stageLabel : null;
+                      const pendingSummary = session.pendingQuestion
+                        ? summarizeText(session.pendingQuestion, 120)
+                        : session.status === 'waiting_user'
+                          ? '等待用户补充信息'
+                          : session.status === 'failed'
+                            ? '存在阻塞错误，请查看详情'
+                            : session.status === 'completed'
+                              ? '对话已收口'
+                              : '暂无待确认问题';
+                      const progressMeta = session.pendingOptions?.length
+                        ? `${session.pendingOptions.length} 个待确认选项`
+                        : session.status === 'in_progress'
+                          ? '会话正在推进'
+                          : session.status === 'waiting_user'
+                            ? '等待用户确认'
+                            : session.status === 'failed'
+                              ? '需人工介入'
+                              : '流程已收口';
+                      return (
+                        <tr key={session.id} className={`${isSelected ? 'selected-row' : ''} conversation-index-row`} onClick={() => selectConversationSession(session.id)}>
+                          <td>
+                            <div className="runtime-primary-cell conversation-index-primary-cell">
+                              <p className="conversation-index-title" title={session.title || session.id}>{session.title || session.id}</p>
+                              <p className="conversation-index-summary">{pendingSummary}</p>
+                              <div className="runtime-id-row conversation-index-id-row">
+                                <span className="mono mono-truncate" title={session.id}>{truncateMiddle(session.id, 10, 8)}</span>
+                                <button
+                                  type="button"
+                                  className="copy-btn"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void copyRuntimeField('会话 ID', session.id);
+                                  }}
+                                >
+                                  复制
+                                </button>
                               </div>
-                              <p className="trace-meta">request {requestSize} 字段 · response {responseSize} 字段</p>
-                            </summary>
-                            <p className="kpi-title">请求内容</p>
-                            <pre className="json-block">{toJsonText(item.request)}</pre>
-                            <p className="kpi-title">返回内容</p>
-                            <pre className="json-block">{toJsonText(item.response)}</pre>
-                          </details>
-                        );
-                      })
-                    )}
-                  </div>
-                ) : null}
-                </div>
-              </div>
-            )}
-          </article>
-
-          <aside className="conversation-inspector-stack">
-            <article className="panel conversation-inspector-panel">
-              <div className="panel-header panel-header-stack">
-                <div>
-                  <p className="section-tag">关联信息</p>
-                  <h2>运行绑定与关联信息</h2>
-                </div>
-                <span className="panel-caption">OpenCode / KVM / Sandbox / OSAC</span>
-              </div>
-
-              {!conversationDetail ? (
-                <p className="empty">选择会话后，这里会显示运行绑定、KVM 摘要和 Sandbox 信息。</p>
-              ) : (
-                <div className="conversation-inspector-content">
-                  {conversationInfraError ? (
-                    <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
-                  ) : null}
-                  <article className="sub-panel">
-                    <div className="panel-header">
-                      <h3>当前会话</h3>
-                      <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
-                    </div>
-                    <div className="detail-kv-list">
-                      <div>
-                        <span>阶段</span>
-                        <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
-                      </div>
-                      <div>
-                        <span>OpenCode ID</span>
-                        <strong className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</strong>
-                      </div>
-                      <div>
-                        <span>待补充问题</span>
-                        <strong>{conversationDetail.runtime?.pendingQuestion || '-'}</strong>
-                      </div>
-                      <div>
-                        <span>挂起原因</span>
-                        <strong>{conversationDetail.runtime?.pendingResume?.reason || '-'}</strong>
-                      </div>
-                    </div>
-                  </article>
-
-                  <article className="sub-panel">
-                    <div className="panel-header">
-                      <h3>KVM / Sandbox 摘要</h3>
-                    </div>
-                    <div className="detail-kv-list">
-                      <div>
-                        <span>编排 ID</span>
-                        {conversationDetail.runtime?.orchestratorSessionId ? (
-                          <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
-                            {conversationDetail.runtime.orchestratorSessionId}
-                          </button>
-                        ) : (
-                          <strong className="mono">-</strong>
-                        )}
-                      </div>
-                      <div>
-                        <span>VM 名称</span>
-                        <strong className="mono">{conversationDetail.runtime?.vmName || '-'}</strong>
-                      </div>
-                      <div>
-                        <span>主 Sandbox</span>
-                        {primaryEnvironmentSandboxId ? (
-                          <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
-                            {primaryEnvironmentSandboxId}
-                          </button>
-                        ) : (
-                          <strong className="mono">-</strong>
-                        )}
-                      </div>
-                      <div>
-                        <span>Executor</span>
-                        <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
-                      </div>
-                      <div>
-                        <span>归档状态</span>
-                        <strong>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</strong>
-                      </div>
-                      <div>
-                        <span>关联记录数</span>
-                        <strong>{relatedEnvironments.length}</strong>
-                      </div>
-                    </div>
-                    {primaryEnvironmentTaskSessionId ? (
-                      <p className="session-meta">
-                        主记录会话：
-                        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(primaryEnvironmentTaskSessionId)}>
-                          {primaryEnvironmentTaskSessionId}
-                        </button>
-                      </p>
-                    ) : null}
-                    {primaryEnvironmentReplacementId ? (
-                      <p className="session-meta">
-                        已由{' '}
-                        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
-                          {primaryEnvironmentReplacementId}
-                        </button>{' '}
-                        接管
-                      </p>
-                    ) : null}
-                  </article>
-
-                  <article className="sub-panel">
-                    <div className="panel-header panel-header-stack">
-                      <div>
-                        <h3>Sandbox 分组</h3>
-                        <span className="panel-caption">{conversationGovernanceFilter ? `当前筛选：${conversationGovernanceFilter}` : `共 ${governanceGroups.length} 类原因`}</span>
-                      </div>
-                      {conversationGovernanceFilter ? (
-                        <button type="button" className="secondary-btn" onClick={() => setConversationGovernanceFilter(null)}>
-                          清除
-                        </button>
-                      ) : null}
-                    </div>
-                    {governanceGroups.length === 0 ? (
-                      <p className="empty">当前没有额外关联的 Sandbox 环境记录。</p>
-                    ) : (
-                      <div className="conversation-sandbox-governance-grid">
-                        {governanceGroups.map((group) => (
-                          <button
-                            key={group.key}
-                            type="button"
-                            className={`sub-panel conversation-sandbox-card conversation-sandbox-governance-card conversation-sandbox-governance-filter ${conversationGovernanceFilter === group.reason ? 'active' : ''}`}
-                            onClick={() => setConversationGovernanceFilter((prev) => (prev === group.reason ? null : group.reason))}
-                          >
-                            <div className="trace-head">
-                              <strong>{group.reason}</strong>
-                              <span className="session-status session-status-governance">分组</span>
                             </div>
-                            <p className="trace-meta">共 {group.items.length} 条 · 最近更新时间 {formatDateTime(group.latestUpdatedAt)}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {finalVisibleRelatedEnvironmentGroups.length ? (
-                      <div className="conversation-sandbox-list">
-                        {finalVisibleRelatedEnvironmentGroups.map((group) => {
-                          const groupSelected = conversationEnvironmentGroupFilter === group.key;
-                          return (
-                            <article key={group.key} className={`sub-panel conversation-sandbox-card conversation-sandbox-group-filter ${groupSelected ? 'active' : ''}`}>
+                          </td>
+                          <td>
+                            <div className="conversation-index-status-stack">
+                              <div className="action-inline conversation-index-status-row">
+                                <span className={stateClassName(session.status)}>{statusText}</span>
+                                {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
+                              </div>
+                              <p className="session-meta">{progressMeta}</p>
+                            </div>
+                          </td>
+                          <td>
+                            <div>{formatDateTime(session.updatedAt)}</div>
+                            <p className="session-meta">创建于 {formatDateTime(session.createdAt)}</p>
+                          </td>
+                          <td className="runtime-col-actions">
+                            <div className="action-inline runtime-actions conversation-index-actions" onClick={(event) => event.stopPropagation()}>
                               <button
                                 type="button"
-                                className="conversation-sandbox-group-head"
-                                onClick={() => setConversationEnvironmentGroupFilter((prev) => (prev === group.key ? null : group.key))}
+                                className={`secondary-btn conversation-index-detail-btn ${isSelected ? 'active' : ''}`}
+                                onClick={() => openConversationDialog(session.id, 'overview')}
                               >
-                                <div className="trace-head">
-                                  <strong>
-                                    {sandboxRuntimeStateLabel(group.status)} · {executorLabel(group.executor)}
-                                  </strong>
-                                  <span className="mono">{formatDateTime(group.latestUpdatedAt)}</span>
-                                </div>
-                                <p className="trace-meta">
-                                  归档: {archiveStatusLabel(group.archiveStatus)} · 原因: {group.governanceReason} · 共 {group.items.length} 条
-                                </p>
+                                查看详情
                               </button>
-                              <details open={groupSelected}>
-                                <summary>{groupSelected ? '收起该组 Sandbox' : '查看该组 Sandbox'}</summary>
-                                <div className="conversation-sandbox-list">
-                                  {group.items.map((environment) => {
-                                    const sandboxId = environmentSandboxId(environment);
-                                    const taskSessionId = environmentTaskSessionId(environment);
-                                    return (
-                                      <article key={environment.id} className="sub-panel conversation-sandbox-card">
-                                        <div className="trace-head">
-                                          <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
-                                          <span className="mono">{formatDateTime(environment.updatedAt)}</span>
-                                        </div>
-                                        <p className="trace-meta">
-                                          Sandbox：
-                                          {sandboxId ? (
-                                            <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
-                                              {sandboxId}
-                                            </button>
-                                          ) : (
-                                            '-'
-                                          )}
-                                        </p>
-                                        <p className="trace-meta">
-                                          会话：
-                                          {taskSessionId ? (
-                                            <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(taskSessionId)}>
-                                              {taskSessionId}
-                                            </button>
-                                          ) : (
-                                            '-'
-                                          )}
-                                        </p>
-                                      </article>
-                                    );
-                                  })}
-                                </div>
-                              </details>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </article>
-
-                  <details className="sub-panel conversation-osac-panel">
-                    <summary>
-                      <div className="panel-header panel-header-stack">
-                        <div>
-                          <h3>OSAC / OpenCode</h3>
-                          <span className="panel-caption">{osacMessages.length} 条消息</span>
-                        </div>
-                      </div>
-                    </summary>
-                    <div className="conversation-osac-panel-body">
-                      <button type="button" className="secondary-btn" onClick={() => setShowOpencodePayload((prev) => !prev)}>
-                        {showOpencodePayload ? '隐藏 payload' : '显示 payload'}
-                      </button>
-                      <div className="trace-list conversation-osac-list">
-                        {osacMessages.length === 0 ? (
-                          <p className="empty">无 OSAC 消息</p>
-                        ) : (
-                          osacMessages.map((message, index) => {
-                            const payload = (message.payload || {}) as Record<string, unknown>;
-                            const summary = summarizeText(
-                              [
-                                typeof payload.eventType === 'string' ? payload.eventType : '',
-                                typeof payload.message === 'string' ? payload.message : '',
-                                typeof payload.status === 'string' ? payload.status : '',
-                                typeof payload.output === 'string' ? payload.output : '',
-                              ].filter(Boolean).join(' | '),
-                              220
-                            );
-                            const payloadTimestamp =
-                              typeof payload.timestamp === 'string'
-                                ? payload.timestamp
-                                : typeof payload.time === 'string'
-                                  ? payload.time
-                                  : undefined;
-                            return (
-                              <article key={`${message.type}-${index}`} className="trace-item">
-                                <p className="trace-head">
-                                  <span className="trace-level info">osac</span>
-                                  <strong>{message.type}</strong>
-                                  <span>{formatDateTime(payloadTimestamp)}</span>
-                                </p>
-                                {summary ? <p className="message-content">{summary}</p> : null}
-                                {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
-                              </article>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  </details>
-
-                  <details className="sub-panel">
-                    <summary>KVM / Sandbox 原始状态</summary>
-                    <pre className="json-block">
-                      {toJsonText({
-                        kvm: {
-                          orchestratorSessionId: conversationDetail.trace?.kvm.orchestratorSessionId,
-                          vmName: conversationDetail.trace?.kvm.vmName,
-                          quota: conversationDetail.trace?.kvm.quota,
-                          session: conversationDetail.trace?.kvm.session,
-                          sessionVm: conversationDetail.trace?.kvm.sessionVm,
-                          sandbox: conversationDetail.trace?.kvm.sandbox,
-                          sandboxIp: conversationDetail.trace?.kvm.sandboxIp,
-                          sandboxPorts: conversationDetail.trace?.kvm.sandboxPorts,
-                          vmDetail: conversationDetail.trace?.kvm.vmDetail,
-                          vmMetrics: conversationDetail.trace?.kvm.vmMetrics,
-                          errors: conversationDetail.trace?.kvm.errors,
-                        },
-                        sandbox: {
-                          primaryEnvironment,
-                          relatedEnvironments,
-                        },
-                      })}
-                    </pre>
-                  </details>
-                </div>
-              )}
-            </article>
-          </aside>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </article>
         </section>
       </main>
+      {conversationDialog ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog}>
+          <div
+            className="modal-card conversation-dialog-modal"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="section-tag">Dialogue</p>
+                <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
+                <p className="panel-copy">
+                  统一会话详情工作台：在同一 popup 中查看概览、交互回放、关联信息、详细日志与状态流转。
+                </p>
+              </div>
+              <div className="conversation-dialog-actions">
+                {conversationDialogDetail ? (
+                  <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
+                    下载会话
+                  </button>
+                ) : null}
+                <button type="button" className="secondary-btn" onClick={closeConversationDialog}>
+                  关闭
+                </button>
+              </div>
+            </div>
+
+            {conversationDialogLoading ? (
+              <div className="modal-body conversation-dialog-body">
+                <p className="empty">正在加载会话内容...</p>
+              </div>
+            ) : (
+              <>
+                <div className="button-grid modal-tab-grid conversation-dialog-tab-grid">
+                  {[
+                    { key: 'overview', label: '概览' },
+                    { key: 'interaction', label: '交互回放' },
+                    { key: 'infra', label: '关联信息' },
+                    { key: 'raw', label: `详细日志 (${conversationDetailedLogs.counts.total})` },
+                    { key: 'transitions', label: `状态流转 (${conversationTabCounts.transitions})` },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className={`inspector-tab-card ${conversationDialogTab === item.key ? 'active' : ''}`}
+                      onClick={() => setConversationDialogTab(item.key as ConversationDialogTab)}
+                    >
+                      <span className="inspector-tab-card-label">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="modal-body conversation-dialog-body">
+                  {conversationDialogTab === 'overview' ? renderConversationContentOverview() : null}
+                  {conversationDialogTab === 'interaction' ? (
+                    <>
+                      {renderConversationReplayPanel()}
+                    </>
+                  ) : null}
+                  {conversationDialogTab === 'infra' ? renderConversationInfraPanel() : null}
+                  {conversationDialogTab === 'raw' ? renderConversationDetailedLogsPanel() : null}
+                  {conversationDialogTab === 'transitions' ? renderConversationTransitionsPanel() : null}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+      </>
     );
   };
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
@@ -60,6 +61,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -98,6 +100,8 @@ test('auth-only task-creation routes reject anonymous access', async () => {
     { method: 'PUT', path: '/api/task-creation/codex/runtime-config', body: { model: 'gpt-5.4' } },
     { method: 'POST', path: '/api/task-creation/sessions', body: { title: 'Session' } },
     { method: 'POST', path: '/api/task-creation/sessions/draft', body: { title: 'Draft' } },
+    { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/tree' },
+    { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/file?path=src/index.ts' },
   ];
 
   try {
@@ -136,12 +140,12 @@ test('skills and codex runtime routes bind requests to current user', async () =
 
   try {
     const skillsResponse = await fetch(`${server.origin}/api/task-creation/skills`, {
-      headers: { 'x-user-id': 'user-auth-1' },
+      headers: { 'x-test-user-id': 'user-auth-1' },
     });
     assert.equal(skillsResponse.status, 200);
 
     const getConfigResponse = await fetch(`${server.origin}/api/task-creation/codex/runtime-config`, {
-      headers: { 'x-user-id': 'user-auth-1' },
+      headers: { 'x-test-user-id': 'user-auth-1' },
     });
     assert.equal(getConfigResponse.status, 200);
 
@@ -149,7 +153,7 @@ test('skills and codex runtime routes bind requests to current user', async () =
       method: 'PUT',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'user-auth-1',
+        'x-test-user-id': 'user-auth-1',
       },
       body: JSON.stringify({ model: 'gpt-5.4-mini' }),
     });
@@ -187,7 +191,7 @@ test('owner-guarded task session routes reject foreign users', async () => {
         method: item.method,
         headers: {
           ...(item.body ? { 'content-type': 'application/json' } : {}),
-          'x-user-id': 'foreign-user',
+          'x-test-user-id': 'foreign-user',
         },
         body: item.body ? JSON.stringify(item.body) : undefined,
       });
@@ -221,7 +225,7 @@ test('intent and delete routes work for the owner', async () => {
 
   try {
     const intentResponse = await fetch(`${server.origin}/api/task-creation/sessions/s-2/intent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const intentPayload = await intentResponse.json();
     assert.equal(intentResponse.status, 200);
@@ -229,7 +233,7 @@ test('intent and delete routes work for the owner', async () => {
 
     const deleteResponse = await fetch(`${server.origin}/api/task-creation/sessions/s-2`, {
       method: 'DELETE',
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const deletePayload = await deleteResponse.json();
     assert.equal(deleteResponse.status, 200);
@@ -273,7 +277,7 @@ test('session-ownership protected attachment, deliverable, and deployment routes
         method: item.method,
         headers: {
           ...(item.headers || {}),
-          'x-user-id': 'foreign-user',
+          'x-test-user-id': 'foreign-user',
         },
         body: item.body,
       });

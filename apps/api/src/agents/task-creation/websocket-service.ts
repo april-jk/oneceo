@@ -23,6 +23,8 @@ import { sandboxAgentProvisionService } from '../../services/sandbox-agent-provi
 import { taskCreationSessionDAO } from '../../db/dao';
 import { directModeEntryService } from '../../services/direct-mode-entry-service';
 import { getDirectModeDeploymentErrorMessage } from '../../services/direct-mode-deployment-capability-service';
+import { appAuthService } from '../../services/app-auth-service';
+import { APP_SESSION_COOKIE_NAME } from '../../utils/auth-session';
 
 function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error || '');
@@ -42,10 +44,52 @@ function normalizeDirectOpencodeErrorMessage(error: unknown): string {
   return raw || getPublicErrorMessage('OpenCode 执行失败');
 }
 
+type WebSocketClientAuthContext = {
+  sessionCookiePresent: boolean;
+  resolvedUserId: string | null;
+  resolveStatus: 'pending' | 'authenticated' | 'anonymous' | 'error';
+  resolvedAt: number | null;
+};
+
+function requiresAuthenticatedUser(messageType: unknown): boolean {
+  const normalized = String(messageType || '').trim().toLowerCase();
+  return (
+    normalized === 'user_input' ||
+    normalized === 'user_response' ||
+    normalized === 'auto_plan' ||
+    normalized === 'opencode_input'
+  );
+}
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readCookieFromHeader(cookieHeader: unknown, name: string): string | null {
+  const header = asText(cookieHeader);
+  if (!header) return null;
+  const items = header.split(/;\s*/g).filter(Boolean);
+  for (const item of items) {
+    const index = item.indexOf('=');
+    if (index <= 0) continue;
+    const key = item.slice(0, index).trim();
+    if (key !== name) continue;
+    const rawValue = item.slice(index + 1);
+    try {
+      return decodeURIComponent(rawValue);
+    } catch {
+      return rawValue;
+    }
+  }
+  return null;
+}
+
 export class TaskCreationWebSocketService {
   private wss: WebSocketServer | null = null;
   private clients: Map<string, WebSocket> = new Map();
   private services: Map<string, TaskCreationService> = new Map();
+  private clientAuthContext: Map<string, WebSocketClientAuthContext> = new Map();
+  private clientAuthResolvePromises: Map<string, Promise<void>> = new Map();
   private sessionByClient: Map<string, string> = new Map();
   private sessionCleanupTimers: Map<string, NodeJS.Timeout> = new Map();
   private clarificationTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -105,6 +149,12 @@ export class TaskCreationWebSocketService {
     this.wss.on('connection', (ws: WebSocket, req: any) => {
       const clientId = this.generateClientId();
       this.clients.set(clientId, ws);
+      this.clientAuthContext.set(clientId, {
+        sessionCookiePresent: false,
+        resolvedUserId: null,
+        resolveStatus: 'pending',
+        resolvedAt: null,
+      });
       const existingTimer = this.sessionCleanupTimers.get(clientId);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -112,6 +162,15 @@ export class TaskCreationWebSocketService {
       }
 
       console.log(`[WebSocket] 客户端连接: ${clientId}`);
+      const authResolvePromise = this.resolveClientAuthContext(clientId, req)
+        .catch(() => undefined)
+        .finally(() => {
+          const latest = this.clientAuthResolvePromises.get(clientId);
+          if (latest === authResolvePromise) {
+            this.clientAuthResolvePromises.delete(clientId);
+          }
+        });
+      this.clientAuthResolvePromises.set(clientId, authResolvePromise);
 
       // 创建任务创建服务实例
       const service = new TaskCreationService({
@@ -164,6 +223,8 @@ export class TaskCreationWebSocketService {
         console.log(`[WebSocket] 客户端断开: ${clientId}`);
         this.clients.delete(clientId);
         this.services.delete(clientId);
+        this.clientAuthContext.delete(clientId);
+        this.clientAuthResolvePromises.delete(clientId);
         this.scheduleSessionCleanup(clientId);
       });
 
@@ -184,6 +245,16 @@ export class TaskCreationWebSocketService {
     const service = this.services.get(clientId);
     if (!service) {
       throw new Error('服务未找到');
+    }
+
+    const authContext = await this.ensureClientAuthResolved(clientId);
+    const resolvedUserId = asText(authContext?.resolvedUserId);
+    if (requiresAuthenticatedUser(message.type) && !resolvedUserId) {
+      this.sendToClient(clientId, {
+        type: 'error' as any,
+        message: getPublicErrorMessage('当前未登录或会话已过期，请刷新后重新登录'),
+      });
+      return;
     }
 
     const altusMode = String((message.metadata as any)?.altusMode || '').trim();
@@ -470,6 +541,8 @@ export class TaskCreationWebSocketService {
     }
     const wasWaitingForUser = sessionId ? await this.isWaitingForUser(sessionId) : false;
     const pendingResume = sessionId ? await this.getPendingResume(sessionId) : null;
+    const authContext = await this.ensureClientAuthResolved(clientId);
+    const resolvedUserId = authContext?.resolvedUserId || undefined;
     if (sessionId) {
       this.sessionByClient.set(clientId, sessionId);
       await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: 'collecting' });
@@ -513,7 +586,7 @@ export class TaskCreationWebSocketService {
           getCancelReason: () => this.activeManagedRuns.get(sessionId)?.cancelReason,
           setPhase: (phase) => this.updateManagedRunPhase(sessionId, phase),
         });
-        await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput);
+        await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput, resolvedUserId);
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
@@ -550,7 +623,7 @@ export class TaskCreationWebSocketService {
           getCancelReason: () => this.activeManagedRuns.get(sessionId)?.cancelReason,
           setPhase: (phase) => this.updateManagedRunPhase(sessionId, phase),
         });
-        await service.createTask(resumedInput, undefined, sessionId, 'user_response');
+        await service.createTask(resumedInput, resolvedUserId, sessionId, 'user_response');
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
         return;
@@ -575,7 +648,7 @@ export class TaskCreationWebSocketService {
       }
       await service.createTask(
         mergedReplayInput,
-        undefined,
+        resolvedUserId,
         sessionId,
         (message.type as any) || 'user_input',
         message.metadata
@@ -721,6 +794,8 @@ export class TaskCreationWebSocketService {
     const clientMessageKey = String((message.metadata as any)?.messageKey || '').trim() || undefined;
     const prePersistedUserInput = Boolean((message.metadata as any)?.prePersistedUserInput);
     const persistLegacyUserInput = Boolean((message.metadata as any)?.persistLegacyUserInput);
+    const authContext = await this.ensureClientAuthResolved(clientId);
+    const resolvedUserId = authContext?.resolvedUserId || undefined;
     if (taskSessionId && this.consumeCancelledClientMessageKey(taskSessionId, clientMessageKey)) {
       return;
     }
@@ -743,7 +818,13 @@ export class TaskCreationWebSocketService {
         try {
           const existing = await taskCreationSessionDAO.getSession(taskSessionId);
           if (!existing) {
-            await taskCreationSessionDAO.createSession({ id: taskSessionId, status: 'in_progress' });
+            await taskCreationSessionDAO.createSession({
+              id: taskSessionId,
+              userId: resolvedUserId,
+              status: 'in_progress',
+            });
+          } else if (resolvedUserId) {
+            await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, resolvedUserId);
           }
           await taskCreationSessionDAO.addMessage({
             id: randomUUID(),
@@ -776,7 +857,13 @@ export class TaskCreationWebSocketService {
       try {
         const existingDbSession = await taskCreationSessionDAO.getSession(taskSessionId);
         if (!existingDbSession) {
-          await taskCreationSessionDAO.createSession({ id: taskSessionId, status: 'in_progress' });
+          await taskCreationSessionDAO.createSession({
+            id: taskSessionId,
+            userId: resolvedUserId,
+            status: 'in_progress',
+          });
+        } else if (resolvedUserId) {
+          await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, resolvedUserId);
         }
       } catch (error) {
         console.warn('[OPENCODE_INPUT_SESSION_DB_ENSURE_FAILED]', error);
@@ -988,6 +1075,43 @@ export class TaskCreationWebSocketService {
     return `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
+  private async ensureClientAuthResolved(clientId: string): Promise<WebSocketClientAuthContext | null> {
+    const resolvePromise = this.clientAuthResolvePromises.get(clientId);
+    if (resolvePromise) {
+      await resolvePromise.catch(() => null);
+    }
+    return this.clientAuthContext.get(clientId) || null;
+  }
+
+  private async resolveClientAuthContext(clientId: string, req: any) {
+    const context = this.clientAuthContext.get(clientId);
+    if (!context) return;
+
+    const sessionToken = readCookieFromHeader(req?.headers?.cookie, APP_SESSION_COOKIE_NAME);
+    context.sessionCookiePresent = Boolean(sessionToken);
+
+    if (!sessionToken) {
+      context.resolveStatus = 'anonymous';
+      context.resolvedAt = Date.now();
+      return;
+    }
+
+    try {
+      const resolved = await appAuthService.resolveUserBySessionToken(sessionToken);
+      const latest = this.clientAuthContext.get(clientId);
+      if (!latest) return;
+      latest.resolvedAt = Date.now();
+      latest.resolvedUserId = asText(resolved?.user?.id) || null;
+      latest.resolveStatus = latest.resolvedUserId ? 'authenticated' : 'anonymous';
+    } catch (error) {
+      const latest = this.clientAuthContext.get(clientId);
+      if (!latest) return;
+      latest.resolvedAt = Date.now();
+      latest.resolvedUserId = null;
+      latest.resolveStatus = 'error';
+    }
+  }
+
   private scheduleSessionCleanup(clientId: string) {
     const sessionId = this.sessionByClient.get(clientId);
     if (!sessionId) {
@@ -1022,6 +1146,8 @@ export class TaskCreationWebSocketService {
       this.wss.close();
       this.clients.clear();
       this.services.clear();
+      this.clientAuthContext.clear();
+      this.clientAuthResolvePromises.clear();
       this.sessionByClient.clear();
       for (const timer of this.sessionCleanupTimers.values()) {
         clearTimeout(timer);

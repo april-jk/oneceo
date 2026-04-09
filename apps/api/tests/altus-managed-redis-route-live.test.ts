@@ -4,6 +4,7 @@ import { after, beforeEach, test } from 'node:test';
 import express from 'express';
 import Redis from 'ioredis';
 import altusManagedRoutes from '../src/routes/altus-managed-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { altusManagedSetupService } from '../src/services/altus-managed-setup-service';
@@ -85,6 +86,7 @@ function sessionRecord(sessionId: string, userId = 'owner-user') {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/altus-managed', altusManagedRoutes);
   const sockets = new Set<Socket>();
 
@@ -246,7 +248,7 @@ test('live route: POST /sessions/:sessionId/runs writes run coordination keys an
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': ids.userId,
+        'x-test-user-id': ids.userId,
       },
       body: JSON.stringify({ content: 'start managed run' }),
     });
@@ -311,7 +313,7 @@ test('live route: GET /sessions/:sessionId/runs/latest reconciles recovery snaps
     assert.equal(await inspector.get(redisKeyspace.runRecovery(scope)), null);
 
     const response = await testFetch(`${server.origin}/api/altus-managed/sessions/${ids.sessionId}/runs/latest`, {
-      headers: { 'x-user-id': ids.userId },
+      headers: { 'x-test-user-id': ids.userId },
     });
     const payload = await response.json();
     assert.equal(response.status, 200);
@@ -376,7 +378,7 @@ test('live route: GET /runs/:runId/stream replays redis run stream before db fal
     assert.equal(rows.length, 1);
 
     const response = await testFetch(`${server.origin}/api/altus-managed/runs/${ids.runId}/stream?afterSequence=2`, {
-      headers: { 'x-user-id': ids.userId },
+      headers: { 'x-test-user-id': ids.userId },
     });
     assert.equal(response.status, 200);
     assert.ok(response.body);
@@ -407,7 +409,7 @@ test('live route: GET /runs/:runId/stream replays redis run stream before db fal
   }
 });
 
-test('live route: GET /runs/:runId/stream accepts query userId when EventSource cannot send auth header', async () => {
+test('live route: GET /runs/:runId/stream rejects missing auth even when query userId is present', async () => {
   const server = await startServer();
   const ids = buildIds('eeeeeeeeeeee');
   const scope = buildScope(ids.sessionId, ids.runId, ids.userId);
@@ -447,36 +449,15 @@ test('live route: GET /runs/:runId/stream accepts query userId when EventSource 
     const response = await testFetch(
       `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?afterSequence=3&userId=${ids.userId}`
     );
-    assert.equal(response.status, 200);
-    assert.ok(response.body);
-
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let text = '';
-
-    try {
-      for (let i = 0; i < 4; i += 1) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        text += decoder.decode(chunk.value, { stream: true });
-        if (text.includes('from query user id auth')) {
-          break;
-        }
-      }
-    } finally {
-      await response.body?.cancel().catch(() => undefined);
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
-
-    assert.match(text, /from query user id auth/);
-    assert.match(text, /event: assistant_message/);
+    const payload = await response.json();
+    assert.equal(response.status, 401);
+    assert.equal(payload.success, false);
   } finally {
     await server.close();
   }
 });
 
-test('live route: GET /runs/:runId/stream rejects mismatched query userId', async () => {
+test('live route: GET /runs/:runId/stream rejects foreign authenticated user even if query userId matches owner', async () => {
   const server = await startServer();
   const ids = buildIds('ffffffffffff');
   runDaoAny.getRun = async () => ({
@@ -494,7 +475,10 @@ test('live route: GET /runs/:runId/stream rejects mismatched query userId', asyn
 
   try {
     const response = await testFetch(
-      `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?userId=other-user`
+      `${server.origin}/api/altus-managed/runs/${ids.runId}/stream?userId=${ids.userId}`,
+      {
+        headers: { 'x-test-user-id': 'other-user' },
+      }
     );
     assert.equal(response.status, 403);
   } finally {
@@ -524,7 +508,7 @@ test('live route: POST /runs/:runId/stop writes redis stop request', async () =>
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': ids.userId,
+        'x-test-user-id': ids.userId,
       },
       body: JSON.stringify({ reason: 'user_interrupt' }),
     });

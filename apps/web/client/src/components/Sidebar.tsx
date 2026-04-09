@@ -169,6 +169,7 @@ export default function Sidebar({
   const [deleteSubmitting, setDeleteSubmitting] = React.useState(false);
   const listLoadingRef = React.useRef(false);
   const lastListFetchRef = React.useRef(0);
+  const lastListErrorToastAtRef = React.useRef(0);
   const LIST_POLL_MS = 30000;
 
   const mapSessionTask = React.useCallback(
@@ -233,8 +234,17 @@ export default function Sidebar({
         const mapped = sortSessionTasks(list.map(mapSessionTask));
         setSessionTasks(mapped);
         lastListFetchRef.current = Date.now();
-      } catch {
-        // ignore
+      } catch (error) {
+        console.error("[Sidebar] 会话列表加载失败:", error);
+        const now = Date.now();
+        if (now - lastListErrorToastAtRef.current > 8000) {
+          lastListErrorToastAtRef.current = now;
+          const message =
+            error instanceof Error && error.message.trim()
+              ? error.message.trim()
+              : "会话列表加载失败，请稍后重试";
+          toast.error(message);
+        }
       } finally {
         listLoadingRef.current = false;
       }

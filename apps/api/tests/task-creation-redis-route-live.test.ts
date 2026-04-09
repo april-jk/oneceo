@@ -4,6 +4,7 @@ import { after, beforeEach, test } from 'node:test';
 import express from 'express';
 import Redis from 'ioredis';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskSessionWorkspaceCacheDAO } from '../src/db/dao/task-session-workspace-cache.dao';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../src/db/dao';
@@ -49,8 +50,20 @@ const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
 const originalSubscribeRemote = opencodeRemoteAny.subscribe;
 
 function buildScope(sessionId: string, userId = 'owner-user') {
+  const hexSeed = Array.from(sessionId)
+    .map((char) => char.codePointAt(0)?.toString(16) || '')
+    .join('')
+    .replace(/[^0-9a-f]/gi, '')
+    .padEnd(12, '1')
+    .slice(0, 12)
+    .toLowerCase();
+  const normalizedSessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    sessionId
+  )
+    ? sessionId
+    : `11111111-1111-4111-8111-${hexSeed}`;
   return {
-    sessionId,
+    sessionId: normalizedSessionId,
     userId,
     tenantKey: deriveTenantKeyForRedis(userId),
   };
@@ -94,6 +107,7 @@ function ownerSession(sessionId: string, userId = 'owner-user') {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
   const sockets = new Set<Socket>();
 
@@ -216,7 +230,7 @@ test('live route: recent messages route writes redis recent cache', async () => 
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/recent`, {
-      headers: { 'x-user-id': scope.userId },
+      headers: { 'x-test-user-id': scope.userId },
     });
     const payload = await response.json();
     assert.equal(response.status, 200);
@@ -268,7 +282,7 @@ test('live route: history route writes redis cursor snapshot', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/history?limit=1`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -332,7 +346,7 @@ test('live route: history route rebuilds cursor snapshot after redis cursor is c
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/history?limit=1`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -359,7 +373,7 @@ test('live route: workspace dir route writes redis dir cache', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/dir?path=src`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -393,7 +407,7 @@ test('live route: workspace tree route writes redis tree cache', async () => {
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/tree`, {
-      headers: { 'x-user-id': scope.userId },
+      headers: { 'x-test-user-id': scope.userId },
     });
     const payload = await response.json();
     assert.equal(response.status, 200);
@@ -423,7 +437,7 @@ test('live route: workspace file route writes redis file cache', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/file?path=src/index.ts`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -466,7 +480,7 @@ test('live route: opencode events route replays redis session-events stream', as
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/opencode/events?since=300`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     assert.equal(response.status, 200);
@@ -544,7 +558,7 @@ test('live route: opencode events route falls back to db replay after redis sess
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/opencode/events?since=300`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     assert.equal(response.status, 200);

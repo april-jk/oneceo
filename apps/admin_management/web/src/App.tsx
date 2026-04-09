@@ -25,7 +25,9 @@ import { OsacReleaseManagementSection } from './components/OsacReleaseManagement
 import { SkillManagementSection } from './components/SkillManagementSection';
 import type {
   AgentManagementOverview,
+  AuditDetailResponse,
   AuditLogEntry,
+  AuditResponse,
   ConversationSession,
   ConversationSessionDetailResponse,
   DashboardOverview,
@@ -46,6 +48,25 @@ import type {
 
 type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
+type ToastTone = 'error' | 'success' | 'warning' | 'info';
+
+type UiToast = {
+  id: number;
+  tone: ToastTone;
+  title: string;
+  message: string;
+};
+
+type AuditFilterState = {
+  query: string;
+  operator: string;
+  action: string;
+  result: string;
+  sessionId: string;
+  targetVmId: string;
+  from: string;
+  to: string;
+};
 
 // 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
@@ -72,13 +93,13 @@ const NAV_ITEMS: Array<{
   signal: string;
 }> = [
   {
-    key: 'kvm',
+    key: 'sandbox',
     group: 'runtime',
-    label: 'KVM 管理',
-    subtitle: '虚拟机与资源',
-    tag: 'KVM',
-    description: '查看宿主机资源、虚拟机状态和实例操作。',
-    signal: '资源水位',
+    label: 'Sandbox 管理',
+    subtitle: 'Sandbox 与 OSAC',
+    tag: 'SBX',
+    description: '查看 Sandbox、归档记录和连通性状态。',
+    signal: 'Sandbox 状态',
   },
   {
     key: 'conversation',
@@ -90,22 +111,22 @@ const NAV_ITEMS: Array<{
     signal: '会话状态',
   },
   {
-    key: 'sandbox',
-    group: 'runtime',
-    label: 'Sandbox 管理',
-    subtitle: 'Sandbox 与 OSAC',
-    tag: 'SBX',
-    description: '查看 Sandbox、归档记录和连通性状态。',
-    signal: 'Sandbox 状态',
-  },
-  {
     key: 'audit',
     group: 'runtime',
     label: '审计日志',
     subtitle: '操作追踪',
     tag: 'LOG',
     description: '查看操作记录、结果状态和时间线。',
-    signal: '结果回溯',
+    signal: '操作记录',
+  },
+  {
+    key: 'kvm',
+    group: 'runtime',
+    label: 'KVM 管理',
+    subtitle: '虚拟机与资源',
+    tag: 'KVM',
+    description: '查看宿主机资源、虚拟机状态和实例操作。',
+    signal: '资源占用',
   },
   {
     key: 'agent',
@@ -120,18 +141,18 @@ const NAV_ITEMS: Array<{
     key: 'skill',
     group: 'platform',
     label: '技能管理',
-    subtitle: '平台技能与 revision',
+    subtitle: '平台技能与版本',
     tag: 'SKL',
-    description: '维护 skill、revision 和校验结果。',
-    signal: '技能管理',
+    description: '维护平台技能、版本记录和校验结果。',
+    signal: '技能工作区',
   },
   {
     key: 'connectorGuide',
     group: 'platform',
     label: '连接器 Guide',
-    subtitle: '隐式引导与发布',
+    subtitle: '引导与发布',
     tag: 'CGD',
-    description: '维护 policy、revision、validation 和发布记录。',
+    description: '维护连接器引导策略、版本与发布记录。',
     signal: '引导策略',
   },
   {
@@ -253,7 +274,70 @@ function statusLabel(status: string) {
   if (status === 'waiting_user') return '待用户确认';
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
+  if (status === 'unknown') return '未知';
   return status;
+}
+
+function conversationStageLabel(stage?: string | null) {
+  if (stage === 'collecting') return '信息收集';
+  if (stage === 'clarifying') return '等待补充';
+  if (stage === 'planning') return '方案规划';
+  if (stage === 'executing') return '执行中';
+  if (stage === 'completed') return '已完成';
+  if (stage === 'failed') return '已失败';
+  if (stage === 'unknown') return '未知阶段';
+  return stage || '-';
+}
+
+function conversationPhaseLabel(phase?: string | null) {
+  if (phase === 'input') return '输入';
+  if (phase === 'thinking') return '思考';
+  if (phase === 'planning') return '规划';
+  if (phase === 'execution') return '执行';
+  if (phase === 'waiting') return '等待';
+  if (phase === 'output') return '输出';
+  if (phase === 'completed') return '完成';
+  if (phase === 'unknown') return '未知相位';
+  return phase || '-';
+}
+
+function conversationRoleLabel(role?: string | null) {
+  if (role === 'user') return '用户';
+  if (role === 'assistant') return '助手';
+  if (role === 'system') return '系统';
+  if (role === 'tool') return '工具';
+  if (role === 'developer') return '开发者';
+  if (role === 'function') return '函数';
+  return role || '-';
+}
+
+function conversationMessageTypeLabel(messageType?: string | null) {
+  if (messageType === 'user') return '用户消息';
+  if (messageType === 'assistant') return '助手回复';
+  if (messageType === 'system') return '系统消息';
+  if (messageType === 'tool') return '工具调用';
+  if (messageType === 'tool_result') return '工具结果';
+  if (messageType === 'state_transition') return '状态流转';
+  if (messageType === 'request') return '请求';
+  if (messageType === 'response') return '响应';
+  if (messageType === 'text') return '文本';
+  return messageType || '-';
+}
+
+function conversationAgentLabel(agent?: string | null) {
+  if (agent === 'task-creation' || agent === 'task_creation') return '任务创建智能体';
+  if (agent === 'ceo-view' || agent === 'ceo_view') return 'CEO 视图智能体';
+  if (agent === 'task-detail' || agent === 'task_detail') return '任务详情智能体';
+  return agent || '-';
+}
+
+function conversationToneLabel(tone?: string | null) {
+  if (tone === 'friendly') return '友好';
+  if (tone === 'neutral') return '中性';
+  if (tone === 'professional') return '专业';
+  if (tone === 'direct') return '直接';
+  if (tone === 'concise') return '简洁';
+  return tone || '-';
 }
 
 function adminRoleLabel(role?: string | null) {
@@ -282,8 +366,72 @@ function archiveStatusLabel(status?: string | null) {
   if (status === 'in_progress') return '进行中';
   if (status === 'failed') return '失败';
   if (status === 'none') return '无';
+  if (status === 'pending_update') return '待同步';
   if (status === 'unknown') return '未知';
   return status || '-';
+}
+
+function templateStatusLabel(status?: string | null) {
+  if (status === 'active') return '启用';
+  if (status === 'archived') return '已归档';
+  if (status === 'building') return '构建中';
+  if (status === 'failed') return '失败';
+  if (status === 'ready' || status === 'available') return '可用';
+  if (status === 'unknown') return '未知';
+  return status || '-';
+}
+
+function archiveEntryTypeLabel(type?: string | null) {
+  if (type === 'current') return '当前快照';
+  if (type === 'snapshot') return '快照';
+  if (type === 'dirty') return '待整理快照';
+  return type || '-';
+}
+
+function sandboxRuntimeStateLabel(status?: string | null) {
+  if (status === 'ready') return '就绪';
+  if (status === 'running') return '运行中';
+  if (status === 'paused') return '已暂停';
+  if (status === 'stopped') return '已停止';
+  if (status === 'closed') return '已关闭';
+  if (status === 'starting') return '启动中';
+  if (status === 'pending_archive') return '待归档';
+  if (status === 'archived') return '已归档';
+  if (status === 'error') return '异常';
+  if (status === 'unknown') return '未知状态';
+  return status || '-';
+}
+
+function sandboxRiskLabel(risk?: string | null) {
+  if (risk === 'missing_osac_endpoint') return '缺少 OSAC 地址';
+  if (risk === 'missing_opencode_base_url') return '缺少 OpenCode 地址';
+  if (risk === 'archive_pending_too_long') return '归档等待过久';
+  if (risk === 'archive_failed') return '归档失败';
+  if (risk === 'inactive_but_running') return '空闲但仍在运行';
+  if (risk === 'missing_executor_metadata') return '缺少执行器元数据';
+  if (risk === 'untracked_environment') return '未纳管环境';
+  return risk || '-';
+}
+
+function executorLabel(executor?: string | null) {
+  if (executor === 'opencode') return 'OpenCode';
+  if (executor === 'codex') return 'Codex';
+  if (executor === 'altus') return 'Altus';
+  if (executor === 'unknown') return '未知执行器';
+  return executor || '-';
+}
+
+function capabilityNameLabel(name?: string | null) {
+  if (name === 'Task Creation Agent') return '任务创建智能体';
+  if (name === 'CEO View Agent') return 'CEO 视图智能体';
+  if (name === 'Task Detail Agent') return '任务详情智能体';
+  return name || '-';
+}
+
+function agentApiMessageLabel(message?: string | null) {
+  if (message === 'Agent API is running') return '智能体接口运行正常';
+  if (message === 'unavailable') return '智能体接口不可用';
+  return message || '-';
 }
 
 function sandboxSourceLabel(source?: string | null) {
@@ -552,9 +700,9 @@ function summarizeText(value: string | undefined, max = 260) {
 }
 
 function formatStateSnapshot(snapshot?: { status?: string; stage?: string; phase?: string }) {
-  const status = snapshot?.status || '-';
-  const stage = snapshot?.stage || '-';
-  const phase = snapshot?.phase || '-';
+  const status = statusLabel(snapshot?.status || '-');
+  const stage = conversationStageLabel(snapshot?.stage);
+  const phase = conversationPhaseLabel(snapshot?.phase);
   return `status=${status} stage=${stage} phase=${phase}`;
 }
 
@@ -631,6 +779,73 @@ function resultClassName(result: string) {
   return `status-pill result-pill result-${result}`;
 }
 
+function auditActionLabel(action?: string | null) {
+  if (action === 'start') return '启动';
+  if (action === 'stop') return '停止';
+  if (action === 'shutdown') return '关机';
+  if (action === 'reboot') return '重启';
+  if (action === 'resume') return '恢复';
+  if (action === 'suspend') return '暂停';
+  return action || '-';
+}
+
+function auditResultLabel(result?: string | null) {
+  if (result === 'success') return '成功';
+  if (result === 'failed') return '失败';
+  return result || '-';
+}
+
+function templateIdOf(template?: E2bTemplate | E2bTemplateWithBuilds | null) {
+  if (!template) return '';
+  return ((template as any).templateID ?? (template as any).templateId ?? '') as string;
+}
+
+function templateAliasOf(template?: E2bTemplate | E2bTemplateWithBuilds | null) {
+  if (!template) return '';
+  return String((template as any).alias ?? '').trim();
+}
+
+function parseAliasCheckResult(result: unknown) {
+  const record = asRecord(result);
+  if (!record) {
+    return {
+      state: 'unknown' as const,
+      message: '返回结果无法识别',
+      targetTemplateId: null,
+    };
+  }
+
+  const availableValue = record.available ?? record.isAvailable ?? record.valid ?? record.ok;
+  const targetTemplateId =
+    typeof record.templateId === 'string'
+      ? record.templateId
+      : typeof record.templateID === 'string'
+        ? record.templateID
+        : null;
+
+  if (availableValue === true || record.exists === false) {
+    return {
+      state: 'available' as const,
+      message: '该别名当前可用',
+      targetTemplateId,
+    };
+  }
+
+  if (availableValue === false || record.exists === true || targetTemplateId || record.alias || record.name) {
+    return {
+      state: 'occupied' as const,
+      message: '该别名已被占用',
+      targetTemplateId,
+    };
+  }
+
+  return {
+    state: 'unknown' as const,
+    message: '已返回结果，但无法明确判断是否可用',
+    targetTemplateId,
+  };
+}
+
 const DEFAULT_TRANSITION_FILTERS = {
   fromStage: 'all',
   toStage: 'all',
@@ -644,6 +859,17 @@ const DEFAULT_TRANSITION_FILTERS = {
   toTime: '',
 };
 
+const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
+  query: '',
+  operator: 'all',
+  action: 'all',
+  result: 'all',
+  sessionId: '',
+  targetVmId: '',
+  from: '',
+  to: '',
+};
+
 export default function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
@@ -651,7 +877,7 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionKey>('kvm');
+  const [activeSection, setActiveSection] = useState<SectionKey>('sandbox');
 
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
@@ -731,10 +957,26 @@ export default function App() {
   const [templateBuildLogs, setTemplateBuildLogs] = useState<E2bTemplateBuildLogsResponse | null>(null);
   const [templateBuildStatus, setTemplateBuildStatus] = useState<E2bTemplateBuildInfo | null>(null);
   const [templateActionPayload, setTemplateActionPayload] = useState('{}');
-  const [templateAliasQuery, setTemplateAliasQuery] = useState('');
+  const [templateAliasDraft, setTemplateAliasDraft] = useState('');
   const [templateAliasResult, setTemplateAliasResult] = useState<unknown>(null);
   const [sandboxBusyIds, setSandboxBusyIds] = useState<Record<string, boolean>>({});
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
+  const [auditResponseMeta, setAuditResponseMeta] = useState<AuditResponse>({
+    total: 0,
+    filteredTotal: 0,
+    limit: 80,
+    offset: 0,
+    entries: [],
+    availableActions: [],
+    availableOperators: [],
+    availableTargets: [],
+  });
+  const [auditFilters, setAuditFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
+  const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
+  const [auditDetail, setAuditDetail] = useState<AuditDetailResponse | null>(null);
+  const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<UiToast[]>([]);
+  const [operationOverlay, setOperationOverlay] = useState<{ message: string } | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -754,6 +996,9 @@ export default function App() {
     startWidth: number;
   } | null>(null);
   const conversationDetailCacheRef = useRef<Map<string, ConversationSessionDetailResponse>>(new Map());
+  const auditAppliedFiltersRef = useRef(DEFAULT_AUDIT_FILTERS);
+  const toastIdRef = useRef(1);
+  const lastErrorToastRef = useRef<string | null>(null);
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -767,6 +1012,46 @@ export default function App() {
       setAuthError(null);
     }
   }, []);
+
+  const dismissToast = useCallback((toastId: number) => {
+    setToasts((previous) => previous.filter((item) => item.id !== toastId));
+  }, []);
+
+  const pushToast = useCallback(
+    (tone: ToastTone, title: string, message: string, durationMs = tone === 'error' ? 8000 : 3200) => {
+      const nextId = toastIdRef.current++;
+      setToasts((previous) => [...previous, { id: nextId, tone, title, message }]);
+      window.setTimeout(() => {
+        dismissToast(nextId);
+      }, durationMs);
+    },
+    [dismissToast]
+  );
+
+  const runBlockingTask = useCallback(
+    async <T,>(
+      message: string,
+      task: () => Promise<T>,
+      options?: { successToast?: string; fallbackError?: string }
+    ): Promise<T> => {
+      setOperationOverlay({ message });
+      try {
+        const result = await task();
+        setError(null);
+        if (options?.successToast) {
+          pushToast('success', '已完成', options.successToast);
+        }
+        return result;
+      } catch (taskError) {
+        const nextError = taskError instanceof Error ? taskError.message : options?.fallbackError || '操作失败';
+        setError(nextError);
+        throw taskError;
+      } finally {
+        setOperationOverlay(null);
+      }
+    },
+    [pushToast]
+  );
 
   const loadKvmSection = useCallback(async () => {
     const [overviewResult, vmResult, hostResult] = await Promise.allSettled([
@@ -1078,34 +1363,51 @@ export default function App() {
   }, []);
 
   const openTemplateDetail = useCallback(async (templateId: string) => {
-    const result = await api.getTemplate(templateId);
-    setTemplateDetail(result);
-    setTemplateBuildLogs(null);
-    setTemplateBuildStatus(null);
-    setTemplateModalOpen(true);
-  }, []);
+    try {
+      await runBlockingTask(
+        '正在加载模板详情',
+        async () => {
+          const result = await api.getTemplate(templateId);
+          setTemplateDetail(result);
+          setTemplateAliasDraft(templateAliasOf(result));
+          setTemplateAliasResult(null);
+          setTemplateBuildLogs(null);
+          setTemplateBuildStatus(null);
+          setTemplateModalOpen(true);
+        },
+        { fallbackError: '加载模板详情失败' }
+      );
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [runBlockingTask]);
 
   const openSandboxDetail = useCallback(
     async (sandboxId: string) => {
       try {
-        setError(null);
-        const detail = await loadSandboxRuntimeDetail(sandboxId);
-        setSandboxDetailTab('overview');
-        setSandboxConnectivityResult(null);
-        setSandboxTerminalOutput('');
-        setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
-        setSandboxFilePath('');
-        setSandboxFileContent('');
-        setSandboxFileItems([]);
-        setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
-        setSandboxProcessResult(null);
-        setSandboxPortResult(null);
-        setSandboxModalOpen(true);
+        await runBlockingTask(
+          '正在加载 Sandbox 详情',
+          async () => {
+            const detail = await loadSandboxRuntimeDetail(sandboxId);
+            setSandboxDetailTab('overview');
+            setSandboxConnectivityResult(null);
+            setSandboxTerminalOutput('');
+            setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
+            setSandboxFilePath('');
+            setSandboxFileContent('');
+            setSandboxFileItems([]);
+            setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
+            setSandboxProcessResult(null);
+            setSandboxPortResult(null);
+            setSandboxModalOpen(true);
+          },
+          { fallbackError: '加载 Sandbox 详情失败' }
+        );
       } catch (detailError) {
         setError(detailError instanceof Error ? detailError.message : '加载 Sandbox 详情失败');
       }
     },
-    [loadSandboxRuntimeDetail]
+    [loadSandboxRuntimeDetail, runBlockingTask]
   );
 
   const closeSandboxDetail = useCallback(() => {
@@ -1477,71 +1779,169 @@ export default function App() {
   const updateTemplateDetail = useCallback(async (templateId: string) => {
     const detail = await api.getTemplate(templateId);
     setTemplateDetail(detail);
+    setTemplateAliasDraft(templateAliasOf(detail));
   }, []);
 
   const runTemplateAction = useCallback(
     async (action: 'create' | 'update' | 'rebuild' | 'delete' | 'tags-assign' | 'tags-delete') => {
+      const actionLabelMap: Record<typeof action, string> = {
+        create: '创建模板',
+        update: '更新模板',
+        rebuild: '重建模板',
+        delete: '删除模板',
+        'tags-assign': '分配标签',
+        'tags-delete': '删除标签',
+      };
+
       try {
         const payload = templateActionPayload.trim()
           ? (JSON.parse(templateActionPayload) as Record<string, unknown>)
           : {};
         const reason = action === 'delete' || action === 'rebuild' ? window.prompt('请输入操作备注（必填）') : 'ok';
         if ((action === 'delete' || action === 'rebuild') && !reason) return;
-        if (action === 'create') {
-          await api.createTemplate(payload);
-        } else if (action === 'update' && templateDetail) {
-          await api.updateTemplate(
-            (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-            payload
-          );
-        } else if (action === 'rebuild' && templateDetail) {
-          await api.rebuildTemplate(
-            (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-            payload
-          );
-        } else if (action === 'delete' && templateDetail) {
-          await api.deleteTemplate((templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '');
-          setTemplateModalOpen(false);
-        } else if (action === 'tags-assign') {
-          await api.assignTemplateTags(payload);
-        } else if (action === 'tags-delete') {
-          await api.deleteTemplateTags(payload);
-        }
-        await loadTemplates();
-        if (templateDetail) {
-          await updateTemplateDetail((templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '');
-        }
+        await runBlockingTask(
+          `正在${actionLabelMap[action]}`,
+          async () => {
+            if (action === 'create') {
+              await api.createTemplate(payload);
+            } else if (action === 'update' && templateDetail) {
+              await api.updateTemplate(templateIdOf(templateDetail), payload);
+            } else if (action === 'rebuild' && templateDetail) {
+              await api.rebuildTemplate(templateIdOf(templateDetail), payload);
+            } else if (action === 'delete' && templateDetail) {
+              await api.deleteTemplate(templateIdOf(templateDetail));
+              setTemplateModalOpen(false);
+            } else if (action === 'tags-assign') {
+              await api.assignTemplateTags(payload);
+            } else if (action === 'tags-delete') {
+              await api.deleteTemplateTags(payload);
+            }
+            await loadTemplates();
+            if (templateDetail && action !== 'delete') {
+              await updateTemplateDetail(templateIdOf(templateDetail));
+            }
+          },
+          {
+            successToast: `${actionLabelMap[action]}已完成`,
+            fallbackError: '模板操作失败',
+          }
+        );
       } catch (actionError) {
         setError(actionError instanceof Error ? actionError.message : '模板操作失败');
       }
     },
-    [templateActionPayload, templateDetail, loadTemplates, updateTemplateDetail]
+    [templateActionPayload, templateDetail, loadTemplates, runBlockingTask, updateTemplateDetail]
   );
 
   const checkAlias = useCallback(async () => {
-    if (!templateAliasQuery.trim()) return;
+    if (!templateAliasDraft.trim()) return;
     try {
-      const result = await api.checkTemplateAlias(templateAliasQuery.trim());
-      setTemplateAliasResult(result);
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : '别名查询失败');
+      await runBlockingTask(
+        '正在检查模板别名',
+        async () => {
+          const result = await api.checkTemplateAlias(templateAliasDraft.trim());
+          setTemplateAliasResult(result);
+        },
+        { fallbackError: '别名查询失败' }
+      );
+    } catch {
+      // error is routed to banner and toast
     }
-  }, [templateAliasQuery]);
+  }, [templateAliasDraft, runBlockingTask]);
+
+  const saveTemplateAlias = useCallback(async () => {
+    const templateId = templateIdOf(templateDetail);
+    const alias = templateAliasDraft.trim();
+    if (!templateId || !alias) return;
+
+    try {
+      await runBlockingTask(
+        '正在保存模板别名',
+        async () => {
+          await api.updateTemplate(templateId, { alias });
+          await loadTemplates();
+          await updateTemplateDetail(templateId);
+          setTemplateAliasResult(null);
+        },
+        {
+          successToast: `模板别名已更新为 ${alias}`,
+          fallbackError: '保存模板别名失败',
+        }
+      );
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [templateAliasDraft, templateDetail, loadTemplates, runBlockingTask, updateTemplateDetail]);
 
   const loadTemplateBuildLogs = useCallback(async (templateId: string, buildId: string) => {
-    const logs = await api.getTemplateBuildLogs(templateId, buildId);
-    setTemplateBuildLogs(logs);
-  }, []);
+    try {
+      await runBlockingTask(
+        '正在加载构建日志',
+        async () => {
+          const logs = await api.getTemplateBuildLogs(templateId, buildId);
+          setTemplateBuildLogs(logs);
+        },
+        { fallbackError: '加载构建日志失败' }
+      );
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [runBlockingTask]);
 
   const loadTemplateBuildStatus = useCallback(async (templateId: string, buildId: string) => {
-    const status = await api.getTemplateBuildStatus(templateId, buildId);
-    setTemplateBuildStatus(status);
-  }, []);
+    try {
+      await runBlockingTask(
+        '正在加载构建状态',
+        async () => {
+          const status = await api.getTemplateBuildStatus(templateId, buildId);
+          setTemplateBuildStatus(status);
+        },
+        { fallbackError: '加载构建状态失败' }
+      );
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [runBlockingTask]);
 
-  const loadAuditSection = useCallback(async () => {
-    const result = await api.listAudit(80);
-    setAuditEntries(result.entries);
-  }, []);
+  const loadAuditSection = useCallback(
+    async (filters: AuditFilterState = auditAppliedFiltersRef.current) => {
+      const result = await api.listAudit({
+        query: filters.query.trim() || undefined,
+        operator: filters.operator !== 'all' ? filters.operator : undefined,
+        action: filters.action !== 'all' ? filters.action : undefined,
+        result: filters.result !== 'all' ? filters.result : undefined,
+        sessionId: filters.sessionId.trim() || undefined,
+        targetVmId: filters.targetVmId.trim() || undefined,
+        from: filters.from ? new Date(filters.from).toISOString() : undefined,
+        to: filters.to ? new Date(filters.to).toISOString() : undefined,
+        limit: 80,
+        offset: 0,
+      });
+      setAuditEntries(result.entries);
+      setAuditResponseMeta(result);
+      auditAppliedFiltersRef.current = filters;
+      setAuditAppliedFilters(filters);
+    },
+    []
+  );
+
+  const openAuditDetail = useCallback(
+    async (auditId: string) => {
+      try {
+        await runBlockingTask(
+          '正在加载日志详情',
+          async () => {
+            const result = await api.getAuditDetail(auditId);
+            setAuditDetail(result);
+          },
+          { fallbackError: '加载日志详情失败' }
+        );
+      } catch {
+        // error is routed to banner and toast
+      }
+    },
+    [runBlockingTask]
+  );
 
   const loadSection = useCallback(
     async (section: SectionKey, initial = false) => {
@@ -1594,8 +1994,31 @@ export default function App() {
   }, [bootstrapAdminSession]);
 
   useEffect(() => {
+    if (!error) {
+      lastErrorToastRef.current = null;
+      return;
+    }
+    if (lastErrorToastRef.current === error) {
+      return;
+    }
+    lastErrorToastRef.current = error;
+    pushToast('error', '操作失败', error);
+  }, [error, pushToast]);
+
+  useEffect(() => {
     sandboxRegistryLimitRef.current = sandboxRegistryLimit;
   }, [sandboxRegistryLimit]);
+
+  useEffect(() => {
+    auditAppliedFiltersRef.current = auditAppliedFilters;
+  }, [auditAppliedFilters]);
+
+  useEffect(() => {
+    const firstStageKey = agentOverview?.stageDistribution?.[0]?.stageKey || null;
+    if (!selectedAgentStageKey || !(agentOverview?.stageDistribution || []).some((item) => item.stageKey === selectedAgentStageKey)) {
+      setSelectedAgentStageKey(firstStageKey);
+    }
+  }, [agentOverview, selectedAgentStageKey]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -1897,63 +2320,6 @@ export default function App() {
     setError(null);
   }, []);
 
-  if (authStatus === 'loading') {
-    return (
-      <div className="auth-shell">
-        <div className="auth-background" aria-hidden="true" />
-        <section className="admin-auth-card">
-          <p className="eyebrow">ONECEO 管理控制台</p>
-          <h1>正在验证管理员会话</h1>
-          <p className="admin-auth-loading-copy">请稍候，系统正在检查当前登录状态。</p>
-        </section>
-      </div>
-    );
-  }
-
-  if (authStatus !== 'authenticated') {
-    return (
-      <div className="auth-shell">
-        <div className="auth-background" aria-hidden="true" />
-        <div className="admin-auth-layout">
-          <section className="admin-auth-hero">
-            <p className="eyebrow">ONECEO 管理控制台</p>
-            <h1>平台管理与运维控制台</h1>
-            <p className="admin-auth-copy">用于访问平台配置、运行状态和管理能力。仅限已授权管理员登录。</p>
-            <div className="admin-auth-badges">
-              <span>平台管理</span>
-              <span>运行监控</span>
-              <span>配置管理</span>
-            </div>
-          </section>
-
-          <section className="admin-auth-card">
-            <p className="eyebrow">管理员入口</p>
-            <h2>管理员登录</h2>
-            <form className="admin-auth-form" onSubmit={handleAdminLogin}>
-              <label>
-                <span>登录名</span>
-                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
-              </label>
-              <label>
-                <span>密码</span>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  required
-                />
-              </label>
-              {authError ? <div className="auth-error-banner">{authError}</div> : null}
-              <button type="submit" className="primary-btn admin-auth-submit-btn" disabled={authSubmitting}>
-                {authSubmitting ? '登录中...' : '登录'}
-              </button>
-            </form>
-          </section>
-        </div>
-      </div>
-    );
-  }
-
   const vmPieData = (kvmOverview?.vmStateDistribution ?? []).filter((item) => item.value > 0);
   const conversationSummary = (() => {
     const summary = {
@@ -2014,11 +2380,17 @@ export default function App() {
   })();
   const auditSummary = (() => {
     return {
-      total: auditEntries.length,
+      total: auditResponseMeta.filteredTotal || auditEntries.length,
       success: auditEntries.filter((item) => item.result === 'success').length,
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
   })();
+  const selectedAgentStage =
+    agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
+    agentOverview?.stageDistribution[0] ||
+    null;
+  const auditActionOptions = auditResponseMeta.availableActions || [];
+  const auditOperatorOptions = auditResponseMeta.availableOperators || [];
 
   const stateTransitions = conversationDetail?.trace?.stateTransitions || [];
   const sortedTransitions = (() => {
@@ -2156,9 +2528,100 @@ export default function App() {
         ? conversationDetail?.session.updatedAt || conversationSessions[0]?.updatedAt
         : activeSection === 'agent'
           ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
-          : activeSection === 'audit'
-            ? auditEntries[0]?.timestamp
+        : activeSection === 'audit'
+          ? auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
+  const currentTemplateId = templateIdOf(templateDetail);
+  const currentTemplateAlias = templateAliasOf(templateDetail);
+  const templateAliasCheck = parseAliasCheckResult(templateAliasResult);
+
+  const refreshActiveSection = useCallback(async () => {
+    try {
+      await runBlockingTask(`正在刷新${breadcrumbTitle}`, async () => {
+        await loadSection(activeSection);
+      });
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [activeSection, breadcrumbTitle, loadSection, runBlockingTask]);
+
+  const applyAuditFilters = useCallback(async () => {
+    try {
+      await runBlockingTask('正在筛选审计日志', async () => {
+        await loadAuditSection(auditFilters);
+      });
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [auditFilters, loadAuditSection, runBlockingTask]);
+
+  const resetAuditFilters = useCallback(async () => {
+    setAuditFilters(DEFAULT_AUDIT_FILTERS);
+    try {
+      await runBlockingTask('正在重置审计筛选', async () => {
+        await loadAuditSection(DEFAULT_AUDIT_FILTERS);
+      });
+    } catch {
+      // error is routed to banner and toast
+    }
+  }, [loadAuditSection, runBlockingTask]);
+
+  if (authStatus === 'loading') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <section className="admin-auth-card">
+          <p className="eyebrow">ONECEO 管理控制台</p>
+          <h1>正在验证管理员会话</h1>
+          <p className="admin-auth-loading-copy">请稍候，系统正在检查当前登录状态。</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <div className="auth-shell">
+        <div className="auth-background" aria-hidden="true" />
+        <div className="admin-auth-layout">
+          <section className="admin-auth-hero">
+            <p className="eyebrow">ONECEO 管理控制台</p>
+            <h1>平台管理与运维控制台</h1>
+            <p className="admin-auth-copy">用于访问平台配置、运行状态和管理能力。仅限已授权管理员登录。</p>
+            <div className="admin-auth-badges">
+              <span>平台管理</span>
+              <span>运行监控</span>
+              <span>配置管理</span>
+            </div>
+          </section>
+
+          <section className="admin-auth-card">
+            <p className="eyebrow">管理员入口</p>
+            <h2>管理员登录</h2>
+            <form className="admin-auth-form" onSubmit={handleAdminLogin}>
+              <label>
+                <span>登录名</span>
+                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
+              </label>
+              <label>
+                <span>密码</span>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                />
+              </label>
+              {authError ? <div className="auth-error-banner">{authError}</div> : null}
+              <button type="submit" className="primary-btn admin-auth-submit-btn" disabled={authSubmitting}>
+                {authSubmitting ? '登录中...' : '登录'}
+              </button>
+            </form>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   const handlePower = async (vm: VmItem, action: 'start' | 'stop') => {
     setBusyVmIds((prev) => ({ ...prev, [vm.vmId]: true }));
@@ -3486,7 +3949,7 @@ export default function App() {
           </article>
           <article className="summary-card">
             <span className="summary-card-label">当前阶段</span>
-            <strong>{conversationDetail?.session.stage || '未选择'}</strong>
+            <strong>{conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '未选择'}</strong>
             <p>{conversationDetail?.session.title || '从左侧选择会话'}</p>
           </article>
         </section>
@@ -3562,7 +4025,7 @@ export default function App() {
                     </div>
                     <div className="session-item-side">
                       <span className={stateClassName(session.status)}>{statusLabel(session.status)}</span>
-                      <span className="session-status">{session.stage || '-'}</span>
+                      <span className="session-status">{conversationStageLabel(session.stage)}</span>
                     </div>
                   </button>
                 ))
@@ -3601,7 +4064,7 @@ export default function App() {
                   </div>
                   <div>
                     <p className="kpi-title">阶段</p>
-                    <p>{conversationDetail.session.stage || '-'}</p>
+                    <p>{conversationStageLabel(conversationDetail.session.stage)}</p>
                   </div>
                   <div>
                     <p className="kpi-title">OpenCode ID</p>
@@ -3697,38 +4160,38 @@ export default function App() {
                             </select>
                           </label>
                           <label className="state-filter-field">
-                            <span>阶段(Phase)</span>
+                            <span>阶段相位</span>
                             <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
                               <option value="all">全部</option>
-                              {transitionOptions.phases.map((value) => <option key={value} value={value}>{value}</option>)}
+                              {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
                             </select>
                           </label>
                           <label className="state-filter-field">
                             <span>消息类型</span>
                             <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
                               <option value="all">全部</option>
-                              {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{value}</option>)}
+                              {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
                             </select>
                           </label>
                           <label className="state-filter-field">
                             <span>角色</span>
                             <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
                               <option value="all">全部</option>
-                              {transitionOptions.roles.map((value) => <option key={value} value={value}>{value}</option>)}
+                              {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
                             </select>
                           </label>
                           <label className="state-filter-field">
-                            <span>Agent</span>
+                            <span>智能体</span>
                             <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
                               <option value="all">全部</option>
-                              {transitionOptions.agents.map((value) => <option key={value} value={value}>{value}</option>)}
+                              {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
                             </select>
                           </label>
                           <label className="state-filter-field">
-                            <span>Tone</span>
+                            <span>语气</span>
                             <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
                               <option value="all">全部</option>
-                              {transitionOptions.tones.map((value) => <option key={value} value={value}>{value}</option>)}
+                              {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
                             </select>
                           </label>
                         </div>
@@ -3744,17 +4207,17 @@ export default function App() {
                       <article className="kpi-card">
                         <p className="kpi-title">命中阶段</p>
                         <p className="kpi-value">{transitionStats.stages.length}</p>
-                        <p className="kpi-meta">{transitionStats.stages.slice(0, 3).join(' / ') || '无'}</p>
+                        <p className="kpi-meta">{transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无'}</p>
                       </article>
                       <article className="kpi-card">
                         <p className="kpi-title">命中状态</p>
                         <p className="kpi-value">{transitionStats.statuses.length}</p>
-                        <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).join(' / ') || '无'}</p>
+                        <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无'}</p>
                       </article>
                       <article className="kpi-card">
                         <p className="kpi-title">命中阶段相位</p>
                         <p className="kpi-value">{transitionStats.phases.length}</p>
-                        <p className="kpi-meta">{transitionStats.phases.slice(0, 3).join(' / ') || '无'}</p>
+                        <p className="kpi-meta">{transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无'}</p>
                       </article>
                     </div>
 
@@ -3766,25 +4229,25 @@ export default function App() {
                           filteredTransitions.map((transition, index) => {
                             const trigger = transition.trigger || {};
                             const triggerSummary = [
-                              trigger.messageType ? `type=${trigger.messageType}` : '',
-                              trigger.role ? `role=${trigger.role}` : '',
-                              trigger.agent ? `agent=${trigger.agent}` : '',
-                              trigger.tone ? `tone=${trigger.tone}` : '',
+                              trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                              trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                              trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                              trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
                               trigger.messageId ? `id=${trigger.messageId}` : '',
                             ].filter(Boolean).join(' / ');
                             return (
                               <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
                                 <p className="state-timeline-head">
-                                  <strong>{transition.from?.stage || '-'}</strong>
+                                  <strong>{conversationStageLabel(transition.from?.stage)}</strong>
                                   <span>→</span>
-                                  <strong>{transition.to?.stage || '-'}</strong>
+                                  <strong>{conversationStageLabel(transition.to?.stage)}</strong>
                                   <span>{formatDateTime(transition.at)}</span>
                                 </p>
                                 <p className="state-timeline-meta">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
                                 <p className="state-transition-flow">
-                                  <span className={stateClassName(transition.to?.status || 'unknown')}>{transition.to?.status || '-'}</span>
-                                  {transition.to?.phase ? <span className="session-status">{transition.to.phase}</span> : null}
-                                  {trigger.messageType ? <span className="session-status">{trigger.messageType}</span> : null}
+                                  <span className={stateClassName(transition.to?.status || 'unknown')}>{statusLabel(transition.to?.status || 'unknown')}</span>
+                                  {transition.to?.phase ? <span className="session-status">{conversationPhaseLabel(transition.to.phase)}</span> : null}
+                                  {trigger.messageType ? <span className="session-status">{conversationMessageTypeLabel(trigger.messageType)}</span> : null}
                                 </p>
                                 {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
                                 {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
@@ -3798,17 +4261,17 @@ export default function App() {
                         {filteredTransitions.map((transition, index) => {
                           const trigger = transition.trigger || {};
                           const triggerSummary = [
-                            trigger.messageType ? `type=${trigger.messageType}` : '',
-                            trigger.role ? `role=${trigger.role}` : '',
-                            trigger.agent ? `agent=${trigger.agent}` : '',
-                            trigger.tone ? `tone=${trigger.tone}` : '',
+                            trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                            trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                            trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                            trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
                             trigger.messageId ? `id=${trigger.messageId}` : '',
                           ].filter(Boolean).join(' / ');
                           return (
                             <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
                               <p className="trace-head">
                                 <span className={traceLevelClass('info')}>state</span>
-                                <strong>{`${transition.from?.stage || '-'} → ${transition.to?.stage || '-'}`}</strong>
+                                <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
                                 <span>{formatDateTime(transition.at)}</span>
                               </p>
                               <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
@@ -3856,7 +4319,7 @@ export default function App() {
                       conversationDetail.messages.map((message) => (
                         <article key={message.id} className="message-item">
                           <p className="message-head">
-                            <strong>{message.role}</strong> · {formatDateTime(message.createdAt)}
+                            <strong>{conversationRoleLabel(message.role)}</strong> · {formatDateTime(message.createdAt)}
                           </p>
                           <p className="message-content">{message.content}</p>
                           {message.metadata !== undefined ? <pre className="json-block message-meta-json">{toJsonText(message.metadata)}</pre> : null}
@@ -3925,7 +4388,7 @@ export default function App() {
                     <div className="detail-kv-list">
                       <div>
                         <span>阶段</span>
-                        <strong>{conversationDetail.session.stage || '-'}</strong>
+                        <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
                       </div>
                       <div>
                         <span>OpenCode ID</span>
@@ -3973,7 +4436,7 @@ export default function App() {
                       </div>
                       <div>
                         <span>Executor</span>
-                        <strong>{primaryEnvironmentExecutor || '-'}</strong>
+                        <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
                       </div>
                       <div>
                         <span>归档状态</span>
@@ -4049,7 +4512,7 @@ export default function App() {
                               >
                                 <div className="trace-head">
                                   <strong>
-                                    {group.status} · {group.executor}
+                                    {sandboxRuntimeStateLabel(group.status)} · {executorLabel(group.executor)}
                                   </strong>
                                   <span className="mono">{formatDateTime(group.latestUpdatedAt)}</span>
                                 </div>
@@ -4066,7 +4529,7 @@ export default function App() {
                                     return (
                                       <article key={environment.id} className="sub-panel conversation-sandbox-card">
                                         <div className="trace-head">
-                                          <strong>{environment.status}</strong>
+                                          <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
                                           <span className="mono">{formatDateTime(environment.updatedAt)}</span>
                                         </div>
                                         <p className="trace-meta">
@@ -4232,7 +4695,7 @@ export default function App() {
             </div>
             <div>
               <span>最近状态</span>
-              <strong>{agentOverview?.agentApi.message || '-'}</strong>
+              <strong>{agentApiMessageLabel(agentOverview?.agentApi.message)}</strong>
             </div>
           </div>
         </article>
@@ -4247,7 +4710,7 @@ export default function App() {
         <article className="kpi-card">
           <p className="kpi-title">智能体服务</p>
           <p className="kpi-value">{agentOverview?.agentApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{agentOverview?.agentApi.message || '-'}</p>
+          <p className="kpi-meta">{agentApiMessageLabel(agentOverview?.agentApi.message)}</p>
         </article>
         <article className="kpi-card">
           <p className="kpi-title">会话总数</p>
@@ -4264,8 +4727,8 @@ export default function App() {
       <section className="chart-grid fade-in">
         <article className="panel">
           <div className="panel-header">
-            <h2>任务阶段分布</h2>
-            <span className="panel-caption">按任务创建阶段统计</span>
+            <h2>任务阶段概览</h2>
+            <span className="panel-caption">按任务创建阶段统计，标签已转成中文</span>
           </div>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={260}>
@@ -4288,14 +4751,73 @@ export default function App() {
           <div className="capability-grid">
             {(agentOverview?.capabilities || []).map((item) => (
               <article key={item.key} className="capability-card">
-                <p className="capability-name">{item.name}</p>
+                <p className="capability-name">{capabilityNameLabel(item.name)}</p>
                 <p className="capability-meta">{item.transport}</p>
                 <p className="mono">{item.endpoint}</p>
-                <span className={`capability-status ${item.status}`}>{item.status}</span>
+                <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
               </article>
             ))}
           </div>
         </article>
+      </section>
+
+      <section className="panel fade-in">
+        <div className="panel-header">
+          <h2>阶段详情</h2>
+          <span className="panel-caption">按阶段查看状态构成与最近会话</span>
+        </div>
+        <div className="agent-stage-grid">
+          <div className="agent-stage-nav">
+            {(agentOverview?.stageDistribution || []).map((item) => (
+              <button
+                key={item.stageKey}
+                type="button"
+                className={`agent-stage-nav-card ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
+                onClick={() => setSelectedAgentStageKey(item.stageKey)}
+              >
+                <span className="agent-stage-nav-title">{item.label}</span>
+                <span className="agent-stage-nav-meta">共 {item.value} 个会话</span>
+              </button>
+            ))}
+          </div>
+          <div className="agent-stage-detail-panel">
+            {selectedAgentStage ? (
+              <>
+                <div className="agent-stage-summary-card">
+                  <div>
+                    <p className="section-tag">当前阶段</p>
+                    <h3>{selectedAgentStage.label}</h3>
+                    <p className="panel-caption">最近会话与状态构成只保留最有排障价值的信息。</p>
+                  </div>
+                  <span className="status-pill">{selectedAgentStage.value}</span>
+                </div>
+                <div className="agent-status-pills">
+                  {selectedAgentStage.statusSummary.map((summary) => (
+                    <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
+                      {summary.label} · {summary.value}
+                    </span>
+                  ))}
+                </div>
+                <div className="agent-session-list">
+                  {selectedAgentStage.recentSessions.map((session) => (
+                    <article key={session.id} className="agent-session-item">
+                      <div className="trace-head">
+                        <strong>{session.title || session.id}</strong>
+                        <span>{session.status}</span>
+                      </div>
+                      <p className="trace-meta">{session.id}</p>
+                      <p className="trace-meta">更新时间：{formatDateTime(session.updatedAt)}</p>
+                      {session.pendingQuestion ? <p className="trace-meta">待确认：{session.pendingQuestion}</p> : null}
+                    </article>
+                  ))}
+                  {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
+                </div>
+              </>
+            ) : (
+              <p className="empty">当前没有阶段数据。</p>
+            )}
+          </div>
+        </div>
       </section>
     </main>
   );
@@ -4321,6 +4843,7 @@ export default function App() {
       .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
       .slice(0, 6);
     const riskGroupMap = new Map<string, {
+      key: string;
       label: string;
       count: number;
       lastSeenAt: string | null;
@@ -4331,7 +4854,8 @@ export default function App() {
         const candidateTime = item.lastActiveAt || item.updatedAt || item.createdAt || null;
         if (!previous) {
           riskGroupMap.set(risk, {
-            label: risk,
+            key: risk,
+            label: sandboxRiskLabel(risk),
             count: 1,
             lastSeenAt: candidateTime,
           });
@@ -4353,7 +4877,7 @@ export default function App() {
         return acc;
       }, new Map<string, number>())
     )
-      .map(([label, value]) => ({ label, value }))
+      .map(([label, value]) => ({ label: executorLabel(label), value }))
       .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
     const executorOptions = Array.from(new Set(sandboxRegistryItems.map((item) => item.executor).filter(Boolean))).sort();
     const statusOptions = Array.from(
@@ -4370,7 +4894,14 @@ export default function App() {
       { label: '暂停中', value: 'paused', count: summary?.paused ?? 0, meta: '暂停且不计费' },
       { label: '待归档', value: 'pending_archive', count: summary?.pendingArchive ?? 0, meta: '待归档更新' },
     ];
-    const riskOptions = riskGroups.map((item) => item.label);
+    const riskOptions = riskGroups.map((item) => item.key);
+    const templateSummary = {
+      total: templates.length,
+      aliased: templates.filter((item) => templateAliasOf(item)).length,
+      lastUpdatedAt: templates
+        .map((item) => ((item as any).updatedAt ?? (item as any).createdAt ?? null) as string | null)
+        .sort((a, b) => toTimestamp(b) - toTimestamp(a))[0] || null,
+    };
     const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
     const loadedRuntimeCount = sandboxRegistryItems.length;
     const loadMoreTargetCount = Math.max(loadedRuntimeCount, sandboxRegistryLimit);
@@ -4596,8 +5127,8 @@ export default function App() {
               <section className="chart-grid fade-in">
                 <article className="panel">
                   <div className="panel-header">
-                    <h2>Executor 分布</h2>
-                    <span className="panel-caption">模式分布</span>
+                    <h2>执行器分布</h2>
+                    <span className="panel-caption">按执行器统计</span>
                   </div>
                   <div className="compact-list">
                     {executorDistribution.map((item) => (
@@ -4622,7 +5153,7 @@ export default function App() {
                         <div key={item.sandboxId} className="compact-item">
                           <div>
                             <strong>{item.taskSessionId || item.sandboxId}</strong>
-                            <p className="session-meta">{item.riskTags.join(' / ')}</p>
+                            <p className="session-meta">{item.riskTags.map((risk) => sandboxRiskLabel(risk)).join(' / ')}</p>
                           </div>
                           <button type="button" className="secondary-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
                             查看
@@ -4677,10 +5208,10 @@ export default function App() {
                     <div className="runtime-risk-group-list">
                       {riskGroups.map((group) => (
                         <button
-                          key={group.label}
+                          key={group.key}
                           type="button"
-                          className={`secondary-btn runtime-risk-group-btn ${sandboxRiskFilter === group.label ? 'active' : ''}`}
-                          onClick={() => setSandboxRiskFilter((prev) => (prev === group.label ? 'all' : group.label))}
+                          className={`secondary-btn runtime-risk-group-btn ${sandboxRiskFilter === group.key ? 'active' : ''}`}
+                          onClick={() => setSandboxRiskFilter((prev) => (prev === group.key ? 'all' : group.key))}
                           title={`最近出现：${formatDateTime(group.lastSeenAt)}`}
                         >
                           <span className="runtime-risk-group-main">{group.label}</span>
@@ -4702,12 +5233,12 @@ export default function App() {
                     />
                   </label>
                   <label className="state-filter-field">
-                    <span>Executor</span>
+                    <span>执行器</span>
                     <select value={sandboxExecutorFilter} onChange={(event) => setSandboxExecutorFilter(event.target.value)}>
                       <option value="all">全部</option>
                       {executorOptions.map((item) => (
                         <option key={item} value={item}>
-                          {item}
+                          {executorLabel(item)}
                         </option>
                       ))}
                     </select>
@@ -4718,7 +5249,7 @@ export default function App() {
                       <option value="all">全部</option>
                       {statusOptions.map((item) => (
                         <option key={item} value={item}>
-                          {item === 'pending_archive' ? 'pending_archive' : item}
+                          {sandboxRuntimeStateLabel(item)}
                         </option>
                       ))}
                     </select>
@@ -4729,7 +5260,7 @@ export default function App() {
                       <option value="all">全部</option>
                       {riskOptions.map((item) => (
                         <option key={item} value={item}>
-                          {item}
+                          {sandboxRiskLabel(item)}
                         </option>
                       ))}
                     </select>
@@ -4772,7 +5303,7 @@ export default function App() {
                         <th>
                           <div className="runtime-th-wrap">
                             <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'executor' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('executor')}>
-                              Executor
+                              执行器
                               <span className="runtime-sort-indicator">{runtimeSort.key === 'executor' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                             </button>
                             <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('executor', event)} />
@@ -4867,13 +5398,13 @@ export default function App() {
                               </div>
                             </td>
                             <td>
-                              <strong>{item.executor}</strong>
+                              <strong>{executorLabel(item.executor)}</strong>
                               <p className="session-meta">{item.codexExecutionMode || '-'}</p>
                             </td>
                             <td>
                               <div className="runtime-status-stack">
                                 <div className="action-inline">
-                                  <span className={stateClassName(item.sandboxState || item.status)}>{item.sandboxState || item.status}</span>
+                                  <span className={stateClassName(item.sandboxState || item.status)}>{sandboxRuntimeStateLabel(item.sandboxState || item.status)}</span>
                                   {item.taskStatus ? <span className={stateClassName(item.taskStatus)}>{statusLabel(item.taskStatus)}</span> : null}
                                   {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
                                     <span className="session-status session-status-governance">已收口</span>
@@ -4919,7 +5450,7 @@ export default function App() {
                                 <div className="runtime-risk-cell">
                                   <div className="runtime-risk-list">
                                     {item.riskTags.slice(0, 2).map((risk) => (
-                                      <span key={risk} className="session-status">{risk}</span>
+                                      <span key={risk} className="session-status">{sandboxRiskLabel(risk)}</span>
                                     ))}
                                     {item.riskTags.length > 2 ? <span className="session-status">+{item.riskTags.length - 2}</span> : null}
                                   </div>
@@ -5047,13 +5578,18 @@ export default function App() {
               <section className="kpi-grid fade-in">
                 <article className="kpi-card">
                   <p className="kpi-title">模板总数</p>
-                  <p className="kpi-value">{templates.length}</p>
+                  <p className="kpi-value">{templateSummary.total}</p>
                   <p className="kpi-meta">来自 E2B</p>
                 </article>
                 <article className="kpi-card">
-                  <p className="kpi-title">别名检测</p>
-                  <p className="kpi-value">{templateAliasQuery || '-'}</p>
-                  <p className="kpi-meta">输入别名后检测</p>
+                  <p className="kpi-title">已设置别名</p>
+                  <p className="kpi-value">{templateSummary.aliased}</p>
+                  <p className="kpi-meta">可直接识别的模板数量</p>
+                </article>
+                <article className="kpi-card">
+                  <p className="kpi-title">最近更新时间</p>
+                  <p className="kpi-value">{formatDateTime(templateSummary.lastUpdatedAt)}</p>
+                  <p className="kpi-meta">模板治理优先看最近改动</p>
                 </article>
               </section>
 
@@ -5088,7 +5624,7 @@ export default function App() {
                             <tr key={templateId}>
                               <td className="mono">{templateId}</td>
                               <td>{name}</td>
-                              <td>{(item as any).status ?? '-'}</td>
+                              <td>{templateStatusLabel((item as any).status ?? '-')}</td>
                               <td>{formatDateTime((item as any).updatedAt ?? (item as any).createdAt)}</td>
                               <td>
                                 <div className="action-inline">
@@ -5109,10 +5645,10 @@ export default function App() {
               <section className="panel fade-in">
                 <div className="panel-header">
                   <h2>模板动作</h2>
-                  <span className="panel-caption">创建、标签和别名检查</span>
+                  <span className="panel-caption">创建模板与批量标签维护</span>
                 </div>
                 <div className="form-stack">
-                  <p className="muted">使用 JSON 触发创建/更新/重建/标签等操作。</p>
+                  <p className="muted">使用 JSON 触发创建、批量分配标签或删除标签。别名设置已收进模板详情。</p>
                   <textarea
                     className="input-area"
                     rows={6}
@@ -5130,18 +5666,6 @@ export default function App() {
                       删除标签
                     </button>
                   </div>
-                  <div className="button-grid">
-                    <input
-                      className="text-input"
-                      placeholder="输入模板别名"
-                      value={templateAliasQuery}
-                      onChange={(event) => setTemplateAliasQuery(event.target.value)}
-                    />
-                    <button type="button" className="secondary-btn" onClick={() => void checkAlias()}>
-                      检测别名
-                    </button>
-                  </div>
-                  {templateAliasResult ? <pre className="json-block">{toJsonText(templateAliasResult)}</pre> : null}
                 </div>
               </section>
             </>
@@ -5206,7 +5730,7 @@ export default function App() {
                   <section className="inspector-stat-grid">
                     <article className="inspector-stat-card">
                       <span className="inspector-stat-label">运行状态</span>
-                      <strong>{sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status}</strong>
+                      <strong>{sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}</strong>
                     </article>
                     <article className="inspector-stat-card">
                       <span className="inspector-stat-label">会话状态</span>
@@ -5234,11 +5758,11 @@ export default function App() {
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
                         <h3>Sandbox 基础信息</h3>
-                        <span className="session-status">{sandboxRuntimeDetail.runtime.executor}</span>
+                        <span className="session-status">{executorLabel(sandboxRuntimeDetail.runtime.executor)}</span>
                       </div>
                       <div className="inspector-kv-grid">
                         <div><span>Sandbox 标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
-                        <div><span>执行器</span><strong>{sandboxRuntimeDetail.runtime.executor}</strong></div>
+                        <div><span>执行器</span><strong>{executorLabel(sandboxRuntimeDetail.runtime.executor)}</strong></div>
                         <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
                         <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
                       </div>
@@ -5465,10 +5989,10 @@ export default function App() {
                           {archiveSortedRows.map((row) => (
                             <tr key={`${row.id}-${row.hash}`}>
                               <td>{formatDateTime(row.timestamp)}</td>
-                              <td><span className="session-status">{row.type}</span></td>
+                              <td><span className="session-status">{archiveEntryTypeLabel(row.type)}</span></td>
                               <td>{row.size}</td>
                               <td>{row.reason}</td>
-                              <td><span className={stateClassName(row.status)}>{row.status}</span></td>
+                              <td><span className={stateClassName(row.status)}>{archiveStatusLabel(row.status)}</span></td>
                               <td>
                                 <div className="runtime-actions">
                                   <button
@@ -5780,7 +6304,7 @@ export default function App() {
                   </section>
 
                   <details className="debug-disclosure">
-                    <summary>Runtime Metadata</summary>
+                    <summary>运行元数据</summary>
                     <div className="debug-disclosure-body debug-meta-grid">
                       <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.metadata)}</pre>
                       {sandboxFullInfo ? <pre className="json-block debug-output-block">{toJsonText(sandboxFullInfo)}</pre> : null}
@@ -5804,7 +6328,7 @@ export default function App() {
               <div className="modal-header">
                 <div>
                   <p className="section-tag">模板详情</p>
-                  <h2>模板详情</h2>
+                  <h2>{currentTemplateAlias || currentTemplateId || '模板详情'}</h2>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
                   关闭
@@ -5812,11 +6336,59 @@ export default function App() {
               </div>
               <div className="detail-grid modal-grid">
                 <article className="sub-panel">
-                  <p className="kpi-title">模板信息</p>
-                  <pre className="json-block">{toJsonText(templateDetail)}</pre>
+                  <p className="kpi-title">模板摘要</p>
+                  <div className="validation-result">
+                    <div>模板 ID: {currentTemplateId || '-'}</div>
+                    <div>当前别名: {currentTemplateAlias || '未设置'}</div>
+                    <div>状态: {templateStatusLabel(String((templateDetail as any).status ?? '-'))}</div>
+                    <div>更新时间: {formatDateTime((templateDetail as any).updatedAt ?? (templateDetail as any).createdAt)}</div>
+                  </div>
+                  <details className="template-raw-details">
+                    <summary>查看原始详情</summary>
+                    <pre className="json-block">{toJsonText(templateDetail)}</pre>
+                  </details>
                 </article>
                 <article className="sub-panel">
-                  <p className="kpi-title">操作</p>
+                  <p className="kpi-title">别名设置</p>
+                  <label className="form-field">
+                    <span>模板别名</span>
+                    <input
+                      className="control-input"
+                      placeholder="例如：opencode-playwright-min"
+                      value={templateAliasDraft}
+                      onChange={(event) => {
+                        setTemplateAliasDraft(event.target.value);
+                        setTemplateAliasResult(null);
+                      }}
+                    />
+                  </label>
+                  <div className="button-grid">
+                    <button type="button" className="secondary-btn" disabled={!templateAliasDraft.trim()} onClick={() => void checkAlias()}>
+                      检查是否可用
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      disabled={!templateAliasDraft.trim() || templateAliasDraft.trim() === currentTemplateAlias}
+                      onClick={() => void saveTemplateAlias()}
+                    >
+                      保存别名
+                    </button>
+                  </div>
+                  {templateAliasResult ? (
+                    <div className={`alias-check-card ${templateAliasCheck.state}`}>
+                      <strong>{templateAliasCheck.message}</strong>
+                      <span>
+                        {templateAliasDraft.trim() || '-'}
+                        {templateAliasCheck.targetTemplateId ? ` · ${templateAliasCheck.targetTemplateId}` : ''}
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="panel-caption">别名检测已从模板首页移除，收敛到详情内作为辅助动作。</p>
+                  )}
+                </article>
+                <article className="sub-panel">
+                  <p className="kpi-title">模板操作</p>
                   <textarea
                     className="input-area"
                     rows={4}
@@ -5830,6 +6402,9 @@ export default function App() {
                     <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
                       重建模板
                     </button>
+                  </div>
+                  <div className="danger-zone">
+                    <p className="panel-caption">危险操作单独放置，避免与别名设置和常规维护混用。</p>
                     <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
                       删除模板
                     </button>
@@ -5839,13 +6414,14 @@ export default function App() {
               {(templateDetail as any)?.builds ? (
                 <div className="panel">
                   <div className="panel-header">
-                    <h2>Builds</h2>
+                    <h2>构建记录</h2>
+                    <span className="panel-caption">用于查看当前模板最近构建状态</span>
                   </div>
                   <div className="table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          <th>Build ID</th>
+                          <th>构建 ID</th>
                           <th>状态</th>
                           <th>创建时间</th>
                           <th>操作</th>
@@ -5855,7 +6431,7 @@ export default function App() {
                         {(templateDetail as any).builds.map((build: any) => (
                           <tr key={build.buildID || build.buildId}>
                             <td className="mono">{build.buildID || build.buildId}</td>
-                            <td>{build.status || '-'}</td>
+                            <td>{templateStatusLabel(build.status || '-')}</td>
                             <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
                             <td>
                               <div className="action-inline">
@@ -5951,72 +6527,235 @@ export default function App() {
       </>
     );
   };
-const renderAuditSection = () => (
-    <main className="content-stack">
-      <section className="page-intro-grid fade-in">
-        <article className="panel hero-panel">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <p className="section-tag">审计摘要</p>
-              <h2>最近管理动作</h2>
+  const renderAuditSection = () => (
+    <>
+      <main className="content-stack">
+        <section className="page-intro-grid fade-in">
+          <article className="panel hero-panel">
+            <div className="panel-header panel-header-stack">
+              <div>
+                <p className="section-tag">审计摘要</p>
+                <h2>管理动作与失败排查</h2>
+              </div>
+              <span className="service-state ok">按时间倒序展示</span>
             </div>
-            <span className="service-state ok">按时间倒序展示</span>
-          </div>
-          <div className="hero-metrics">
-            <div>
-              <span className="hero-metric-label">日志总数</span>
-              <strong>{auditSummary.total}</strong>
+            <div className="hero-metrics">
+              <div>
+                <span className="hero-metric-label">筛选结果</span>
+                <strong>{auditSummary.total}</strong>
+              </div>
+              <div>
+                <span className="hero-metric-label">成功</span>
+                <strong>{auditSummary.success}</strong>
+              </div>
+              <div>
+                <span className="hero-metric-label">失败</span>
+                <strong>{auditSummary.failed}</strong>
+              </div>
             </div>
-            <div>
-              <span className="hero-metric-label">成功</span>
-              <strong>{auditSummary.success}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">失败</span>
-              <strong>{auditSummary.failed}</strong>
-            </div>
-          </div>
-        </article>
+          </article>
 
-        <article className="panel aside-panel">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <p className="section-tag">状态摘要</p>
-              <h2>失败记录</h2>
+          <article className="panel aside-panel">
+            <div className="panel-header panel-header-stack">
+              <div>
+                <p className="section-tag">筛选状态</p>
+                <h2>当前范围</h2>
+              </div>
             </div>
-          </div>
-          <ul className="signal-list">
-            <li>最新失败记录</li>
-            <li>连续重试操作</li>
-          </ul>
-        </article>
-      </section>
+            <ul className="signal-list">
+              <li>总日志数：{auditResponseMeta.total}</li>
+              <li>当前筛选后：{auditResponseMeta.filteredTotal || auditEntries.length}</li>
+              <li>可筛维度：操作人 / 动作 / 结果 / 会话 / 目标实例 / 时间</li>
+            </ul>
+          </article>
+        </section>
 
-      <section className="panel fade-in">
-        <div className="panel-header">
-          <h2>审计日志</h2>
-          <span className="panel-caption">最近 {auditEntries.length} 条</span>
-        </div>
-        <div className="audit-list">
-          {auditEntries.length === 0 ? (
-            <p className="empty">暂无审计日志。</p>
-          ) : (
-            auditEntries.map((entry) => (
-              <article key={entry.id} className="audit-item">
-                <p className="audit-headline">
-                  <strong>{entry.action.toUpperCase()}</strong> {entry.targetVmId}{' '}
-                  <span className={resultClassName(entry.result)}>{entry.result}</span>
-                </p>
-                <p className="mono">
-                  {entry.operator} | {formatDateTime(entry.timestamp)}
-                </p>
-                {entry.detail ? <p className="audit-detail">{entry.detail}</p> : null}
+        <section className="panel fade-in">
+          <div className="panel-header">
+            <h2>筛选条件</h2>
+            <span className="panel-caption">按操作人、动作、结果、会话、目标实例和时间筛选</span>
+          </div>
+          <div className="audit-filter-grid">
+            <input
+              className="control-input"
+              placeholder="搜索日志 ID、详情、实例、会话"
+              value={auditFilters.query}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
+            />
+            <select
+              className="control-input"
+              value={auditFilters.operator}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
+            >
+              <option value="all">全部操作人</option>
+              {auditOperatorOptions.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <select
+              className="control-input"
+              value={auditFilters.action}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
+            >
+              <option value="all">全部动作</option>
+              {auditActionOptions.map((item) => (
+                <option key={item} value={item}>
+                  {auditActionLabel(item)}
+                </option>
+              ))}
+            </select>
+            <select
+              className="control-input"
+              value={auditFilters.result}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
+            >
+              <option value="all">全部结果</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+            </select>
+            <input
+              className="control-input"
+              placeholder="会话 ID"
+              value={auditFilters.sessionId}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, sessionId: event.target.value }))}
+            />
+            <input
+              className="control-input"
+              placeholder="目标实例 ID"
+              value={auditFilters.targetVmId}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, targetVmId: event.target.value }))}
+            />
+            <input
+              className="control-input"
+              type="datetime-local"
+              value={auditFilters.from}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
+            />
+            <input
+              className="control-input"
+              type="datetime-local"
+              value={auditFilters.to}
+              onChange={(event) => setAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
+            />
+          </div>
+          <div className="action-inline">
+            <button type="button" className="primary-btn" onClick={() => void applyAuditFilters()}>
+              应用筛选
+            </button>
+            <button type="button" className="secondary-btn" onClick={() => void resetAuditFilters()}>
+              重置
+            </button>
+          </div>
+        </section>
+
+        <section className="panel fade-in">
+          <div className="panel-header">
+            <h2>审计日志</h2>
+            <span className="panel-caption">
+              当前显示 {auditEntries.length} 条，筛选后共 {auditResponseMeta.filteredTotal || auditEntries.length} 条
+            </span>
+          </div>
+          <div className="table-wrap">
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>动作</th>
+                  <th>结果</th>
+                  <th>操作人</th>
+                  <th>目标实例</th>
+                  <th>会话</th>
+                  <th>详情</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="empty">
+                      暂无符合条件的审计日志。
+                    </td>
+                  </tr>
+                ) : (
+                  auditEntries.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{formatDateTime(entry.timestamp)}</td>
+                      <td>{auditActionLabel(entry.action)}</td>
+                      <td>
+                        <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
+                      </td>
+                      <td>{entry.operator}</td>
+                      <td className="mono">{entry.targetVmId}</td>
+                      <td className="mono">{entry.sessionId || '-'}</td>
+                      <td>{entry.detail || '-'}</td>
+                      <td>
+                        <button type="button" className="table-btn" onClick={() => void openAuditDetail(entry.id)}>
+                          查看详情
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      {auditDetail ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setAuditDetail(null)}>
+          <div
+            className="modal-card"
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="section-tag">审计详情</p>
+                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetail.entry.targetVmId}</h2>
+              </div>
+              <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
+                关闭
+              </button>
+            </div>
+            <div className={`detail-grid modal-grid audit-detail-grid ${auditDetail.relatedEntries.length === 0 ? 'audit-detail-grid-single' : ''}`}>
+              <article className="sub-panel">
+                <p className="kpi-title">当前记录</p>
+                <div className="validation-result">
+                  <div>日志 ID: {auditDetail.entry.id}</div>
+                  <div>时间: {formatDateTime(auditDetail.entry.timestamp)}</div>
+                  <div>动作: {auditActionLabel(auditDetail.entry.action)}</div>
+                  <div>结果: {auditResultLabel(auditDetail.entry.result)}</div>
+                  <div>操作人: {auditDetail.entry.operator}</div>
+                  <div>目标实例: {auditDetail.entry.targetVmId}</div>
+                  <div>会话 ID: {auditDetail.entry.sessionId || '-'}</div>
+                  <div>关联记录: {auditDetail.relatedEntries.length || 0}</div>
+                </div>
+                <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
               </article>
-            ))
-          )}
+              {auditDetail.relatedEntries.length > 0 ? (
+                <article className="sub-panel">
+                  <p className="kpi-title">关联记录</p>
+                  <div className="audit-related-list">
+                    {auditDetail.relatedEntries.map((entry) => (
+                      <article key={entry.id} className="audit-related-item">
+                        <strong>{auditActionLabel(entry.action)} · {auditResultLabel(entry.result)}</strong>
+                        <span>{formatDateTime(entry.timestamp)}</span>
+                        <span className="mono">{entry.sessionId || entry.targetVmId}</span>
+                        {entry.detail ? <p>{entry.detail}</p> : null}
+                      </article>
+                    ))}
+                  </div>
+                </article>
+              ) : null}
+            </div>
+          </div>
         </div>
-      </section>
-    </main>
+      ) : null}
+    </>
   );
 
   const renderContent = () => {
@@ -6105,17 +6844,13 @@ const renderAuditSection = () => (
                 <p className="subtitle">{activeNavItem.description}</p>
               </div>
               <div className="header-actions">
-                <div className="page-signal-block">
-                  <span className="page-signal-label">当前信号</span>
-                  <strong>{activeNavItem.signal}</strong>
-                </div>
                 <button
                   type="button"
                   className="primary-btn"
-                  onClick={() => loadSection(activeSection)}
+                  onClick={() => void refreshActiveSection()}
                   disabled={refreshing}
                 >
-                  {refreshing ? '刷新中...' : '刷新当前标签'}
+                  {refreshing ? '刷新中...' : '刷新当前页面'}
                 </button>
                 <button type="button" className="secondary-btn" onClick={() => void handleAdminLogout()}>
                   退出登录
@@ -6133,6 +6868,30 @@ const renderAuditSection = () => (
           {renderContent()}
         </section>
       </div>
+      {operationOverlay ? (
+        <div className="global-operation-overlay" role="status" aria-live="polite">
+          <div className="global-operation-card">
+            <span className="global-operation-spinner" aria-hidden="true" />
+            <strong>{operationOverlay.message}</strong>
+            <span>请稍候，后台正在处理当前操作。</span>
+          </div>
+        </div>
+      ) : null}
+      {toasts.length ? (
+        <div className="toast-stack" aria-live="polite" aria-atomic="true">
+          {toasts.map((toast) => (
+            <article key={toast.id} className={`toast-card ${toast.tone}`}>
+              <div className="toast-copy">
+                <strong>{toast.title}</strong>
+                <span>{toast.message}</span>
+              </div>
+              <button type="button" className="toast-close-btn" onClick={() => dismissToast(toast.id)}>
+                关闭
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

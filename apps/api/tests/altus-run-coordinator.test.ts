@@ -226,6 +226,103 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
 });
 
+test('execute preserves richer assistant text when complete_task summary is concise', async () => {
+  const state = createState('run-coordinator-preserve-assistant', 'session-coordinator-preserve-assistant');
+  const setupCalls: Record<string, unknown>[] = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-preserve-assistant',
+      workspaceRoot: '/workspace/session-coordinator-preserve-assistant',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
+      sequence: 1,
+      payload,
+    })),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  const detailedAssistantContent =
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
+
+  global.fetch = mock.fn(async () => {
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: detailedAssistantContent,
+              tool_calls: [
+                {
+                  id: 'tool-complete-preserve-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已查询并汇总2026年4月9日美股市场最新动态。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: '已查询并汇总2026年4月9日美股市场最新动态。',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+
+  const timelineCall = setupCalls.find((entry) => (entry as any).input?.messageType === 'assistant_message') as any;
+  assert.ok(timelineCall);
+  assert.equal(timelineCall.input.content, detailedAssistantContent);
+});
+
 test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {
   const state = createState('run-coordinator-deliverables', 'session-coordinator-deliverables');
   const setupCalls: Record<string, unknown>[] = [];

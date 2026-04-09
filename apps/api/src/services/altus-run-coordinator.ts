@@ -577,6 +577,26 @@ export class AltusRunCoordinator {
     return `${normalizedSummary}\n\n验证:\n${checks.map((item) => `- ${item}`).join('\n')}`;
   }
 
+  private resolveFinalAssistantContent(assistantContent: string, completionMessage: string): string {
+    const normalizedAssistantContent = truncate(asText(assistantContent), 24000).trim();
+    const normalizedCompletionMessage = asText(completionMessage);
+    if (!normalizedAssistantContent) {
+      return normalizedCompletionMessage;
+    }
+    if (!normalizedCompletionMessage) {
+      return normalizedAssistantContent;
+    }
+    if (normalizedAssistantContent.includes(normalizedCompletionMessage)) {
+      return normalizedAssistantContent;
+    }
+    if (normalizedCompletionMessage.includes(normalizedAssistantContent)) {
+      return normalizedCompletionMessage;
+    }
+    return normalizedAssistantContent.length >= normalizedCompletionMessage.length
+      ? normalizedAssistantContent
+      : normalizedCompletionMessage;
+  }
+
   private async runModelLoop(state: AltusRunState, signal: AbortSignal) {
     if (!state.workspaceRoot || !state.sandboxId) {
       throw new Error('managed_run_missing_sandbox_context');
@@ -762,7 +782,8 @@ export class AltusRunCoordinator {
               attachments: result.attachments || [],
             });
             state.deliverables = deliverables;
-            const finalContent = this.buildCompletionMessage(result.summary, result.verification);
+            const completionMessage = this.buildCompletionMessage(result.summary, result.verification);
+            const finalContent = this.resolveFinalAssistantContent(assistantContent, completionMessage);
             if (deliverables.length > 0) {
               await this.setupService.persistTimelineMessage({
                 sessionId: state.input.sessionId,

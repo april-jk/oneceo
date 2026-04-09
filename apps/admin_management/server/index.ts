@@ -53,22 +53,24 @@ const skillManagementService = new SkillManagementService(oneceoApiConnector);
 const connectorGuideManagementService = new ConnectorGuideManagementService(oneceoApiConnector);
 const osacReleaseManagementService = new OsacReleaseManagementService(oneceoApiConnector);
 
+app.use(express.json({ limit: jsonBodyLimit }));
+if (hasBuiltAdminWeb) {
+  app.use(express.static(adminWebDistPath));
+}
 app.use(
+  '/api',
   cors({
     origin(origin, callback) {
       if (isAllowedCorsOrigin(origin)) {
         callback(null, true);
         return;
       }
-      callback(new Error(`CORS origin not allowed: ${origin || 'unknown'}`));
+      // Disallow CORS without turning request into 500. Browser will block cross-origin calls.
+      callback(null, false);
     },
     credentials: true,
   })
 );
-app.use(express.json({ limit: jsonBodyLimit }));
-if (hasBuiltAdminWeb) {
-  app.use(express.static(adminWebDistPath));
-}
 
 app.use((req, res, next) => {
   const startedAt = Date.now();

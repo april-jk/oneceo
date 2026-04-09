@@ -1,19 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import {
-  sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
   taskSessionConnectorBindingDAO,
 } from '../db/dao';
-import { sandboxEnvironmentService } from './sandbox-environment-service';
 import { osacAgentService } from './osac-agent-service';
 import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { sessionConnectorService } from './session-connector-service';
-import { e2bConnector } from '../connectors/e2b-connector';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
-import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
+import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
@@ -122,38 +119,6 @@ function extractMessageTextContent(content: ChatMessage['content']) {
 
 export class AltusManagedSetupService {
   constructor(private readonly imageObjectService: ManagedImageObjectService = managedImageObjectService) {}
-
-  private async reuseKnownSandbox(sessionId: string, sandboxId: string, workspaceRoot: string) {
-    const normalizedSandboxId = asText(sandboxId);
-    if (!normalizedSandboxId) {
-      return null;
-    }
-
-    try {
-      await e2bConnector.getSandboxInfo(normalizedSandboxId);
-      await taskSessionRunDAO.upsertSandboxBinding({
-        sessionId,
-        sandboxId: normalizedSandboxId,
-        workspaceRoot,
-        status: 'ready',
-        metadataJson: {
-          provider: 'e2b',
-        },
-      });
-      await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
-        orchestratorSessionId: normalizedSandboxId,
-      });
-      await sandboxExecutionEnvironmentDAO.updateStatus(normalizedSandboxId, 'ready', null).catch(() => null);
-      return {
-        sandboxId: normalizedSandboxId,
-        workspaceRoot,
-        reused: true,
-      };
-    } catch {
-      await sandboxExecutionEnvironmentDAO.updateStatus(normalizedSandboxId, 'closed', null).catch(() => null);
-      return null;
-    }
-  }
 
   private async buildInlineImageBlocks(input: {
     metadata?: unknown;
@@ -319,37 +284,8 @@ export class AltusManagedSetupService {
 
   async ensureSandbox(sessionId: string, sessionTitle?: string | null) {
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
-    const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId);
-    const runtimeSandboxId = asText(sessionMemory?.runtime?.orchestratorSessionId);
-    if (runtimeSandboxId) {
-      const reusedFromRuntime = await this.reuseKnownSandbox(sessionId, runtimeSandboxId, workspaceRoot);
-      if (reusedFromRuntime) {
-        void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromRuntime.sandboxId).catch(() => null);
-        return reusedFromRuntime;
-      }
-    }
-
-    const existing = await taskSessionRunDAO.getSandboxBindingBySession(sessionId);
-    if (existing?.sandboxId) {
-      const reusedFromBinding = await this.reuseKnownSandbox(
-        sessionId,
-        existing.sandboxId,
-        existing.workspaceRoot || workspaceRoot
-      );
-      if (reusedFromBinding) {
-        void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, reusedFromBinding.sandboxId).catch(() => null);
-        return reusedFromBinding;
-      }
-      try {
-        await taskSessionRunDAO.touchSandboxBinding(sessionId, 'failed');
-        await sessionMcpRecoveryService.markPendingRecoverByOrchestratorSessionId(existing.sandboxId).catch(() => null);
-        await sandboxExecutionEnvironmentDAO.updateStatus(existing.sandboxId, 'closed', null).catch(() => null);
-      } catch {
-        // ignore stale binding cleanup failures and continue provisioning a new sandbox
-      }
-    }
-
-    const opened = await sandboxEnvironmentService.openEnvironment({
+    const provision = await sandboxAgentProvisionService.provisionWithLock({
+      executor: 'altus',
       metadata: {
         taskSessionId: sessionId,
         taskTitle: sessionTitle || undefined,
@@ -362,33 +298,23 @@ export class AltusManagedSetupService {
       },
     });
 
-    await e2bConnector.runCommand(
-      opened.sessionId,
-      `mkdir -p '${workspaceRoot.replace(/'/g, `'\"'\"'`)}'`,
-      { timeoutMs: 15000 }
-    );
-    await restoreWorkspaceIfArchived(opened.sessionId).catch(() => false);
     await taskSessionRunDAO.upsertSandboxBinding({
       sessionId,
-      sandboxId: opened.sessionId,
+      sandboxId: provision.sessionId,
       workspaceRoot,
       status: 'ready',
       metadataJson: {
         provider: 'e2b',
       },
     });
-    await taskCreationFileMemoryStore.updateRuntimeBinding(sessionId, {
-      orchestratorSessionId: opened.sessionId,
-      executor: 'altus',
-    });
-    await ensureSandboxRuntimeMetadata(opened.sessionId, {
+    await ensureSandboxRuntimeMetadata(provision.sessionId, {
       taskSessionId: sessionId,
     }).catch(() => null);
-    void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, opened.sessionId).catch(() => null);
+    void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, provision.sessionId).catch(() => null);
     return {
-      sandboxId: opened.sessionId,
+      sandboxId: provision.sessionId,
       workspaceRoot,
-      reused: false,
+      reused: provision.allocationSource === 'reused_session',
     };
   }
 

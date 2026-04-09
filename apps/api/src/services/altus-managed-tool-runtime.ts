@@ -4,6 +4,7 @@ import { tavilyConnector } from '../connectors/tavily-connector';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
+import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
   asText,
@@ -70,6 +71,13 @@ export class AltusManagedToolRuntime {
       workspaceRoot: string;
       activeSkills: ManagedSkillContext[];
       mcpProviders: ManagedMcpProvider[];
+    },
+    private readonly sandboxActivityDeps: {
+      touchSandbox: typeof touchSandbox;
+      markSandboxDirty: typeof markSandboxDirty;
+    } = {
+      touchSandbox,
+      markSandboxDirty,
     }
   ) {}
 
@@ -206,8 +214,13 @@ export class AltusManagedToolRuntime {
     }));
   }
 
+  private async markWorkspaceDirty(reason: string) {
+    await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, reason).catch(() => null);
+  }
+
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
     if (toolName === 'load_connector_guide') {
       const connectorKey = asText(rawArgs.connectorKey).toLowerCase();
       if (!connectorKey) {
@@ -284,6 +297,7 @@ export class AltusManagedToolRuntime {
           })
         );
       }
+      await this.markWorkspaceDirty(`managed_mcp_tool:${mcpTool.toolName}`);
       return {
         type: 'result',
         content: JSON.stringify({
@@ -307,6 +321,7 @@ export class AltusManagedToolRuntime {
       const stdout = truncate(asText((result as any)?.stdout));
       const stderr = truncate(asText((result as any)?.stderr));
       const exitCode = Number((result as any)?.exitCode ?? -1);
+      await this.markWorkspaceDirty('managed_shell_execute');
       return {
         type: 'result',
         content: JSON.stringify({
@@ -342,6 +357,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       await e2bConnector.writeFile(this.input.sandboxId, absolutePath, Buffer.from(content, 'utf-8'));
       this.ensureNotAborted(signal);
+      await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
         content: JSON.stringify({

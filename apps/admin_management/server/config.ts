@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { loadAdminEnv } from './load-env';
 
-loadAdminEnv();
+const { loadedPath: adminEnvLoadedPath } = loadAdminEnv();
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -22,6 +22,15 @@ function parseCommaSeparatedList(value: string) {
     .filter(Boolean);
 }
 
+function resolveDefaultAdminPort(loadedPath?: string) {
+  if (loadedPath) {
+    return 9310;
+  }
+
+  const runtimePort = Number(asText(process.env.PORT) || '9310');
+  return Number.isFinite(runtimePort) && runtimePort > 0 ? runtimePort : 9310;
+}
+
 function isPrivateIpv4(hostname: string) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return false;
   const parts = hostname.split('.').map((part) => Number(part));
@@ -38,7 +47,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
-    .default(Number(asText(process.env.PORT) || '9310')),
+    .default(resolveDefaultAdminPort(adminEnvLoadedPath)),
   KVM_ORCHESTRATOR_URL: z.string().url().default('http://192.168.10.128:8500'),
   KVM_ORCH_TOKEN: z.string().default(''),
   KVM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),

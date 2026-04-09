@@ -35,13 +35,25 @@ function releaseStatusLabel(status?: string | null) {
 }
 
 async function fileToBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('读取文件失败'));
+        return;
+      }
+      const markerIndex = reader.result.indexOf(',');
+      if (markerIndex < 0) {
+        reject(new Error('文件编码失败'));
+        return;
+      }
+      resolve(reader.result.slice(markerIndex + 1));
+    };
+    reader.onerror = () => {
+      reject(new Error('读取文件失败'));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 const DEFAULT_UPLOAD_FORM = {

@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { currentUserResolver } from '../services/current-user-resolver';
+import { isSameUserId } from '../utils/user-id';
 import { altusManagedRunService } from '../services/altus-managed-run-service';
 import { altusManagedInputService } from '../services/altus-managed-input-service';
 import { getPublicErrorMessage } from '../utils/error-response';
@@ -180,7 +181,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
         error: '当前 run 关联会话缺少用户归属',
       });
     }
-    if (currentUser.userId !== sessionUserId) {
+    if (!isSameUserId(currentUser.userId, sessionUserId)) {
       return res.status(403).json({
         success: false,
         error: '当前用户无权订阅该 Altus managed run',

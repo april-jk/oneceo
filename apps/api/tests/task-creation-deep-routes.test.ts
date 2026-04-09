@@ -32,6 +32,8 @@ const opencodeEventStreamAny = opencodeEventStreamService as any;
 const opencodeRemoteAny = opencodeRemoteService as any;
 
 const originalGetSessionDao = sessionDaoAny.getSession;
+const originalBindUserIfMissing = sessionDaoAny.bindUserIfMissing;
+const originalAdoptSessionFromLegacyUserId = sessionDaoAny.adoptSessionFromLegacyUserId;
 const originalGetRecentMessages = sessionDaoAny.getRecentMessages;
 const originalGetMessages = sessionDaoAny.getMessages;
 const originalGetRun = runDaoAny.getRun;
@@ -56,6 +58,8 @@ const originalSubscribeRemote = opencodeRemoteAny.subscribe;
 
 after(async () => {
   sessionDaoAny.getSession = originalGetSessionDao;
+  sessionDaoAny.bindUserIfMissing = originalBindUserIfMissing;
+  sessionDaoAny.adoptSessionFromLegacyUserId = originalAdoptSessionFromLegacyUserId;
   sessionDaoAny.getRecentMessages = originalGetRecentMessages;
   sessionDaoAny.getMessages = originalGetMessages;
   runDaoAny.getRun = originalGetRun;
@@ -157,6 +161,100 @@ test('GET /api/task-creation/sessions/:sessionId returns 403 for foreign user', 
 
     assert.equal(response.status, 403);
     assert.equal(payload.error, '当前用户无权访问该会话');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId binds orphan session to current user', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: null,
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  let bindSessionId = '';
+  let bindUserId = '';
+  sessionDaoAny.bindUserIfMissing = async (sessionId: string, userId: string) => {
+    bindSessionId = sessionId;
+    bindUserId = userId;
+    return {
+      id: sessionId,
+      userId,
+      status: 'in_progress',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  };
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId, 'owner-user');
+  sessionConnectorAny.listSessionConnectors = async () => [];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-orphan-1`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(bindSessionId, 's-orphan-1');
+    assert.equal(bindUserId, 'owner-user');
+    assert.equal(payload.data.id, 's-orphan-1');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/task-creation/sessions/:sessionId adopts legacy session owner when hint matches', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'legacy-local-user-2',
+    status: 'in_progress',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  sessionDaoAny.bindUserIfMissing = async () => {
+    throw new Error('should not bind missing owner in legacy adopt test');
+  };
+  let adoptedSessionId = '';
+  let adoptedUserId = '';
+  let adoptedLegacyUserId = '';
+  sessionDaoAny.adoptSessionFromLegacyUserId = async (
+    sessionId: string,
+    userId: string,
+    legacyUserId: string
+  ) => {
+    adoptedSessionId = sessionId;
+    adoptedUserId = userId;
+    adoptedLegacyUserId = legacyUserId;
+    return {
+      id: sessionId,
+      userId,
+      status: 'in_progress',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  };
+  fileStoreAny.getSession = async (sessionId: string) => ownerSession(sessionId, 'owner-user');
+  sessionConnectorAny.listSessionConnectors = async () => [];
+
+  try {
+    const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-legacy-owner-1`, {
+      headers: {
+        'x-test-user-id': 'owner-user',
+        'x-legacy-user-id': 'legacy-local-user-2',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(adoptedSessionId, 's-legacy-owner-1');
+    assert.equal(adoptedUserId, 'owner-user');
+    assert.equal(adoptedLegacyUserId, 'legacy-local-user-2');
   } finally {
     await server.close();
   }

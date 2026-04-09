@@ -20,6 +20,7 @@ import { connectorGuideService } from './connector-guide-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import type { OsacMessage } from '../clients/osac-client';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { isSameUserId } from '../utils/user-id';
 
 export type SessionConnectorConfig = {
   repositories?: string[];
@@ -386,11 +387,14 @@ export class SessionConnectorService {
     if (!session) {
       throw new Error('会话不存在');
     }
-    if (session.userId && session.userId !== userId) {
+    if (session.userId && !isSameUserId(session.userId, userId)) {
       throw new Error('当前用户无权管理该会话连接器');
     }
     if (!session.userId) {
-      throw new Error('会话缺少归属用户，无法管理该会话连接器');
+      session = await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, userId);
+      if (!session?.userId) {
+        throw new Error('会话缺少归属用户，无法管理该会话连接器');
+      }
     }
     return session;
   }

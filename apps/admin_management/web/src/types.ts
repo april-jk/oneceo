@@ -197,7 +197,7 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   operator: string;
-  action: 'start' | 'stop';
+  action: string;
   targetVmId: string;
   sessionId?: string;
   result: 'success' | 'failed';
@@ -206,7 +206,32 @@ export interface AuditLogEntry {
 
 export interface AuditResponse {
   total: number;
+  filteredTotal: number;
+  limit: number;
+  offset: number;
   entries: AuditLogEntry[];
+  availableOperators?: string[];
+  availableActions?: string[];
+  availableTargets?: string[];
+}
+
+export interface AuditDetailResponse {
+  entry: AuditLogEntry;
+  relatedEntries: AuditLogEntry[];
+}
+
+export interface AgentStageDistributionItem {
+  stageKey: string;
+  label: string;
+  value: number;
+  statusSummary: Array<{ label: string; value: number }>;
+  recentSessions: Array<{
+    id: string;
+    title: string;
+    status: string;
+    updatedAt: string;
+    pendingQuestion?: string;
+  }>;
 }
 
 export interface ConversationSession {
@@ -606,7 +631,7 @@ export interface AgentManagementOverview {
     completed: number;
     failed: number;
   };
-  stageDistribution: Array<{ label: string; value: number }>;
+  stageDistribution: AgentStageDistributionItem[];
 }
 
 export interface SandboxEnvironmentItem {

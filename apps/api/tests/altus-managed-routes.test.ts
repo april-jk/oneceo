@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
 import altusManagedRoutes from '../src/routes/altus-managed-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { altusManagedInputService } from '../src/services/altus-managed-input-service';
 import { altusManagedRunService } from '../src/services/altus-managed-run-service';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
@@ -37,6 +38,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/altus-managed', altusManagedRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -96,7 +98,7 @@ test('POST /api/altus-managed/inputs forwards current user to service', async ()
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'altus-user-1',
+        'x-test-user-id': 'altus-user-1',
       },
       body: JSON.stringify({ content: 'hello' }),
     });
@@ -123,7 +125,7 @@ test('POST /api/altus-managed/sessions/:sessionId/runs forwards current user to 
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'altus-user-2',
+        'x-test-user-id': 'altus-user-2',
       },
       body: JSON.stringify({ content: 'run' }),
     });
@@ -163,7 +165,7 @@ test('GET /api/altus-managed/runs/:runId/stream uses current user instead of que
 
   try {
     const response = await fetch(`${server.origin}/api/altus-managed/runs/run-3/stream`, {
-      headers: { 'x-user-id': 'altus-user-3' },
+      headers: { 'x-test-user-id': 'altus-user-3' },
     });
     const payload = await response.json();
 
@@ -186,7 +188,7 @@ test('GET /api/altus-managed/runs/:runId/stream returns 403 for foreign user', a
 
   try {
     const response = await fetch(`${server.origin}/api/altus-managed/runs/run-4/stream`, {
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -210,7 +212,7 @@ test('POST /api/altus-managed/runs/:runId/stop forwards current user to stopRun'
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'altus-user-5',
+        'x-test-user-id': 'altus-user-5',
       },
       body: JSON.stringify({ reason: 'user_interrupt' }),
     });

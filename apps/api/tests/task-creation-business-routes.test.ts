@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { taskCreationSessionDAO } from '../src/db/dao';
 
@@ -36,6 +37,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -101,7 +103,7 @@ test('GET /api/task-creation/sessions only returns sessions owned by current use
   try {
     const response = await fetch(`${server.origin}/api/task-creation/sessions`, {
       headers: {
-        'x-user-id': 'user-a',
+        'x-test-user-id': 'user-a',
       },
     });
     const payload = await response.json();
@@ -140,7 +142,7 @@ test('POST /api/task-creation/sessions binds db session to current user', async 
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'user-bind-1',
+        'x-test-user-id': 'user-bind-1',
       },
       body: JSON.stringify({
         sessionId: 'new-session',
@@ -167,7 +169,7 @@ test('GET /api/task-creation/sessions/:sessionId/workspace/dir blocks foreign us
   try {
     const response = await fetch(`${server.origin}/api/task-creation/sessions/foreign-1/workspace/dir`, {
       headers: {
-        'x-user-id': 'visitor-user',
+        'x-test-user-id': 'visitor-user',
       },
     });
     const payload = await response.json();

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
+import { e2bConnector } from '../src/connectors/e2b-connector';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { connectorGuideService } from '../src/services/connector-guide-service';
@@ -229,4 +230,73 @@ test('vercel mcp tool call is blocked until active vercel connector guide is loa
   assert.equal(toolResult.type, 'result');
   assert.equal(mcpMock.mock.callCount(), 1);
   assert.ok(guideMock.mock.callCount() >= 3);
+});
+
+test('write_file marks sandbox dirty so archive job can persist latest workspace snapshot', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  mock.method(e2bConnector, 'writeFile', async () => undefined);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('write_file', {
+    path: 'snake-game/index.html',
+    content: '<!doctype html><title>snake</title>',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_write_file']);
+});
+
+test('shell_execute marks sandbox dirty after command execution', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: 'ok',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'echo ok',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_shell_execute']);
 });

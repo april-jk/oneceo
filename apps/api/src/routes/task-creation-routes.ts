@@ -7,6 +7,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import {
+  appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
@@ -370,6 +371,40 @@ function resolveLegacyUserIdHint(req: express.Request, currentUserId: string): s
   return candidate;
 }
 
+async function upsertLegacyUserMapping(appUserId: string, legacyUserIdHint: string) {
+  if (!legacyUserIdHint) return;
+  try {
+    await appUserLegacyIdMappingDAO.upsert({
+      appUserId,
+      legacyUserId: legacyUserIdHint,
+      source: 'request_header',
+    });
+  } catch (error) {
+    console.warn('[TASK_SESSION_LEGACY_MAPPING_UPSERT_FAILED]', {
+      appUserId,
+      legacyUserId: legacyUserIdHint,
+      error,
+    });
+  }
+}
+
+async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdHint: string): Promise<string[]> {
+  const values = new Set<string>();
+  if (legacyUserIdHint) values.add(legacyUserIdHint);
+  try {
+    const mapped = await appUserLegacyIdMappingDAO.listLegacyIdsByAppUserId(appUserId, 200);
+    for (const legacyUserId of mapped) {
+      if (legacyUserId) values.add(legacyUserId);
+    }
+  } catch (error) {
+    console.warn('[TASK_SESSION_LEGACY_MAPPING_LIST_FAILED]', {
+      appUserId,
+      error,
+    });
+  }
+  return [...values];
+}
+
 async function requireOwnedTaskSession(sessionId: string, userId: string, legacyUserIdHint?: string) {
   const normalizedUserId = normalizeUserId(userId);
   let session = await taskCreationSessionDAO.getSession(sessionId);
@@ -392,6 +427,31 @@ async function requireOwnedTaskSession(sessionId: string, userId: string, legacy
     );
     if (adopted?.userId) {
       session = adopted;
+    }
+  }
+  if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
+    const legacyOwner = normalizeUserId(session.userId);
+    if (isLegacyClientUserId(legacyOwner)) {
+      try {
+        const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
+        if (isSameUserId(mappedAppUserId, normalizedUserId)) {
+          const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
+            sessionId,
+            normalizedUserId,
+            legacyOwner
+          );
+          if (adopted?.userId) {
+            session = adopted;
+          }
+        }
+      } catch (error) {
+        console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
+          sessionId,
+          userId: normalizedUserId,
+          legacyOwner,
+          error,
+        });
+      }
     }
   }
   if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
@@ -2941,6 +3001,7 @@ router.post('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
+    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
@@ -3103,6 +3164,7 @@ router.get('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
+    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const rawLimit = (req.query.limit as string | undefined)?.trim();
     let limit = 200;
     if (rawLimit === 'all') {
@@ -3123,36 +3185,27 @@ router.get('/sessions', async (req, res) => {
     let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
     if (ownedDbSessions.length === 0) {
       try {
-        if (legacyUserIdHint) {
-          const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
-            currentUser.userId,
-            legacyUserIdHint,
-            limit
-          );
-          if (reboundLegacy.length > 0) {
-            ownedDbSessions = reboundLegacy;
-            console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
-              userId: currentUser.userId,
-              legacyUserId: legacyUserIdHint,
-              reboundCount: reboundLegacy.length,
-            });
-          }
-        }
-        if (ownedDbSessions.length === 0) {
-          const hasForeignOwnedSessions = await taskCreationSessionDAO.hasForeignOwnedSessions(currentUser.userId);
-          if (!hasForeignOwnedSessions) {
-            const rebound = await taskCreationSessionDAO.rebindRecentUnownedSessionsToUser(currentUser.userId, limit);
-            if (rebound.length > 0) {
-              ownedDbSessions = rebound;
-              console.warn('[TASK_SESSION_LIST_REBOUND_ORPHAN]', {
+        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId, legacyUserIdHint);
+        if (legacyUserIds.length > 0) {
+          for (const legacyUserId of legacyUserIds) {
+            const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
+              currentUser.userId,
+              legacyUserId,
+              limit
+            );
+            if (reboundLegacy.length > 0) {
+              ownedDbSessions = reboundLegacy;
+              console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
                 userId: currentUser.userId,
-                reboundCount: rebound.length,
+                legacyUserId,
+                reboundCount: reboundLegacy.length,
               });
+              break;
             }
           }
         }
       } catch (error) {
-        console.warn('[TASK_SESSION_LIST_REBOUND_ORPHAN_FAILED]', {
+        console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
           userId: currentUser.userId,
           error,
         });

@@ -25,6 +25,10 @@ import { opencodeRemoteService } from '../../services/opencode-remote-service';
 import { resolveOpencodeWorkspacePath } from '../../utils/opencode-workspace';
 import { taskCreationFileMemoryStore } from './file-memory-store';
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export interface TaskCreationCallbacks {
   onMessage: (message: WebSocketMessage) => void;
   onAskUser: (question: string, options?: string[]) => Promise<string>;
@@ -94,6 +98,10 @@ export class TaskCreationService {
     metadata?: Record<string, unknown>
   ): Promise<ExecutionPlan> {
     try {
+      const resolvedUserId = asText(userId);
+      if (!resolvedUserId) {
+        throw new Error('无法识别当前用户，请先登录');
+      }
       this.runControl?.setPhase?.('intent_processing');
       this.sessionId = sessionId;
       console.log('[TaskCreationService] 开始创建任务:', userInput);
@@ -104,7 +112,7 @@ export class TaskCreationService {
         console.log('[TaskCreationService] 创建会话...');
         const session = await this.runDbOperation(
           'createSession',
-          () => taskCreationSessionDAO.createSession({ userId })
+          () => taskCreationSessionDAO.createSession({ userId: resolvedUserId })
         );
         this.sessionId = session.id;
         this.callbacks?.onSessionCreated?.(this.sessionId);
@@ -117,16 +125,14 @@ export class TaskCreationService {
           await this.runDbOperation('createSessionWithId', () =>
             taskCreationSessionDAO.createSession({
               id: this.sessionId!,
-              userId,
+              userId: resolvedUserId,
               status: 'in_progress',
             } as any)
           );
         } else {
-          if (userId) {
-            await this.runDbOperation('bindUserIfMissing', () =>
-              taskCreationSessionDAO.bindUserIfMissing(this.sessionId!, userId)
-            );
-          }
+          await this.runDbOperation('bindUserIfMissing', () =>
+            taskCreationSessionDAO.bindUserIfMissing(this.sessionId!, resolvedUserId)
+          );
           await this.runDbOperation(
             'updateSessionStatus:in_progress',
             () => taskCreationSessionDAO.updateSessionStatus(this.sessionId!, 'in_progress')
@@ -986,6 +992,10 @@ export class TaskCreationService {
   }
 
   async resumeTask(sessionId: string, latestUserInput?: string, userId?: string): Promise<void> {
+    const resolvedUserId = asText(userId);
+    if (!resolvedUserId) {
+      throw new Error('无法识别当前用户，请先登录');
+    }
     this.sessionId = sessionId;
     await ensureDatabaseConnection({ retries: 3, delayMs: 1200 });
 
@@ -1009,7 +1019,7 @@ export class TaskCreationService {
 
       this.setStage('collecting');
       this.sendStatus('intent', '上下文不足，正在重新发起任务流程...');
-      await this.createTask(restartInput, userId, sessionId, 'user_response');
+      await this.createTask(restartInput, resolvedUserId, sessionId, 'user_response');
       return;
     }
 

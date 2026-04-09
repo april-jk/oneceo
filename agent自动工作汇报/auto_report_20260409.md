@@ -68,3 +68,17 @@
   - 该问题同时涉及“运行时最终落库策略”和“提示词完成约束”；仅改前端渲染无法从根源避免最终历史消息被短 summary 覆盖。
 - 计划如何解决（补充7）：
   - 继续观察线上 managed run 中 `web_search -> complete_task` 场景，确认最终消息内容与流式展示保持一致，不再出现任务完成后正文变短。
+
+- 做了什么（补充8）：
+  - 针对 Issue #45 再次回归，补充排查到“非空但 legacy 的 user_id”路径：历史 session 的 `user_id` 为旧匿名本地标识时，原空归属回填逻辑无法命中。
+  - 新增后端定向迁移能力：
+    1. `rebindSessionsFromLegacyUserId`（列表链路）
+    2. `adoptSessionFromLegacyUserId`（详情/访问链路）
+  - `task-creation-routes` 读取 `X-Legacy-User-Id`（兼容 `X-User-Id` hint）后，先做 legacy 定向迁移，再走 orphan 回填。
+  - 统一 owner 比较为规范化比较（trim 后比较），修复历史脏数据导致的误判 403。
+  - Web 端 `buildClientIdentityHeaders` 透传 `localStorage.oneceo_client_user_id` 到 `X-Legacy-User-Id`，用于历史会话归属修复。
+  - 新增/更新 API 测试覆盖 legacy 定向迁移与详情链路认领场景。
+- 遇到什么（补充8）：
+  - 线上历史数据存在“空归属 + legacy 归属 + 规范归属”并存，单一回填策略不能覆盖全部历史形态。
+- 计划如何解决（补充8）：
+  - 执行 task-creation 相关回归测试与 type-check，确认刷新/重部署场景下列表稳定恢复且不放宽跨用户边界。

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
-import { taskCreationSessionDAO } from '../src/db/dao';
+import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { managedImageObjectService } from '../src/services/managed-image-object-service';
 import { AltusManagedSetupService } from '../src/services/altus-managed-setup-service';
+import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
+import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 
 afterEach(() => {
   mock.reset();
@@ -84,4 +86,26 @@ test('buildConversationMessages converts image attachments into multimodal user 
   assert.match(String(parts[0]?.text), /看看这个图讲了什么/);
   assert.equal(parts[1]?.type, 'image_url');
   assert.equal(parts[1]?.image_url?.url, 'https://images.example.com/signed/screenshot.png?token=abc');
+});
+
+test('ensureSandbox provisions through sandboxAgentProvisionService to enforce paused-sandbox recovery gate', async () => {
+  const provisionMock = mock.method(sandboxAgentProvisionService, 'provisionWithLock', async () => ({
+    sessionId: 'sandbox-new',
+    allocationSource: 'reused_session',
+  }) as any);
+  const upsertMock = mock.method(taskSessionRunDAO, 'upsertSandboxBinding', async () => ({} as any));
+  const recoverMock = mock.method(sessionMcpRecoveryService, 'ensureSessionRecovered', async () => undefined as any);
+
+  const service = new AltusManagedSetupService();
+  const result = await service.ensureSandbox('session-1', 'Demo session');
+
+  assert.equal(provisionMock.mock.callCount(), 1);
+  const provisionInput = provisionMock.mock.calls[0]?.arguments[0] as Record<string, unknown>;
+  assert.equal(provisionInput.executor, 'altus');
+  assert.equal((provisionInput.metadata as Record<string, unknown>)?.taskSessionId, 'session-1');
+  assert.equal((provisionInput.metadata as Record<string, unknown>)?.sandboxExecutor, 'altus');
+  assert.equal(upsertMock.mock.callCount(), 1);
+  assert.equal(result.sandboxId, 'sandbox-new');
+  assert.equal(result.reused, true);
+  assert.equal(recoverMock.mock.callCount(), 1);
 });

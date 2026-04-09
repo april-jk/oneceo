@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { taskSessionRunDAO } from '../db/dao';
 import { e2bConnector } from '../connectors/e2b-connector';
-import { touchSandbox } from './sandbox-activity-service';
+import { markSandboxDirty } from './sandbox-activity-service';
 import { altusManagedRunService, type AltusManagedRunService } from './altus-managed-run-service';
 import { AltusManagedSetupService, altusManagedSetupService } from './altus-managed-setup-service';
 import {
@@ -41,7 +41,7 @@ export class AltusManagedInputService {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
     private readonly runService: AltusManagedRunService = altusManagedRunService,
-    private readonly touchSandboxFn: typeof touchSandbox = touchSandbox,
+    private readonly markSandboxDirtyFn: typeof markSandboxDirty = markSandboxDirty,
     private readonly imageObjectService: ManagedImageObjectService = managedImageObjectService
   ) {}
 
@@ -154,7 +154,7 @@ export class AltusManagedInputService {
       await e2bConnector.writeFile(sandboxId, `${workspaceRoot}/${attachment.path}`, upload.buffer);
     }
 
-    await this.touchSandboxFn(sandboxId, 'managed_attachment_upload');
+    await this.markSandboxDirtyFn(sandboxId, 'managed_attachment_upload');
     return attachments;
   }
 

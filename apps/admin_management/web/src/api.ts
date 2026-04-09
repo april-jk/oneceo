@@ -1,5 +1,6 @@
 import type {
   AgentManagementOverview,
+  AuditDetailResponse,
   AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
@@ -738,5 +739,29 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
+  listAudit: (
+    query: {
+      query?: string;
+      operator?: string;
+      action?: string;
+      result?: string;
+      sessionId?: string;
+      targetVmId?: string;
+      from?: string;
+      to?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<AuditResponse>(`/api/audit${suffix}`);
+  },
+  getAuditDetail: (auditId: string) =>
+    request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
 };

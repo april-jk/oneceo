@@ -42,6 +42,8 @@ const EMPTY_EDITOR: EditorState = {
   documents: [],
 };
 
+const DEFAULT_CATEGORY_OPTIONS = ['general', 'office', 'engineering', 'ops', 'design'];
+
 function toEditorState(detail: SkillDetail): EditorState {
   return {
     slug: detail.slug,
@@ -83,8 +85,23 @@ function skillStatusLabel(status?: string | null) {
   return status || '-';
 }
 
+function resourceTypeLabel(value?: string | null) {
+  if (value === 'template') return '模板片段';
+  if (value === 'reference') return '参考文档';
+  return value || '-';
+}
+
 function storageLabel(value?: string | null) {
   return value === 'object_storage' ? '存储桶' : '数据库';
+}
+
+function skillCategoryLabel(category?: string | null) {
+  if (category === 'general') return '通用';
+  if (category === 'office') return '办公';
+  if (category === 'engineering') return '工程';
+  if (category === 'ops') return '运维';
+  if (category === 'design') return '设计';
+  return category || '-';
 }
 
 async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativePath: string; content: string }>> {
@@ -154,11 +171,11 @@ export function SkillManagementSection({ onError }: Props) {
   }, []);
 
   const categoryOptions = useMemo(() => {
-    const categories = new Set<string>();
+    const categories = new Set<string>(DEFAULT_CATEGORY_OPTIONS);
     for (const item of skills) {
       if (item.category) categories.add(item.category);
     }
-    return Array.from(categories).sort((a, b) => a.localeCompare(b));
+    return Array.from(categories).sort((a, b) => skillCategoryLabel(a).localeCompare(skillCategoryLabel(b), 'zh-Hans-CN'));
   }, [skills]);
 
   const loadSkills = useCallback(async () => {
@@ -432,13 +449,17 @@ export function SkillManagementSection({ onError }: Props) {
       setValidationResult(result);
       onError(null);
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Sandbox 验证失败');
+      onError(error instanceof Error ? error.message : '沙箱校验失败');
     } finally {
       setBusy(false);
     }
   };
 
   const selectedDocument = editor.documents[selectedDocumentIndex] || null;
+
+  const selectedRevisionLabel = selectedRevisionId
+    ? `版本 ${revisions.find((item) => item.id === selectedRevisionId)?.revisionNumber || '-'}`
+    : '未选择版本';
 
   const updateDocument = (
     index: number,
@@ -487,9 +508,9 @@ export function SkillManagementSection({ onError }: Props) {
       <section className="panel fade-in">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">技能注册表</p>
+            <p className="eyebrow">技能总览</p>
             <h2>技能管理</h2>
-            <p className="subtitle">维护平台注册 skills、revision 与 sandbox 验证。</p>
+            <p className="subtitle">维护平台技能、版本记录、资源文档与沙箱校验。</p>
           </div>
           <div className="section-actions">
             <button
@@ -577,7 +598,7 @@ export function SkillManagementSection({ onError }: Props) {
         <div className="skill-toolbar">
           <input
             className="control-input"
-            placeholder="按名称 / slug 搜索"
+            placeholder="按名称或 slug 搜索"
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
           />
@@ -595,13 +616,13 @@ export function SkillManagementSection({ onError }: Props) {
             value={filters.category}
             onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))}
           >
-            <option value="">全部分类</option>
-            {categoryOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+              <option value="">全部分类</option>
+              {categoryOptions.map((item) => (
+                <option key={item} value={item}>
+                  {skillCategoryLabel(item)}
+                </option>
+              ))}
+            </select>
           <button type="button" className="ghost-btn" onClick={() => void loadSkills()} disabled={busy}>
             应用筛选
           </button>
@@ -614,14 +635,14 @@ export function SkillManagementSection({ onError }: Props) {
                 <th>技能</th>
                 <th>分类</th>
                 <th>状态</th>
-                <th>发布版本</th>
+                <th>当前版本</th>
               </tr>
             </thead>
             <tbody>
               {skills.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="table-empty">
-                    暂无技能
+                    暂无技能记录
                   </td>
                 </tr>
               ) : (
@@ -635,11 +656,11 @@ export function SkillManagementSection({ onError }: Props) {
                       <strong>{item.name}</strong>
                       <div className="cell-subtle">{item.slug}</div>
                     </td>
-                    <td>{item.category}</td>
+                    <td>{skillCategoryLabel(item.category)}</td>
                     <td>
                       <span className={`status-pill status-${item.status}`}>{skillStatusLabel(item.status)}</span>
                     </td>
-                    <td>{item.publishedRevisionNumber ? `rev.${item.publishedRevisionNumber}` : '-'}</td>
+                    <td>{item.publishedRevisionNumber ? `版本 ${item.publishedRevisionNumber}` : '-'}</td>
                   </tr>
                 ))
               )}
@@ -656,16 +677,16 @@ export function SkillManagementSection({ onError }: Props) {
               event.stopPropagation();
             }}
           >
-            <div className="modal-header">
-              <div>
-                <p className="section-tag">技能详情</p>
-                <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
-                <p className="cell-subtle">
-                  {isCreating
-                    ? '直接创建平台 skill，并在同一窗口完成正文与资源校验'
+              <div className="modal-header">
+                <div>
+                  <p className="section-tag">技能详情</p>
+                  <h2>{isCreating ? '新建技能' : detail?.name || '技能详情'}</h2>
+                  <p className="cell-subtle">
+                    {isCreating
+                    ? '直接创建平台技能，并在同一窗口完成正文与资源校验'
                     : `${detail?.slug || '-'} · 更新时间 ${formatDateTime(detail?.updatedAt)}`}
-                </p>
-              </div>
+                  </p>
+                </div>
               <div className="section-actions">
                 {!isCreating && detail ? (
                   <button type="button" className="ghost-btn" onClick={handleArchiveToggle} disabled={busy}>
@@ -684,7 +705,7 @@ export function SkillManagementSection({ onError }: Props) {
                 onClick={() => setDetailTab('editor')}
               >
                 <span className="inspector-tab-card-key mono">01</span>
-                <span className="inspector-tab-card-label">编辑与 Revision</span>
+                <span className="inspector-tab-card-label">内容与版本</span>
               </button>
               <button
                 type="button"
@@ -693,7 +714,7 @@ export function SkillManagementSection({ onError }: Props) {
                 disabled={isCreating}
               >
                 <span className="inspector-tab-card-key mono">02</span>
-                <span className="inspector-tab-card-label">复合资源</span>
+                <span className="inspector-tab-card-label">资源明细</span>
               </button>
               <button
                 type="button"
@@ -702,7 +723,7 @@ export function SkillManagementSection({ onError }: Props) {
                 disabled={isCreating}
               >
                 <span className="inspector-tab-card-key mono">03</span>
-                <span className="inspector-tab-card-label">渲染结果</span>
+                <span className="inspector-tab-card-label">渲染预览</span>
               </button>
               <button
                 type="button"
@@ -711,7 +732,7 @@ export function SkillManagementSection({ onError }: Props) {
                 disabled={isCreating}
               >
                 <span className="inspector-tab-card-key mono">04</span>
-                <span className="inspector-tab-card-label">Sandbox 验证</span>
+                <span className="inspector-tab-card-label">沙箱校验</span>
               </button>
             </div>
             <div className="modal-body">
@@ -720,15 +741,15 @@ export function SkillManagementSection({ onError }: Props) {
                   <article className="sub-panel">
                     <div className="editor-header">
                       <div>
-                        <h3>{isCreating ? '基本信息' : 'Revision 编辑器'}</h3>
+                        <h3>{isCreating ? '基本信息' : '版本编辑器'}</h3>
                         <p className="cell-subtle">
-                          {isCreating ? '填写后直接创建并发布' : '保存会生成新的 published revision'}
+                          {isCreating ? '填写后直接创建并发布' : '保存会生成新的已发布版本'}
                         </p>
                       </div>
                     </div>
                     <div className="skill-form-grid">
                       <label className="form-field">
-                        <span>Slug</span>
+                        <span>唯一标识（Slug）</span>
                         <input
                           className="control-input"
                           value={editor.slug}
@@ -746,11 +767,20 @@ export function SkillManagementSection({ onError }: Props) {
                       </label>
                       <label className="form-field">
                         <span>分类</span>
-                        <input
+                        <select
                           className="control-input"
                           value={editor.category}
                           onChange={(event) => setEditor((prev) => ({ ...prev, category: event.target.value }))}
-                        />
+                        >
+                          {categoryOptions.map((item) => (
+                            <option key={item} value={item}>
+                              {skillCategoryLabel(item)}
+                            </option>
+                          ))}
+                          {!categoryOptions.includes(editor.category) && editor.category ? (
+                            <option value={editor.category}>{skillCategoryLabel(editor.category)}</option>
+                          ) : null}
+                        </select>
                       </label>
                       <label className="form-field field-span-2">
                         <span>描述</span>
@@ -761,7 +791,7 @@ export function SkillManagementSection({ onError }: Props) {
                         />
                       </label>
                       <label className="form-field field-span-2">
-                        <span>Markdown 正文</span>
+                        <span>主说明文档（Markdown）</span>
                         <textarea
                           className="control-textarea"
                           rows={16}
@@ -772,8 +802,8 @@ export function SkillManagementSection({ onError }: Props) {
                       <div className="form-field field-span-2">
                         <div className="editor-header">
                           <div>
-                            <span>渐进式文档</span>
-                            <div className="cell-subtle">支持多份数据库型 markdown 文档，交互与用户态编辑器保持一致。</div>
+                            <span>补充文档</span>
+                            <div className="cell-subtle">支持多份数据库型 Markdown 文档，交互方式与用户态编辑器保持一致。</div>
                           </div>
                           <button type="button" className="ghost-btn" onClick={addDocument}>
                             新增文档
@@ -783,7 +813,7 @@ export function SkillManagementSection({ onError }: Props) {
                           <div className="skill-doc-nav">
                             {editor.documents.length === 0 ? (
                               <div className="table-empty">
-                                还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类 markdown 文件。
+                                还没有补充文档。可以添加 `references/overview.md`、`design/rules.md` 这类 Markdown 文件。
                               </div>
                             ) : (
                               editor.documents.map((item, index) => (
@@ -794,7 +824,7 @@ export function SkillManagementSection({ onError }: Props) {
                                   onClick={() => setSelectedDocumentIndex(index)}
                                 >
                                   <strong>{item.title || item.resourcePath || `文档 ${index + 1}`}</strong>
-                                  <span>{item.resourceType}</span>
+                                  <span>{resourceTypeLabel(item.resourceType)}</span>
                                   <span>{item.resourcePath || '未设置路径'}</span>
                                 </button>
                               ))
@@ -816,7 +846,7 @@ export function SkillManagementSection({ onError }: Props) {
                                     />
                                   </label>
                                   <label className="form-field">
-                                    <span>文档 Key</span>
+                                    <span>文档标识（Key）</span>
                                     <input
                                       className="control-input"
                                       value={selectedDocument.documentKey}
@@ -827,7 +857,7 @@ export function SkillManagementSection({ onError }: Props) {
                                     />
                                   </label>
                                   <label className="form-field">
-                                    <span>资源类型</span>
+                                    <span>文档类型</span>
                                     <select
                                       className="control-input"
                                       value={selectedDocument.resourceType}
@@ -837,8 +867,8 @@ export function SkillManagementSection({ onError }: Props) {
                                         })
                                       }
                                     >
-                                      <option value="reference">reference</option>
-                                      <option value="template">template</option>
+                                      <option value="reference">参考文档（reference）</option>
+                                      <option value="template">模板片段（template）</option>
                                     </select>
                                   </label>
                                   <label className="form-field">
@@ -899,13 +929,13 @@ export function SkillManagementSection({ onError }: Props) {
                         </button>
                       ) : (
                         <button type="button" className="primary-btn" onClick={handleSave} disabled={busy || !selectedSkillId}>
-                          保存为新 revision
+                          保存为新版本
                         </button>
                       )}
                     </div>
                   </article>
                   <article className="sub-panel">
-                    <p className="kpi-title">Revision 历史</p>
+                    <p className="kpi-title">版本历史</p>
                     <div className="revision-list">
                       {revisions.map((item) => (
                         <button
@@ -914,16 +944,16 @@ export function SkillManagementSection({ onError }: Props) {
                           className={`revision-item ${selectedRevisionId === item.id ? 'active' : ''}`}
                           onClick={() => setSelectedRevisionId(item.id)}
                         >
-                          <span>rev.{item.revisionNumber}</span>
-                          <span>{item.isPublished ? '已发布' : '草稿'}</span>
+                          <span>版本 {item.revisionNumber}</span>
+                          <span>{item.isPublished ? '已发布' : '草稿版本'}</span>
                           <span>{formatDateTime(item.createdAt)}</span>
                         </button>
                       ))}
-                      {!revisions.length ? <div className="table-empty">暂无 revision</div> : null}
+                      {!revisions.length ? <div className="table-empty">暂无版本记录</div> : null}
                     </div>
                     {!isCreating && detail ? (
                       <div className="validation-result">
-                        <div>publishedRevisionId: {detail.publishedRevisionId || '-'}</div>
+                        <div>当前发布版本 ID: {detail.publishedRevisionId || '-'}</div>
                         <div>资源数量: {detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</div>
                         <div>引用路径数: {detail.resourceSummary?.paths?.length ?? 0}</div>
                       </div>
@@ -937,8 +967,8 @@ export function SkillManagementSection({ onError }: Props) {
                   <article className="sub-panel">
                     <div className="section-heading">
                       <div>
-                        <p className="eyebrow">Composite Resources</p>
-                        <h2>当前 revision 资源</h2>
+                        <p className="eyebrow">资源工作区</p>
+                        <h2>当前版本资源</h2>
                       </div>
                     </div>
                     <div className="revision-list">
@@ -950,12 +980,12 @@ export function SkillManagementSection({ onError }: Props) {
                           onClick={() => setSelectedResourcePath(item.resourcePath)}
                         >
                           <span>{item.resourcePath}</span>
-                          <span>{item.resourceType}</span>
+                          <span>{resourceTypeLabel(item.resourceType)}</span>
                           <span>{storageLabel(item.contentStorage)}</span>
                         </button>
                       ))}
                       {!revisionResources?.resources.length ? (
-                        <div className="table-empty">当前 revision 暂无额外资源</div>
+                        <div className="table-empty">当前版本暂无额外资源</div>
                       ) : null}
                     </div>
                   </article>
@@ -969,18 +999,18 @@ export function SkillManagementSection({ onError }: Props) {
                       return (
                         <div className="inspector-page-stack">
                           <div className="validation-result">
-                            <div>resourcePath: {resource.resourcePath}</div>
-                            <div>resourceType: {resource.resourceType}</div>
-                            <div>contentStorage: {storageLabel(resource.contentStorage)}</div>
-                            <div>mimeType: {resource.mimeType || '-'}</div>
-                            <div>loadStage: {resource.loadStage || '-'}</div>
-                            <div>storagePath: {resource.storagePath || '-'}</div>
-                            <div>updatedAt: {formatDateTime(resource.updatedAt)}</div>
+                            <div>资源路径: {resource.resourcePath}</div>
+                            <div>文档类型: {resourceTypeLabel(resource.resourceType)}</div>
+                            <div>存储位置: {storageLabel(resource.contentStorage)}</div>
+                            <div>MIME 类型: {resource.mimeType || '-'}</div>
+                            <div>加载阶段: {resource.loadStage || '-'}</div>
+                            <div>存储路径: {resource.storagePath || '-'}</div>
+                            <div>更新时间: {formatDateTime(resource.updatedAt)}</div>
                           </div>
                           <div className="validation-result">
-                            <div>title: {resource.title || '-'}</div>
-                            <div>summary: {resource.summary || '-'}</div>
-                            <div>storageLocator: {resource.storageLocatorJson ? JSON.stringify(resource.storageLocatorJson) : '-'}</div>
+                            <div>标题: {resource.title || '-'}</div>
+                            <div>摘要: {resource.summary || '-'}</div>
+                            <div>存储定位信息: {resource.storageLocatorJson ? JSON.stringify(resource.storageLocatorJson) : '-'}</div>
                           </div>
                           <pre className="code-block">
                             {resource.contentMarkdown || (resource.contentStorage === 'object_storage' ? '该存储桶文件当前无可预览文本内容' : '暂无正文')}
@@ -996,35 +1026,35 @@ export function SkillManagementSection({ onError }: Props) {
                 <div className="inspector-page-stack">
                   <section className="inspector-stat-grid">
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Revision</span>
-                      <strong>{renderedRevision ? `rev.${renderedRevision.revisionNumber}` : '-'}</strong>
-                      <span className="session-meta">{selectedRevisionId || '未选择 revision'}</span>
+                      <span className="inspector-stat-label">当前版本</span>
+                      <strong>{renderedRevision ? `版本 ${renderedRevision.revisionNumber}` : '-'}</strong>
+                      <span className="session-meta">{selectedRevisionLabel}</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Signature</span>
+                      <span className="inspector-stat-label">校验签名</span>
                       <strong>{renderedRevision?.signature?.slice(0, 12) || '-'}</strong>
-                      <span className="session-meta">rendered skill markdown</span>
+                      <span className="session-meta">当前技能 Markdown 的渲染结果</span>
                     </article>
                     <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">Resources</span>
+                      <span className="inspector-stat-label">资源数</span>
                       <strong>{revisionResources?.resourceSummary.totalCount ?? 0}</strong>
-                      <span className="session-meta">数据库与存储桶统一挂在当前 revision</span>
+                      <span className="session-meta">当前版本下的数据库与存储桶资源总数</span>
                     </article>
                   </section>
-                  <pre className="code-block">{renderedRevision?.renderedMarkdown || '选择 revision 后显示渲染结果'}</pre>
+                  <pre className="code-block">{renderedRevision?.renderedMarkdown || '选择版本后显示渲染结果'}</pre>
                 </div>
               ) : null}
 
               {detailTab === 'validation' ? (
                 <div className="detail-grid modal-grid">
                   <article className="sub-panel">
-                    <p className="kpi-title">Sandbox 验证</p>
+                    <p className="kpi-title">沙箱校验</p>
                     <div className="validation-box">
                       <label className="form-field">
-                        <span>目标 sessionId</span>
+                        <span>目标会话 ID（sessionId）</span>
                         <input
                           className="control-input"
-                          placeholder="输入已有 task sessionId"
+                          placeholder="输入已有任务会话 ID"
                           value={validationSessionId}
                           onChange={(event) => setValidationSessionId(event.target.value)}
                         />
@@ -1035,20 +1065,20 @@ export function SkillManagementSection({ onError }: Props) {
                         onClick={handleValidate}
                         disabled={busy || !selectedSkillId || !selectedRevisionId || !validationSessionId.trim()}
                       >
-                        同步到 sandbox 并验证
+                        同步到沙箱并校验
                       </button>
                       {validationResult ? (
                         <div className="validation-result">
-                          <div>skillPath: {validationResult.skillPath || '-'}</div>
-                          <div>signature: {validationResult.signature}</div>
-                          <div>restartTriggered: {String(validationResult.restartTriggered)}</div>
-                          <div>syncedAt: {formatDateTime(validationResult.syncedAt)}</div>
+                          <div>技能路径: {validationResult.skillPath || '-'}</div>
+                          <div>校验签名: {validationResult.signature}</div>
+                          <div>是否触发重启: {String(validationResult.restartTriggered)}</div>
+                          <div>同步时间: {formatDateTime(validationResult.syncedAt)}</div>
                         </div>
                       ) : null}
                     </div>
                   </article>
                   <article className="sub-panel">
-                    <p className="kpi-title">复合资源清单</p>
+                    <p className="kpi-title">资源清单</p>
                     <div className="revision-list">
                       {revisionResources?.resources.map((item) => (
                         <div key={item.id} className="revision-item active">
@@ -1057,7 +1087,7 @@ export function SkillManagementSection({ onError }: Props) {
                           <span>{formatBytes(item.contentMarkdown?.length)}</span>
                         </div>
                       ))}
-                      {!revisionResources?.resources.length ? <div className="table-empty">暂无资源</div> : null}
+                      {!revisionResources?.resources.length ? <div className="table-empty">暂无资源记录</div> : null}
                     </div>
                   </article>
                 </div>
@@ -1088,7 +1118,7 @@ export function SkillManagementSection({ onError }: Props) {
           >
             <div className="section-heading">
               <div>
-                <p className="eyebrow">Import Preview</p>
+                <p className="eyebrow">导入预览</p>
                 <h2>技能文件夹导入</h2>
                 <p className="subtitle">
                   入口正文会进入数据库，脚本等运行型资源后续按存储策略处理。当前目录共 {importPreview.files.length} 个待处理文件。
@@ -1138,7 +1168,7 @@ export function SkillManagementSection({ onError }: Props) {
                       });
                   }}
                 >
-                  {importJobStatus === 'running' ? '导入处理中...' : isCreating ? '导入并创建 skill' : '导入为新 revision'}
+                  {importJobStatus === 'running' ? '导入处理中...' : isCreating ? '导入并创建技能' : '导入为新版本'}
                 </button>
               </div>
             </div>
@@ -1147,7 +1177,7 @@ export function SkillManagementSection({ onError }: Props) {
               <article className="panel fade-in">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">File Tree</p>
+                    <p className="eyebrow">文件树</p>
                     <h2>待处理文件</h2>
                   </div>
                 </div>
@@ -1190,16 +1220,16 @@ export function SkillManagementSection({ onError }: Props) {
               <article className="panel fade-in">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Activation</p>
-                    <h2>入口与告警</h2>
+                    <p className="eyebrow">导入摘要</p>
+                    <h2>入口与提示</h2>
                   </div>
                 </div>
                 <div className="validation-box">
-                  <div>jobStatus: {importJobStatus || 'idle'}</div>
-                  <div>slug: {importPreview.slug}</div>
-                  <div>name: {importPreview.name}</div>
-                  <div>entry: {importPreview.entry.entryName}</div>
-                  <div>summary: {importPreview.activationSummary || '-'}</div>
+                  <div>任务状态: {importJobStatus || '空闲'}</div>
+                  <div>唯一标识（Slug）: {importPreview.slug}</div>
+                  <div>名称: {importPreview.name}</div>
+                  <div>入口文件: {importPreview.entry.entryName}</div>
+                  <div>摘要: {importPreview.activationSummary || '-'}</div>
                   <pre className="code-block">{importPreview.entry.bodyMarkdown}</pre>
                   {importPreview.warnings.length ? (
                     <pre className="code-block">{importPreview.warnings.join('\n')}</pre>

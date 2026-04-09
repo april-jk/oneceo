@@ -75,7 +75,7 @@ npm run build
 2. Build Command：`npm ci && npm run build`
 3. Start Command：`npm start`
 4. 环境变量：
-   - `PORT`：由 Railway 注入（代码已自动回退到 `PORT` 作为 `ADMIN_MANAGEMENT_PORT`）
+   - `PORT`：由 Railway 注入（仅在**没有加载本地 `.env` 文件**时，代码才会回退到 `PORT` 作为 `ADMIN_MANAGEMENT_PORT`）
    - `ONECEO_API_URL`：指向你的 API 服务域名（例如 `https://api-develop.oneceo.ai`）
    - `ONECEO_INTERNAL_TOKEN`：与 API 服务保持一致
 

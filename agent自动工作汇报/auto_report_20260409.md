@@ -57,3 +57,14 @@
   - Playwright：`playwright test client/src/tests/managed-completion-card-routing.playwright.spec.ts` 通过（2/2）。
 - 遇到什么（补充6）：
   - MCP Playwright 浏览器工具在当前运行环境写 `/.playwright-mcp` 目录失败（只读根目录），已记录为环境限制，不影响仓库内 Playwright 自动化测试执行。
+
+- 做了什么（补充7）：
+  - 修复 managed 模式“complete_task 吞并详细正文”的问题：
+    1. 在 `altus-run-coordinator` 新增最终内容择优逻辑，优先保留同轮 assistant 的更完整正文。
+    2. 调整 `altus-managed-prompt-service` completion 规则，要求 `complete_task.summary` 提供可直接展示的完整最终答复，而非一句话摘要。
+    3. 新增回归测试 `execute preserves richer assistant text when complete_task summary is concise`。
+  - 同步更新已采用设计文档的修复记录（20260331 设计文档第 16 节）。
+- 遇到什么（补充7）：
+  - 该问题同时涉及“运行时最终落库策略”和“提示词完成约束”；仅改前端渲染无法从根源避免最终历史消息被短 summary 覆盖。
+- 计划如何解决（补充7）：
+  - 继续观察线上 managed run 中 `web_search -> complete_task` 场景，确认最终消息内容与流式展示保持一致，不再出现任务完成后正文变短。

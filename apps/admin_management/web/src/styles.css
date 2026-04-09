@@ -295,7 +295,10 @@ a {
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 18px;
+  height: calc(100vh - 52px);
   min-height: calc(100vh - 52px);
+  max-height: calc(100vh - 52px);
+  overflow: hidden;
   padding: 20px 18px;
   border-radius: 28px;
   background:
@@ -355,6 +358,29 @@ a {
 
 .sidebar-nav {
   align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+  margin-right: -4px;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(173, 195, 219, 0.26);
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb:hover {
+  background: rgba(173, 195, 219, 0.4);
 }
 
 .nav-group {
@@ -3601,7 +3627,16 @@ tbody tr:hover {
 
   .sidebar {
     position: static;
+    height: auto;
     min-height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .sidebar-nav {
+    overflow: visible;
+    padding-right: 0;
+    margin-right: 0;
   }
 
   .top-header {

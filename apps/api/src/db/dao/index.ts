@@ -4,6 +4,7 @@
 
 export * from './task-creation-session.dao';
 export * from './auth.dao';
+export * from './app-user-legacy-id-mapping.dao';
 export * from './sandbox-execution-environment.dao';
 export * from './user-connector-account.dao';
 export * from './user-connector-profile.dao';

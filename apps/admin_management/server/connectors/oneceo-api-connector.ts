@@ -843,6 +843,8 @@ export class OneceoApiConnector {
     return this.request<AdminOsacRelease>('/api/internal/runtime-artifacts/osac/releases', {
       method: 'POST',
       body: input,
+      timeoutMs: config.oneceoOsacUploadTimeoutMs,
+      retries: 0,
     });
   }
 

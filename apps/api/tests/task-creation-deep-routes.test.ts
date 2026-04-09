@@ -3,6 +3,7 @@ import { after, test } from 'node:test';
 import express from 'express';
 import type { Socket } from 'node:net';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
@@ -83,6 +84,7 @@ after(async () => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
   const sockets = new Set<Socket>();
 
@@ -149,7 +151,7 @@ test('GET /api/task-creation/sessions/:sessionId returns 403 for foreign user', 
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-1`, {
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -166,7 +168,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns 403 for
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-2/messages/recent`, {
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -211,7 +213,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent returns owner m
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-3/messages/recent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -256,7 +258,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent preserves manag
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-tool-meta/messages/recent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -294,7 +296,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent prefers redis c
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-redis-recent/messages/recent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -332,7 +334,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/recent writes redis ca
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-recent-write/messages/recent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -352,7 +354,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history returns 403 fo
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-4/messages/history`, {
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -418,7 +420,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history refreshes redi
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-history-cursor/messages/history?limit=1`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -503,7 +505,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages/history preserves mana
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-history-managed/messages/history?limit=20`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -545,7 +547,7 @@ test('GET /api/task-creation/sessions/:sessionId/workspace/dir prefers redis cac
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-dir-redis/workspace/dir?path=src`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -575,7 +577,7 @@ test('GET /api/task-creation/sessions/:sessionId/workspace/tree prefers redis ca
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-tree-redis/workspace/tree`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -614,7 +616,7 @@ test('GET /api/task-creation/sessions/:sessionId/workspace/file prefers redis ca
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/s-file-redis/workspace/file?path=src/index.ts`,
       {
-        headers: { 'x-user-id': 'owner-user' },
+        headers: { 'x-test-user-id': 'owner-user' },
       }
     );
     const payload = await response.json();
@@ -633,7 +635,7 @@ test('GET /api/task-creation/sessions/:sessionId/messages returns 403 for foreig
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-5/messages`, {
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -689,7 +691,7 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events replays redis s
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/sse-redis-1/opencode/events?since=100`,
       {
-        headers: { 'x-user-id': 'owner-user' },
+        headers: { 'x-test-user-id': 'owner-user' },
         signal: controller.signal,
       }
     );
@@ -772,7 +774,7 @@ test('GET /api/task-creation/sessions/:sessionId/opencode/events falls back to d
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/sse-db-fallback/opencode/events?since=200`,
       {
-        headers: { 'x-user-id': 'owner-user' },
+        headers: { 'x-test-user-id': 'owner-user' },
         signal: controller.signal,
       }
     );
@@ -845,7 +847,7 @@ test('GET /api/task-creation/sessions/:sessionId/deliverables returns owner-scop
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-6/deliverables`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -867,7 +869,7 @@ test('POST /api/task-creation/sessions/:sessionId/runtime/start returns 403 for 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-7/runtime/start`, {
       method: 'POST',
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -887,7 +889,7 @@ test('POST /api/task-creation/sessions/:sessionId/runtime/touch returns 403 for 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-8/runtime/touch`, {
       method: 'POST',
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 
@@ -908,7 +910,7 @@ test('GET /api/task-creation/sessions/:sessionId/connectors returns current user
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-9/connectors`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -931,7 +933,7 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'other-user',
+        'x-test-user-id': 'other-user',
       },
       body: JSON.stringify({ profileId: 'profile-1' }),
     });
@@ -955,7 +957,7 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/attac
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'owner-user',
+        'x-test-user-id': 'owner-user',
       },
       body: JSON.stringify({ profileId: 'profile-timeout' }),
     });
@@ -980,7 +982,7 @@ test('POST /api/task-creation/sessions/:sessionId/connectors/:connectorKey/detac
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-11/connectors/github/detach`, {
       method: 'POST',
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const payload = await response.json();
 
@@ -1001,7 +1003,7 @@ test('POST /api/task-creation/sessions/:sessionId/runtime/interrupt returns 403 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/s-12/runtime/interrupt`, {
       method: 'POST',
-      headers: { 'x-user-id': 'other-user' },
+      headers: { 'x-test-user-id': 'other-user' },
     });
     const payload = await response.json();
 

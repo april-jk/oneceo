@@ -355,7 +355,7 @@ function resolveTenantKey(currentUser: { tenantKey: string }): string {
 
 function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
   const message = error instanceof Error ? error.message : String(error || '');
-  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+  if (message.includes('无法识别当前用户')) {
     return { status: 401, message };
   }
   return null;
@@ -397,7 +397,7 @@ function resolveSessionConnectorOwnershipError(error: unknown): { status: number
   ) {
     return { status: 403, message };
   }
-  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+  if (message.includes('无法识别当前用户')) {
     return { status: 401, message };
   }
   return null;
@@ -995,6 +995,30 @@ type SessionListCache = {
 };
 
 const sessionListCacheByUser = new Map<string, SessionListCache>();
+const sessionListEmptyLogAtByUser = new Map<string, number>();
+
+function logSessionListEmpty(input: {
+  userId: string;
+  source: 'db_summary' | 'memory_reconcile';
+  ownedDbCount: number;
+  memoryCount: number;
+  refresh: boolean;
+}) {
+  const now = Date.now();
+  const lastLoggedAt = sessionListEmptyLogAtByUser.get(input.userId) || 0;
+  if (now - lastLoggedAt < 30000) {
+    return;
+  }
+  sessionListEmptyLogAtByUser.set(input.userId, now);
+  console.warn('[TASK_SESSION_LIST_EMPTY]', {
+    userId: input.userId,
+    source: input.source,
+    ownedDbCount: input.ownedDbCount,
+    memoryCount: input.memoryCount,
+    refresh: input.refresh,
+    loggedAt: new Date(now).toISOString(),
+  });
+}
 
 function mapStageFromStatus(status: string | null | undefined) {
   if (status === 'completed') return 'completed';
@@ -3085,6 +3109,15 @@ router.get('/sessions', async (req, res) => {
 
     if (sessions.length === 0) {
       const summaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
+      if (summaries.length === 0) {
+        logSessionListEmpty({
+          userId: currentUser.userId,
+          source: 'db_summary',
+          ownedDbCount: ownedDbSessions.length,
+          memoryCount: rawSessions.length,
+          refresh,
+        });
+      }
       sessionListCacheByUser.set(currentUser.userId, {
         fetchedAt: now,
         limit,
@@ -3113,6 +3146,15 @@ router.get('/sessions', async (req, res) => {
       limit,
       data: sessions,
     });
+    if (sessions.length === 0) {
+      logSessionListEmpty({
+        userId: currentUser.userId,
+        source: 'memory_reconcile',
+        ownedDbCount: ownedDbSessions.length,
+        memoryCount: rawSessions.length,
+        refresh,
+      });
+    }
 
     return res.json({
       success: true,
@@ -4168,7 +4210,7 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
         ? 403
         : connectorOwnershipError?.status === 401
           ? 401
-        : normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')
+        : normalized.includes('无权') || normalized.includes('登录')
         ? 401
         : normalized.includes('未授权') || normalized.includes('尚未完成授权')
           ? 409
@@ -5371,6 +5413,13 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
     const ownershipError = resolveOwnedTaskSessionError(error);
     if (ownershipError) {
       return res.status(ownershipError.status).json({
@@ -5671,6 +5720,13 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
     const ownershipError = resolveOwnedTaskSessionError(error);
     if (ownershipError) {
       return res.status(ownershipError.status).json({

@@ -21,7 +21,7 @@ test('current user resolver prefers auth context over fallback headers', () => {
   });
 });
 
-test('current user resolver falls back to X-User-Id then tenant', () => {
+test('current user resolver no longer accepts X-User-Id or tenant-only identity', () => {
   const headerReq = {
     header(name: string) {
       if (name === 'X-User-Id') return 'header-user-2';
@@ -29,11 +29,7 @@ test('current user resolver falls back to X-User-Id then tenant', () => {
     },
     query: {},
   } as any;
-  assert.deepEqual(currentUserResolver.resolve(headerReq), {
-    userId: 'header-user-2',
-    source: 'x-user-id',
-    tenantKey: '',
-  });
+  assert.equal(currentUserResolver.resolve(headerReq), null);
 
   const tenantReq = {
     header() {
@@ -41,11 +37,7 @@ test('current user resolver falls back to X-User-Id then tenant', () => {
     },
     query: { tenantId: 'tenant-user-1' },
   } as any;
-  assert.deepEqual(currentUserResolver.resolve(tenantReq), {
-    userId: 'tenant-user-1',
-    source: 'tenant',
-    tenantKey: 'tenant-user-1',
-  });
+  assert.equal(currentUserResolver.resolve(tenantReq), null);
 });
 
 test('current user resolver require rejects when identity is missing', () => {
@@ -56,5 +48,5 @@ test('current user resolver require rejects when identity is missing', () => {
       },
       query: {},
     } as any);
-  }, /X-User-Id/);
+  }, /请先登录/);
 });

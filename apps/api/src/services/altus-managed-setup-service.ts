@@ -14,6 +14,7 @@ import { sandboxAgentProvisionService } from './sandbox-agent-provision-service'
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
+import { isSameUserId } from '../utils/user-id';
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
@@ -173,8 +174,12 @@ export class AltusManagedSetupService {
         status: 'in_progress',
       });
     } else if (!session.userId) {
-      throw new Error('会话缺少归属用户，无法进入 Altus managed 链路');
-    } else if (session.userId !== userId) {
+      const rebound = await taskCreationSessionDAO.bindUserIfMissing(sessionId, userId);
+      if (!rebound?.userId) {
+        throw new Error('会话缺少归属用户，无法进入 Altus managed 链路');
+      }
+      session = rebound;
+    } else if (!isSameUserId(session.userId, userId)) {
       throw new Error('当前用户无权操作该 Altus 会话');
     }
 

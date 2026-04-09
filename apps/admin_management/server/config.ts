@@ -48,6 +48,7 @@ const envSchema = z.object({
   ONECEO_API_URL: z.string().url().default('http://127.0.0.1:4000'),
   ONECEO_INTERNAL_TOKEN: requiredNonEmptyText('ONECEO_INTERNAL_TOKEN'),
   ONECEO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  ONECEO_OSAC_UPLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   ONECEO_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(1),
   ADMIN_MANAGEMENT_CORS_ORIGIN: z.string().default('http://localhost:5174'),
   E2B_API_KEY: z.string().optional(),
@@ -79,6 +80,7 @@ export const config = {
   oneceoApiUrl: parsed.ONECEO_API_URL.replace(/\/+$/, ''),
   oneceoInternalToken: parsed.ONECEO_INTERNAL_TOKEN,
   oneceoRequestTimeoutMs: parsed.ONECEO_REQUEST_TIMEOUT_MS,
+  oneceoOsacUploadTimeoutMs: parsed.ONECEO_OSAC_UPLOAD_TIMEOUT_MS,
   oneceoRequestRetries: parsed.ONECEO_REQUEST_RETRIES,
   e2bApiKey: parsed.E2B_API_KEY || '',
 };

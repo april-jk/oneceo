@@ -69,6 +69,7 @@ export type AdminUser = {
 
 const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
+const OSAC_UPLOAD_TIMEOUT_MS = Number((import.meta.env.VITE_OSAC_UPLOAD_TIMEOUT_MS as string | undefined) ?? 300000);
 
 type RequestOptions = RequestInit & {
   timeoutMs?: number;
@@ -529,6 +530,8 @@ export const api = {
     request<OsacRelease>('/api/osac-releases', {
       method: 'POST',
       body: JSON.stringify(payload),
+      timeoutMs: OSAC_UPLOAD_TIMEOUT_MS,
+      abortMessage: '上传 OSAC release 超时，请稍后重试',
     }),
   validateOsacRelease: (releaseId: string) =>
     request<OsacRelease>(`/api/osac-releases/${encodeURIComponent(releaseId)}/validate`, {

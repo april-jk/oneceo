@@ -112,6 +112,7 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
@@ -1291,7 +1292,7 @@ export default function Home() {
   };
 
   const openWorkspacePreview = (path: string) => {
-    const normalizedPath = String(path || "").trim().replace(/\\/g, "/");
+    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
     if (!normalizedPath) return;
     setPreviewWorkspacePath(normalizedPath);
     setPreviewTab("files");

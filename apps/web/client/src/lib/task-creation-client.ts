@@ -892,7 +892,7 @@ export async function startTaskCreationDebug(sessionId: string): Promise<TaskCre
     headers: buildClientIdentityHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
   const result = (await response.json()) as { data?: TaskCreationDebugInfo };
   return result?.data || null;

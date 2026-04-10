@@ -21,8 +21,8 @@ export function mapWorkspaceRawPreviewHeadResult(result: WorkspaceRawHeadResult)
   }
   if (result.status === 404) {
     return {
-      state: "fetch_failed",
-      message: "预览文件不存在或已被移除。",
+      state: "runtime_unavailable",
+      message: "正在准备预览内容，点击“重新加载预览”继续。",
     };
   }
   if (result.networkError) {

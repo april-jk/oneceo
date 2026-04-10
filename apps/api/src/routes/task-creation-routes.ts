@@ -1384,7 +1384,15 @@ type OpencodeFileContent = {
   mimeType?: string;
 };
 
-type WorkspacePreviewType = 'text' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+type WorkspacePreviewType =
+  | 'text'
+  | 'markdown'
+  | 'html'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'binary';
 
 async function listOpencodeDirectory(
   orchestratorSessionId: string,
@@ -1600,13 +1608,19 @@ async function buildWorkspaceTreeFromSandbox(input: {
   };
 }
 
-function normalizeHistoricalPath(value: unknown): string {
-  const normalized = normalizeWorkspacePath(typeof value === 'string' ? value : '');
+function normalizeHistoricalPath(value: unknown, workspaceRoot: string): string {
+  const normalized = resolveWorkspaceRelativeRequestPath(
+    typeof value === 'string' ? value : '',
+    workspaceRoot
+  );
   if (!normalized || normalized === '.') return '';
   return normalized;
 }
 
-function buildHistoricalWorkspaceItems(messages: Array<{ metadata?: unknown }>): Array<{ path: string; type: 'file' | 'dir' }> {
+function buildHistoricalWorkspaceItems(
+  messages: Array<{ metadata?: unknown }>,
+  workspaceRoot: string
+): Array<{ path: string; type: 'file' | 'dir' }> {
   const filePaths = new Set<string>();
   const dirPaths = new Set<string>();
 
@@ -1617,17 +1631,17 @@ function buildHistoricalWorkspaceItems(messages: Array<{ metadata?: unknown }>):
     const candidates: string[] = [];
     const rawFilePaths = Array.isArray(metadata.filePaths) ? metadata.filePaths : [];
     for (const raw of rawFilePaths) {
-      const path = normalizeHistoricalPath(raw);
+      const path = normalizeHistoricalPath(raw, workspaceRoot);
       if (path) candidates.push(path);
     }
     const rawFileChanges = Array.isArray(metadata.fileChanges) ? metadata.fileChanges : [];
     for (const raw of rawFileChanges) {
       if (!raw || typeof raw !== 'object') continue;
-      const path = normalizeHistoricalPath((raw as Record<string, unknown>).path);
+      const path = normalizeHistoricalPath((raw as Record<string, unknown>).path, workspaceRoot);
       if (path) candidates.push(path);
     }
     for (const key of ['path', 'targetPath']) {
-      const path = normalizeHistoricalPath(metadata[key]);
+      const path = normalizeHistoricalPath(metadata[key], workspaceRoot);
       if (path) candidates.push(path);
     }
 
@@ -1668,11 +1682,17 @@ async function buildWorkspaceFallbackFromMessageHistory(input: {
   limit: number;
 }): Promise<WorkspaceDirectoryCachePayload | null> {
   const recent = await taskCreationSessionDAO.getRecentMessages(input.sessionId, 50);
-  const recentItems = buildHistoricalWorkspaceItems(recent as Array<{ metadata?: unknown }>);
+  const recentItems = buildHistoricalWorkspaceItems(
+    recent as Array<{ metadata?: unknown }>,
+    input.workspaceRoot
+  );
   const allItems =
     recentItems.length > 0
       ? recentItems
-      : buildHistoricalWorkspaceItems((await taskCreationSessionDAO.getMessages(input.sessionId)) as Array<{ metadata?: unknown }>);
+      : buildHistoricalWorkspaceItems(
+          (await taskCreationSessionDAO.getMessages(input.sessionId)) as Array<{ metadata?: unknown }>,
+          input.workspaceRoot
+        );
   if (allItems.length === 0) {
     return null;
   }
@@ -1703,6 +1723,57 @@ async function buildWorkspaceFallbackFromMessageHistory(input: {
 
 function normalizeWorkspacePath(input: string): string {
   return input.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function normalizeWorkspaceRootPath(input: string): string {
+  return String(input || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function resolveWorkspaceRelativeRequestPath(
+  input: string,
+  workspaceRoot: string,
+  options?: { allowWorkspaceRoot?: boolean }
+): string | null {
+  const raw = String(input || '').trim().replace(/\\/g, '/');
+  if (!raw) return null;
+  const allowWorkspaceRoot = Boolean(options?.allowWorkspaceRoot);
+  const normalizedRoot = normalizeWorkspaceRootPath(workspaceRoot);
+  const rootWithoutLeadingSlash = normalizedRoot.replace(/^\/+/, '');
+  const parentRootWithoutLeadingSlash = rootWithoutLeadingSlash.includes('/')
+    ? rootWithoutLeadingSlash.slice(0, rootWithoutLeadingSlash.lastIndexOf('/'))
+    : '';
+
+  let candidate = raw;
+  if (candidate.startsWith('/') || candidate.startsWith('\\')) {
+    if (!normalizedRoot) return null;
+    if (candidate === normalizedRoot) {
+      candidate = '';
+    } else if (candidate.startsWith(`${normalizedRoot}/`)) {
+      candidate = candidate.slice(normalizedRoot.length + 1);
+    } else {
+      return null;
+    }
+  } else if (rootWithoutLeadingSlash) {
+    if (candidate === rootWithoutLeadingSlash) {
+      candidate = '';
+    } else if (candidate.startsWith(`${rootWithoutLeadingSlash}/`)) {
+      candidate = candidate.slice(rootWithoutLeadingSlash.length + 1);
+    } else if (
+      parentRootWithoutLeadingSlash &&
+      candidate.startsWith(`${parentRootWithoutLeadingSlash}/`)
+    ) {
+      return null;
+    }
+  }
+
+  const normalized = normalizeWorkspacePath(candidate.replace(/^\.\/+/, ''));
+  if (!normalized) {
+    return allowWorkspaceRoot ? '' : null;
+  }
+  if (isUnsafePath(normalized)) {
+    return null;
+  }
+  return normalized;
 }
 
 function shellEscape(value: string): string {
@@ -2788,6 +2859,9 @@ function detectPreviewType(filePath: string, mimeType: string, isBinary: boolean
     }
     if (mimeType === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx') {
       return 'markdown';
+    }
+    if (mimeType === 'text/html' || ext === 'html' || ext === 'htm') {
+      return 'html';
     }
     return 'text';
   }
@@ -5121,14 +5195,20 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const rawPath = String(req.query.path || '').trim();
-    if (rawPath && isUnsafePath(rawPath)) {
+    const resolvedDirPath = rawPath
+      ? resolveWorkspaceRelativeRequestPath(rawPath, workspaceRoot, {
+          allowWorkspaceRoot: true,
+        })
+      : '';
+    if (rawPath && resolvedDirPath === null) {
       return res.status(400).json({
         success: false,
         error: getPublicErrorMessage('非法路径'),
       });
     }
-    const dirPath = normalizeWorkspacePath(rawPath);
+    const dirPath = resolvedDirPath || '';
     const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
     const rawCursor = Number(req.query.cursor || 0);
     const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
@@ -5202,7 +5282,6 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       });
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const listWorkspaceNodes = async () =>
       isE2bWorkspaceExecutor(workspaceExecutor)
         ? await listSandboxDirectory(orchestratorSessionId, workspaceRoot, dirPath)
@@ -5342,7 +5421,13 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     const rawPath = String(req.query.path || '').trim();
-    const dirPath = normalizeWorkspacePath(rawPath);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const resolvedDirPath = rawPath
+      ? resolveWorkspaceRelativeRequestPath(rawPath, workspaceRoot, {
+          allowWorkspaceRoot: true,
+        })
+      : '';
+    const dirPath = resolvedDirPath === null ? normalizeWorkspacePath(rawPath) : resolvedDirPath;
     const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
     const rawCursor = Number(req.query.cursor || 0);
     const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
@@ -5629,16 +5714,16 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
-    const relativePath = String(req.query.path || '').trim();
-    if (isUnsafePath(relativePath)) {
+    const rawRequestPath = String(req.query.path || '').trim();
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath = resolveWorkspaceRelativeRequestPath(rawRequestPath, workspaceRoot);
+    if (!normalizedPath) {
       return res.status(400).json({
         success: false,
         error: getPublicErrorMessage('非法路径'),
       });
     }
-    const normalizedPath = relativePath.replace(/\\/g, '/');
-
-    const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
@@ -5718,7 +5803,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       });
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const maxBytes = clampNumber(Number(req.query.maxBytes || 200000), 20000, 500000);
     const maxBinaryBytes = clampNumber(
       Number(req.query.maxBinaryBytes || 2 * 1024 * 1024),
@@ -5872,12 +5956,16 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath =
+      resolveWorkspaceRelativeRequestPath(String(req.query.path || '').trim(), workspaceRoot) ||
+      normalizeWorkspacePath(String(req.query.path || '').trim());
     if (tenantKey && currentUser) {
       const redisCached = await taskSessionCacheFacade.getWorkspaceFile({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
-        path: String(req.query.path || '').trim().replace(/\\/g, '/'),
+        path: normalizedPath,
       });
       if (redisCached) {
         return res.json({
@@ -5892,7 +5980,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
       }
-      const normalizedPath = String(req.query.path || '').trim().replace(/\\/g, '/');
       if (tenantKey && isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
@@ -5913,8 +6000,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
       });
     }
-    const relativePath = String(req.query.path || '').trim();
-    const normalizedPath = relativePath.replace(/\\/g, '/');
     if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
@@ -5958,11 +6043,11 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
     const currentUser = currentUserResolver.require(req);
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
-    if (!wildcardPath || isUnsafePath(wildcardPath)) {
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath = resolveWorkspaceRelativeRequestPath(wildcardPath, workspaceRoot);
+    if (!normalizedPath) {
       return res.status(400).type('text/plain; charset=utf-8').send('非法路径');
     }
-
-    const normalizedPath = wildcardPath.replace(/\\/g, '/');
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       return res.status(404).type('text/plain; charset=utf-8').send('会话不存在');
@@ -5979,7 +6064,6 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境未启动，无法读取文件');
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     let buffer: Buffer;
     let mimeType: string;
 

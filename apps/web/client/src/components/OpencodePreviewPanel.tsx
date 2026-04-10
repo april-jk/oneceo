@@ -56,6 +56,7 @@ import {
   updateTaskCreationDatabaseRow,
   getWorkspaceFile,
   getWorkspaceDirectory,
+  getWorkspaceRawFileUrl,
   type TaskCreationDatabaseColumn,
   type TaskCreationDatabaseInfo,
   type TaskCreationDatabaseRowLocator,
@@ -67,6 +68,7 @@ import {
   type WorkspaceTreeItem,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 
 interface OpencodePreviewPanelProps {
   messages: AgentMessage[];
@@ -150,6 +152,7 @@ export default function OpencodePreviewPanel({
     string | null
   >(null);
   const refreshTimerRef = useRef<number | null>(null);
+  const fileRequestSequenceRef = useRef(0);
   const debugBootRef = useRef(false);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
@@ -186,7 +189,7 @@ export default function OpencodePreviewPanel({
   }, [autoDiff, diffItems, open, selectedDiffId, controlledSelectedDiffId]);
 
   const normalizeWorkspacePath = (value: string) =>
-    value.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    normalizeWorkspaceRelativePath(value, sessionId);
 
   const mergeWorkspaceItems = (
     currentItems: WorkspaceTreeItem[],
@@ -312,6 +315,8 @@ export default function OpencodePreviewPanel({
 
   async function handleFileSelect(path: string) {
     if (!sessionId) return;
+    const normalizedPath = normalizeWorkspacePath(path);
+    if (!normalizedPath) return;
     if (runtimeReady === false) {
       if (onEnsureRuntime) {
         await onEnsureRuntime();
@@ -319,8 +324,11 @@ export default function OpencodePreviewPanel({
         return;
       }
     }
-    setSelectedPath(path);
-    const parts = path.split("/").filter(Boolean);
+    const requestSequence = fileRequestSequenceRef.current + 1;
+    fileRequestSequenceRef.current = requestSequence;
+    setSelectedPath(normalizedPath);
+    setFileData(null);
+    const parts = normalizedPath.split("/").filter(Boolean);
     const parentDirs: string[] = [];
     let parentPath = "";
     parts.slice(0, -1).forEach((part) => {
@@ -348,7 +356,10 @@ export default function OpencodePreviewPanel({
     setFileLoading(true);
     setFileError(null);
     try {
-      const file = await getWorkspaceFile(sessionId, path);
+      const file = await getWorkspaceFile(sessionId, normalizedPath);
+      if (fileRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       setFileData(file);
       if (file.binaryTooLarge) {
         setFileError("二进制文件过大，暂不支持预览");
@@ -356,6 +367,9 @@ export default function OpencodePreviewPanel({
         setFileError("内容较大，已截断显示");
       }
     } catch (error) {
+      if (fileRequestSequenceRef.current !== requestSequence) {
+        return;
+      }
       const message = error instanceof Error ? error.message : "读取文件失败";
       if (message.includes("409")) {
         setFileError(null);
@@ -364,7 +378,9 @@ export default function OpencodePreviewPanel({
       }
       setFileData(null);
     } finally {
-      setFileLoading(false);
+      if (fileRequestSequenceRef.current === requestSequence) {
+        setFileLoading(false);
+      }
     }
   }
 
@@ -476,6 +492,7 @@ export default function OpencodePreviewPanel({
   }, [open, sessionId, runtimeReady]);
 
   useEffect(() => {
+    fileRequestSequenceRef.current += 1;
     setTree(null);
     setTreeError(null);
     setTreeLoading(false);
@@ -894,6 +911,7 @@ export default function OpencodePreviewPanel({
           aria-hidden={currentTab !== "files"}
         >
           <FilePreview
+            sessionId={sessionId}
             tree={effectiveTree}
             loading={treeLoading}
             error={treeError}
@@ -1148,7 +1166,7 @@ function buildWorkspaceTreeFromDiffItems(
 ): WorkspaceTree | null {
   if (!sessionId || diffItems.length === 0) return null;
   const normalizePath = (value: string) =>
-    value.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "").replace(/\/+$/, "");
+    normalizeWorkspaceRelativePath(value, sessionId);
   const filePaths = new Set<string>();
   const dirPaths = new Set<string>();
 
@@ -1188,6 +1206,7 @@ function buildWorkspaceTreeFromDiffItems(
 }
 
 function FilePreview({
+  sessionId,
   tree,
   loading,
   error,
@@ -1204,6 +1223,7 @@ function FilePreview({
   runtimeReady,
   runtimeStarting,
 }: {
+  sessionId?: string | null;
   tree: WorkspaceTree | null;
   loading: boolean;
   error: string | null;
@@ -1220,6 +1240,12 @@ function FilePreview({
   runtimeReady: boolean;
   runtimeStarting: boolean;
 }) {
+  const [htmlView, setHtmlView] = useState<"preview" | "source">("preview");
+
+  useEffect(() => {
+    setHtmlView("preview");
+  }, [selectedPath]);
+
   if (!runtimeReady) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
@@ -1271,6 +1297,10 @@ function FilePreview({
     file && file.encoding === "base64" && file.content
       ? `data:${mimeType};base64,${file.content}`
       : null;
+  const htmlPreviewUrl =
+    previewType === "html" && sessionId && selectedPath
+      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+      : "";
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
@@ -1304,18 +1334,82 @@ function FilePreview({
         {selectedPath ? (
           <div className="h-full min-h-0 flex flex-col gap-2">
             <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50 text-[11px] text-slate-500">
+              <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200 bg-slate-50 text-[11px] text-slate-500">
                 <span className="truncate">文件: {selectedPath}</span>
-                <span>
-                  {isBinary
-                    ? `${mimeType}${typeof file?.size === "number" ? ` · ${Math.ceil(file.size / 1024)} KB` : ""}`
-                    : `${lineCount} 行`}
-                </span>
+                <div className="flex items-center gap-2">
+                  {previewType === "html" && !isBinary ? (
+                    <div className="inline-flex items-center rounded-md border border-slate-200 bg-white p-0.5">
+                      <button
+                        type="button"
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px]",
+                          htmlView === "preview"
+                            ? "bg-slate-900 text-white"
+                            : "text-slate-600",
+                        )}
+                        onClick={() => setHtmlView("preview")}
+                      >
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px]",
+                          htmlView === "source"
+                            ? "bg-slate-900 text-white"
+                            : "text-slate-600",
+                        )}
+                        onClick={() => setHtmlView("source")}
+                      >
+                        Source
+                      </button>
+                    </div>
+                  ) : null}
+                  {previewType === "html" && htmlPreviewUrl ? (
+                    <button
+                      type="button"
+                      className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600"
+                      onClick={() =>
+                        window.open(htmlPreviewUrl, "_blank", "noopener,noreferrer")
+                      }
+                    >
+                      Open
+                    </button>
+                  ) : null}
+                  <span>
+                    {isBinary
+                      ? `${mimeType}${typeof file?.size === "number" ? ` · ${Math.ceil(file.size / 1024)} KB` : ""}`
+                      : `${lineCount} 行`}
+                  </span>
+                </div>
               </div>
               {contentLoading ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">
                   加载中...
                 </div>
+              ) : previewType === "html" && !isBinary ? (
+                htmlView === "preview" ? (
+                  <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
+                    {htmlPreviewUrl ? (
+                      <iframe
+                        src={htmlPreviewUrl}
+                        title={`preview-${selectedPath}`}
+                        className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                      />
+                    ) : (
+                      <div className="px-3 py-3 text-xs text-muted-foreground">
+                        当前 HTML 文件暂不可预览。
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
+                    <pre className="px-3 py-3 text-xs leading-5 whitespace-pre text-slate-700">
+                      <code>{file?.content || ""}</code>
+                    </pre>
+                  </div>
+                )
               ) : previewType === "markdown" && !isBinary ? (
                 <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
                   <Streamdown>{file?.content || ""}</Streamdown>

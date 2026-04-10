@@ -72,7 +72,77 @@ export class TaskCreationSessionDAO {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   }
 
-  private sanitizeTimelineMetadataForStorage(metadataRaw: unknown): Record<string, unknown> {
+  private isUnsafeRelativePath(value: string): boolean {
+    if (!value) return true;
+    if (value === '.' || value === '..') return true;
+    if (value.includes('\0')) return true;
+    return value.split('/').some((segment) => segment === '..');
+  }
+
+  private stripWorkspaceRootPrefix(pathValue: string, workspaceRoot: string): string {
+    const normalizedPath = this.asText(pathValue).replace(/\\/g, '/');
+    const normalizedRoot = this.asText(workspaceRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!normalizedPath || !normalizedRoot) return normalizedPath;
+
+    const rootWithoutLeadingSlash = normalizedRoot.replace(/^\/+/, '');
+    if (normalizedPath === normalizedRoot || normalizedPath === rootWithoutLeadingSlash) {
+      return '';
+    }
+    if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
+      return normalizedPath.slice(normalizedRoot.length + 1);
+    }
+    if (normalizedPath.startsWith(`/${rootWithoutLeadingSlash}/`)) {
+      return normalizedPath.slice(rootWithoutLeadingSlash.length + 2);
+    }
+    if (normalizedPath.startsWith(`${rootWithoutLeadingSlash}/`)) {
+      return normalizedPath.slice(rootWithoutLeadingSlash.length + 1);
+    }
+    return normalizedPath;
+  }
+
+  private normalizeWorkspaceRelativePathForSession(
+    value: unknown,
+    sessionId: string,
+    workspaceRootHint?: string
+  ): string {
+    let normalized = this.asText(value).replace(/\\/g, '/');
+    if (!normalized) return '';
+
+    normalized = normalized.replace(/^\.\/+/, '');
+    if (workspaceRootHint) {
+      normalized = this.stripWorkspaceRootPrefix(normalized, workspaceRootHint);
+    }
+
+    const safeSessionId = this.asText(sessionId).toLowerCase();
+    if (safeSessionId) {
+      const lowerPath = normalized.toLowerCase();
+      const workspaceMarker = `/workspaces/${safeSessionId}`;
+      const markerIndex = lowerPath.indexOf(workspaceMarker);
+      if (markerIndex >= 0) {
+        const markerEnd = markerIndex + workspaceMarker.length;
+        if (lowerPath.length === markerEnd) {
+          normalized = '';
+        } else if (normalized[markerEnd] === '/') {
+          normalized = normalized.slice(markerEnd + 1);
+        }
+      } else {
+        const markerNoLeadingSlash = `workspaces/${safeSessionId}`;
+        if (lowerPath === markerNoLeadingSlash) {
+          normalized = '';
+        } else if (lowerPath.startsWith(`${markerNoLeadingSlash}/`)) {
+          normalized = normalized.slice(markerNoLeadingSlash.length + 1);
+        }
+      }
+    }
+
+    normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+    if (this.isUnsafeRelativePath(normalized)) {
+      return '';
+    }
+    return normalized;
+  }
+
+  private sanitizeTimelineMetadataForStorage(metadataRaw: unknown, sessionId?: string): Record<string, unknown> {
     const metadata = this.asRecord(metadataRaw);
     const slim: Record<string, unknown> = {};
 
@@ -110,6 +180,7 @@ export class TaskCreationSessionDAO {
       'exitCode',
       'fileChanges',
       'filePaths',
+      'path',
       'commandCategory',
       'targetPath',
       'approvalText',
@@ -201,6 +272,59 @@ export class TaskCreationSessionDAO {
       }
       if (Object.keys(slimProps).length > 0) {
         slim.event = { properties: slimProps };
+      }
+    }
+
+    const safeSessionId = this.asText(sessionId);
+    const workspaceRootHint =
+      this.asText(metadata.workspacePath) || this.asText((metadata as Record<string, unknown>).workspaceRoot);
+    const normalizePath = (value: unknown) =>
+      this.normalizeWorkspaceRelativePathForSession(value, safeSessionId, workspaceRootHint);
+
+    if (Array.isArray(slim.filePaths)) {
+      const normalizedFilePaths = slim.filePaths
+        .map((entry) => normalizePath(entry))
+        .filter(Boolean);
+      if (normalizedFilePaths.length > 0) {
+        slim.filePaths = Array.from(new Set(normalizedFilePaths));
+      } else {
+        delete slim.filePaths;
+      }
+    }
+
+    if (Array.isArray(slim.fileChanges)) {
+      const normalizedChanges = slim.fileChanges
+        .map((entry) => this.asRecord(entry))
+        .map((entry) => {
+          const normalizedPath = normalizePath(entry.path);
+          if (normalizedPath) {
+            return {
+              ...entry,
+              path: normalizedPath,
+            };
+          }
+          if (entry.path !== undefined) {
+            const next = { ...entry };
+            delete next.path;
+            return next;
+          }
+          return entry;
+        })
+        .filter((entry) => Object.keys(entry).length > 0);
+      if (normalizedChanges.length > 0) {
+        slim.fileChanges = normalizedChanges;
+      } else {
+        delete slim.fileChanges;
+      }
+    }
+
+    for (const key of ['path', 'targetPath'] as const) {
+      if (slim[key] === undefined) continue;
+      const normalizedPath = normalizePath(slim[key]);
+      if (normalizedPath) {
+        slim[key] = normalizedPath;
+      } else {
+        delete slim[key];
       }
     }
 
@@ -550,7 +674,7 @@ export class TaskCreationSessionDAO {
     const storageId = this.createId();
     const sourceId = data.id;
     const metadata = normalizeMessageTimelineMetadata(
-      this.sanitizeTimelineMetadataForStorage(data.metadata),
+      this.sanitizeTimelineMetadataForStorage(data.metadata, data.sessionId),
       data.createdAt,
       seed
     );
@@ -658,7 +782,7 @@ export class TaskCreationSessionDAO {
               ? new Date(message.createdAt)
               : null;
         const metadata = normalizeMessageTimelineMetadata(message.metadata, message.createdAt, index);
-        const sanitizedMetadata = this.sanitizeTimelineMetadataForStorage(metadata);
+        const sanitizedMetadata = this.sanitizeTimelineMetadataForStorage(metadata, sessionId);
         const runtimeGeneration = normalizeRuntimeGenerationValue(sanitizedMetadata.runtimeGeneration);
         if (runtimeGeneration !== null) {
           sanitizedMetadata.runtimeGeneration = runtimeGeneration;

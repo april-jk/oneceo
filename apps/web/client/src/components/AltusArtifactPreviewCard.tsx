@@ -7,6 +7,7 @@ import {
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import {
   Code2,
   ExternalLink,
@@ -48,7 +49,10 @@ export default function AltusArtifactPreviewCard({
   const normalizedArtifacts = useMemo(() => {
     const unique = new Map<string, AltusArtifactFile>();
     for (const artifact of artifacts) {
-      const normalizedPath = String(artifact.path || "").trim().replace(/\\/g, "/");
+      const normalizedPath = normalizeWorkspaceRelativePath(
+        artifact.path || "",
+        sessionId,
+      );
       if (!normalizedPath) continue;
       if (!unique.has(normalizedPath)) {
         unique.set(normalizedPath, {
@@ -58,7 +62,7 @@ export default function AltusArtifactPreviewCard({
       }
     }
     return Array.from(unique.values());
-  }, [artifacts]);
+  }, [artifacts, sessionId]);
 
   const visibleArtifacts = useMemo(() => {
     if (displayMode === "web-preview") {

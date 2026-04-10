@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/drawer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 
 export type AltusReplayActionStatus =
   | "running"
@@ -85,10 +86,10 @@ function getStatusBadgeClass(status: AltusReplayActionStatus) {
   return "bg-white text-zinc-700 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:border-zinc-700";
 }
 
-function uniqueFiles(files: AltusReplayFile[]) {
+function uniqueFiles(files: AltusReplayFile[], sessionId: string) {
   const map = new Map<string, AltusReplayFile>();
   for (const file of files) {
-    const normalizedPath = String(file.path || "").trim().replace(/\\/g, "/");
+    const normalizedPath = normalizeWorkspaceRelativePath(file.path || "", sessionId);
     if (!normalizedPath || map.has(normalizedPath)) continue;
     map.set(normalizedPath, {
       ...file,
@@ -114,7 +115,10 @@ export default function AltusRunReplayDrawer({
   onActiveViewChange,
   onOpenFile,
 }: AltusRunReplayDrawerProps) {
-  const normalizedFiles = useMemo(() => uniqueFiles(files), [files]);
+  const normalizedFiles = useMemo(
+    () => uniqueFiles(files, sessionId),
+    [files, sessionId],
+  );
   const selectedAction =
     currentIndex >= 0 && currentIndex < actions.length ? actions[currentIndex] : null;
   const [selectedFilePath, setSelectedFilePath] = useState<string>(

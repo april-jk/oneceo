@@ -50,6 +50,7 @@ import {
   getTaskCreationDeploymentInfo,
   getTaskCreationDebugInfo,
   headWorkspaceRawFile,
+  waitWorkspaceRawFileReady,
   insertTaskCreationDatabaseRow,
   startTaskCreationRuntime,
   startTaskCreationDebug,
@@ -1306,7 +1307,10 @@ function FilePreview({
     setHtmlPreviewMessage("");
     try {
       await startTaskCreationRuntime(sessionId);
-      const result = await headWorkspaceRawFile(sessionId, selectedPath);
+      const result = await waitWorkspaceRawFileReady(sessionId, selectedPath, {
+        attempts: 8,
+        intervalMs: 600,
+      });
       const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setHtmlPreviewState(mapped.state);
       setHtmlPreviewMessage(mapped.message);

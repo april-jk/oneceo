@@ -2702,6 +2702,56 @@ function isSandboxNotFoundError(error: unknown): boolean {
   );
 }
 
+function isWorkspaceFileNotFoundError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  const name = error instanceof Error ? String(error.name || '').toLowerCase() : '';
+  return (
+    name === 'notfounderror' ||
+    normalized.includes("does not exist") ||
+    normalized.includes('no such file') ||
+    normalized.includes('enoent') ||
+    normalized.includes('file not found')
+  );
+}
+
+function resolveRuntimeRestoreSourceKey(runtime: unknown): string {
+  const record = (runtime || {}) as Record<string, unknown>;
+  return (
+    asText(record.codexRestoreSourceKey) ||
+    asText(record.r2RestoreSourceKey) ||
+    asText(record.r2ArchiveKey) ||
+    ''
+  );
+}
+
+async function tryRestoreWorkspaceForPreviewRead(
+  sessionId: string,
+  orchestratorSessionId: string,
+  session: FileSessionRecord | null,
+): Promise<boolean> {
+  if (!isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) return false;
+  const restoreSourceKey = resolveRuntimeRestoreSourceKey(session?.runtime);
+  if (!restoreSourceKey) return false;
+  try {
+    const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
+    if (restored) {
+      await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+      await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
+      return true;
+    }
+    return false;
+  } catch (restoreError) {
+    console.warn('[WORKSPACE_RAW_RESTORE_ON_MISSING_FAILED]', {
+      sessionId,
+      orchestratorSessionId,
+      error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+    });
+    return false;
+  }
+}
+
 async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
   const sessionId = asText(orchestratorSessionId);
   if (!sessionId) return null;
@@ -6070,7 +6120,23 @@ async function handleWorkspaceRawRequest(
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
-      const rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      let rawContent: Uint8Array;
+      try {
+        rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      } catch (readError) {
+        if (!isWorkspaceFileNotFoundError(readError)) {
+          throw readError;
+        }
+        const restored = await tryRestoreWorkspaceForPreviewRead(
+          sessionId,
+          orchestratorSessionId,
+          session,
+        );
+        if (!restored) {
+          throw readError;
+        }
+        rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      }
       if (!headOnly) {
         buffer = Buffer.from(rawContent);
       }
@@ -6123,6 +6189,9 @@ async function handleWorkspaceRawRequest(
         await markSandboxClosed(orchestratorSessionId);
       }
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境已关闭，请重新启动');
+    }
+    if (isWorkspaceFileNotFoundError(error)) {
+      return res.status(404).type('text/plain; charset=utf-8').send('预览文件不存在或已被移除');
     }
     console.error('获取工作区原始文件失败:', error);
     return res.status(500).type('text/plain; charset=utf-8').send('获取工作区原始文件失败，请稍后重试');

@@ -1233,6 +1233,42 @@ export async function headWorkspaceRawFile(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
+function shouldRetryWorkspaceRawHead(result: WorkspaceRawHeadResult): boolean {
+  if (result.ok) return false;
+  if (result.networkError) return true;
+  return result.status === 0 || result.status === 409 || result.status >= 500;
+}
+
+export async function waitWorkspaceRawFileReady(
+  sessionId: string,
+  filePath: string,
+  options?: {
+    attempts?: number;
+    intervalMs?: number;
+  },
+): Promise<WorkspaceRawHeadResult> {
+  const attempts = Math.max(1, Math.floor(options?.attempts ?? 8));
+  const intervalMs = Math.max(100, Math.floor(options?.intervalMs ?? 600));
+  let last: WorkspaceRawHeadResult = {
+    ok: false,
+    status: 0,
+  };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await headWorkspaceRawFile(sessionId, filePath);
+    if (!shouldRetryWorkspaceRawHead(last) || attempt === attempts - 1) {
+      return last;
+    }
+    await sleep(intervalMs);
+  }
+  return last;
+}
+
 export function getTaskCreationDeliverableDownloadUrl(sessionId: string, artifactId: string): string {
   const safeSessionId = encodeURIComponent(sessionId);
   const safeArtifactId = encodeURIComponent(artifactId);

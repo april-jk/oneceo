@@ -25,6 +25,16 @@ test("issue39: network error maps to friendly retry message", async () => {
   expect(result.message).toContain("网络异常");
 });
 
+test("issue39: server 500 maps to runtime recovering message", async () => {
+  const result = mapWorkspaceRawPreviewHeadResult({
+    ok: false,
+    status: 500,
+  });
+
+  expect(result.state).toBe("runtime_unavailable");
+  expect(result.message).toContain("恢复中");
+});
+
 test("issue39: successful head check maps to ready state", async () => {
   const result = mapWorkspaceRawPreviewHeadResult({
     ok: true,

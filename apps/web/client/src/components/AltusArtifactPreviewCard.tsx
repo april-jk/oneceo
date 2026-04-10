@@ -3,10 +3,17 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getWorkspaceFile,
+  headWorkspaceRawFile,
   getWorkspaceRawFileUrl,
+  startTaskCreationRuntime,
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import {
+  appendPreviewCacheBust,
+  mapWorkspaceRawPreviewHeadResult,
+  type WorkspaceHtmlPreviewState,
+} from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import {
   Code2,
@@ -84,6 +91,10 @@ export default function AltusArtifactPreviewCard({
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [webPreviewState, setWebPreviewState] = useState<WorkspaceHtmlPreviewState>("checking");
+  const [webPreviewMessage, setWebPreviewMessage] = useState("");
+  const [webPreviewReloading, setWebPreviewReloading] = useState(false);
+  const [webPreviewNonce, setWebPreviewNonce] = useState(0);
 
   useEffect(() => {
     setSelectedPath(defaultPath);
@@ -133,9 +144,60 @@ export default function AltusArtifactPreviewCard({
     selectedArtifact && isWebArtifact(selectedArtifact.path),
   );
   const hasPreviewTab = Boolean(previewPath);
+  const effectiveRawPreviewUrl = appendPreviewCacheBust(rawPreviewUrl, webPreviewNonce);
+  const effectiveRawSelectedUrl = appendPreviewCacheBust(rawSelectedUrl, webPreviewNonce);
+  const previewCheckEnabled = Boolean(activeTab === "preview" && previewPath);
   const frameClass = selectedIsWebArtifact
     ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
     : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
+
+  useEffect(() => {
+    setWebPreviewState("checking");
+    setWebPreviewMessage("");
+    setWebPreviewNonce(Date.now());
+  }, [previewPath]);
+
+  useEffect(() => {
+    if (!previewCheckEnabled || !previewPath) {
+      return;
+    }
+    let cancelled = false;
+    setWebPreviewState("checking");
+    setWebPreviewMessage("");
+    void headWorkspaceRawFile(sessionId, previewPath).then((result) => {
+      if (cancelled) return;
+      const mapped = mapWorkspaceRawPreviewHeadResult(result);
+      setWebPreviewState(mapped.state);
+      setWebPreviewMessage(mapped.message);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewCheckEnabled, previewPath, sessionId]);
+
+  const reloadWebPreview = async () => {
+    if (!previewPath || webPreviewReloading) {
+      return;
+    }
+    setWebPreviewReloading(true);
+    setWebPreviewState("checking");
+    setWebPreviewMessage("");
+    try {
+      await startTaskCreationRuntime(sessionId);
+      const result = await headWorkspaceRawFile(sessionId, previewPath);
+      const mapped = mapWorkspaceRawPreviewHeadResult(result);
+      setWebPreviewState(mapped.state);
+      setWebPreviewMessage(mapped.message);
+      if (mapped.state === "ready") {
+        setWebPreviewNonce(Date.now());
+      }
+    } catch {
+      setWebPreviewState("fetch_failed");
+      setWebPreviewMessage("预览恢复失败，请稍后重试。");
+    } finally {
+      setWebPreviewReloading(false);
+    }
+  };
 
   const handleDeploy = async () => {
     if (!selectedArtifact || !onDeployRequested || deploying) {
@@ -232,7 +294,9 @@ export default function AltusArtifactPreviewCard({
                         variant="outline"
                         size="sm"
                         className="h-8 rounded-2xl border-border/70 bg-background/80 text-xs backdrop-blur-sm"
-                        onClick={() => window.open(rawSelectedUrl, "_blank", "noopener,noreferrer")}
+                        onClick={() =>
+                          window.open(effectiveRawSelectedUrl, "_blank", "noopener,noreferrer")
+                        }
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                         Open
@@ -243,13 +307,56 @@ export default function AltusArtifactPreviewCard({
                   <TabsContent value="preview" className="relative h-full data-[state=inactive]:hidden">
                     {previewPath ? (
                       <div className="absolute inset-0">
-                        <iframe
-                          src={rawPreviewUrl}
-                          title={`${getFilename(previewPath)} preview`}
-                          className="absolute inset-0 h-full w-full border-0"
-                          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
-                          style={{ background: "white" }}
-                        />
+                        {webPreviewState === "ready" ? (
+                          <iframe
+                            src={effectiveRawPreviewUrl}
+                            title={`${getFilename(previewPath)} preview`}
+                            className="absolute inset-0 h-full w-full border-0"
+                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            style={{ background: "white" }}
+                          />
+                        ) : (
+                          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted/20 px-6 text-center">
+                            {webPreviewState === "checking" ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                <div className="text-sm text-muted-foreground">正在检查预览环境...</div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="max-w-md text-sm text-muted-foreground">
+                                  {webPreviewMessage || "当前 HTML 文件暂不可预览。"}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => void reloadWebPreview()}
+                                    disabled={webPreviewReloading}
+                                  >
+                                    {webPreviewReloading ? (
+                                      <>
+                                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                        重新加载中...
+                                      </>
+                                    ) : (
+                                      "重新加载预览"
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setActiveTab("code")}
+                                  >
+                                    查看源码
+                                  </Button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="absolute inset-0 flex items-center justify-center bg-muted/20 px-6 text-center text-sm text-muted-foreground">

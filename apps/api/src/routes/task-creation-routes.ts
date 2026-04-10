@@ -6033,11 +6033,12 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   }
 });
 
-/**
- * GET /api/task-creation/sessions/:sessionId/workspace/raw/*
- * 以原始内容返回会话工作区内的单个文件，供 iframe 预览和新标签页打开使用
- */
-router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+async function handleWorkspaceRawRequest(
+  req: express.Request,
+  res: express.Response,
+  options?: { headOnly?: boolean }
+) {
+  const headOnly = options?.headOnly === true;
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
@@ -6064,26 +6065,30 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境未启动，无法读取文件');
     }
 
-    let buffer: Buffer;
-    let mimeType: string;
+    let buffer: Buffer | null = null;
+    let mimeType = resolveMimeType(normalizedPath);
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
-      buffer = Buffer.from(await e2bConnector.readFile(orchestratorSessionId, absolutePath));
-      mimeType = resolveMimeType(normalizedPath);
+      const rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      if (!headOnly) {
+        buffer = Buffer.from(rawContent);
+      }
     } else {
       await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
       const content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
-      const isBinary = content.type !== 'text' || content.encoding === 'base64';
       mimeType = resolveMimeType(normalizedPath, content.mimeType);
-      if (isBinary) {
-        const encoded =
-          content.encoding === 'base64'
-            ? String(content.content || '').trim()
-            : Buffer.from(String(content.content || ''), 'utf8').toString('base64');
-        buffer = Buffer.from(encoded, 'base64');
-      } else {
-        buffer = Buffer.from(String(content.content || ''), 'utf8');
+      if (!headOnly) {
+        const isBinary = content.type !== 'text' || content.encoding === 'base64';
+        if (isBinary) {
+          const encoded =
+            content.encoding === 'base64'
+              ? String(content.content || '').trim()
+              : Buffer.from(String(content.content || ''), 'utf8').toString('base64');
+          buffer = Buffer.from(encoded, 'base64');
+        } else {
+          buffer = Buffer.from(String(content.content || ''), 'utf8');
+        }
       }
     }
 
@@ -6094,7 +6099,10 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       'Content-Type',
       isTextLikeMimeType(mimeType) ? `${mimeType}; charset=utf-8` : mimeType
     );
-    return res.status(200).send(buffer);
+    if (headOnly) {
+      return res.status(200).end();
+    }
+    return res.status(200).send(buffer || Buffer.alloc(0));
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
     if (authError) {
@@ -6119,6 +6127,22 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
     console.error('获取工作区原始文件失败:', error);
     return res.status(500).type('text/plain; charset=utf-8').send('获取工作区原始文件失败，请稍后重试');
   }
+}
+
+/**
+ * HEAD /api/task-creation/sessions/:sessionId/workspace/raw/*
+ * 预检查文件原始预览是否可用（不返回正文）
+ */
+router.head('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+  return handleWorkspaceRawRequest(req, res, { headOnly: true });
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/workspace/raw/*
+ * 以原始内容返回会话工作区内的单个文件，供 iframe 预览和新标签页打开使用
+ */
+router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+  return handleWorkspaceRawRequest(req, res, { headOnly: false });
 });
 
 /**

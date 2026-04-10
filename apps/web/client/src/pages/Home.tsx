@@ -4260,7 +4260,6 @@ function MessageBubble({
         <AltusArtifactPreviewCard
           sessionId={item.sessionId}
           artifacts={item.artifacts}
-          displayMode="web-preview"
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
         />

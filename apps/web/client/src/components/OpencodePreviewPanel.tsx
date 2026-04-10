@@ -10,12 +10,24 @@ import { Button } from "@/components/ui/button";
 import {
   BarChart3,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
   Database,
+  Download,
   ExternalLink,
+  File,
+  FileAudio,
+  FileCode2,
+  FileImage,
+  FileJson2,
+  FileText,
+  FileType2,
+  FileVideo,
   Filter,
+  Folder,
+  FolderOpen,
   Globe,
   Globe2,
   HardDrive,
@@ -71,6 +83,11 @@ import {
   type WorkspaceTreeItem,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import {
   appendPreviewCacheBust,
   mapWorkspaceRawPreviewHeadResult,
@@ -170,7 +187,10 @@ export default function OpencodePreviewPanel({
     () => buildWorkspaceTreeFromDiffItems(sessionId, diffItems),
     [sessionId, diffItems],
   );
-  const effectiveTree = tree && tree.items.length > 0 ? tree : diffDerivedTree;
+  const effectiveTree = useMemo(
+    () => mergeWorkspaceTrees(sessionId, tree, diffDerivedTree),
+    [sessionId, tree, diffDerivedTree],
+  );
 
   const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
   const setSelectedDiffId = (id: string | null) => {
@@ -761,7 +781,7 @@ export default function OpencodePreviewPanel({
 
   const currentDiff =
     diffItems.find((item) => item.id === selectedDiffId) || null;
-  const treeCount = tree?.items.length || 0;
+  const treeCount = effectiveTree?.items.length || 0;
 
   const refreshDeployment = async (deploymentId?: string) => {
     if (!sessionId) {
@@ -1168,6 +1188,99 @@ function detectProjectRootPrefix(items: WorkspaceTreeItem[]): string | null {
   return null;
 }
 
+function getWorkspacePathBasename(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function getWorkspacePathExt(path: string): string {
+  const base = getWorkspacePathBasename(path).toLowerCase();
+  const lastDot = base.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === base.length - 1) return "";
+  return base.slice(lastDot + 1);
+}
+
+function formatWorkspaceFileSize(size?: number): string {
+  if (!Number.isFinite(size) || typeof size !== "number" || size < 0) {
+    return "未知大小";
+  }
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function resolveTreeNodeIcon(node: TreeNode, isOpen: boolean) {
+  if (node.type === "dir") {
+    return isOpen ? FolderOpen : Folder;
+  }
+  const ext = getWorkspacePathExt(node.path);
+  if (ext === "html" || ext === "htm") return Globe2;
+  if (ext === "md" || ext === "markdown" || ext === "mdx") return ScrollText;
+  if (
+    ext === "png" ||
+    ext === "jpg" ||
+    ext === "jpeg" ||
+    ext === "gif" ||
+    ext === "webp" ||
+    ext === "bmp" ||
+    ext === "svg"
+  ) {
+    return FileImage;
+  }
+  if (ext === "mp4" || ext === "webm" || ext === "mov" || ext === "m4v") {
+    return FileVideo;
+  }
+  if (ext === "mp3" || ext === "wav" || ext === "ogg" || ext === "m4a") {
+    return FileAudio;
+  }
+  if (ext === "pdf") return FileType2;
+  if (ext === "json") return FileJson2;
+  if (
+    ext === "ts" ||
+    ext === "tsx" ||
+    ext === "js" ||
+    ext === "jsx" ||
+    ext === "py" ||
+    ext === "go" ||
+    ext === "java" ||
+    ext === "rs" ||
+    ext === "css" ||
+    ext === "scss" ||
+    ext === "sql" ||
+    ext === "sh" ||
+    ext === "bash" ||
+    ext === "zsh"
+  ) {
+    return FileCode2;
+  }
+  if (ext === "txt" || ext === "log" || ext === "yaml" || ext === "yml" || ext === "toml" || ext === "xml") {
+    return FileText;
+  }
+  return File;
+}
+
+async function writeClipboardTextSafely(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function triggerFileDownload(url: string, filename: string) {
+  if (!url) return;
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener noreferrer";
+  anchor.target = "_blank";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+}
+
 function buildWorkspaceTreeFromDiffItems(
   sessionId: string | null | undefined,
   diffItems: PreviewDiffItem[],
@@ -1213,6 +1326,36 @@ function buildWorkspaceTreeFromDiffItems(
   };
 }
 
+function mergeWorkspaceTrees(
+  sessionId: string | null | undefined,
+  primary: WorkspaceTree | null | undefined,
+  secondary: WorkspaceTree | null | undefined,
+): WorkspaceTree | null {
+  const allItems = [...(primary?.items || []), ...(secondary?.items || [])];
+  if (allItems.length === 0) return null;
+  const byPath = new Map<string, WorkspaceTreeItem>();
+  allItems.forEach((item) => {
+    const normalized = normalizeWorkspaceRelativePath(item.path, sessionId);
+    if (!normalized) return;
+    byPath.set(normalized, {
+      path: normalized,
+      type: item.type === "dir" ? "dir" : "file",
+    });
+  });
+  const items = Array.from(byPath.values()).sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+    return a.path.localeCompare(b.path);
+  });
+  if (items.length === 0) return null;
+  return {
+    root:
+      primary?.root ||
+      secondary?.root ||
+      (sessionId ? `/home/user/opencode/workspaces/${sessionId}` : ""),
+    items,
+  };
+}
+
 function FilePreview({
   sessionId,
   tree,
@@ -1249,10 +1392,12 @@ function FilePreview({
   runtimeStarting: boolean;
 }) {
   const [htmlView, setHtmlView] = useState<"preview" | "source">("preview");
-  const [htmlPreviewState, setHtmlPreviewState] = useState<WorkspaceHtmlPreviewState>("checking");
+  const [htmlPreviewState, setHtmlPreviewState] =
+    useState<WorkspaceHtmlPreviewState>("checking");
   const [htmlPreviewMessage, setHtmlPreviewMessage] = useState("");
   const [htmlPreviewReloading, setHtmlPreviewReloading] = useState(false);
   const [htmlPreviewNonce, setHtmlPreviewNonce] = useState(0);
+  const [copiedKey, setCopiedKey] = useState<"path" | "content" | null>(null);
 
   useEffect(() => {
     setHtmlView("preview");
@@ -1264,6 +1409,14 @@ function FilePreview({
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
   const isBinary = Boolean(file?.isBinary);
+  const selectedFilename = selectedPath
+    ? getWorkspacePathBasename(selectedPath)
+    : "";
+  const selectedRawUrl =
+    sessionId && selectedPath
+      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+      : "";
+  const pathSegments = selectedPath ? selectedPath.split("/").filter(Boolean) : [];
   const htmlPreviewUrl =
     previewType === "html" && sessionId && selectedPath
       ? getWorkspaceRawFileUrl(sessionId, selectedPath)
@@ -1280,7 +1433,10 @@ function FilePreview({
       !isBinary &&
       htmlView === "preview",
   );
-  const effectiveHtmlPreviewUrl = appendPreviewCacheBust(htmlPreviewUrl, htmlPreviewNonce);
+  const effectiveHtmlPreviewUrl = appendPreviewCacheBust(
+    htmlPreviewUrl,
+    htmlPreviewNonce,
+  );
 
   useEffect(() => {
     if (!htmlPreviewEnabled || !sessionId || !selectedPath) {
@@ -1325,6 +1481,25 @@ function FilePreview({
     }
   };
 
+  const copyPath = async (path: string) => {
+    const copied = await writeClipboardTextSafely(path);
+    if (!copied) return;
+    setCopiedKey("path");
+    window.setTimeout(() => {
+      setCopiedKey((current) => (current === "path" ? null : current));
+    }, 1200);
+  };
+
+  const copyContent = async () => {
+    if (!file || isBinary) return;
+    const copied = await writeClipboardTextSafely(file.content || "");
+    if (!copied) return;
+    setCopiedKey("content");
+    window.setTimeout(() => {
+      setCopiedKey((current) => (current === "content" ? null : current));
+    }, 1200);
+  };
+
   if (!runtimeReady) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
@@ -1364,9 +1539,6 @@ function FilePreview({
       ? nodes.find((node) => node.type === "dir" && node.path === projectPrefix) || null
       : null;
   const renderNodes = projectNode ? projectNode.children : nodes;
-  const displayRoot = projectPrefix
-    ? `${(tree.root || "").replace(/\/+$/, "")}/${projectPrefix}`
-    : tree.root;
   const lineCount = file?.content ? file.content.split("\n").length : 0;
   const rootDirState = dirState[""];
   const binaryDataUrl =
@@ -1375,235 +1547,350 @@ function FilePreview({
       : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col md:flex-row">
-      <div className="border-b border-border overflow-auto overscroll-contain bg-slate-50/60 px-3 py-3 md:basis-[30%] md:max-w-[30%] md:border-r md:border-b-0">
-        <div className="mb-2 space-y-1">
-          <div className="text-[11px] text-muted-foreground break-all font-mono">
-            根目录: {displayRoot}
+    <ResizablePanelGroup direction="horizontal" className="h-full min-h-0">
+      <ResizablePanel defaultSize={28} minSize={20} maxSize={45}>
+        <div className="h-full min-h-0 overflow-auto overscroll-contain border-r border-border bg-[var(--fill-tsp-gray-main)]">
+          <div className="space-y-1 p-2">
+            {rootDirState?.hasMore ? (
+              <button
+                type="button"
+                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-blue-600 transition-colors hover:border-blue-100 hover:bg-blue-50/60 disabled:text-slate-400"
+                onClick={() => onLoadMoreDir("")}
+                disabled={Boolean(rootDirState.loading)}
+              >
+                {rootDirState.loading ? "加载中..." : "加载更多根目录项..."}
+              </button>
+            ) : null}
           </div>
-          {rootDirState?.hasMore ? (
-            <button
-              type="button"
-              className="text-[11px] text-blue-600 hover:text-blue-700 disabled:text-slate-400"
-              onClick={() => onLoadMoreDir("")}
-              disabled={Boolean(rootDirState.loading)}
-            >
-              {rootDirState.loading ? "加载中..." : "加载更多根目录项..."}
-            </button>
-          ) : null}
+          <div className="px-2 pb-3">
+            <TreeList
+              nodes={renderNodes}
+              sessionId={sessionId}
+              selectedPath={selectedPath}
+              onSelectFile={onSelectFile}
+              expandedPaths={expandedPaths}
+              dirState={dirState}
+              onTogglePath={onTogglePath}
+              onLoadMoreDir={onLoadMoreDir}
+              onCopyPath={copyPath}
+            />
+          </div>
         </div>
-        <TreeList
-          nodes={renderNodes}
-          selectedPath={selectedPath}
-          onSelectFile={onSelectFile}
-          expandedPaths={expandedPaths}
-          dirState={dirState}
-          onTogglePath={onTogglePath}
-          onLoadMoreDir={onLoadMoreDir}
-        />
-      </div>
-      <div className="min-h-0 md:basis-[70%] md:max-w-[70%] overflow-hidden px-4 py-3">
-        {selectedPath ? (
-          <div className="h-full min-h-0 flex flex-col gap-2">
-            <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
-              <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200 bg-slate-50 text-[11px] text-slate-500">
-                <span className="truncate">文件: {selectedPath}</span>
-                <div className="flex items-center gap-2">
-                  {previewType === "html" && !isBinary ? (
-                    <div className="inline-flex items-center rounded-md border border-slate-200 bg-white p-0.5">
-                      <button
-                        type="button"
+      </ResizablePanel>
+      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-blue-500/70 data-[resize-handle-state=drag]:bg-blue-500" />
+      <ResizablePanel defaultSize={72} minSize={55}>
+        <div className="h-full min-h-0 overflow-hidden bg-background p-3">
+          {selectedPath ? (
+            <div className="flex h-full min-h-0 flex-col rounded-lg border border-slate-200 bg-white">
+              <div className="flex h-10 items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3">
+                <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[12px]">
+                  {pathSegments.map((segment, index) => (
+                    <div key={`${segment}-${index}`} className="flex min-w-0 items-center gap-1">
+                      <span
                         className={cn(
-                          "rounded px-2 py-0.5 text-[11px]",
-                          htmlView === "preview"
-                            ? "bg-slate-900 text-white"
-                            : "text-slate-600",
+                          "truncate",
+                          index === pathSegments.length - 1
+                            ? "font-medium text-slate-900"
+                            : "text-slate-500",
                         )}
-                        onClick={() => setHtmlView("preview")}
                       >
-                        Preview
-                      </button>
-                      <button
-                        type="button"
-                        className={cn(
-                          "rounded px-2 py-0.5 text-[11px]",
-                          htmlView === "source"
-                            ? "bg-slate-900 text-white"
-                            : "text-slate-600",
-                        )}
-                        onClick={() => setHtmlView("source")}
-                      >
-                        Source
-                      </button>
+                        {segment}
+                      </span>
+                      {index < pathSegments.length - 1 ? (
+                        <span className="text-slate-400">/</span>
+                      ) : null}
                     </div>
-                  ) : null}
-                  {previewType === "html" && htmlPreviewUrl ? (
-                    <button
-                      type="button"
-                      className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600"
-                      onClick={() =>
-                        window.open(effectiveHtmlPreviewUrl, "_blank", "noopener,noreferrer")
-                      }
-                    >
-                      Open
-                    </button>
-                  ) : null}
-                  <span>
-                    {isBinary
-                      ? `${mimeType}${typeof file?.size === "number" ? ` · ${Math.ceil(file.size / 1024)} KB` : ""}`
-                      : `${lineCount} 行`}
-                  </span>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    onClick={() => void copyPath(selectedPath)}
+                    title={copiedKey === "path" ? "已复制路径" : "复制路径"}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    onClick={() => void copyContent()}
+                    disabled={!file || isBinary}
+                    title={copiedKey === "content" ? "已复制" : "复制内容"}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    onClick={() =>
+                      triggerFileDownload(selectedRawUrl, selectedFilename || "workspace-file")
+                    }
+                    disabled={!selectedRawUrl}
+                    title="下载文件"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    onClick={() =>
+                      selectedRawUrl
+                        ? window.open(selectedRawUrl, "_blank", "noopener,noreferrer")
+                        : null
+                    }
+                    disabled={!selectedRawUrl}
+                    title="新窗口打开"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
-              {contentLoading ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">
-                  加载中...
-                </div>
-              ) : previewType === "html" && !isBinary ? (
-                htmlView === "preview" ? (
-                  <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                    {htmlPreviewUrl ? (
-                      htmlPreviewState === "ready" ? (
-                        <iframe
-                          src={effectiveHtmlPreviewUrl}
-                          title={`preview-${selectedPath}`}
-                          className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
-                          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
-                          onError={() => {
-                            setHtmlPreviewState("fetch_failed");
-                            setHtmlPreviewMessage("预览加载失败，请稍后重试。");
-                          }}
-                        />
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
+                <span className="truncate">{selectedPath}</span>
+                <span className="shrink-0">
+                  {isBinary ? `${mimeType} · ${formatWorkspaceFileSize(file?.size)}` : `${lineCount} 行 · ${mimeType}`}
+                </span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                {contentLoading ? (
+                  <div className="px-3 py-3 text-xs text-muted-foreground">
+                    加载中...
+                  </div>
+                ) : previewType === "html" && !isBinary ? (
+                  htmlView === "preview" ? (
+                    <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
+                      {htmlPreviewUrl ? (
+                        htmlPreviewState === "ready" ? (
+                          <iframe
+                            src={effectiveHtmlPreviewUrl}
+                            title={`preview-${selectedPath}`}
+                            className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            onError={() => {
+                              setHtmlPreviewState("fetch_failed");
+                              setHtmlPreviewMessage("预览加载失败，请稍后重试。");
+                            }}
+                          />
+                        ) : (
+                          <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
+                            {htmlPreviewState === "checking" ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+                                <div className="text-xs text-slate-500">正在检查预览环境...</div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="text-sm text-slate-700">
+                                  {htmlPreviewMessage || "当前 HTML 文件暂不可预览。"}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void reloadHtmlPreview()}
+                                    disabled={htmlPreviewReloading}
+                                  >
+                                    {htmlPreviewReloading ? (
+                                      <>
+                                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                        重新加载中...
+                                      </>
+                                    ) : (
+                                      "重新加载预览"
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setHtmlView("source")}
+                                  >
+                                    查看源码
+                                  </Button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )
                       ) : (
-                        <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
-                          {htmlPreviewState === "checking" ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-                              <div className="text-xs text-slate-500">正在检查预览环境...</div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="text-sm text-slate-700">
-                                {htmlPreviewMessage || "当前 HTML 文件暂不可预览。"}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => void reloadHtmlPreview()}
-                                  disabled={htmlPreviewReloading}
-                                >
-                                  {htmlPreviewReloading ? (
-                                    <>
-                                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                      重新加载中...
-                                    </>
-                                  ) : (
-                                    "重新加载预览"
-                                  )}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setHtmlView("source")}
-                                >
-                                  查看源码
-                                </Button>
-                              </div>
-                            </>
-                          )}
+                        <div className="px-3 py-3 text-xs text-muted-foreground">
+                          当前 HTML 文件暂不可预览。
                         </div>
-                      )
-                    ) : (
-                      <div className="px-3 py-3 text-xs text-muted-foreground">
-                        当前 HTML 文件暂不可预览。
+                      )}
+                    </div>
+                  ) : (
+                    <div className="h-full min-h-0 overflow-auto overscroll-contain bg-slate-950 text-slate-100">
+                      <pre className="px-4 py-3 text-[12px] leading-5 whitespace-pre">
+                        <code>{file?.content || ""}</code>
+                      </pre>
+                    </div>
+                  )
+                ) : previewType === "markdown" && !isBinary ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
+                    <Streamdown>{file?.content || ""}</Streamdown>
+                  </div>
+                ) : previewType === "image" && binaryDataUrl ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
+                    <img
+                      src={binaryDataUrl}
+                      alt={selectedPath}
+                      className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50"
+                    />
+                  </div>
+                ) : previewType === "video" && binaryDataUrl ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
+                    <video
+                      src={binaryDataUrl}
+                      controls
+                      className="max-h-full w-full rounded-md border border-slate-200 bg-black"
+                    />
+                  </div>
+                ) : previewType === "audio" && binaryDataUrl ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
+                    <audio src={binaryDataUrl} controls className="w-full" />
+                  </div>
+                ) : previewType === "pdf" && binaryDataUrl ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain p-3">
+                    <iframe
+                      title={`preview-${selectedPath}`}
+                      src={binaryDataUrl}
+                      className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                    />
+                  </div>
+                ) : isBinary ? (
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain p-4">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+                      <div className="mb-3 text-sm font-medium text-slate-900">
+                        二进制文件信息
                       </div>
-                    )}
+                      <dl className="grid gap-3 text-xs text-slate-600">
+                        <div>
+                          <dt className="text-slate-500">文件路径</dt>
+                          <dd className="mt-0.5 break-all font-mono text-slate-800">{selectedPath}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">MIME 类型</dt>
+                          <dd className="mt-0.5 font-mono text-slate-800">{mimeType}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">文件大小</dt>
+                          <dd className="mt-0.5 text-slate-800">{formatWorkspaceFileSize(file?.size)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-slate-500">预览策略</dt>
+                          <dd className="mt-0.5 text-slate-800">
+                            {file?.binaryTooLarge
+                              ? "文件较大，仅展示元信息并提供下载。"
+                              : "该类型按二进制处理，仅展示元信息。"}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            triggerFileDownload(selectedRawUrl, selectedFilename || "workspace-file")
+                          }
+                          disabled={!selectedRawUrl}
+                        >
+                          <Download className="mr-1.5 h-3.5 w-3.5" />
+                          下载文件
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            selectedRawUrl
+                              ? window.open(selectedRawUrl, "_blank", "noopener,noreferrer")
+                              : null
+                          }
+                          disabled={!selectedRawUrl}
+                        >
+                          <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                          新窗口打开
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-                    <pre className="px-3 py-3 text-xs leading-5 whitespace-pre text-slate-700">
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain bg-slate-950 text-slate-100">
+                    <pre className="px-4 py-3 text-[12px] leading-5 whitespace-pre">
                       <code>{file?.content || ""}</code>
                     </pre>
                   </div>
-                )
-              ) : previewType === "markdown" && !isBinary ? (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
-                  <Streamdown>{file?.content || ""}</Streamdown>
+                )}
+              </div>
+              {previewType === "html" && !isBinary ? (
+                <div className="border-t border-slate-100 px-3 py-1.5">
+                  <div className="inline-flex items-center rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-0.5",
+                        htmlView === "preview"
+                          ? "bg-slate-900 text-white"
+                          : "text-slate-600",
+                      )}
+                      onClick={() => setHtmlView("preview")}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded px-2 py-0.5",
+                        htmlView === "source"
+                          ? "bg-slate-900 text-white"
+                          : "text-slate-600",
+                      )}
+                      onClick={() => setHtmlView("source")}
+                    >
+                      Source
+                    </button>
+                  </div>
                 </div>
-              ) : previewType === "image" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                  <img
-                    src={binaryDataUrl}
-                    alt={selectedPath}
-                    className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50"
-                  />
-                </div>
-              ) : previewType === "video" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                  <video
-                    src={binaryDataUrl}
-                    controls
-                    className="max-h-full w-full rounded-md border border-slate-200 bg-black"
-                  />
-                </div>
-              ) : previewType === "audio" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                  <audio src={binaryDataUrl} controls className="w-full" />
-                </div>
-              ) : previewType === "pdf" && binaryDataUrl ? (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
-                  <iframe
-                    title={`preview-${selectedPath}`}
-                    src={binaryDataUrl}
-                    className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
-                  />
-                </div>
-              ) : isBinary ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">
-                  {file?.binaryTooLarge
-                    ? "该二进制文件过大，无法在预览区直接加载。"
-                    : "该二进制文件类型暂不支持内嵌预览。"}
-                </div>
-              ) : (
-                <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
-                  <pre className="px-3 py-3 text-xs leading-5 whitespace-pre text-slate-700">
-                    <code>{file?.content || ""}</code>
-                  </pre>
-                </div>
-              )}
+              ) : null}
             </div>
-            {contentError ? (
-              <div className="text-[11px] text-amber-600">{contentError}</div>
-            ) : null}
-          </div>
-        ) : (
-          <EmptyState text="请选择文件预览" />
-        )}
-      </div>
-    </div>
+          ) : (
+            <div className="h-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70">
+              <EmptyState text="请选择文件预览" />
+            </div>
+          )}
+          {contentError ? (
+            <div className="mt-2 text-[11px] text-amber-600">{contentError}</div>
+          ) : null}
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 
 function TreeList({
   nodes,
+  sessionId,
   selectedPath,
   onSelectFile,
   expandedPaths,
   dirState,
   onTogglePath,
   onLoadMoreDir,
+  onCopyPath,
   depth = 0,
 }: {
   nodes: TreeNode[];
+  sessionId?: string | null;
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
   expandedPaths: Set<string>;
   dirState: Record<string, DirectoryLoadState>;
   onTogglePath: (path: string) => void;
   onLoadMoreDir: (path: string) => void;
+  onCopyPath: (path: string) => Promise<void>;
   depth?: number;
 }) {
   return (
@@ -1611,8 +1898,11 @@ function TreeList({
       {nodes.map((node) => {
         const isDir = node.type === "dir";
         const isOpen = expandedPaths.has(node.path);
-        const indent = depth * 12;
+        const NodeIcon = resolveTreeNodeIcon(node, isOpen);
+        const indent = depth * 10;
         const state = dirState[node.path];
+        const nodeRawUrl =
+          sessionId && !isDir ? getWorkspaceRawFileUrl(sessionId, node.path) : "";
         return (
           <div key={node.path}>
             <button
@@ -1624,30 +1914,70 @@ function TreeList({
                   onSelectFile(node.path);
                 }
               }}
-              className={`w-full flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs font-mono transition-colors border ${
+              className={`group w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] transition-colors border ${
                 selectedPath === node.path
-                  ? "bg-white border-slate-200 text-foreground shadow-sm"
-                  : "text-muted-foreground border-transparent hover:bg-white/80 hover:border-slate-200"
+                  ? "bg-[var(--fill-tsp-white-dark)] border-slate-200 text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-slate-200"
               }`}
               style={{ paddingLeft: `${indent + 8}px` }}
             >
-              <span className="w-3">{isDir ? (isOpen ? "▾" : "▸") : ""}</span>
-              <span className="truncate">{node.name}</span>
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-slate-500">
+                {isDir ? (
+                  isOpen ? (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  )
+                ) : (
+                  <NodeIcon className="h-3.5 w-3.5" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
               {isDir && state?.loading ? (
                 <span className="ml-1 text-[10px] text-slate-400">加载中</span>
               ) : null}
+              <span className="hidden items-center gap-1 group-hover:flex">
+                <button
+                  type="button"
+                  className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void onCopyPath(node.path);
+                  }}
+                  title="复制路径"
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+                {!isDir && nodeRawUrl ? (
+                  <button
+                    type="button"
+                    className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      window.open(nodeRawUrl, "_blank", "noopener,noreferrer");
+                    }}
+                    title="新窗口打开"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </button>
+                ) : null}
+              </span>
             </button>
             {isDir && isOpen ? (
               <div className="space-y-1">
                 {node.children.length > 0 ? (
                   <TreeList
                     nodes={node.children}
+                    sessionId={sessionId}
                     selectedPath={selectedPath}
                     onSelectFile={onSelectFile}
                     expandedPaths={expandedPaths}
                     dirState={dirState}
                     onTogglePath={onTogglePath}
                     onLoadMoreDir={onLoadMoreDir}
+                    onCopyPath={onCopyPath}
                     depth={depth + 1}
                   />
                 ) : null}

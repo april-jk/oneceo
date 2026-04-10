@@ -125,6 +125,14 @@ type PersistedMessageScrollAnchor = {
   savedAt: number;
 };
 
+type PersistedPreviewState = {
+  previewOpen: boolean;
+  previewTab: "files" | "changes" | "debug" | "deployment";
+  selectedDiffId: string | null;
+  selectedDiffMessageKey: string | null;
+  savedAt: number;
+};
+
 type ComposerReferenceToken = {
   id: string;
   kind: SlashReferenceKind;
@@ -206,8 +214,48 @@ function readPersistedScrollAnchor(
   return null;
 }
 
+function readPersistedPreviewState(
+  raw: string | null,
+): PersistedPreviewState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PersistedPreviewState;
+    if (!parsed || typeof parsed !== "object") return null;
+    const previewTab =
+      parsed.previewTab === "files" ||
+      parsed.previewTab === "changes" ||
+      parsed.previewTab === "debug" ||
+      parsed.previewTab === "deployment"
+        ? parsed.previewTab
+        : "files";
+    const previewOpen = Boolean(parsed.previewOpen);
+    const selectedDiffId =
+      typeof parsed.selectedDiffId === "string" && parsed.selectedDiffId.trim()
+        ? parsed.selectedDiffId.trim()
+        : null;
+    const selectedDiffMessageKey =
+      typeof parsed.selectedDiffMessageKey === "string" &&
+      parsed.selectedDiffMessageKey.trim()
+        ? parsed.selectedDiffMessageKey.trim()
+        : null;
+    return {
+      previewOpen,
+      previewTab,
+      selectedDiffId,
+      selectedDiffMessageKey,
+      savedAt:
+        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
+  const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location] = useLocation();
   const search = useSearch();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
@@ -250,6 +298,15 @@ export default function Home() {
     "files" | "changes" | "debug" | "deployment"
   >("files");
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [selectedDiffMessageKey, setSelectedDiffMessageKey] = useState<
+    string | null
+  >(null);
+  const [pendingDiffTarget, setPendingDiffTarget] = useState<{
+    diffId?: string | null;
+    filePath?: string | null;
+    messageKey?: string | null;
+    messageIndex?: number | null;
+  } | null>(null);
   const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -262,6 +319,7 @@ export default function Home() {
   const scrollRestoreDoneRef = useRef<string | null>(null);
   const stickToBottomRef = useRef(true);
   const olderHistoryIntentRef = useRef(false);
+  const previewStateRestoredSessionRef = useRef<string | null>(null);
   const sessionIdFromPath = useMemo(() => {
     const match = location.match(/^\/session\/([^/?#]+)/);
     return match ? decodeURIComponent(match[1]) : null;
@@ -526,6 +584,72 @@ export default function Home() {
     scrollRestoreDoneRef.current = null;
     olderHistoryIntentRef.current = false;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      previewStateRestoredSessionRef.current = null;
+      setPreviewOpen(false);
+      setPreviewTab("files");
+      setSelectedDiffId(null);
+      setSelectedDiffMessageKey(null);
+      setPendingDiffTarget(null);
+      return;
+    }
+    if (previewStateRestoredSessionRef.current === sessionId) {
+      return;
+    }
+    setPendingDiffTarget(null);
+    try {
+      const raw = window.sessionStorage.getItem(
+        `${PREVIEW_STATE_CACHE_PREFIX}${sessionId}`,
+      );
+      const persisted = readPersistedPreviewState(raw);
+      if (!persisted) {
+        setPreviewOpen(false);
+        setPreviewTab("files");
+        setSelectedDiffId(null);
+        setSelectedDiffMessageKey(null);
+      } else {
+        setPreviewOpen(Boolean(persisted.previewOpen));
+        setPreviewTab(persisted.previewTab);
+        setSelectedDiffId(persisted.selectedDiffId);
+        setSelectedDiffMessageKey(persisted.selectedDiffMessageKey);
+      }
+    } catch {
+      setPreviewOpen(false);
+      setPreviewTab("files");
+      setSelectedDiffId(null);
+      setSelectedDiffMessageKey(null);
+    } finally {
+      previewStateRestoredSessionRef.current = sessionId;
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (previewStateRestoredSessionRef.current !== sessionId) return;
+    try {
+      const payload: PersistedPreviewState = {
+        previewOpen,
+        previewTab,
+        selectedDiffId,
+        selectedDiffMessageKey,
+        savedAt: Date.now(),
+      };
+      window.sessionStorage.setItem(
+        `${PREVIEW_STATE_CACHE_PREFIX}${sessionId}`,
+        JSON.stringify(payload),
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [
+    previewOpen,
+    previewTab,
+    selectedDiffId,
+    selectedDiffMessageKey,
+    sessionId,
+  ]);
 
   // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
   useEffect(() => {
@@ -1233,6 +1357,17 @@ export default function Home() {
   const pickExistingDiffId = (id: string | null | undefined) =>
     id && diffItems.some((item) => item.id === id) ? id : null;
 
+  const findDiffIdForMessageKey = (messageKey: string | null | undefined) => {
+    const normalized = (messageKey || "").trim();
+    if (!normalized) return null;
+    for (let i = diffItems.length - 1; i >= 0; i -= 1) {
+      const item = diffItems[i];
+      if (item.eventMessageKey === normalized) return item.id;
+      if (item.relatedMessageKeys?.includes(normalized)) return item.id;
+    }
+    return null;
+  };
+
   const findDiffIdForFile = (filePath: string | null | undefined) => {
     if (!filePath) return null;
     const fileName = getFilename(filePath).toLowerCase();
@@ -1274,20 +1409,50 @@ export default function Home() {
     return null;
   };
 
+  const resolveDiffTarget = (options?: {
+    diffId?: string | null;
+    filePath?: string | null;
+    messageKey?: string | null;
+    messageIndex?: number | null;
+  }) =>
+    pickExistingDiffId(options?.diffId) ||
+    pickExistingDiffId(findDiffIdForMessageKey(options?.messageKey)) ||
+    pickExistingDiffId(findDiffIdForFile(options?.filePath || null)) ||
+    pickExistingDiffId(findDiffIdForMessageIndex(options?.messageIndex)) ||
+    diffItems[diffItems.length - 1]?.id ||
+    null;
+
   const openDiffPreview = (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => {
     setPreviewWorkspacePath(null);
     setPreviewTab("changes");
     setPreviewOpen(true);
-    const target =
-      pickExistingDiffId(options?.diffId) ||
-      pickExistingDiffId(findDiffIdForMessageIndex(options?.messageIndex)) ||
-      pickExistingDiffId(findDiffIdForFile(options?.filePath || null)) ||
-      diffItems[diffItems.length - 1]?.id ||
-      null;
+    const normalizedMessageKey = (options?.messageKey || "").trim() || null;
+    if (normalizedMessageKey) {
+      setSelectedDiffMessageKey(normalizedMessageKey);
+    }
+    const target = resolveDiffTarget(options);
+    if (
+      !target &&
+      (options?.diffId || options?.filePath || options?.messageKey || options?.messageIndex !== undefined)
+    ) {
+      setPendingDiffTarget({
+        diffId: options?.diffId || null,
+        filePath: options?.filePath || null,
+        messageKey: normalizedMessageKey,
+        messageIndex:
+          typeof options?.messageIndex === "number" &&
+          Number.isFinite(options.messageIndex)
+            ? options.messageIndex
+            : null,
+      });
+    } else {
+      setPendingDiffTarget(null);
+    }
     setSelectedDiffId(target);
   };
 
@@ -1324,6 +1489,38 @@ export default function Home() {
       throw error;
     }
   };
+
+  useEffect(() => {
+    if (!selectedDiffId) return;
+    const current = diffItems.find((item) => item.id === selectedDiffId);
+    if (!current) return;
+    const nextMessageKey =
+      current.eventMessageKey ||
+      current.relatedMessageKeys?.[0] ||
+      null;
+    if (!nextMessageKey || nextMessageKey === selectedDiffMessageKey) {
+      return;
+    }
+    setSelectedDiffMessageKey(nextMessageKey);
+  }, [diffItems, selectedDiffId, selectedDiffMessageKey]);
+
+  useEffect(() => {
+    if (!selectedDiffId) return;
+    if (diffItems.some((item) => item.id === selectedDiffId)) return;
+    const fallback =
+      pickExistingDiffId(findDiffIdForMessageKey(selectedDiffMessageKey)) ||
+      diffItems[diffItems.length - 1]?.id ||
+      null;
+    setSelectedDiffId(fallback);
+  }, [diffItems, selectedDiffId, selectedDiffMessageKey]);
+
+  useEffect(() => {
+    if (!pendingDiffTarget) return;
+    const target = resolveDiffTarget(pendingDiffTarget);
+    if (!target) return;
+    setSelectedDiffId(target);
+    setPendingDiffTarget(null);
+  }, [diffItems, pendingDiffTarget]);
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
@@ -1405,7 +1602,10 @@ export default function Home() {
         onTabChange={setPreviewTab}
         onToggle={() => setPreviewOpen(false)}
         selectedDiffId={selectedDiffId}
-        onSelectDiff={(id) => setSelectedDiffId(id)}
+        onSelectDiff={(id) => {
+          setPendingDiffTarget(null);
+          setSelectedDiffId(id);
+        }}
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
@@ -3844,6 +4044,7 @@ function MessageBubble({
   onOpenDiffPreview?: (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => void;
   onOpenManagedReplay?: (
@@ -4842,6 +5043,7 @@ function OpencodeToolCard({
   onOpenDiffPreview?: (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => void;
 }) {
@@ -5048,6 +5250,7 @@ function OpencodeToolCard({
           onClick={() =>
             onOpenDiffPreview?.({
               diffId: item.diffId,
+              messageKey: item.messageKey || null,
               messageIndex: item.messageIndex,
             })
           }
@@ -5320,6 +5523,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: filePath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }
@@ -5497,6 +5701,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: primaryPath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }
@@ -5528,6 +5733,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: filePath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }

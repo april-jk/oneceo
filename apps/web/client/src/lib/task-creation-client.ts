@@ -371,6 +371,12 @@ export type WorkspaceFile = {
   binaryTooLarge?: boolean;
 };
 
+export type WorkspaceRawHeadResult = {
+  ok: boolean;
+  status: number;
+  networkError?: boolean;
+};
+
 export type CodexRuntimeConfig = {
   baseUrl: string;
   model: string;
@@ -1200,6 +1206,31 @@ export function getWorkspaceRawFileUrl(sessionId: string, filePath: string): str
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/workspace/raw/${encodedPath}`;
+}
+
+export async function headWorkspaceRawFile(
+  sessionId: string,
+  filePath: string,
+): Promise<WorkspaceRawHeadResult> {
+  const url = getWorkspaceRawFileUrl(sessionId, filePath);
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      credentials: "include",
+      cache: "no-store",
+      headers: buildClientIdentityHeaders(),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      networkError: true,
+    };
+  }
 }
 
 export function getTaskCreationDeliverableDownloadUrl(sessionId: string, artifactId: string): string {

@@ -49,7 +49,9 @@ import {
   getTaskCreationDatabaseRows,
   getTaskCreationDeploymentInfo,
   getTaskCreationDebugInfo,
+  headWorkspaceRawFile,
   insertTaskCreationDatabaseRow,
+  startTaskCreationRuntime,
   startTaskCreationDebug,
   redeployTaskCreationSession,
   rollbackTaskCreationSessionDeployment,
@@ -68,6 +70,11 @@ import {
   type WorkspaceTreeItem,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
+import {
+  appendPreviewCacheBust,
+  mapWorkspaceRawPreviewHeadResult,
+  type WorkspaceHtmlPreviewState,
+} from "@/lib/workspace-preview";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 
 interface OpencodePreviewPanelProps {
@@ -1241,10 +1248,78 @@ function FilePreview({
   runtimeStarting: boolean;
 }) {
   const [htmlView, setHtmlView] = useState<"preview" | "source">("preview");
+  const [htmlPreviewState, setHtmlPreviewState] = useState<WorkspaceHtmlPreviewState>("checking");
+  const [htmlPreviewMessage, setHtmlPreviewMessage] = useState("");
+  const [htmlPreviewReloading, setHtmlPreviewReloading] = useState(false);
+  const [htmlPreviewNonce, setHtmlPreviewNonce] = useState(0);
 
   useEffect(() => {
     setHtmlView("preview");
+    setHtmlPreviewState("checking");
+    setHtmlPreviewMessage("");
+    setHtmlPreviewNonce(Date.now());
   }, [selectedPath]);
+
+  const previewType = file?.previewType || "text";
+  const mimeType = file?.mimeType || "application/octet-stream";
+  const isBinary = Boolean(file?.isBinary);
+  const htmlPreviewUrl =
+    previewType === "html" && sessionId && selectedPath
+      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+      : "";
+  const htmlPreviewEnabled = Boolean(
+    runtimeReady &&
+      !loading &&
+      !error &&
+      tree &&
+      tree.items.length > 0 &&
+      sessionId &&
+      selectedPath &&
+      previewType === "html" &&
+      !isBinary &&
+      htmlView === "preview",
+  );
+  const effectiveHtmlPreviewUrl = appendPreviewCacheBust(htmlPreviewUrl, htmlPreviewNonce);
+
+  useEffect(() => {
+    if (!htmlPreviewEnabled || !sessionId || !selectedPath) {
+      return;
+    }
+    let cancelled = false;
+    setHtmlPreviewState("checking");
+    setHtmlPreviewMessage("");
+    void headWorkspaceRawFile(sessionId, selectedPath).then((result) => {
+      if (cancelled) return;
+      const mapped = mapWorkspaceRawPreviewHeadResult(result);
+      setHtmlPreviewState(mapped.state);
+      setHtmlPreviewMessage(mapped.message);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [htmlPreviewEnabled, selectedPath, sessionId]);
+
+  const reloadHtmlPreview = async () => {
+    if (!sessionId || !selectedPath || htmlPreviewReloading) return;
+    setHtmlPreviewReloading(true);
+    setHtmlPreviewState("checking");
+    setHtmlPreviewMessage("");
+    try {
+      await startTaskCreationRuntime(sessionId);
+      const result = await headWorkspaceRawFile(sessionId, selectedPath);
+      const mapped = mapWorkspaceRawPreviewHeadResult(result);
+      setHtmlPreviewState(mapped.state);
+      setHtmlPreviewMessage(mapped.message);
+      if (mapped.state === "ready") {
+        setHtmlPreviewNonce(Date.now());
+      }
+    } catch {
+      setHtmlPreviewState("fetch_failed");
+      setHtmlPreviewMessage("预览恢复失败，请稍后重试。");
+    } finally {
+      setHtmlPreviewReloading(false);
+    }
+  };
 
   if (!runtimeReady) {
     return (
@@ -1289,18 +1364,11 @@ function FilePreview({
     ? `${(tree.root || "").replace(/\/+$/, "")}/${projectPrefix}`
     : tree.root;
   const lineCount = file?.content ? file.content.split("\n").length : 0;
-  const previewType = file?.previewType || "text";
-  const mimeType = file?.mimeType || "application/octet-stream";
-  const isBinary = Boolean(file?.isBinary);
   const rootDirState = dirState[""];
   const binaryDataUrl =
     file && file.encoding === "base64" && file.content
       ? `data:${mimeType};base64,${file.content}`
       : null;
-  const htmlPreviewUrl =
-    previewType === "html" && sessionId && selectedPath
-      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
-      : "";
 
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
@@ -1370,7 +1438,7 @@ function FilePreview({
                       type="button"
                       className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600"
                       onClick={() =>
-                        window.open(htmlPreviewUrl, "_blank", "noopener,noreferrer")
+                        window.open(effectiveHtmlPreviewUrl, "_blank", "noopener,noreferrer")
                       }
                     >
                       Open
@@ -1391,12 +1459,59 @@ function FilePreview({
                 htmlView === "preview" ? (
                   <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-3">
                     {htmlPreviewUrl ? (
-                      <iframe
-                        src={htmlPreviewUrl}
-                        title={`preview-${selectedPath}`}
-                        className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
-                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
-                      />
+                      htmlPreviewState === "ready" ? (
+                        <iframe
+                          src={effectiveHtmlPreviewUrl}
+                          title={`preview-${selectedPath}`}
+                          className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                          onError={() => {
+                            setHtmlPreviewState("fetch_failed");
+                            setHtmlPreviewMessage("预览加载失败，请稍后重试。");
+                          }}
+                        />
+                      ) : (
+                        <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
+                          {htmlPreviewState === "checking" ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+                              <div className="text-xs text-slate-500">正在检查预览环境...</div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="text-sm text-slate-700">
+                                {htmlPreviewMessage || "当前 HTML 文件暂不可预览。"}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void reloadHtmlPreview()}
+                                  disabled={htmlPreviewReloading}
+                                >
+                                  {htmlPreviewReloading ? (
+                                    <>
+                                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                      重新加载中...
+                                    </>
+                                  ) : (
+                                    "重新加载预览"
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setHtmlView("source")}
+                                >
+                                  查看源码
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )
                     ) : (
                       <div className="px-3 py-3 text-xs text-muted-foreground">
                         当前 HTML 文件暂不可预览。

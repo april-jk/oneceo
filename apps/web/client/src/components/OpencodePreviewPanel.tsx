@@ -4801,6 +4801,16 @@ function DebugPreview({
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{error}</span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            onStart();
+          }}
+          disabled={starting}
+        >
+          {starting ? "重试中..." : "重新启用远程调试"}
+        </Button>
       </div>
     );
   }
@@ -4811,10 +4821,12 @@ function DebugPreview({
         <Button
           variant="outline"
           size="sm"
-          onClick={onStart}
+          onClick={() => {
+            onStart();
+          }}
           disabled={starting}
         >
-          {starting ? "启动中..." : "启动调试"}
+          {starting ? "启动中..." : "启用远程调试"}
         </Button>
       </div>
     );
@@ -4824,14 +4836,28 @@ function DebugPreview({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-4 py-2 border-b border-border">
         <div className="text-xs text-muted-foreground">远程浏览器调试</div>
-        <a
-          href={debugUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs text-blue-600 hover:text-blue-700"
-        >
-          打开新窗口
-        </a>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={() => {
+              onStart();
+            }}
+            disabled={starting}
+          >
+            {starting ? "启用中..." : "启用远程调试"}
+          </Button>
+          <a
+            href={debugUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-blue-600 hover:text-blue-700"
+          >
+            打开新窗口
+          </a>
+        </div>
       </div>
       <div className="flex-1 min-h-0 p-3">
         <div className="h-full w-full rounded-xl border border-border overflow-hidden bg-black/5">

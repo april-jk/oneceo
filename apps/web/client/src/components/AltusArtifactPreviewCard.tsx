@@ -6,6 +6,7 @@ import {
   headWorkspaceRawFile,
   getWorkspaceRawFileUrl,
   startTaskCreationRuntime,
+  waitWorkspaceRawFileReady,
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
@@ -184,7 +185,10 @@ export default function AltusArtifactPreviewCard({
     setWebPreviewMessage("");
     try {
       await startTaskCreationRuntime(sessionId);
-      const result = await headWorkspaceRawFile(sessionId, previewPath);
+      const result = await waitWorkspaceRawFileReady(sessionId, previewPath, {
+        attempts: 8,
+        intervalMs: 600,
+      });
       const mapped = mapWorkspaceRawPreviewHeadResult(result);
       setWebPreviewState(mapped.state);
       setWebPreviewMessage(mapped.message);

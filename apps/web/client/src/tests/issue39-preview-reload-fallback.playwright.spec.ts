@@ -35,6 +35,16 @@ test("issue39: server 500 maps to runtime recovering message", async () => {
   expect(result.message).toContain("恢复中");
 });
 
+test("issue39: 404 maps to auto-recovering preview message", async () => {
+  const result = mapWorkspaceRawPreviewHeadResult({
+    ok: false,
+    status: 404,
+  });
+
+  expect(result.state).toBe("runtime_unavailable");
+  expect(result.message).toContain("准备预览");
+});
+
 test("issue39: successful head check maps to ready state", async () => {
   const result = mapWorkspaceRawPreviewHeadResult({
     ok: true,

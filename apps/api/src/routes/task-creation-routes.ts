@@ -2752,6 +2752,178 @@ async function tryRestoreWorkspaceForPreviewRead(
   }
 }
 
+function resolvePathBasename(filePath: string): string {
+  const normalized = String(filePath || '').replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts.length > 0 ? String(parts[parts.length - 1] || '') : '';
+}
+
+function resolvePathExt(filePath: string): string {
+  const base = resolvePathBasename(filePath);
+  const index = base.lastIndexOf('.');
+  return index > 0 ? base.slice(index + 1).toLowerCase() : '';
+}
+
+function decodeCachedWorkspaceFileBytes(payload: Record<string, unknown> | null | undefined): Buffer | null {
+  const data = payload || null;
+  if (!data) return null;
+  if (Boolean(data.truncated)) return null;
+  if (typeof data.content !== 'string') return null;
+  const encoding = asText(data.encoding).toLowerCase();
+  const isBinary = Boolean(data.isBinary) || encoding === 'base64';
+  if (!isBinary) {
+    return Buffer.from(data.content, 'utf8');
+  }
+  const base64 = String(data.content || '').trim();
+  if (!base64) return Buffer.alloc(0);
+  try {
+    return Buffer.from(base64, 'base64');
+  } catch {
+    return null;
+  }
+}
+
+async function writeWorkspaceFileToSandbox(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  normalizedPath: string,
+  bytes: Buffer,
+): Promise<void> {
+  const slash = normalizedPath.lastIndexOf('/');
+  if (slash > 0) {
+    const dirPath = normalizedPath.slice(0, slash);
+    const absoluteDir = resolveWorkspaceAbsolutePath(workspaceRoot, dirPath);
+    await e2bConnector.runCommand(
+      orchestratorSessionId,
+      `mkdir -p ${shellEscape(absoluteDir)}`,
+      {
+        timeoutMs: 10000,
+      },
+    );
+  }
+  const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
+  await e2bConnector.writeFile(orchestratorSessionId, absolutePath, bytes);
+}
+
+async function tryRebuildWorkspaceFileFromCache(input: {
+  sessionId: string;
+  tenantKey: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  if (!input.tenantKey) return false;
+  try {
+    const dbCached = await taskSessionWorkspaceCacheDAO.get({
+      sessionId: input.sessionId,
+      tenantKey: input.tenantKey,
+      cacheType: 'file',
+      cacheKey: input.normalizedPath,
+    });
+    const dbBytes = decodeCachedWorkspaceFileBytes(pickRecord(dbCached?.data));
+    if (dbBytes) {
+      await writeWorkspaceFileToSandbox(
+        input.orchestratorSessionId,
+        input.workspaceRoot,
+        input.normalizedPath,
+        dbBytes,
+      );
+      return true;
+    }
+
+    const stale = await taskCreationCacheStore.getWorkspaceFile(
+      input.tenantKey,
+      input.sessionId,
+      input.normalizedPath,
+      { allowStale: true },
+    );
+    const staleBytes = decodeCachedWorkspaceFileBytes(
+      stale && stale.data && typeof stale.data === 'object'
+        ? (stale.data as Record<string, unknown>)
+        : null,
+    );
+    if (staleBytes) {
+      await writeWorkspaceFileToSandbox(
+        input.orchestratorSessionId,
+        input.workspaceRoot,
+        input.normalizedPath,
+        staleBytes,
+      );
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.warn('[WORKSPACE_RAW_REBUILD_FROM_CACHE_FAILED]', {
+      sessionId: input.sessionId,
+      path: input.normalizedPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function tryRebuildWorkspaceFileFromDeliverables(input: {
+  sessionId: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  try {
+    const deliverables = await taskSessionDeliverableService.listSessionDeliverables(input.sessionId);
+    if (!deliverables.length) return false;
+    const normalizedTarget = normalizeWorkspacePath(input.normalizedPath);
+    const targetBasename = resolvePathBasename(input.normalizedPath);
+    const targetExt = resolvePathExt(input.normalizedPath);
+    const candidate =
+      deliverables.find((item) => normalizeWorkspacePath(item.path) === normalizedTarget) ||
+      deliverables.find((item) => {
+        const base = resolvePathBasename(item.path);
+        if (!base || base !== targetBasename) return false;
+        if (!targetExt) return true;
+        return resolvePathExt(item.path) === targetExt;
+      }) ||
+      null;
+    if (!candidate) return false;
+    const artifact = await taskSessionDeliverableService.getSessionDeliverable(
+      input.sessionId,
+      candidate.id,
+    );
+    if (!artifact?.storageKey) return false;
+    const bytes = await downloadFromR2(artifact.storageKey);
+    await writeWorkspaceFileToSandbox(
+      input.orchestratorSessionId,
+      input.workspaceRoot,
+      input.normalizedPath,
+      bytes,
+    );
+    return true;
+  } catch (error) {
+    console.warn('[WORKSPACE_RAW_REBUILD_FROM_DELIVERABLE_FAILED]', {
+      sessionId: input.sessionId,
+      path: input.normalizedPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function tryRebuildWorkspaceFileForPreview(input: {
+  sessionId: string;
+  tenantKey: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  const cacheRebuilt = await tryRebuildWorkspaceFileFromCache(input);
+  if (cacheRebuilt) return true;
+  return tryRebuildWorkspaceFileFromDeliverables({
+    sessionId: input.sessionId,
+    normalizedPath: input.normalizedPath,
+    workspaceRoot: input.workspaceRoot,
+    orchestratorSessionId: input.orchestratorSessionId,
+  });
+}
+
 async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
   const sessionId = asText(orchestratorSessionId);
   if (!sessionId) return null;
@@ -4638,6 +4810,7 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
+    const tenantKey = resolveTenantKey(currentUser);
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
@@ -4716,6 +4889,7 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
+    const tenantKey = resolveTenantKey(currentUser);
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
@@ -6092,6 +6266,7 @@ async function handleWorkspaceRawRequest(
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
+    const tenantKey = resolveTenantKey(currentUser);
     await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
     const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
@@ -6120,22 +6295,45 @@ async function handleWorkspaceRawRequest(
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
-      let rawContent: Uint8Array;
+      let rawContent: Uint8Array | null = null;
       try {
         rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
       } catch (readError) {
         if (!isWorkspaceFileNotFoundError(readError)) {
           throw readError;
         }
+        let rebuilt = false;
         const restored = await tryRestoreWorkspaceForPreviewRead(
           sessionId,
           orchestratorSessionId,
           session,
         );
-        if (!restored) {
-          throw readError;
+        if (restored) {
+          try {
+            rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+            rebuilt = true;
+          } catch (afterRestoreError) {
+            if (!isWorkspaceFileNotFoundError(afterRestoreError)) {
+              throw afterRestoreError;
+            }
+          }
         }
-        rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+        if (!rebuilt) {
+          const recovered = await tryRebuildWorkspaceFileForPreview({
+            sessionId,
+            tenantKey,
+            normalizedPath,
+            workspaceRoot,
+            orchestratorSessionId,
+          });
+          if (!recovered) {
+            throw readError;
+          }
+          rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+        }
+      }
+      if (!rawContent) {
+        throw new Error('workspace_raw_content_unavailable');
       }
       if (!headOnly) {
         buffer = Buffer.from(rawContent);
@@ -6191,7 +6389,7 @@ async function handleWorkspaceRawRequest(
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境已关闭，请重新启动');
     }
     if (isWorkspaceFileNotFoundError(error)) {
-      return res.status(404).type('text/plain; charset=utf-8').send('预览文件不存在或已被移除');
+      return res.status(409).type('text/plain; charset=utf-8').send('预览暂不可用，请重新加载预览');
     }
     console.error('获取工作区原始文件失败:', error);
     return res.status(500).type('text/plain; charset=utf-8').send('获取工作区原始文件失败，请稍后重试');

@@ -31,6 +31,12 @@ export function mapWorkspaceRawPreviewHeadResult(result: WorkspaceRawHeadResult)
       message: "网络异常，暂时无法加载预览，请稍后重试。",
     };
   }
+  if (result.status >= 500) {
+    return {
+      state: "runtime_unavailable",
+      message: "预览环境正在恢复中，点击“重新加载预览”继续尝试。",
+    };
+  }
   return {
     state: "fetch_failed",
     message: "预览加载失败，请稍后重试。",

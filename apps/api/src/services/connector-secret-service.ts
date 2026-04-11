@@ -17,13 +17,13 @@ function fromBase64Url(value: string): Buffer {
 
 export class ConnectorSecretService {
   private resolveKey(): Buffer {
-    const configured = asText(process.env.CONNECTOR_SECRET_KEY);
+    const configured = asText(process.env.NOTION_CONNECTOR_SECRET_KEY);
     if (configured) {
       return createHash('sha256').update(configured).digest();
     }
     const nodeEnv = asText(process.env.NODE_ENV).toLowerCase();
     if (nodeEnv === 'production') {
-      throw new Error('CONNECTOR_SECRET_KEY 未配置，无法处理连接器密文');
+      throw new Error('NOTION_CONNECTOR_SECRET_KEY 未配置，无法处理连接器密文');
     }
     return createHash('sha256').update(DEV_FALLBACK_KEY).digest();
   }

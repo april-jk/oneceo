@@ -2,17 +2,17 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { connectorSecretService } from '../src/services/connector-secret-service';
 
-const originalKey = process.env.CONNECTOR_SECRET_KEY;
+const originalKey = process.env.NOTION_CONNECTOR_SECRET_KEY;
 
 beforeEach(() => {
-  process.env.CONNECTOR_SECRET_KEY = 'unit-test-connector-secret';
+  process.env.NOTION_CONNECTOR_SECRET_KEY = 'unit-test-connector-secret';
 });
 
 afterEach(() => {
   if (originalKey === undefined) {
-    delete process.env.CONNECTOR_SECRET_KEY;
+    delete process.env.NOTION_CONNECTOR_SECRET_KEY;
   } else {
-    process.env.CONNECTOR_SECRET_KEY = originalKey;
+    process.env.NOTION_CONNECTOR_SECRET_KEY = originalKey;
   }
 });
 

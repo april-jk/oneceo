@@ -300,3 +300,76 @@ test('shell_execute marks sandbox dirty after command execution', async () => {
   assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_shell_execute']);
 });
+
+test('debug_open_page rejects non-http protocols', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'file:///tmp/index.html',
+    }),
+    /debug_open_page_invalid_protocol/
+  );
+});
+
+test('debug_open_page ensures debug and opens URL via CDP', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+    },
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/folder1/',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.targetUrl, 'http://127.0.0.1:3000/folder1/');
+  assert.equal(payload.debugUrl, 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo');
+  assert.equal(payload.ready, true);
+  assert.equal(payload.status, 'running');
+  assert.equal(payload.sandboxId, 'sandbox-1');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+});

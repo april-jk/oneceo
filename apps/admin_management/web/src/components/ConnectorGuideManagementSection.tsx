@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type {
+  ConnectorCatalogItem,
+  ConnectorGuideCatalogSummary,
   ConnectorGuidePolicy,
   ConnectorGuidePolicyDetail,
   ConnectorGuideRevision,
@@ -30,6 +32,8 @@ const EMPTY_EDITOR: EditorState = {
   blockingRulesMarkdown: '',
   notes: '',
 };
+
+const BUILTIN_CANDIDATE_CONNECTOR_KEYS = ['github', 'supabase', 'vercel', 'notion'] as const;
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -64,6 +68,7 @@ function triggerModeLabel(mode: string) {
 
 export function ConnectorGuideManagementSection({ onError }: Props) {
   const [policies, setPolicies] = useState<ConnectorGuidePolicy[]>([]);
+  const [catalogSummary, setCatalogSummary] = useState<ConnectorGuideCatalogSummary | null>(null);
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ConnectorGuidePolicyDetail | null>(null);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
@@ -79,6 +84,30 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
   const revision = useMemo(
     () => detail?.revisions.find((item) => item.id === selectedRevisionId) || detail?.publishedRevision || null,
     [detail, selectedRevisionId]
+  );
+
+  const connectorOptions = useMemo(() => {
+    const candidates = new Set<string>(BUILTIN_CANDIDATE_CONNECTOR_KEYS);
+    policies.forEach((policy) => candidates.add(policy.connectorKey));
+    (catalogSummary?.items || []).forEach((item) => {
+      if (candidates.has(item.key) || policies.some((policy) => policy.connectorKey === item.key)) {
+        candidates.add(item.key);
+      }
+    });
+    return Array.from(candidates).sort((left, right) => left.localeCompare(right));
+  }, [catalogSummary?.items, policies]);
+
+  const catalogVisibleItems = useMemo(
+    () => (catalogSummary?.items || []).filter((item) => item.visibleInMenu),
+    [catalogSummary?.items]
+  );
+
+  const catalogKeySummary = useMemo(
+    () =>
+      catalogVisibleItems.length > 0
+        ? catalogVisibleItems.map((item) => `${item.key}${item.available ? '' : '（不可用）'}`).join(' / ')
+        : '-',
+    [catalogVisibleItems]
   );
 
   const loadPolicies = useCallback(async () => {
@@ -101,6 +130,17 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     }
   }, [filters.connectorKey, filters.query, filters.status, onError, selectedPolicyId]);
 
+  const loadCatalogSummary = useCallback(async () => {
+    const next = await api.getConnectorGuideCatalogSummary();
+    setCatalogSummary(next);
+    onError(null);
+    return next;
+  }, [onError]);
+
+  const refreshOverview = useCallback(async () => {
+    await Promise.all([loadPolicies(), loadCatalogSummary()]);
+  }, [loadCatalogSummary, loadPolicies]);
+
   const loadDetail = useCallback(
     async (policyId: string) => {
       const next = await api.getConnectorGuidePolicy(policyId);
@@ -115,10 +155,10 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
   );
 
   useEffect(() => {
-    void loadPolicies().catch((error) => {
+    void refreshOverview().catch((error) => {
       onError(error instanceof Error ? error.message : 'connector guide 列表加载失败');
     });
-  }, [loadPolicies, onError]);
+  }, [onError, refreshOverview]);
 
   useEffect(() => {
     if (!selectedPolicyId) return;
@@ -132,8 +172,6 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     setEditor(toEditorState(detail, revision));
   }, [detail, revision]);
 
-  const connectorOptions = ['github', 'supabase', 'vercel'];
-
   const createPolicy = async (connectorKey: string) => {
     setBusy(true);
     try {
@@ -143,7 +181,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
         description: `${connectorKey} connector guide policy`,
         createdBy: 'admin_management',
       });
-      await loadPolicies();
+      await refreshOverview();
       setSelectedPolicyId(policy.id);
     } catch (error) {
       onError(error instanceof Error ? error.message : '创建 connector guide policy 失败');
@@ -211,8 +249,8 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
         notes: editor.notes,
       });
       const result = await api.validateConnectorGuideRevision(detail.id, revision.id);
-      setValidationResult(result);
       await loadDetail(detail.id);
+      setValidationResult(result);
     } catch (error) {
       onError(error instanceof Error ? error.message : '校验 connector guide 失败');
     } finally {
@@ -255,6 +293,17 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     }
   };
 
+  const handleRefresh = async () => {
+    setBusy(true);
+    try {
+      await refreshOverview();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : '刷新 connector guide 列表失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="content-stack">
       <section className="panel fade-in">
@@ -262,7 +311,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
           <div>
             <p className="eyebrow">连接器引导规则</p>
             <h2>连接器 Guide 管理</h2>
-            <p className="subtitle">管理 GitHub / Supabase / Vercel 的隐式 guide 文本，并控制发布版本。</p>
+            <p className="subtitle">管理已接入 connector 的隐式 guide 文本，并控制发布版本。</p>
           </div>
           <div className="section-actions">
             {connectorOptions.map((item) => (
@@ -276,10 +325,56 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                 新建 {item}
               </button>
             ))}
-            <button type="button" className="primary-btn" disabled={busy} onClick={() => void loadPolicies()}>
+            <button type="button" className="primary-btn" disabled={busy} onClick={() => void handleRefresh()}>
               刷新列表
             </button>
           </div>
+        </div>
+
+        <div className="detail-grid modal-grid" style={{ marginBottom: 20 }}>
+          <article className="sub-panel">
+            <div className="editor-header">
+              <div>
+                <h3>MCP Catalog 快照</h3>
+                <p className="cell-subtle">页面进入后立即获取一次，后续通过“刷新列表”手动同步。</p>
+              </div>
+            </div>
+            <div className="signal-list">
+              <p>
+                <strong>MCP 类型数量:</strong> {catalogSummary?.stats.total ?? '-'}
+              </p>
+              <p>
+                <strong>可用 / 不可用:</strong>{' '}
+                {catalogSummary ? `${catalogSummary.stats.available} / ${catalogSummary.stats.unavailable}` : '-'}
+              </p>
+              <p>
+                <strong>类型列表:</strong> {catalogKeySummary}
+              </p>
+              <p>
+                <strong>更新时间:</strong> {formatDateTime(catalogSummary?.updatedAt)}
+              </p>
+            </div>
+          </article>
+
+          <article className="sub-panel">
+            <div className="editor-header">
+              <div>
+                <h3>可见 Connector</h3>
+                <p className="cell-subtle">展示当前 catalog 中可见的 connector 与可用性状态。</p>
+              </div>
+            </div>
+            <div className="signal-list">
+              {catalogVisibleItems.length === 0 ? (
+                <p className="empty">还没有 catalog 快照。</p>
+              ) : (
+                catalogVisibleItems.map((item: ConnectorCatalogItem) => (
+                  <p key={item.key}>
+                    <strong>{item.key}</strong> · {item.name} · {item.available ? '可用' : item.availabilityReason || '不可用'}
+                  </p>
+                ))
+              )}
+            </div>
+          </article>
         </div>
 
         <div className="skill-toolbar">
@@ -489,15 +584,15 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
               </div>
             </article>
 
-            <article className="sub-panel">
+            <article className="sub-panel connector-guide-sidebar-panel">
               <div className="editor-header">
                 <div>
                   <h3>Revision 历史</h3>
                   <p className="cell-subtle">可切换 revision 查看并回滚到历史发布版本。</p>
                 </div>
               </div>
-              <div className="skill-list">
-                <table className="skill-table">
+              <div className="skill-list connector-guide-revision-list">
+                <table className="skill-table connector-guide-revision-table">
                   <thead>
                     <tr>
                       <th>版本</th>
@@ -511,12 +606,19 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                       <tr key={item.id} className={selectedRevisionId === item.id ? 'selected' : ''}>
                         <td onClick={() => setSelectedRevisionId(item.id)}>
                           <strong>v{item.versionNumber}</strong>
-                          <div className="cell-subtle">{formatDateTime(item.createdAt)}</div>
+                          <div className="cell-subtle connector-guide-revision-meta">
+                            {formatDateTime(item.createdAt)}
+                          </div>
                         </td>
                         <td onClick={() => setSelectedRevisionId(item.id)}>
                           <span className={`status-pill status-${item.status}`}>{item.status}</span>
                         </td>
-                        <td onClick={() => setSelectedRevisionId(item.id)}>{formatDateTime(item.publishedAt)}</td>
+                        <td
+                          onClick={() => setSelectedRevisionId(item.id)}
+                          className="connector-guide-revision-date"
+                        >
+                          {formatDateTime(item.publishedAt)}
+                        </td>
                         <td>
                           <button
                             type="button"

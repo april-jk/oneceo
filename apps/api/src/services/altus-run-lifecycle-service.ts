@@ -8,6 +8,15 @@ import { altusRunRecoveryService, AltusRunRecoveryService } from './altus-run-re
 const RUN_COMPLETED_TEXT = 'managed run 已完成';
 const RUN_STOPPED_TEXT = '已停止当前处理';
 
+function buildRunFailedUserMessage(message: string) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return '本次执行失败，已停止当前任务。请检查模型与连接器配置后重试。';
+  }
+  const short = text.length > 800 ? `${text.slice(0, 800)}...` : text;
+  return `本次执行失败：${short}`;
+}
+
 export class AltusRunLifecycleService {
   constructor(
     private readonly setupService: AltusManagedSetupService = altusManagedSetupService,
@@ -198,6 +207,7 @@ export class AltusRunLifecycleService {
   }
 
   async markFailed(state: AltusRunState, message: string) {
+    const userVisibleMessage = buildRunFailedUserMessage(message);
     await taskSessionRunDAO.updateRunStatus(state.input.runId, 'failed', {
       completedAt: state.completedAt || new Date(),
       stopReason: message,
@@ -226,6 +236,17 @@ export class AltusRunLifecycleService {
       stage: 'failed',
       phase: 'repair',
       clearClarification: true,
+    });
+    await this.setupService.persistTimelineMessage({
+      sessionId: state.input.sessionId,
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: userVisibleMessage,
+      metadata: {
+        runId: state.input.runId,
+        error: message,
+      },
+      messageKey: `managed:${state.input.runId}:failed_assistant`,
     });
     await this.setupService.persistTimelineMessage({
       sessionId: state.input.sessionId,

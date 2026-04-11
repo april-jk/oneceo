@@ -18,6 +18,14 @@ export function createConnectorGuideRoutes(service: ConnectorGuideManagementServ
   );
 
   router.get(
+    '/catalog-summary',
+    asyncHandler(async (_req, res) => {
+      const result = await service.getCatalogSummary();
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/:policyId',
     asyncHandler(async (req, res) => {
       const result = await service.getPolicy(req.params.policyId);

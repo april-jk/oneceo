@@ -109,6 +109,7 @@ interface OpencodePreviewPanelProps {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  onRequestStartDebugByMessage?: () => void;
   className?: string;
   selectedWorkspacePath?: string | null;
 }
@@ -139,6 +140,7 @@ export default function OpencodePreviewPanel({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  onRequestStartDebugByMessage,
   className,
   selectedWorkspacePath,
 }: OpencodePreviewPanelProps) {
@@ -1016,6 +1018,7 @@ export default function OpencodePreviewPanel({
             error={debugError}
             runtimeReady={runtimeReady !== false}
             starting={debugStarting}
+            onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
               if (!sessionId) return;
               if (runtimeReady === false) {
@@ -4737,6 +4740,7 @@ function DebugPreview({
   runtimeReady,
   starting,
   onStart,
+  onRequestStartDebugByMessage,
 }: {
   info: TaskCreationDebugInfo | null;
   loading: boolean;
@@ -4744,6 +4748,7 @@ function DebugPreview({
   runtimeReady: boolean;
   starting: boolean;
   onStart: () => void;
+  onRequestStartDebugByMessage?: () => void;
 }) {
   const debugUrl = useMemo(() => {
     if (!info?.url) return "";
@@ -4787,11 +4792,25 @@ function DebugPreview({
 
   if (!runtimeReady) {
     return (
-      <EmptyState
-        text={
-          starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"
-        }
-      />
+      <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
+        <span>
+          {starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (onRequestStartDebugByMessage) {
+              onRequestStartDebugByMessage();
+              return;
+            }
+            onStart();
+          }}
+          disabled={starting}
+        >
+          启动调试
+        </Button>
+      </div>
     );
   }
   if (loading) {

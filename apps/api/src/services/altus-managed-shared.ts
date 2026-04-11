@@ -201,6 +201,28 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'debug_open_page',
+        description:
+          'Start website debugging behavior by opening a target http/https URL in the sandbox Chromium debug session shown by n.eko. Use this when users ask to 启动网站调试功能 or open a page in the debug view.',
+        parameters: objectSchema(
+          {
+            url: {
+              type: 'string',
+              description:
+                'Target URL to open in Chromium. Must start with http:// or https:// and may include path/query/hash, e.g. http://127.0.0.1:3000/folder1/?tab=debug#section-2.',
+            },
+            ensureDebug: {
+              type: 'boolean',
+              description: 'Whether to ensure n.eko debug service is ready before opening the page. Default true.',
+            },
+          },
+          ['url']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'read_file',
         description: 'Read a UTF-8 text file from the workspace.',
         parameters: objectSchema(

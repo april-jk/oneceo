@@ -126,7 +126,9 @@ v1.<base64url({rid, sid, ts, nonce})>
 3. 回调处理触发条件：
    - 在 `/notion/callback` 页面读取 `code` 与 `state`。
    - 完成 callback 后通过 `returnToSessionId` 执行 attach。
-4. 回调完成后清理查询参数并跳回常规页面（如 `/home`），避免重复触发。
+4. 回调完成后清理查询参数：
+   - 若存在 `sessionId`，跳转到 `/session/:sessionId` 继续聊天。
+   - 若不存在 `sessionId`，跳回常规页面（如 `/home`）。
 
 ### 验收点
 
@@ -188,6 +190,7 @@ v1.<base64url({rid, sid, ts, nonce})>
 1. Notion OAuth 使用固定回调路径。
 2. `/notion/callback` 场景可触发 completeConnectorOauth。
 3. callback 成功后触发 attach 并跳回常规页面。
+4. callback 成功且存在 `sessionId` 时，跳转到对应 `/session/:sessionId`。
 
 ## 8.3 手工联调
 

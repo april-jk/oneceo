@@ -274,6 +274,24 @@ export type AdminConnectorGuideValidationResult = {
   warnings: string[];
 };
 
+export type AdminConnectorCatalogItem = {
+  key: string;
+  name: string;
+  available: boolean;
+  availabilityReason?: string;
+  visibleInMenu: boolean;
+};
+
+export type AdminConnectorGuideCatalogSummary = {
+  items: AdminConnectorCatalogItem[];
+  stats: {
+    total: number;
+    available: number;
+    unavailable: number;
+  };
+  updatedAt: string;
+};
+
 export type AdminOsacRelease = {
   id: string;
   artifactType: string;
@@ -815,6 +833,10 @@ export class OneceoApiConnector {
         body: {},
       }
     );
+  }
+
+  listConnectorCatalog() {
+    return this.request<AdminConnectorCatalogItem[]>('/api/connectors/catalog');
   }
 
   listOsacReleases(filters?: { status?: string; query?: string; channel?: string }) {

@@ -6,6 +6,7 @@ import type {
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
   ConnectorGuidePolicy,
+  ConnectorGuideCatalogSummary,
   ConnectorGuidePolicyDetail,
   ConnectorGuideRevision,
   ConnectorGuideValidationResult,
@@ -433,6 +434,7 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<ConnectorGuidePolicy[]>(`/api/connector-guides${suffix}`);
   },
+  getConnectorGuideCatalogSummary: () => request<ConnectorGuideCatalogSummary>('/api/connector-guides/catalog-summary'),
   getConnectorGuidePolicy: (policyId: string) =>
     request<ConnectorGuidePolicyDetail>(`/api/connector-guides/${encodeURIComponent(policyId)}`),
   createConnectorGuidePolicy: (payload: {

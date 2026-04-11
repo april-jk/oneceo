@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSearch } from 'wouter';
+import { useLocation, useSearch } from 'wouter';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -633,6 +633,7 @@ export function SettingsDialog({
 }
 
 export function GlobalSettingsDialogHost() {
+  const [location] = useLocation();
   const search = useSearch();
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>('settings');
@@ -641,16 +642,22 @@ export function GlobalSettingsDialogHost() {
 
   const searchState = useMemo(() => {
     const params = new URLSearchParams(search);
+    const callbackPath = new URL(location, window.location.origin).pathname;
+    const isNotionCallback =
+      callbackPath === '/notion/callback' &&
+      Boolean(params.get('code')) &&
+      Boolean(params.get('state'));
     return {
       shouldOpen:
         params.get('settings') === 'open' ||
         params.get('settingsTab') === 'connectors' ||
-        params.get('connector_oauth') === '1',
-      settingsTab: params.get('settingsTab'),
+        params.get('connector_oauth') === '1' ||
+        isNotionCallback,
+      settingsTab: isNotionCallback ? 'connectors' : params.get('settingsTab'),
       targetSessionId: params.get('targetSessionId'),
-      connector: params.get('connector'),
+      connector: isNotionCallback ? 'notion' : params.get('connector'),
     };
-  }, [search]);
+  }, [location, search]);
 
   useEffect(() => {
     const handleOpen = (event: Event) => {

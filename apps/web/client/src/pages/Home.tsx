@@ -1609,6 +1609,9 @@ export default function Home() {
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
+        onRequestStartDebugByMessage={() => {
+          void submitPrompt("启动网站调试功能");
+        }}
         selectedWorkspacePath={previewWorkspacePath}
         className="h-full min-h-0 w-full"
       />

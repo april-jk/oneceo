@@ -167,7 +167,13 @@ function buildConnectorRedirectUri(
   return url.toString();
 }
 
-function cleanupConnectorQuery(location: string, search: string) {
+function cleanupConnectorQuery(
+  location: string,
+  search: string,
+  options?: {
+    targetSessionId?: string | null;
+  }
+) {
   const url = new URL(location, window.location.origin);
   const params = new URLSearchParams(search);
   [
@@ -181,7 +187,13 @@ function cleanupConnectorQuery(location: string, search: string) {
     "settingsTab",
   ].forEach((key) => params.delete(key));
   url.search = params.toString();
-  const nextPath = url.pathname === NOTION_FIXED_CALLBACK_PATH ? "/home" : url.pathname;
+  const sessionId = asText(options?.targetSessionId);
+  const nextPath =
+    url.pathname === NOTION_FIXED_CALLBACK_PATH
+      ? sessionId
+        ? `/session/${encodeURIComponent(sessionId)}`
+        : "/home"
+      : url.pathname;
   return `${nextPath}${url.search ? `?${url.searchParams.toString()}` : ""}`;
 }
 
@@ -305,7 +317,7 @@ export function ConnectorCenterPanel({
   targetSessionId,
   highlightedConnector,
 }: ConnectorCenterPanelProps) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const callbackHandled = useRef(false);
@@ -396,10 +408,15 @@ export function ConnectorCenterPanel({
   useEffect(() => {
     const code = params.get("code");
     const state = params.get("state");
-    const connector = params.get("connector") as ConnectorKey | null;
+    const currentPath = new URL(location, window.location.origin).pathname;
+    const isNotionFixedCallback = currentPath === NOTION_FIXED_CALLBACK_PATH;
+    const connector =
+      (params.get("connector") as ConnectorKey | null) ||
+      (isNotionFixedCallback ? "notion" : null);
     const profileId = params.get("profileId");
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
-    if (params.get("connector_oauth") !== "1") return;
+    const hasConnectorOAuthFlag = params.get("connector_oauth") === "1";
+    if (!hasConnectorOAuthFlag && !isNotionFixedCallback) return;
     if (!code || !state || !connector) return;
     if (!useConnectorLevelOauth && !profileId) return;
     if (callbackHandled.current) return;
@@ -469,7 +486,11 @@ export function ConnectorCenterPanel({
           }
         }
 
-        window.history.replaceState(null, "", cleanupConnectorQuery(location, search));
+        setLocation(
+          cleanupConnectorQuery(location, search, {
+            targetSessionId: attachTarget || null,
+          })
+        );
         
         // OAuth回调完成后，优先选中刚授权的 Profile
         setSelectedProfileIds((prev) => ({
@@ -498,7 +519,7 @@ export function ConnectorCenterPanel({
         setActionKey(null);
       }
     })();
-  }, [effectiveTargetSessionId, location, params, search]);
+  }, [effectiveTargetSessionId, location, params, search, setLocation]);
 
   const profilesByConnector = useMemo(() => groupProfilesByConnector(profiles), [profiles]);
 

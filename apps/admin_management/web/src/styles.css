@@ -443,6 +443,55 @@ a {
   background: rgba(15, 143, 119, 0.06);
 }
 
+.connector-guide-sidebar-panel {
+  min-width: 0;
+}
+
+.connector-guide-revision-list {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.connector-guide-revision-table {
+  table-layout: fixed;
+}
+
+.connector-guide-revision-table th,
+.connector-guide-revision-table td {
+  overflow-wrap: anywhere;
+}
+
+.connector-guide-revision-table th:nth-child(1),
+.connector-guide-revision-table td:nth-child(1) {
+  width: 28%;
+}
+
+.connector-guide-revision-table th:nth-child(2),
+.connector-guide-revision-table td:nth-child(2) {
+  width: 20%;
+}
+
+.connector-guide-revision-table th:nth-child(3),
+.connector-guide-revision-table td:nth-child(3) {
+  width: 28%;
+}
+
+.connector-guide-revision-table th:nth-child(4),
+.connector-guide-revision-table td:nth-child(4) {
+  width: 24%;
+}
+
+.connector-guide-revision-meta,
+.connector-guide-revision-date {
+  display: block;
+}
+
+.connector-guide-revision-table td:last-child .ghost-btn {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}
+
 .table-empty,
 .cell-subtle {
   color: var(--text-soft);

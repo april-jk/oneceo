@@ -335,6 +335,24 @@ export interface ConnectorGuideValidationResult {
   warnings: string[];
 }
 
+export interface ConnectorCatalogItem {
+  key: string;
+  name: string;
+  available: boolean;
+  availabilityReason?: string;
+  visibleInMenu: boolean;
+}
+
+export interface ConnectorGuideCatalogSummary {
+  items: ConnectorCatalogItem[];
+  stats: {
+    total: number;
+    available: number;
+    unavailable: number;
+  };
+  updatedAt: string;
+}
+
 export interface SkillSummary {
   id: string;
   slug: string;

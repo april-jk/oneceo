@@ -63,4 +63,23 @@ export class ConnectorGuideManagementService {
   rollbackRevision(policyId: string, revisionId: string) {
     return this.oneceoApi.rollbackConnectorGuideRevision(policyId, revisionId);
   }
+
+  async getCatalogSummary() {
+    const items = await this.oneceoApi.listConnectorCatalog();
+    const stats = items.reduce(
+      (acc, item) => {
+        acc.total += 1;
+        if (item.available) acc.available += 1;
+        else acc.unavailable += 1;
+        return acc;
+      },
+      { total: 0, available: 0, unavailable: 0 }
+    );
+
+    return {
+      items,
+      stats,
+      updatedAt: new Date().toISOString(),
+    };
+  }
 }

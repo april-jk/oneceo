@@ -1,7 +1,7 @@
 import { connectorGuideDAO, taskSessionConnectorBindingDAO } from '../db/dao';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
-const SUPPORTED_CONNECTOR_KEYS = ['github', 'supabase', 'vercel'] as const;
+const SUPPORTED_CONNECTOR_KEYS = ['github', 'supabase', 'vercel', 'notion'] as const;
 const SUPPORTED_TRIGGER_MODES = ['on_attach', 'on_active_use', 'on_attach_and_active_use'] as const;
 const RESERVED_SKILL_PATTERNS = [/\bplatform[_ -]?skill\b/i, /\bsandbox[_ -]?skill[_ -]?sync\b/i];
 const MAX_MARKDOWN_LENGTH = 20_000;
@@ -72,6 +72,24 @@ const BUILTIN_CONNECTOR_GUIDES: Record<
     ].join('\n'),
     notes: 'Seeded from connector guide builtin v1.',
   },
+  notion: {
+    description: 'Notion connector prompt guide',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: [
+      'Treat Notion as a workspace-scoped knowledge connector and confirm the current workspace/page/database target before writes.',
+      'Prefer reading page structure, database schema, and access scope before create/update/archive operations.',
+      'When the user asks to organize or update Notion content, inspect the existing hierarchy first instead of assuming naming or parent page structure.',
+    ].join('\n'),
+    guideReminderMarkdown: [
+      'A Notion connector guide is active for this session.',
+      'Identify the target workspace/page/database first, then proceed with reads or writes against the confirmed scope.',
+    ].join('\n'),
+    blockingRulesMarkdown: [
+      'Do not create, move, archive, or overwrite Notion pages/databases until the target parent location is explicit.',
+      'If multiple workspaces or similarly named pages could match the user request, stop and ask instead of guessing.',
+    ].join('\n'),
+    notes: 'Seeded from connector guide builtin v1.',
+  },
 };
 
 export type SupportedConnectorKey = (typeof SUPPORTED_CONNECTOR_KEYS)[number];
@@ -121,7 +139,7 @@ function formatGuideSection(title: string, items: Array<{ connectorKey: string; 
 export class ConnectorGuideService {
   private assertSupportedConnectorKey(connectorKey: string) {
     if (!isSupportedConnectorKey(connectorKey)) {
-      throw new Error('首批仅支持 github、supabase、vercel 三个 connector guide');
+      throw new Error('首批仅支持 github、supabase、vercel、notion 四个 connector guide');
     }
   }
 

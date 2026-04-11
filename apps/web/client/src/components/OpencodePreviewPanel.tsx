@@ -65,7 +65,6 @@ import {
   waitWorkspaceRawFileReady,
   insertTaskCreationDatabaseRow,
   startTaskCreationRuntime,
-  startTaskCreationDebug,
   redeployTaskCreationSession,
   rollbackTaskCreationSessionDeployment,
   updateTaskCreationDatabaseRow,
@@ -180,7 +179,6 @@ export default function OpencodePreviewPanel({
   >(null);
   const refreshTimerRef = useRef<number | null>(null);
   const fileRequestSequenceRef = useRef(0);
-  const debugBootRef = useRef(false);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
   const deploymentPollRef = useRef<number | null>(null);
@@ -554,7 +552,6 @@ export default function OpencodePreviewPanel({
   ]);
 
   useEffect(() => {
-    debugBootRef.current = false;
     debugRuntimeBootRef.current = false;
     if (debugPollRef.current) {
       window.clearTimeout(debugPollRef.current);
@@ -580,7 +577,6 @@ export default function OpencodePreviewPanel({
 
   useEffect(() => {
     if (runtimeReady === false) {
-      debugBootRef.current = false;
       debugRuntimeBootRef.current = false;
     }
   }, [runtimeReady]);
@@ -612,17 +608,7 @@ export default function OpencodePreviewPanel({
       setDebugLoading(true);
       setDebugError(null);
       try {
-        let info = await getTaskCreationDebugInfo(sessionId);
-        if ((!info?.ready || !info.url) && !debugBootRef.current) {
-          debugBootRef.current = true;
-          setDebugStarting(true);
-          try {
-            await startTaskCreationDebug(sessionId);
-          } finally {
-            setDebugStarting(false);
-          }
-          info = await getTaskCreationDebugInfo(sessionId);
-        }
+        const info = await getTaskCreationDebugInfo(sessionId);
         if (!cancelled) {
           setDebugInfo(info);
           if (!info?.ready && info?.status === "starting") {
@@ -1020,27 +1006,22 @@ export default function OpencodePreviewPanel({
             starting={debugStarting}
             onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
-              if (!sessionId) return;
               if (runtimeReady === false) {
                 if (onEnsureRuntime) {
-                  await onEnsureRuntime();
-                } else {
-                  return;
+                  setDebugStarting(true);
+                  try {
+                    await onEnsureRuntime();
+                  } finally {
+                    setDebugStarting(false);
+                  }
                 }
+                return;
               }
-              setDebugStarting(true);
-              setDebugError(null);
-              try {
-                await startTaskCreationDebug(sessionId);
-                const info = await getTaskCreationDebugInfo(sessionId);
-                setDebugInfo(info);
-              } catch (error) {
-                const message =
-                  error instanceof Error ? error.message : "启动调试失败";
-                setDebugError(message);
-              } finally {
-                setDebugStarting(false);
+              if (!onRequestStartDebugByMessage) {
+                setDebugError("缺少启动调试消息入口");
+                return;
               }
+              onRequestStartDebugByMessage();
             }}
           />
         </div>
@@ -4750,6 +4731,14 @@ function DebugPreview({
   onStart: () => void;
   onRequestStartDebugByMessage?: () => void;
 }) {
+  const requestStartDebug = () => {
+    if (onRequestStartDebugByMessage) {
+      onRequestStartDebugByMessage();
+      return;
+    }
+    onStart();
+  };
+
   const debugUrl = useMemo(() => {
     if (!info?.url) return "";
     try {
@@ -4800,11 +4789,7 @@ function DebugPreview({
           variant="outline"
           size="sm"
           onClick={() => {
-            if (onRequestStartDebugByMessage) {
-              onRequestStartDebugByMessage();
-              return;
-            }
-            onStart();
+            requestStartDebug();
           }}
           disabled={starting}
         >
@@ -4824,7 +4809,7 @@ function DebugPreview({
           variant="outline"
           size="sm"
           onClick={() => {
-            onStart();
+            requestStartDebug();
           }}
           disabled={starting}
         >
@@ -4841,7 +4826,7 @@ function DebugPreview({
           variant="outline"
           size="sm"
           onClick={() => {
-            onStart();
+            requestStartDebug();
           }}
           disabled={starting}
         >
@@ -4862,7 +4847,7 @@ function DebugPreview({
             size="sm"
             className="h-7 px-2 text-[11px]"
             onClick={() => {
-              onStart();
+              requestStartDebug();
             }}
             disabled={starting}
           >

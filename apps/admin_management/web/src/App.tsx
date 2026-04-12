@@ -2474,6 +2474,8 @@ export default function App() {
   const [conversationSearchQuery, setConversationSearchQuery] = useState('');
   const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
   const [conversationStageFilter, setConversationStageFilter] = useState('all');
+  const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState('');
+  const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState('');
   const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
@@ -3935,6 +3937,7 @@ export default function App() {
       inProgress: 0,
       completed: 0,
       failed: 0,
+      latestUpdatedAt: null as string | null,
     };
 
     for (const session of conversationSessions) {
@@ -3942,6 +3945,12 @@ export default function App() {
       else if (session.status === 'in_progress') summary.inProgress += 1;
       else if (session.status === 'completed') summary.completed += 1;
       else if (session.status === 'failed') summary.failed += 1;
+
+      const sessionUpdatedAt = new Date(session.updatedAt).getTime();
+      const latestUpdatedAt = summary.latestUpdatedAt ? new Date(summary.latestUpdatedAt).getTime() : 0;
+      if (Number.isFinite(sessionUpdatedAt) && sessionUpdatedAt > latestUpdatedAt) {
+        summary.latestUpdatedAt = session.updatedAt;
+      }
     }
 
     return summary;
@@ -3951,16 +3960,38 @@ export default function App() {
     { label: '进行中', value: 'in_progress', count: conversationSummary.inProgress, meta: '执行中或处理中' },
     { label: '待确认', value: 'waiting_user', count: conversationSummary.waitingUser, meta: '等待用户确认' },
     { label: '失败', value: 'failed', count: conversationSummary.failed, meta: '存在阻塞错误' },
-    { label: '已完成', value: 'completed', count: conversationSummary.completed, meta: '已结束会话' },
+    { label: '已完成', value: 'completed', count: conversationSummary.completed, meta: '已完成的会话' },
+  ] as const;
+  const conversationIndexSummaryCards = [
+    { label: '全部', value: conversationSummary.total, meta: '当前加载会话', tone: 'neutral' },
+    { label: '进行中', value: conversationSummary.inProgress, meta: '执行中或处理中', tone: 'active' },
+    { label: '待确认', value: conversationSummary.waitingUser, meta: '等待用户补充', tone: 'warning' },
+    { label: '失败', value: conversationSummary.failed, meta: '需要人工介入', tone: 'danger' },
+    { label: '最近活跃', value: formatDateTime(conversationSummary.latestUpdatedAt), meta: '按更新时间排序', tone: 'time' },
   ] as const;
   const conversationStageOptions = uniqueSorted(conversationSessions.map((session) => session.stage));
+  const conversationScopeFilterValue =
+    conversationStatusFilter !== 'all'
+      ? `status:${conversationStatusFilter}`
+      : conversationStageFilter !== 'all'
+        ? `stage:${conversationStageFilter}`
+        : 'all';
   const filteredConversationSessions = (() => {
     const query = conversationSearchQuery.trim().toLowerCase();
+    const fromTime = conversationUpdatedFromDate ? new Date(`${conversationUpdatedFromDate}T00:00:00`).getTime() : null;
+    const toTime = conversationUpdatedToDate ? new Date(`${conversationUpdatedToDate}T23:59:59.999`).getTime() : null;
     return conversationSessions.filter((session) => {
       if (conversationStatusFilter !== 'all' && session.status !== conversationStatusFilter) {
         return false;
       }
       if (conversationStageFilter !== 'all' && (session.stage || '') !== conversationStageFilter) {
+        return false;
+      }
+      const updatedAt = new Date(session.updatedAt).getTime();
+      if (fromTime !== null && (!Number.isFinite(updatedAt) || updatedAt < fromTime)) {
+        return false;
+      }
+      if (toTime !== null && (!Number.isFinite(updatedAt) || updatedAt > toTime)) {
         return false;
       }
       if (!query) {
@@ -4444,9 +4475,23 @@ export default function App() {
     </>
   );
 
+  const renderJsonWithLineNumbers = (value: unknown) => {
+    const lines = toJsonText(value).split('\n');
+    return (
+      <pre className="json-block conversation-detailed-logs-json">
+        {lines.map((line, index) => (
+          <span key={`json-line-${index}`} className="conversation-detailed-logs-line">
+            <span className="conversation-detailed-logs-line-number">{index + 1}</span>
+            <code>{line || ' '}</code>
+          </span>
+        ))}
+      </pre>
+    );
+  };
+
   const renderConversationDetailedLogsPanel = () => (
-    <div className="sub-panel">
-      <pre className="json-block">{toJsonText(conversationDetailedLogs)}</pre>
+    <div className="sub-panel conversation-detailed-logs-panel">
+      {renderJsonWithLineNumbers(conversationDetailedLogs)}
     </div>
   );
 
@@ -6386,17 +6431,13 @@ export default function App() {
                 <span>{conversationAutoRefreshEnabled ? '自动刷新中' : '已暂停自动刷新'}</span>
               </label>
             </div>
-            <div className="runtime-quick-filters conversation-status-quick-filters" role="group" aria-label="会话状态快速筛选">
-              {conversationQuickStatusFilters.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`toggle-btn conversation-status-chip ${conversationStatusFilter === item.value ? 'active' : ''}`}
-                  onClick={() => setConversationStatusFilter(item.value)}
-                >
-                  <span>{item.label}</span>
-                  <span className="conversation-status-chip-count">{item.count}</span>
-                </button>
+            <div className="conversation-index-summary-strip" aria-label="会话索引摘要">
+              {conversationIndexSummaryCards.map((item) => (
+                <article key={item.label} className={`conversation-index-summary-card conversation-index-summary-card-${item.tone}`}>
+                  <span className="conversation-index-summary-label">{item.label}</span>
+                  <strong>{item.value}</strong>
+                  <span>{item.meta}</span>
+                </article>
               ))}
             </div>
             <div className="conversation-index-toolbar">
@@ -6411,15 +6452,55 @@ export default function App() {
                   />
                 </label>
                 <label className="state-filter-field">
-                  <span>阶段</span>
-                  <select value={conversationStageFilter} onChange={(event) => setConversationStageFilter(event.target.value)}>
-                    <option value="all">全部阶段</option>
+                  <span>状态 / 阶段</span>
+                  <select
+                    value={conversationScopeFilterValue}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === 'all') {
+                        setConversationStatusFilter('all');
+                        setConversationStageFilter('all');
+                        return;
+                      }
+                      if (value.startsWith('status:')) {
+                        setConversationStatusFilter(value.replace('status:', '') as typeof conversationStatusFilter);
+                        setConversationStageFilter('all');
+                        return;
+                      }
+                      setConversationStatusFilter('all');
+                      setConversationStageFilter(value.replace('stage:', ''));
+                    }}
+                  >
+                    <option value="all">全部状态与阶段</option>
+                    {conversationQuickStatusFilters.filter((item) => item.value !== 'all').map((item) => (
+                      <option key={item.value} value={`status:${item.value}`}>
+                        {item.label} ({item.count})
+                      </option>
+                    ))}
                     {conversationStageOptions.map((stage) => (
-                      <option key={stage} value={stage}>
+                      <option key={stage} value={`stage:${stage}`}>
                         {conversationStageLabel(stage)}
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="state-filter-field">
+                  <span>更新开始日期</span>
+                  <input
+                    type="date"
+                    value={conversationUpdatedFromDate}
+                    max={conversationUpdatedToDate || undefined}
+                    onChange={(event) => setConversationUpdatedFromDate(event.target.value)}
+                  />
+                </label>
+                <label className="state-filter-field">
+                  <span>更新结束日期</span>
+                  <input
+                    type="date"
+                    value={conversationUpdatedToDate}
+                    min={conversationUpdatedFromDate || undefined}
+                    onChange={(event) => setConversationUpdatedToDate(event.target.value)}
+                  />
                 </label>
                 <button
                   type="button"
@@ -6428,6 +6509,8 @@ export default function App() {
                     setConversationSearchQuery('');
                     setConversationStatusFilter('all');
                     setConversationStageFilter('all');
+                    setConversationUpdatedFromDate('');
+                    setConversationUpdatedToDate('');
                   }}
                 >
                   重置筛选
@@ -6440,16 +6523,16 @@ export default function App() {
             <div className="table-wrap conversation-index-table-wrap">
               <table className="conversation-index-table">
                 <colgroup>
-                  <col style={{ width: '46%' }} />
-                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '51%' }} />
+                  <col style={{ width: '22%' }} />
                   <col style={{ width: '16%' }} />
-                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '11%' }} />
                 </colgroup>
                 <thead>
                   <tr>
                     <th>会话</th>
-                    <th>当前进度</th>
-                    <th>最近活跃</th>
+                    <th>状态</th>
+                    <th>时间</th>
                     <th className="runtime-col-actions">操作</th>
                   </tr>
                 </thead>
@@ -6475,7 +6558,7 @@ export default function App() {
                           : session.status === 'failed'
                             ? '存在阻塞错误，请查看详情'
                             : session.status === 'completed'
-                              ? '对话已收口'
+                              ? '对话已完成'
                               : '暂无待确认问题';
                       const progressMeta = session.pendingOptions?.length
                         ? `${session.pendingOptions.length} 个待确认选项`
@@ -6485,9 +6568,14 @@ export default function App() {
                             ? '等待用户确认'
                             : session.status === 'failed'
                               ? '需人工介入'
-                              : '流程已收口';
+                              : '流程已结束';
                       return (
-                        <tr key={session.id} className={`${isSelected ? 'selected-row' : ''} conversation-index-row`} onClick={() => selectConversationSession(session.id)}>
+                        <tr
+                          key={session.id}
+                          className={`${isSelected ? 'selected-row' : ''} conversation-index-row`}
+                          onClick={() => selectConversationSession(session.id)}
+                          aria-selected={isSelected}
+                        >
                           <td>
                             <div className="runtime-primary-cell conversation-index-primary-cell">
                               <p className="conversation-index-title" title={session.title || session.id}>{session.title || session.id}</p>
@@ -6517,7 +6605,7 @@ export default function App() {
                             </div>
                           </td>
                           <td>
-                            <div>{formatDateTime(session.updatedAt)}</div>
+                            <div className="conversation-index-time-cell">{formatDateTime(session.updatedAt)}</div>
                             <p className="session-meta">创建于 {formatDateTime(session.createdAt)}</p>
                           </td>
                           <td className="runtime-col-actions">
@@ -7372,7 +7460,7 @@ export default function App() {
                                   <span className={stateClassName(item.sandboxState || item.status)}>{sandboxRuntimeStateLabel(item.sandboxState || item.status)}</span>
                                   {item.taskStatus ? <span className={stateClassName(item.taskStatus)}>{statusLabel(item.taskStatus)}</span> : null}
                                   {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
-                                    <span className="session-status session-status-governance">已收口</span>
+                                    <span className="session-status session-status-governance">已处理</span>
                                   ) : null}
                                 </div>
                                 <p className="session-meta">

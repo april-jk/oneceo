@@ -125,6 +125,23 @@ type DirectoryLoadState = {
   total: number;
 };
 
+const DEBUG_POLL_STARTING_MS = 2000;
+const DEBUG_POLL_READY_MS = 6000;
+const DEBUG_POLL_RETRY_MS = 3000;
+
+function isRetryableDebugError(message: string): boolean {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("failed to fetch") ||
+    text.includes("network") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("aborterror") ||
+    text.includes("request timeout") ||
+    text.includes("超时")
+  );
+}
+
 export default function OpencodePreviewPanel({
   messages,
   sessionId,
@@ -604,22 +621,30 @@ export default function OpencodePreviewPanel({
       return;
     }
     let cancelled = false;
-    const loadDebug = async () => {
-      setDebugLoading(true);
-      setDebugError(null);
+    const scheduleDebugPoll = (silent = true, delayMs = DEBUG_POLL_STARTING_MS) => {
+      if (debugPollRef.current) {
+        window.clearTimeout(debugPollRef.current);
+      }
+      debugPollRef.current = window.setTimeout(() => {
+        if (!cancelled) {
+          void loadDebug(silent);
+        }
+      }, delayMs);
+    };
+    const loadDebug = async (silent = false) => {
+      if (!silent) {
+        setDebugLoading(true);
+      }
       try {
         const info = await getTaskCreationDebugInfo(sessionId);
         if (!cancelled) {
           setDebugInfo(info);
-          if (!info?.ready && info?.status === "starting") {
-            if (debugPollRef.current) {
-              window.clearTimeout(debugPollRef.current);
-            }
-            debugPollRef.current = window.setTimeout(() => {
-              if (!cancelled) {
-                void loadDebug();
-              }
-            }, 2000);
+          setDebugError(null);
+          if (!info?.ready || info?.status === "starting") {
+            scheduleDebugPoll(true, DEBUG_POLL_STARTING_MS);
+          } else {
+            // Keep a low-frequency heartbeat to recover from transient iframe/debug service issues.
+            scheduleDebugPoll(true, DEBUG_POLL_READY_MS);
           }
         }
       } catch (error) {
@@ -627,28 +652,24 @@ export default function OpencodePreviewPanel({
         const message =
           error instanceof Error ? error.message : "加载调试信息失败";
         setDebugError(message);
-        setDebugInfo(null);
-        if (
-          message.toLowerCase().includes("failed to fetch") ||
-          message.toLowerCase().includes("network")
-        ) {
-          if (debugPollRef.current) {
-            window.clearTimeout(debugPollRef.current);
-          }
-          debugPollRef.current = window.setTimeout(() => {
-            if (!cancelled) {
-              void loadDebug();
-            }
-          }, 3000);
+        // Keep latest ready info in UI to avoid a blank panel caused by transient timeout.
+        if (isRetryableDebugError(message)) {
+          scheduleDebugPoll(true, DEBUG_POLL_RETRY_MS);
         }
       } finally {
         if (cancelled) return;
-        setDebugLoading(false);
+        if (!silent) {
+          setDebugLoading(false);
+        }
       }
     };
-    void loadDebug();
+    void loadDebug(false);
     return () => {
       cancelled = true;
+      if (debugPollRef.current) {
+        window.clearTimeout(debugPollRef.current);
+        debugPollRef.current = null;
+      }
     };
   }, [open, currentTab, sessionId, runtimeReady]);
 
@@ -4778,6 +4799,7 @@ function DebugPreview({
       return info.url;
     }
   }, [info?.url]);
+  const isFailed = info?.status === "failed";
 
   if (!runtimeReady) {
     return (
@@ -4801,7 +4823,7 @@ function DebugPreview({
   if (loading) {
     return <EmptyState text="正在加载调试画面..." />;
   }
-  if (error) {
+  if (error && (!info?.ready || !info?.url)) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{error}</span>
@@ -4821,7 +4843,7 @@ function DebugPreview({
   if (!info?.ready || !info.url) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>{info?.message || "调试服务未就绪"}</span>
+        <span>{info?.message || (isFailed ? "远程调试连接失败" : "调试服务未就绪")}</span>
         <Button
           variant="outline"
           size="sm"
@@ -4830,7 +4852,7 @@ function DebugPreview({
           }}
           disabled={starting}
         >
-          {starting ? "启动中..." : "启用远程调试"}
+          {starting ? "启动中..." : isFailed ? "重新触发远程调试" : "启用远程调试"}
         </Button>
       </div>
     );

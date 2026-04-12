@@ -87,6 +87,13 @@ export function OsacReleaseManagementSection({ onError }: Props) {
     return list;
   }, [currentPublishedReleaseId, list, tab]);
 
+  const releaseSummary = useMemo(() => ({
+    published: currentPublishedReleaseId ? 1 : 0,
+    pending: list.filter((item) => item.status === 'uploaded' || item.status === 'validated').length,
+    failed: list.filter((item) => item.status === 'failed').length,
+    validated: list.filter((item) => item.status === 'validated').length,
+  }), [currentPublishedReleaseId, list]);
+
   const loadList = useCallback(async () => {
     const response = await api.listOsacReleases({
       query: query || undefined,
@@ -204,7 +211,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
   };
 
   return (
-    <main className="content-stack">
+    <main className="content-stack osac-release-page">
       <section className="page-intro-grid fade-in">
         <article className="panel hero-panel">
           <div className="panel-header panel-header-stack">
@@ -227,6 +234,10 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               <span className="hero-metric-label">版本总数</span>
               <strong>{list.length}</strong>
             </div>
+            <div>
+              <span className="hero-metric-label">待发布</span>
+              <strong>{releaseSummary.pending}</strong>
+            </div>
           </div>
         </article>
 
@@ -245,7 +256,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
         </article>
       </section>
 
-      <section className="panel fade-in">
+      <section className="panel fade-in osac-release-panel">
         <div className="section-heading">
           <div>
             <p className="eyebrow">OSAC 版本管理标签卡</p>
@@ -265,7 +276,26 @@ export function OsacReleaseManagementSection({ onError }: Props) {
           </div>
         </div>
 
-        <div className="section-actions" style={{ marginBottom: 16 }}>
+        <div className="osac-release-summary-strip">
+          <div>
+            <span>当前发布</span>
+            <strong>{releaseSummary.published}</strong>
+          </div>
+          <div>
+            <span>待发布</span>
+            <strong>{releaseSummary.pending}</strong>
+          </div>
+          <div>
+            <span>已校验</span>
+            <strong>{releaseSummary.validated}</strong>
+          </div>
+          <div>
+            <span>失败</span>
+            <strong>{releaseSummary.failed}</strong>
+          </div>
+        </div>
+
+        <div className="section-actions osac-release-tabs">
           {([
             ['published', '已发布'],
             ['pending', '待发布'],
@@ -340,7 +370,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
             </div>
           </article>
         ) : (
-          <div className="detail-grid modal-grid">
+          <div className="detail-grid modal-grid osac-release-workbench">
             <article className="sub-panel">
               <div className="editor-header">
                 <div>
@@ -412,7 +442,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               </div>
               {detail?.release ? (
                 <>
-                  <div className="signal-list">
+                  <div className="signal-list osac-release-facts">
                     <p><strong>版本号：</strong> {detail.release.version}</p>
                     <p><strong>状态：</strong> {releaseStatusLabel(detail.release.status)}</p>
                     <p><strong>存储桶：</strong> {detail.release.bucket}</p>

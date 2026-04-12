@@ -1,5 +1,16 @@
-import { userConnectorAccountDAO } from '../db/dao';
-import { connectorSecretService } from './connector-secret-service';
+import { loadApiEnv } from '../config/load-env';
+
+loadApiEnv();
+
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function asPositiveInt(value: unknown, fallback: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, Math.floor(parsed));
+}
 
 type TurnIceServer = {
   urls: string[];
@@ -7,182 +18,94 @@ type TurnIceServer = {
   credential?: string;
 };
 
-type TurnKeySecret = {
-  turnKeyApiToken: string;
+type CachedIce = {
+  expiresAt: number;
+  iceServers: TurnIceServer[];
 };
-
-type TurnKeyConfig = {
-  provider: 'cloudflare_calls_turn';
-  turnKeyId: string;
-  turnKeyName: string;
-  createdAt: string;
-};
-
-const TURN_CONNECTOR_KEY = 'cloudflare_turn';
-const TURN_PROVIDER_NAME = 'Cloudflare TURN';
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function toStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map((item) => asText(item)).filter(Boolean);
-  }
-  const single = asText(value);
-  return single ? [single] : [];
-}
-
-function resolveTurnAccountId() {
-  return (
-    asText(process.env.CLOUDFLARE_ACCOUNT_ID) ||
-    asText(process.env.CF_ACCOUNT_ID) ||
-    asText(process.env.R2_ACCOUNT_ID)
-  );
-}
-
-function resolveTurnManagementToken() {
-  return (
-    asText(process.env.CLOUDFLARE_TURN_MANAGEMENT_API_TOKEN) ||
-    asText(process.env.CF_TURN_MANAGEMENT_API_TOKEN)
-  );
-}
-
-function resolveTurnCredentialTtlSeconds() {
-  const raw = Number(process.env.NEKO_TURN_CREDENTIAL_TTL_SECONDS || 3600);
-  if (!Number.isFinite(raw) || raw <= 0) return 3600;
-  return Math.max(60, Math.min(48 * 3600, Math.floor(raw)));
-}
-
-function buildTurnKeyName(userId: string) {
-  const prefix = asText(process.env.CLOUDFLARE_TURN_KEY_PREFIX) || 'oneceo-user-turn';
-  const normalizedUser = userId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 28) || 'user';
-  return `${prefix}-${normalizedUser}`.slice(0, 64);
-}
-
-async function requestCloudflareJson<T>(
-  url: string,
-  token: string,
-  init: {
-    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-    body?: Record<string, unknown>;
-    timeoutMs?: number;
-  }
-): Promise<T> {
-  const timeoutMs = Math.max(5000, Math.min(60000, Number(init.timeoutMs || 20000)));
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-      signal: controller.signal,
-    });
-    const payload = (await response.json().catch(() => null)) as any;
-    if (!response.ok) {
-      const message = asText(payload?.errors?.[0]?.message) || `http_${response.status}`;
-      throw new Error(`cloudflare_turn_http_error:${message}`);
-    }
-    if (payload && payload.success === false) {
-      const message = asText(payload?.errors?.[0]?.message) || 'cloudflare_api_failed';
-      throw new Error(`cloudflare_turn_api_error:${message}`);
-    }
-    return payload as T;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function normalizeIceServers(value: unknown): TurnIceServer[] {
-  if (!Array.isArray(value)) {
-    throw new Error('cloudflare_turn_invalid_ice_servers_shape');
-  }
-  const normalized = value
-    .map((item) => {
-      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-      const urls = toStringArray(record.urls);
-      if (!urls.length) return null;
-      const entry: TurnIceServer = { urls };
-      const username = asText(record.username);
-      const credential = asText(record.credential);
-      if (username) entry.username = username;
-      if (credential) entry.credential = credential;
-      return entry;
-    })
-    .filter(Boolean) as TurnIceServer[];
-  if (!normalized.length) {
-    throw new Error('cloudflare_turn_empty_ice_servers');
-  }
-  return normalized;
-}
 
 export class CloudflareTurnService {
-  private async ensureUserTurnKey(userId: string) {
-    const accountId = resolveTurnAccountId();
-    const managementToken = resolveTurnManagementToken();
-    if (!accountId || !managementToken) {
-      return null;
+  private readonly perUserCache = new Map<string, CachedIce>();
+
+  private getCredentialTtlSeconds() {
+    return asPositiveInt(process.env.NEKO_TURN_CREDENTIAL_TTL_SECONDS, 3600, 86400);
+  }
+
+  private getFixedTurnConfig() {
+    const keyId =
+      asText(process.env.CLOUDFLARE_TURN_KEY_ID) ||
+      asText(process.env.CLOUDFLARE_TURN_TOKEN_ID);
+    const keyToken =
+      asText(process.env.CLOUDFLARE_TURN_KEY_API_TOKEN) ||
+      asText(process.env.CLOUDFLARE_TURN_API_TOKEN);
+    if (!keyId || !keyToken) return null;
+    return { keyId, keyToken };
+  }
+
+  private async fetchJson(url: string, init: RequestInit) {
+    const response = await fetch(url, init);
+    const text = await response.text();
+    let payload: Record<string, unknown> = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        payload = { raw: text };
+      }
     }
-
-    const existing = await userConnectorAccountDAO.getByUserAndConnectorKey(userId, TURN_CONNECTOR_KEY);
-    const existingConfig = (existing?.configJson || {}) as Record<string, unknown>;
-    const existingSecret = existing?.secretCiphertext
-      ? connectorSecretService.decryptJson<TurnKeySecret>(existing.secretCiphertext)
-      : null;
-    const existingTurnKeyId = asText(existingConfig.turnKeyId);
-    const existingTurnKeyApiToken = asText(existingSecret?.turnKeyApiToken);
-
-    if (existingTurnKeyId && existingTurnKeyApiToken) {
-      return {
-        accountId,
-        turnKeyId: existingTurnKeyId,
-        turnKeyApiToken: existingTurnKeyApiToken,
-      };
+    if (!response.ok) {
+      const firstError =
+        Array.isArray(payload.errors) && payload.errors.length
+          ? (payload.errors[0] as Record<string, unknown>)
+          : null;
+      const message =
+        asText(firstError?.message) ||
+        asText(payload?.error) ||
+        asText(payload?.message);
+      throw new Error(message || `cloudflare_turn_request_failed:${response.status}`);
     }
+    return payload;
+  }
 
-    const keyName = buildTurnKeyName(userId);
-    const created = await requestCloudflareJson<{ result?: { uid?: string; key?: string } }>(
-      `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/calls/turn_keys`,
-      managementToken,
+  private normalizeIceServers(rawPayload: Record<string, unknown>): TurnIceServer[] {
+    const payload = ((rawPayload.result ?? rawPayload) || {}) as Record<string, unknown>;
+    const iceServersRaw = Array.isArray(payload.iceServers) ? payload.iceServers : [];
+    const result: TurnIceServer[] = [];
+    for (const item of iceServersRaw) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const record = item as Record<string, unknown>;
+      const urls = Array.isArray(record.urls)
+        ? record.urls.map((url) => asText(url)).filter(Boolean)
+        : asText(record.urls)
+          ? [asText(record.urls)]
+          : [];
+      if (!urls.length) continue;
+      const username = asText(record.username);
+      const credential = asText(record.credential);
+      result.push({
+        urls,
+        ...(username ? { username } : {}),
+        ...(credential ? { credential } : {}),
+      });
+    }
+    return result;
+  }
+
+  private async generateIceServers(input: { keyId: string; keyToken: string }) {
+    const ttl = this.getCredentialTtlSeconds();
+    const payload = await this.fetchJson(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(input.keyId)}/credentials/generate-ice-servers`,
       {
         method: 'POST',
-        body: { name: keyName },
+        headers: {
+          Authorization: `Bearer ${input.keyToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ttl }),
       }
     );
-
-    const turnKeyId = asText(created?.result?.uid);
-    const turnKeyApiToken = asText(created?.result?.key);
-    if (!turnKeyId || !turnKeyApiToken) {
-      throw new Error('cloudflare_turn_create_key_invalid_result');
-    }
-
-    const config: TurnKeyConfig = {
-      provider: 'cloudflare_calls_turn',
-      turnKeyId,
-      turnKeyName: keyName,
-      createdAt: new Date().toISOString(),
-    };
-
-    await userConnectorAccountDAO.upsert({
-      userId,
-      connectorKey: TURN_CONNECTOR_KEY,
-      authMode: 'token',
-      authStatus: 'authorized',
-      displayName: TURN_PROVIDER_NAME,
-      configJson: config,
-      secretCiphertext: connectorSecretService.encrypt({ turnKeyApiToken }),
-      lastAuthAt: new Date(),
-      lastError: null,
-    });
-
     return {
-      accountId,
-      turnKeyId,
-      turnKeyApiToken,
+      iceServers: this.normalizeIceServers(payload),
+      ttlSeconds: ttl,
     };
   }
 
@@ -190,24 +113,36 @@ export class CloudflareTurnService {
     const normalizedUserId = asText(userId);
     if (!normalizedUserId) return null;
 
-    const turnKey = await this.ensureUserTurnKey(normalizedUserId);
-    if (!turnKey) {
+    const cached = this.perUserCache.get(normalizedUserId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.iceServers;
+    }
+
+    const config = this.getFixedTurnConfig();
+    if (!config) {
+      console.warn('[CLOUDFLARE_TURN_FIXED_KEY_NOT_CONFIGURED]', { userId: normalizedUserId });
       return null;
     }
 
-    const ttl = resolveTurnCredentialTtlSeconds();
-    const generated = await requestCloudflareJson<{ iceServers?: unknown }>(
-      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(turnKey.turnKeyId)}/credentials/generate-ice-servers`,
-      turnKey.turnKeyApiToken,
-      {
-        method: 'POST',
-        body: { ttl },
+    try {
+      const generated = await this.generateIceServers(config);
+      if (!generated.iceServers.length) {
+        throw new Error('cloudflare_turn_empty_ice_servers');
       }
-    );
-
-    return normalizeIceServers(generated?.iceServers);
+      const cacheTtlMs = Math.max(30_000, Math.floor(generated.ttlSeconds * 500));
+      this.perUserCache.set(normalizedUserId, {
+        iceServers: generated.iceServers,
+        expiresAt: Date.now() + cacheTtlMs,
+      });
+      return generated.iceServers;
+    } catch (error) {
+      console.warn('[CLOUDFLARE_TURN_ISSUE_FAILED]', {
+        userId: normalizedUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 }
 
 export const cloudflareTurnService = new CloudflareTurnService();
-

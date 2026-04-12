@@ -10,7 +10,8 @@
 
 - 用户级配置存储在 `user_connector_accounts`
   - 作用：统一保存授权状态、显示名、非敏感配置、加密后的 token/DSN。
-  - 敏感字段使用 `CONNECTOR_SECRET_KEY` 进行 `AES-256-GCM` 加密。
+  - 敏感字段按连接器使用对应密钥进行 `AES-256-GCM` 加密：
+    `NOTION_CONNECTOR_SECRET_KEY`、`SLACK_CONNECTOR_SECRET_KEY`，其他连接器默认使用 `CONNECTOR_SECRET_KEY`。
 - 会话级绑定存储在 `task_session_connector_bindings`
   - 作用：记录 task session 对某个连接器的期望状态、运行时状态、最近活跃时间、最近错误。
   - 绑定作用域是 `task session`，不是 sandbox。

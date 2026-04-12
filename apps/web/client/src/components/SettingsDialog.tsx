@@ -643,19 +643,19 @@ export function GlobalSettingsDialogHost() {
   const searchState = useMemo(() => {
     const params = new URLSearchParams(search);
     const callbackPath = new URL(location, window.location.origin).pathname;
-    const isNotionCallback =
-      callbackPath === '/notion/callback' &&
-      Boolean(params.get('code')) &&
-      Boolean(params.get('state'));
+    const hasOauthCallbackParams = Boolean(params.get('code')) && Boolean(params.get('state'));
+    const isNotionCallback = callbackPath === '/notion/callback' && hasOauthCallbackParams;
+    const isSlackCallback = callbackPath === '/slack/callback' && hasOauthCallbackParams;
     return {
       shouldOpen:
         params.get('settings') === 'open' ||
         params.get('settingsTab') === 'connectors' ||
         params.get('connector_oauth') === '1' ||
-        isNotionCallback,
-      settingsTab: isNotionCallback ? 'connectors' : params.get('settingsTab'),
+        isNotionCallback ||
+        isSlackCallback,
+      settingsTab: isNotionCallback || isSlackCallback ? 'connectors' : params.get('settingsTab'),
       targetSessionId: params.get('targetSessionId'),
-      connector: isNotionCallback ? 'notion' : params.get('connector'),
+      connector: isNotionCallback ? 'notion' : isSlackCallback ? 'slack' : params.get('connector'),
     };
   }, [location, search]);
 

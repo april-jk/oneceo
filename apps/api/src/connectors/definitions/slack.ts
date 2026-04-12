@@ -13,22 +13,43 @@ function parseScopes(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+function resolveSlackRedirectUri(): string {
+  const configuredPath = asText(process.env.SLACK_CONNECTOR_REDIRECT_URI);
+  const frontendBaseUrl = asText(process.env.FRONTEND_URL);
+  if (!configuredPath || !frontendBaseUrl) return '';
+
+  try {
+    const normalizedPath = configuredPath.startsWith('/') ? configuredPath : `/${configuredPath}`;
+    return new URL(normalizedPath, frontendBaseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
 export function resolveSlackOauthProvider(): ConnectorOauthProvider | undefined {
   const clientId = asText(process.env.SLACK_CONNECTOR_CLIENT_ID);
   const clientSecret = asText(process.env.SLACK_CONNECTOR_CLIENT_SECRET);
   if (!clientId || !clientSecret) return undefined;
+  const redirectUri = resolveSlackRedirectUri();
   return {
     provider: 'slack',
     clientId,
     clientSecret,
+    redirectUri: redirectUri || undefined,
     authorizationUrl:
       asText(process.env.SLACK_CONNECTOR_AUTHORIZE_URL) ||
-      'https://slack.com/oauth/v2/authorize',
+      'https://slack.com/oauth/v2_user/authorize',
     tokenUrl:
       asText(process.env.SLACK_CONNECTOR_TOKEN_URL) ||
-      'https://slack.com/api/oauth.v2.access',
+      'https://slack.com/api/oauth.v2.user.access',
     scopeParam: 'scope',
-    scopes: parseScopes(process.env.SLACK_CONNECTOR_SCOPES, ['channels:history', 'chat:write']),
+    scopes: parseScopes(process.env.SLACK_CONNECTOR_USER_SCOPES, [
+      'channels:history',
+      'groups:history',
+      'mpim:history',
+      'im:history',
+      'chat:write',
+    ]),
     tokenRequestBodyFormat: 'form',
     tokenClientAuth: 'body',
   };
@@ -36,7 +57,17 @@ export function resolveSlackOauthProvider(): ConnectorOauthProvider | undefined 
 
 export function buildSlackDefinition(): ConnectorDefinition {
   const oauth = resolveSlackOauthProvider();
-  const remoteUrl = asText(process.env.SLACK_MCP_REMOTE_URL);
+  const redirectUriRaw = asText(process.env.SLACK_CONNECTOR_REDIRECT_URI);
+  const oauthClientConfigured = Boolean(oauth);
+  const redirectUriConfigured = Boolean(asText(oauth?.redirectUri));
+  const oauthConfigured = oauthClientConfigured && redirectUriConfigured;
+  const available = oauth ? oauthConfigured : true;
+  const availabilityReason =
+    oauth && !available
+      ? !redirectUriRaw
+        ? '部署环境未配置 Slack OAuth 回调路径'
+        : 'Slack OAuth 回调地址解析失败，请检查 FRONTEND_URL 与 SLACK_CONNECTOR_REDIRECT_URI'
+      : undefined;
   return {
     key: 'slack',
     category: 'app',
@@ -46,8 +77,8 @@ export function buildSlackDefinition(): ConnectorDefinition {
     featured: true,
     sortOrder: 30,
     authMode: oauth ? 'oauth' : 'token',
-    available: Boolean(remoteUrl),
-    availabilityReason: remoteUrl ? undefined : '部署环境未配置 Slack MCP remote URL',
+    available,
+    availabilityReason,
     configFields: [
       {
         key: 'profileName',
@@ -66,23 +97,23 @@ export function buildSlackDefinition(): ConnectorDefinition {
       },
       {
         key: 'accessToken',
-        label: oauth ? 'Slack Token (Optional)' : 'Slack Access Token',
+        label: oauth ? 'Slack User Token (Optional)' : 'Slack User Access Token',
         type: 'password',
         required: !oauth,
         secret: true,
-        placeholder: 'xoxb-...',
-        description: '通常填写从 Slack App 获取的 bot token 或平台 OAuth 回填的 access token。',
+        placeholder: 'xoxp-...',
+        description: '填写 Slack user token，或留空后通过平台 OAuth 获取并回填 user token。',
       },
     ],
     oauth: {
-      supported: Boolean(oauth),
+      supported: oauthConfigured,
       provider: oauth?.provider,
     },
     activityMatcherVerified: true,
     visibleInMenu: true,
     runtime: {
       type: 'remote',
-      urlEnv: 'SLACK_MCP_REMOTE_URL',
+      urlDefault: 'https://mcp.slack.com/mcp',
       headersEnv: 'SLACK_MCP_REMOTE_HEADERS_JSON',
       headerTemplate: 'bearer-token',
     },

@@ -18,22 +18,25 @@ function fromBase64Url(value: string): Buffer {
   return Buffer.from(value, 'base64url');
 }
 
-function resolveEnvKeyName(scope?: ConnectorSecretScope): string {
-  if (scope === 'notion') return 'NOTION_CONNECTOR_SECRET_KEY';
-  if (scope === 'slack') return 'SLACK_CONNECTOR_SECRET_KEY';
-  return 'CONNECTOR_SECRET_KEY';
+function resolveEnvKeyNames(scope?: ConnectorSecretScope): string[] {
+  if (scope === 'notion') return ['NOTION_CONNECTOR_SECRET_KEY', 'CONNECTOR_SECRET_KEY'];
+  if (scope === 'slack') return ['SLACK_CONNECTOR_SECRET_KEY', 'CONNECTOR_SECRET_KEY'];
+  return ['CONNECTOR_SECRET_KEY'];
 }
 
 export class ConnectorSecretService {
   private resolveKey(scope?: ConnectorSecretScope): Buffer {
-    const envKeyName = resolveEnvKeyName(scope);
-    const configured = asText(process.env[envKeyName]);
+    const envKeyNames = resolveEnvKeyNames(scope);
+    const configured =
+      envKeyNames
+        .map((envKeyName) => asText(process.env[envKeyName]))
+        .find(Boolean) || '';
     if (configured) {
       return createHash('sha256').update(configured).digest();
     }
     const nodeEnv = asText(process.env.NODE_ENV).toLowerCase();
     if (nodeEnv === 'production') {
-      throw new Error(`${envKeyName} is required to process connector secrets`);
+      throw new Error(`${envKeyNames.join(' or ')} is required to process connector secrets`);
     }
     return createHash('sha256').update(DEV_FALLBACK_KEY).digest();
   }

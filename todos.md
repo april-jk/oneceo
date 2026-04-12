@@ -72,3 +72,33 @@
    - 现状：方案已明确，但要对齐 Manus 的授权路径，必须先拿到 Vercel OAuth integration 的 `client_id / client_secret`
    - 阻塞：Vercel OAuth integration 审核较严格，当前暂未申请，因此暂不继续实现
    - 后续需要补齐：完成 integration 申请后，恢复 Vercel connector 的官方 OAuth 单路径开发与真实联调
+
+## 2026-04-12
+
+### 文档
+
+- 管理文档：
+  - [20260412_Issue41_n_eko连接中_ICE失败修复方案_[20260412-1910已采用].md](/Users/watson/.codex/worktrees/d7cc/oneceo/docs/agent研发文档/20260412_Issue41_n_eko连接中_ICE失败修复方案_[20260412-1910已采用].md)
+
+### TODO 列表
+
+1. 调试链路诊断基线固化（T0）
+   - 状态：已完成（2026-04-12）
+   - 结果：已在 `sandbox-debug-service.ts` 增加诊断采集与 ICE 失败规则探测能力（`collectNekoDebugDiagnostics` + `detectIceFailureFromLog`）。
+
+2. ICE 配置输入与 TURN 强约束（T1-T2）
+   - 状态：已完成（2026-04-12）
+   - 结果：已实现 `NEKO_ICE_SERVERS_JSON` 严格解析；远程调试链路下无 TURN 直接返回 `failed/missing_turn`。
+
+3. 启动后失败收敛（T3）
+   - 状态：已完成（2026-04-12）
+   - 结果：已增加启动后 ICE 健康探测，命中失败日志后统一收敛为 `failed/ice_failed` 并写回 metadata。
+
+4. API/前端/工具链路状态一致性（T4-T6）
+   - 状态：已完成（2026-04-12）
+   - 结果：调试接口已返回 `reasonCode`，前端新增失败态文案，`debug_open_page` 在失败态下 fast-fail 并透传原因。
+
+5. 自动化测试与真机回归（T7-T8）
+   - 状态：部分完成（2026-04-12）
+   - 已完成：API/Web 类型检查通过；新增/更新单测通过；无 TURN 场景实测已收敛为明确失败态。
+   - 待完成：有 TURN 凭据的真机“可见画面”验收仍需你提供可用 TURN 配置后复测。

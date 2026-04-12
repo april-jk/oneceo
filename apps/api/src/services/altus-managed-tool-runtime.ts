@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
+import { ensureNekoDebug } from './sandbox-debug-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
@@ -60,6 +61,24 @@ function truncate(value: string, limit = 16000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
+function normalizeDebugTargetUrl(value: unknown) {
+  const raw = asText(value);
+  if (!raw) {
+    throw new Error('debug_open_page_missing_url');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`debug_open_page_invalid_url:Please provide a full URL like http://127.0.0.1:3000/folder1/`);
+  }
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error('debug_open_page_invalid_protocol:Only http:// or https:// is allowed');
+  }
+  return parsed.toString();
+}
+
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
@@ -78,6 +97,11 @@ export class AltusManagedToolRuntime {
     } = {
       touchSandbox,
       markSandboxDirty,
+    },
+    private readonly debugDeps: {
+      ensureNekoDebug: typeof ensureNekoDebug;
+    } = {
+      ensureNekoDebug,
     }
   ) {}
 
@@ -329,6 +353,68 @@ export class AltusManagedToolRuntime {
           exitCode,
           stdout,
           stderr,
+        }),
+      };
+    }
+
+    if (toolName === 'debug_open_page') {
+      const targetUrl = normalizeDebugTargetUrl(rawArgs.url);
+      const ensureDebug = rawArgs.ensureDebug === undefined ? true : asBoolean(rawArgs.ensureDebug);
+      const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
+      let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
+      if (ensureDebug) {
+        debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
+          requireTurn: true,
+          strictIceCheck: true,
+        });
+        if (!debugInfo.ready || debugInfo.status === 'failed') {
+          const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';
+          const message = asText(debugInfo.message) || 'debug_not_ready';
+          throw new Error(`debug_open_page_debug_not_ready:${reason}:${message}`);
+        }
+      }
+
+      const encodedUrl = encodeURIComponent(targetUrl);
+      const command = [
+        `cdp_port=${cdpPort}`,
+        `encoded_url=${shellEscape(encodedUrl)}`,
+        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
+        'if curl -fsS -X PUT "$endpoint"; then',
+        '  echo "\\n__OPENED_BY__=PUT"',
+        'elif curl -fsS "$endpoint"; then',
+        '  echo "\\n__OPENED_BY__=GET"',
+        'else',
+        '  echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
+        '  exit 1',
+        'fi',
+      ].join('\n');
+
+      const result = await this.runShell(
+        command,
+        {
+          cwd: this.input.workspaceRoot,
+          timeoutMs: asPositiveInt(rawArgs.timeoutMs, 20000, 60000),
+        },
+        signal
+      );
+      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const stdout = truncate(asText((result as any)?.stdout), 4000);
+      const stderr = truncate(asText((result as any)?.stderr), 2000);
+      if (exitCode !== 0 || stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+        throw new Error(`debug_open_page_failed:${stderr || stdout || 'unknown error'}`);
+      }
+
+      await this.markWorkspaceDirty('managed_debug_open_page');
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          targetUrl,
+          debugUrl: debugInfo?.url,
+          ready: debugInfo?.ready ?? false,
+          status: debugInfo?.status || 'unknown',
+          sandboxId: this.input.sandboxId,
+          cdpPort,
+          output: stdout,
         }),
       };
     }

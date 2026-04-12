@@ -1,6 +1,6 @@
 import { e2bConnector } from '../connectors/e2b-connector';
 import { e2bConfig } from '../config/e2b-config';
-import { sandboxExecutionEnvironmentDAO } from '../db/dao';
+import { sandboxExecutionEnvironmentDAO, taskSessionRunDAO } from '../db/dao';
 import { ensureDatabaseConnection } from '../config/database';
 import { sandboxSecurityConfig } from '../config/sandbox-security';
 import { archiveSandboxWorkspace, isArchiveStorageConfigured } from './sandbox-archive-service';
@@ -208,6 +208,37 @@ export class SandboxEnvironmentService {
   async listRegistryEnvironments(limit: number = 20) {
     await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
     return sandboxExecutionEnvironmentDAO.listRecentRegistry(limit);
+  }
+
+  async listTaskSessionEnvironments(taskSessionId: string) {
+    const normalizedTaskSessionId = String(taskSessionId || '').trim();
+    if (!normalizedTaskSessionId) {
+      throw new Error('taskSessionId 不能为空');
+    }
+
+    await ensureDatabaseConnection({ retries: 3, delayMs: 1000 });
+    const [binding, canonicalEnvironment, relatedEnvironments] = await Promise.all([
+      taskSessionRunDAO.getSandboxBindingBySession(normalizedTaskSessionId),
+      sandboxExecutionEnvironmentDAO.findCanonicalByTaskSessionId(normalizedTaskSessionId),
+      sandboxExecutionEnvironmentDAO.listByTaskSessionId(normalizedTaskSessionId, 200),
+    ]);
+
+    const bindingEnvironment = binding?.sandboxId
+      ? await sandboxExecutionEnvironmentDAO.getBySessionId(binding.sandboxId)
+      : null;
+    const environmentById = new Map<string, typeof canonicalEnvironment>();
+    for (const environment of [bindingEnvironment, canonicalEnvironment, ...relatedEnvironments]) {
+      if (environment?.sessionId) {
+        environmentById.set(environment.sessionId, environment);
+      }
+    }
+
+    return {
+      taskSessionId: normalizedTaskSessionId,
+      binding: binding || null,
+      primaryEnvironment: canonicalEnvironment || bindingEnvironment || relatedEnvironments[0] || null,
+      relatedEnvironments: Array.from(environmentById.values()).filter(Boolean),
+    };
   }
 }
 

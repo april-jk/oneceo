@@ -136,7 +136,7 @@
 - NOTION_CONNECTOR_CLIENT_SECRET
 - NOTION_CONNECTOR_SCOPES
 - NOTION_MCP_REMOTE_URL（默认建议 https://mcp.notion.com/mcp）
-- CONNECTOR_SECRET_KEY（用于 token 加密）
+- NOTION_CONNECTOR_SECRET_KEY（用于 token 加密）
 
 ### 8.2 安全约束
 - OAuth state 仅一次有效，10 分钟过期（复用现有策略）。

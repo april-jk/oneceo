@@ -30,6 +30,7 @@ import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery'
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-service';
+import { cloudflareTurnService } from '../services/cloudflare-turn-service';
 import {
   getRailwayDeploymentPanel,
   triggerRailwayRedeploy,
@@ -4948,9 +4949,20 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
       });
     }
 
+    let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+    try {
+      dynamicIceServers = await cloudflareTurnService.issueIceServersForUser(currentUser.userId);
+    } catch (error) {
+      console.warn('[TURN_ICE_GENERATE_FAILED]', {
+        userId: currentUser.userId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error || ''),
+      });
+    }
     const result = await ensureNekoDebug(orchestratorSessionId, {
       requireTurn: true,
       strictIceCheck: true,
+      ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
     });
     return res.json({
       success: true,

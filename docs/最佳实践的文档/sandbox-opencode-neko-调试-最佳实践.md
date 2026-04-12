@@ -11,9 +11,16 @@
 1. 在 sandbox 内启动 Xvfb 虚拟屏幕（:0）。
 2. 启动 Chromium 指向该 display，并开启 CDP 端口（9222）。
 3. 构建 n.eko Web Client（Vue）并配置 `server.static`，保证 UI 可访问。
-4. 启动 n.eko 服务器输出 WebRTC 视频流（默认 8080）。
+4. 启动 n.eko 服务器输出 WebRTC 视频流（默认 8081）。
 5. 将 n.eko 的公开访问 URL 写入 sandbox 环境元数据。
 6. 前端通过 `/api/task-creation/sessions/:sessionId/debug` 拉取调试 URL，并在预览面板内嵌 iframe。
+
+## 2026-04 链路修复结论（连接中）
+
+- 现象：调试页持续显示“连接中”，n.eko HTTP 页面可打开但无画面。
+- 根因：WebRTC 处于 `epr` 端口段模式时，ICE 无法形成 candidate pair，日志持续出现 `Failed to ping without candidate pairs`，最终 `ICE failed`。
+- 直接修复策略：E2B 场景默认改为 **mux 优先**（`tcpmux`/`udpmux`），默认禁用 `epr`；仅在显式配置时才启用 `epr`。
+- 防回归要求：调试启动逻辑必须将 `webrtc mode`、`mux/epr`、`nat` 等关键配置纳入版本/刷新判定，配置改变后强制重启 n.eko，避免旧坏配置持续复用。
 
 ## 实施步骤（单沙箱验证）
 
@@ -38,7 +45,7 @@ pnpm dlx tsx scripts/_tmp_neko_debug_setup.ts
 ```
 [debug] taskSessionId= session_xxx
 [debug] sandboxId= <sandboxId>
-[debug] nekoUrl= https://8080-<sandboxId>.e2b.app
+[debug] nekoUrl= https://8081-<sandboxId>.e2b.app
 ```
 
 ### 2) 校验调试接口
@@ -52,7 +59,7 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
   "success": true,
   "data": {
     "ready": true,
-    "url": "https://8080-<sandboxId>.e2b.app",
+    "url": "https://8081-<sandboxId>.e2b.app",
     "status": "ready",
     "sandboxId": "<sandboxId>",
     "updatedAt": "..."
@@ -65,15 +72,20 @@ GET /api/task-creation/sessions/<taskSessionId>/debug
 - 逻辑：读取 `/sessions/:id/debug` 的 `url` 并内嵌 iframe。
 
 ## 关键配置
-- n.eko 端口：`NEKO_PORT`（默认 8080）
+- n.eko 端口：`NEKO_PORT`（默认 8081）
 - Chromium CDP 端口：`NEKO_CDP_PORT`（默认 9222）
 - Xvfb Display：`NEKO_DISPLAY`（默认 `:0`）
+- `NEKO_WEBRTC_FORCE_MUX`：默认 `true`（推荐，E2B 场景优先）。
+- `NEKO_WEBRTC_TCPMUX`：默认 `8082`。
+- `NEKO_WEBRTC_UDPMUX`：默认 `0`（可按需开启）。
+- `NEKO_WEBRTC_EPR`：默认 `0`（禁用；仅明确需要时再启用端口段）。
+- `NEKO_AUTO_NAT1TO1`：默认 `false`（仅在确认需要时开启）。
 
 ## 注意事项
 - n.eko 没有可用的 Linux release asset，需 **从源码编译**。
 - Go 版本要求较新，脚本默认安装 `go1.24.5`。
 - 若在 sandbox 中遇到 `libxcvt/libxcvt.h` 缺失，请安装 `libxcvt-dev`。
-- n.eko Web UI 必须通过 `server.static` 指向构建产物（如 `/tmp/neko-src/client/dist`），否则访问 `https://8080-<sandboxId>.e2b.app` 会返回 404。
+- n.eko Web UI 必须通过 `server.static` 指向构建产物（如 `/tmp/neko-src/client/dist`），否则访问 `https://8081-<sandboxId>.e2b.app` 会返回 404。
 - 本次验证默认关闭 `desktop.input.enabled`，避免缺少 `xf86-input-neko` 驱动导致服务崩溃；如需可交互控制，需要补齐 Xorg + `xf86-input-neko` 驱动配置。
 - 当前脚本为 **单沙箱验证用途**，后续可转为模板化或自动化启动。
 

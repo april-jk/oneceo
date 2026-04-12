@@ -363,7 +363,15 @@ export class AltusManagedToolRuntime {
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
       let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
       if (ensureDebug) {
-        debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId);
+        debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
+          requireTurn: true,
+          strictIceCheck: true,
+        });
+        if (!debugInfo.ready || debugInfo.status === 'failed') {
+          const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';
+          const message = asText(debugInfo.message) || 'debug_not_ready';
+          throw new Error(`debug_open_page_debug_not_ready:${reason}:${message}`);
+        }
       }
 
       const encodedUrl = encodeURIComponent(targetUrl);

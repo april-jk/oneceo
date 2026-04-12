@@ -2,6 +2,7 @@ import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
 import { ensureNekoDebug } from './sandbox-debug-service';
+import { cloudflareTurnService } from './cloudflare-turn-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
@@ -86,6 +87,7 @@ export class AltusManagedToolRuntime {
   constructor(
     private readonly input: {
       sessionId: string;
+      userId: string;
       sandboxId: string;
       workspaceRoot: string;
       activeSkills: ManagedSkillContext[];
@@ -100,8 +102,10 @@ export class AltusManagedToolRuntime {
     },
     private readonly debugDeps: {
       ensureNekoDebug: typeof ensureNekoDebug;
+      issueIceServersForUser: typeof cloudflareTurnService.issueIceServersForUser;
     } = {
       ensureNekoDebug,
+      issueIceServersForUser: (userId: string) => cloudflareTurnService.issueIceServersForUser(userId),
     }
   ) {}
 
@@ -363,9 +367,20 @@ export class AltusManagedToolRuntime {
       const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
       let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
       if (ensureDebug) {
+        let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+        try {
+          dynamicIceServers = await this.debugDeps.issueIceServersForUser(this.input.userId);
+        } catch (error) {
+          console.warn('[MANAGED_DEBUG_TURN_ICE_GENERATE_FAILED]', {
+            sessionId: this.input.sessionId,
+            userId: this.input.userId,
+            error: error instanceof Error ? error.message : String(error || ''),
+          });
+        }
         debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
           requireTurn: true,
           strictIceCheck: true,
+          ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
         });
         if (!debugInfo.ready || debugInfo.status === 'failed') {
           const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';

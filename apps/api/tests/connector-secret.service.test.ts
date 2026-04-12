@@ -62,6 +62,15 @@ test('connector secret service keeps notion and slack keys isolated', () => {
   assert.equal(decrypted?.accessToken, 'notion-token');
 });
 
+test('connector secret service falls back to generic connector key', () => {
+  delete process.env.NOTION_CONNECTOR_SECRET_KEY;
+  const encrypted = connectorSecretService.encrypt({ accessToken: 'generic-token' }, 'notion');
+  assert.ok(encrypted);
+
+  const decrypted = connectorSecretService.decryptJson<{ accessToken: string }>(encrypted, 'notion');
+  assert.equal(decrypted?.accessToken, 'generic-token');
+});
+
 test('connector secret service handles empty payloads and summarizes secrets', () => {
   assert.equal(connectorSecretService.encrypt(null, 'slack'), null);
   assert.equal(connectorSecretService.decryptToString(null, 'slack'), null);

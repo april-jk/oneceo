@@ -65,7 +65,6 @@ import {
   waitWorkspaceRawFileReady,
   insertTaskCreationDatabaseRow,
   startTaskCreationRuntime,
-  startTaskCreationDebug,
   redeployTaskCreationSession,
   rollbackTaskCreationSessionDeployment,
   updateTaskCreationDatabaseRow,
@@ -109,6 +108,7 @@ interface OpencodePreviewPanelProps {
   runtimeReady?: boolean;
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
+  onRequestStartDebugByMessage?: () => void;
   className?: string;
   selectedWorkspacePath?: string | null;
 }
@@ -125,6 +125,23 @@ type DirectoryLoadState = {
   total: number;
 };
 
+const DEBUG_POLL_STARTING_MS = 2000;
+const DEBUG_POLL_READY_MS = 6000;
+const DEBUG_POLL_RETRY_MS = 3000;
+
+function isRetryableDebugError(message: string): boolean {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("failed to fetch") ||
+    text.includes("network") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("aborterror") ||
+    text.includes("request timeout") ||
+    text.includes("超时")
+  );
+}
+
 export default function OpencodePreviewPanel({
   messages,
   sessionId,
@@ -139,6 +156,7 @@ export default function OpencodePreviewPanel({
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
+  onRequestStartDebugByMessage,
   className,
   selectedWorkspacePath,
 }: OpencodePreviewPanelProps) {
@@ -178,7 +196,6 @@ export default function OpencodePreviewPanel({
   >(null);
   const refreshTimerRef = useRef<number | null>(null);
   const fileRequestSequenceRef = useRef(0);
-  const debugBootRef = useRef(false);
   const debugRuntimeBootRef = useRef(false);
   const debugPollRef = useRef<number | null>(null);
   const deploymentPollRef = useRef<number | null>(null);
@@ -552,7 +569,6 @@ export default function OpencodePreviewPanel({
   ]);
 
   useEffect(() => {
-    debugBootRef.current = false;
     debugRuntimeBootRef.current = false;
     if (debugPollRef.current) {
       window.clearTimeout(debugPollRef.current);
@@ -578,7 +594,6 @@ export default function OpencodePreviewPanel({
 
   useEffect(() => {
     if (runtimeReady === false) {
-      debugBootRef.current = false;
       debugRuntimeBootRef.current = false;
     }
   }, [runtimeReady]);
@@ -606,32 +621,30 @@ export default function OpencodePreviewPanel({
       return;
     }
     let cancelled = false;
-    const loadDebug = async () => {
-      setDebugLoading(true);
-      setDebugError(null);
-      try {
-        let info = await getTaskCreationDebugInfo(sessionId);
-        if ((!info?.ready || !info.url) && !debugBootRef.current) {
-          debugBootRef.current = true;
-          setDebugStarting(true);
-          try {
-            await startTaskCreationDebug(sessionId);
-          } finally {
-            setDebugStarting(false);
-          }
-          info = await getTaskCreationDebugInfo(sessionId);
+    const scheduleDebugPoll = (silent = true, delayMs = DEBUG_POLL_STARTING_MS) => {
+      if (debugPollRef.current) {
+        window.clearTimeout(debugPollRef.current);
+      }
+      debugPollRef.current = window.setTimeout(() => {
+        if (!cancelled) {
+          void loadDebug(silent);
         }
+      }, delayMs);
+    };
+    const loadDebug = async (silent = false) => {
+      if (!silent) {
+        setDebugLoading(true);
+      }
+      try {
+        const info = await getTaskCreationDebugInfo(sessionId);
         if (!cancelled) {
           setDebugInfo(info);
-          if (!info?.ready && info?.status === "starting") {
-            if (debugPollRef.current) {
-              window.clearTimeout(debugPollRef.current);
-            }
-            debugPollRef.current = window.setTimeout(() => {
-              if (!cancelled) {
-                void loadDebug();
-              }
-            }, 2000);
+          setDebugError(null);
+          if (!info?.ready || info?.status === "starting") {
+            scheduleDebugPoll(true, DEBUG_POLL_STARTING_MS);
+          } else {
+            // Keep a low-frequency heartbeat to recover from transient iframe/debug service issues.
+            scheduleDebugPoll(true, DEBUG_POLL_READY_MS);
           }
         }
       } catch (error) {
@@ -639,28 +652,24 @@ export default function OpencodePreviewPanel({
         const message =
           error instanceof Error ? error.message : "加载调试信息失败";
         setDebugError(message);
-        setDebugInfo(null);
-        if (
-          message.toLowerCase().includes("failed to fetch") ||
-          message.toLowerCase().includes("network")
-        ) {
-          if (debugPollRef.current) {
-            window.clearTimeout(debugPollRef.current);
-          }
-          debugPollRef.current = window.setTimeout(() => {
-            if (!cancelled) {
-              void loadDebug();
-            }
-          }, 3000);
+        // Keep latest ready info in UI to avoid a blank panel caused by transient timeout.
+        if (isRetryableDebugError(message)) {
+          scheduleDebugPoll(true, DEBUG_POLL_RETRY_MS);
         }
       } finally {
         if (cancelled) return;
-        setDebugLoading(false);
+        if (!silent) {
+          setDebugLoading(false);
+        }
       }
     };
-    void loadDebug();
+    void loadDebug(false);
     return () => {
       cancelled = true;
+      if (debugPollRef.current) {
+        window.clearTimeout(debugPollRef.current);
+        debugPollRef.current = null;
+      }
     };
   }, [open, currentTab, sessionId, runtimeReady]);
 
@@ -1016,28 +1025,24 @@ export default function OpencodePreviewPanel({
             error={debugError}
             runtimeReady={runtimeReady !== false}
             starting={debugStarting}
+            onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
-              if (!sessionId) return;
               if (runtimeReady === false) {
                 if (onEnsureRuntime) {
-                  await onEnsureRuntime();
-                } else {
-                  return;
+                  setDebugStarting(true);
+                  try {
+                    await onEnsureRuntime();
+                  } finally {
+                    setDebugStarting(false);
+                  }
                 }
+                return;
               }
-              setDebugStarting(true);
-              setDebugError(null);
-              try {
-                await startTaskCreationDebug(sessionId);
-                const info = await getTaskCreationDebugInfo(sessionId);
-                setDebugInfo(info);
-              } catch (error) {
-                const message =
-                  error instanceof Error ? error.message : "启动调试失败";
-                setDebugError(message);
-              } finally {
-                setDebugStarting(false);
+              if (!onRequestStartDebugByMessage) {
+                setDebugError("缺少启动调试消息入口");
+                return;
               }
+              onRequestStartDebugByMessage();
             }}
           />
         </div>
@@ -4737,6 +4742,7 @@ function DebugPreview({
   runtimeReady,
   starting,
   onStart,
+  onRequestStartDebugByMessage,
 }: {
   info: TaskCreationDebugInfo | null;
   loading: boolean;
@@ -4744,7 +4750,16 @@ function DebugPreview({
   runtimeReady: boolean;
   starting: boolean;
   onStart: () => void;
+  onRequestStartDebugByMessage?: () => void;
 }) {
+  const requestStartDebug = () => {
+    if (onRequestStartDebugByMessage) {
+      onRequestStartDebugByMessage();
+      return;
+    }
+    onStart();
+  };
+
   const debugUrl = useMemo(() => {
     if (!info?.url) return "";
     try {
@@ -4784,20 +4799,31 @@ function DebugPreview({
       return info.url;
     }
   }, [info?.url]);
+  const isFailed = info?.status === "failed";
 
   if (!runtimeReady) {
     return (
-      <EmptyState
-        text={
-          starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"
-        }
-      />
+      <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
+        <span>
+          {starting ? "正在启动执行环境..." : "执行环境未启动，无法加载调试画面"}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            requestStartDebug();
+          }}
+          disabled={starting}
+        >
+          启动调试
+        </Button>
+      </div>
     );
   }
   if (loading) {
     return <EmptyState text="正在加载调试画面..." />;
   }
-  if (error) {
+  if (error && (!info?.ready || !info?.url)) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-2">
         <span>{error}</span>
@@ -4805,7 +4831,7 @@ function DebugPreview({
           variant="outline"
           size="sm"
           onClick={() => {
-            onStart();
+            requestStartDebug();
           }}
           disabled={starting}
         >
@@ -4817,16 +4843,16 @@ function DebugPreview({
   if (!info?.ready || !info.url) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-xs text-muted-foreground gap-3">
-        <span>{info?.message || "调试服务未就绪"}</span>
+        <span>{info?.message || (isFailed ? "远程调试连接失败" : "调试服务未就绪")}</span>
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
-            onStart();
+            requestStartDebug();
           }}
           disabled={starting}
         >
-          {starting ? "启动中..." : "启用远程调试"}
+          {starting ? "启动中..." : isFailed ? "重新触发远程调试" : "启用远程调试"}
         </Button>
       </div>
     );
@@ -4843,7 +4869,7 @@ function DebugPreview({
             size="sm"
             className="h-7 px-2 text-[11px]"
             onClick={() => {
-              onStart();
+              requestStartDebug();
             }}
             disabled={starting}
           >

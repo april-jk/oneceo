@@ -29,7 +29,7 @@ import { sandboxAgentProvisionService } from '../services/sandbox-agent-provisio
 import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
-import { ensureNekoDebug } from '../services/sandbox-debug-service';
+import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-service';
 import {
   getRailwayDeploymentPanel,
   triggerRailwayRedeploy,
@@ -4844,7 +4844,30 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
     const nekoMeta = pickRecord(debugMeta.neko);
     const baseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
     const clientUrl = asText(nekoMeta.clientUrl);
-    const status = asText(nekoMeta.status) || environment.status;
+    let status = asText(nekoMeta.status) || environment.status;
+    let reasonCode = asText(nekoMeta.reasonCode) || undefined;
+    let message = baseUrl ? asText(nekoMeta.message) || undefined : '调试服务未配置或未启动';
+    if (status === 'running' || status === 'ready') {
+      const health = await probeNekoIceHealth(orchestratorSessionId);
+      if (health.failed) {
+        status = 'failed';
+        reasonCode = 'ice_failed';
+        message = '远程调试 ICE 连接失败，请检查 TURN 配置后重试';
+        await sandboxExecutionEnvironmentDAO.updateMetadata(orchestratorSessionId, {
+          ...metadata,
+          debug: {
+            ...(metadata as any)?.debug,
+            neko: {
+              ...nekoMeta,
+              status,
+              reasonCode,
+              message,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
+    }
     const ready = Boolean(baseUrl) && (status === 'running' || status === 'ready') && environment.status === 'ready';
 
     return res.json({
@@ -4855,7 +4878,8 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
         status: status || environment.status,
         updatedAt: toIso(environment.updatedAt as any),
         sandboxId: orchestratorSessionId,
-        message: baseUrl ? asText(nekoMeta.message) || undefined : '调试服务未配置或未启动',
+        reasonCode,
+        message,
       },
     });
   } catch (error: any) {
@@ -4924,13 +4948,17 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
       });
     }
 
-    const result = await ensureNekoDebug(orchestratorSessionId);
+    const result = await ensureNekoDebug(orchestratorSessionId, {
+      requireTurn: true,
+      strictIceCheck: true,
+    });
     return res.json({
       success: true,
       data: {
         ready: result.ready,
         url: result.url,
         status: result.status,
+        reasonCode: result.reasonCode,
         updatedAt: result.updatedAt,
         sandboxId: result.sandboxId,
         message: result.message,

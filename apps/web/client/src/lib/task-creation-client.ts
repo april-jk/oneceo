@@ -180,6 +180,7 @@ export type TaskCreationDebugInfo = {
   ready: boolean;
   url?: string;
   status?: string;
+  reasonCode?: string;
   updatedAt?: string;
   sandboxId?: string;
   message?: string;

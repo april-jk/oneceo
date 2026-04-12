@@ -373,3 +373,51 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
   assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
   assert.equal(ensureDebugMock.mock.callCount(), 1);
 });
+
+test('debug_open_page fails fast when debug runtime reports failed status', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: false,
+        status: 'failed',
+        reasonCode: 'ice_failed',
+        message: '远程调试 ICE 连接失败，请检查 TURN 配置后重试',
+        sandboxId: 'sandbox-1',
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:3000/folder1/',
+    }),
+    /debug_open_page_debug_not_ready:ice_failed/
+  );
+
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 0);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
+});

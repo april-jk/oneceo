@@ -25,6 +25,7 @@ test('load_skill_resource only allows active selected platform skills and return
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [
@@ -65,6 +66,7 @@ test('load_skill_resource only allows active selected platform skills and return
 test('load_skill_resource rejects inactive or non-selected skills', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -100,6 +102,7 @@ test('load_connector_guide returns the active connector guide and unlocks later 
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -152,6 +155,7 @@ test('mcp tool call is blocked until active connector guide is loaded', async ()
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -198,6 +202,7 @@ test('vercel mcp tool call is blocked until active vercel connector guide is loa
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-vercel',
+    userId: 'user-1',
     sandboxId: 'sandbox-vercel',
     workspaceRoot: '/workspace/session-vercel',
     activeSkills: [],
@@ -246,7 +251,8 @@ test('write_file marks sandbox dirty so archive job can persist latest workspace
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
-      sandboxId: 'sandbox-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
       workspaceRoot: '/workspace/session-1',
       activeSkills: [],
       mcpProviders: [],
@@ -280,7 +286,8 @@ test('shell_execute marks sandbox dirty after command execution', async () => {
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
-      sandboxId: 'sandbox-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
       workspaceRoot: '/workspace/session-1',
       activeSkills: [],
       mcpProviders: [],
@@ -304,6 +311,7 @@ test('shell_execute marks sandbox dirty after command execution', async () => {
 test('debug_open_page rejects non-http protocols', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -344,7 +352,8 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
-      sandboxId: 'sandbox-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
       workspaceRoot: '/workspace/session-1',
       activeSkills: [],
       mcpProviders: [],
@@ -355,6 +364,7 @@ test('debug_open_page ensures debug and opens URL via CDP', async () => {
     },
     {
       ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
     },
   );
 
@@ -396,7 +406,8 @@ test('debug_open_page fails fast when debug runtime reports failed status', asyn
   const runtime = new AltusManagedToolRuntime(
     {
       sessionId: 'session-1',
-      sandboxId: 'sandbox-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
       workspaceRoot: '/workspace/session-1',
       activeSkills: [],
       mcpProviders: [],
@@ -407,6 +418,7 @@ test('debug_open_page fails fast when debug runtime reports failed status', asyn
     },
     {
       ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
     },
   );
 

@@ -102,3 +102,8 @@
    - 状态：部分完成（2026-04-12）
    - 已完成：API/Web 类型检查通过；新增/更新单测通过；无 TURN 场景实测已收敛为明确失败态。
    - 待完成：有 TURN 凭据的真机“可见画面”验收仍需你提供可用 TURN 配置后复测。
+
+6. TURN 用户级动态签发链路（T9）
+   - 状态：部分完成（2026-04-12）
+   - 已完成：后端已支持“按用户创建永久 TURN key + 按次签发临时 ICE 凭据”；`/debug/start` 与 `debug_open_page` 已接入。
+   - 待完成：当前 Cloudflare 管理 token 实测返回 `Authorization Failure`，需修正 token 的 Account 范围/Calls 权限后完成实机验收。

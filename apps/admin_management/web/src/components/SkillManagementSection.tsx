@@ -3,7 +3,6 @@ import { api } from '../api';
 import type {
   SkillDetail,
   SkillImportPreview,
-  SkillRenderedRevision,
   SkillRevision,
   SkillRevisionResources,
   SkillSummary,
@@ -32,6 +31,7 @@ type ImportedFolderPayload = {
 };
 
 type ImportFileStatus = 'pending' | 'success' | 'failed';
+type SkillViewFilter = 'all' | 'active' | 'archived' | 'published' | 'unpublished';
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
@@ -137,13 +137,13 @@ export function SkillManagementSection({ onError }: Props) {
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
-  const [renderedRevision, setRenderedRevision] = useState<SkillRenderedRevision | null>(null);
   const [revisionResources, setRevisionResources] = useState<SkillRevisionResources | null>(null);
   const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [validationSessionId, setValidationSessionId] = useState('');
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'rendered' | 'validation'>('editor');
+  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>('editor');
+  const [skillView, setSkillView] = useState<SkillViewFilter>('all');
   const [filters, setFilters] = useState({
     query: '',
     status: 'all',
@@ -191,7 +191,6 @@ export function SkillManagementSection({ onError }: Props) {
       setDetail(null);
       setRevisions([]);
       setSelectedRevisionId(null);
-      setRenderedRevision(null);
       setRevisionResources(null);
       setSelectedResourcePath(null);
       setSelectedDocumentIndex(0);
@@ -218,12 +217,6 @@ export function SkillManagementSection({ onError }: Props) {
       setSelectedRevisionId(nextRevisionId);
       setValidationResult(null);
       onError(null);
-      if (nextRevisionId) {
-        const rendered = await api.getRenderedSkillRevision(skillId, nextRevisionId);
-        setRenderedRevision(rendered);
-      } else {
-        setRenderedRevision(null);
-      }
     },
     [onError]
   );
@@ -240,16 +233,6 @@ export function SkillManagementSection({ onError }: Props) {
       onError(error instanceof Error ? error.message : '技能详情加载失败');
     });
   }, [selectedSkillId, loadSkillDetail, onError]);
-
-  useEffect(() => {
-    if (!selectedSkillId || !selectedRevisionId) return;
-    void api
-      .getRenderedSkillRevision(selectedSkillId, selectedRevisionId)
-      .then(setRenderedRevision)
-      .catch((error) => {
-        onError(error instanceof Error ? error.message : '技能渲染内容加载失败');
-      });
-  }, [selectedRevisionId, selectedSkillId, onError]);
 
   useEffect(() => {
     if (!selectedSkillId || !selectedRevisionId || !detailDialogOpen || isCreating) {
@@ -341,7 +324,6 @@ export function SkillManagementSection({ onError }: Props) {
     setDetail(null);
     setRevisions([]);
     setSelectedRevisionId(null);
-    setRenderedRevision(null);
     setRevisionResources(null);
     setSelectedResourcePath(null);
     setValidationResult(null);
@@ -457,9 +439,29 @@ export function SkillManagementSection({ onError }: Props) {
 
   const selectedDocument = editor.documents[selectedDocumentIndex] || null;
 
-  const selectedRevisionLabel = selectedRevisionId
-    ? `版本 ${revisions.find((item) => item.id === selectedRevisionId)?.revisionNumber || '-'}`
-    : '未选择版本';
+  const skillOverview = useMemo(() => ({
+    total: skills.length,
+    active: skills.filter((item) => item.status === 'active').length,
+    archived: skills.filter((item) => item.status === 'archived').length,
+    published: skills.filter((item) => Boolean(item.publishedRevisionNumber)).length,
+    unpublished: skills.filter((item) => !item.publishedRevisionNumber).length,
+  }), [skills]);
+
+  const skillViewOptions: Array<{ key: SkillViewFilter; label: string; count: number }> = [
+    { key: 'all', label: '全部', count: skillOverview.total },
+    { key: 'active', label: '启用', count: skillOverview.active },
+    { key: 'archived', label: '归档', count: skillOverview.archived },
+    { key: 'published', label: '已发布', count: skillOverview.published },
+    { key: 'unpublished', label: '待发布', count: skillOverview.unpublished },
+  ];
+
+  const visibleSkills = useMemo(() => {
+    if (skillView === 'active') return skills.filter((item) => item.status === 'active');
+    if (skillView === 'archived') return skills.filter((item) => item.status === 'archived');
+    if (skillView === 'published') return skills.filter((item) => Boolean(item.publishedRevisionNumber));
+    if (skillView === 'unpublished') return skills.filter((item) => !item.publishedRevisionNumber);
+    return skills;
+  }, [skillView, skills]);
 
   const updateDocument = (
     index: number,
@@ -505,7 +507,7 @@ export function SkillManagementSection({ onError }: Props) {
 
   return (
     <main className="content-stack">
-      <section className="panel fade-in">
+      <section className="panel fade-in skill-management-panel">
         <div className="section-heading">
           <div>
             <p className="eyebrow">技能总览</p>
@@ -553,7 +555,6 @@ export function SkillManagementSection({ onError }: Props) {
                     setDetail(null);
                     setRevisions([]);
                     setSelectedRevisionId(null);
-                    setRenderedRevision(null);
                     setEditor({
                       slug: preview.slug,
                       name: preview.name,
@@ -628,6 +629,41 @@ export function SkillManagementSection({ onError }: Props) {
           </button>
         </div>
 
+        <div className="skill-overview-strip">
+          <div>
+            <span>技能总数</span>
+            <strong>{skillOverview.total}</strong>
+          </div>
+          <div>
+            <span>已启用</span>
+            <strong>{skillOverview.active}</strong>
+          </div>
+          <div>
+            <span>已发布</span>
+            <strong>{skillOverview.published}</strong>
+          </div>
+          <div>
+            <span>待发布</span>
+            <strong>{skillOverview.unpublished}</strong>
+          </div>
+        </div>
+
+        <div className="skill-secondary-menu" role="tablist" aria-label="技能二级筛选">
+          {skillViewOptions.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              role="tab"
+              aria-selected={skillView === item.key}
+              className={skillView === item.key ? 'active' : ''}
+              onClick={() => setSkillView(item.key)}
+            >
+              <span>{item.label}</span>
+              <strong>{item.count}</strong>
+            </button>
+          ))}
+        </div>
+
         <div className="skill-list">
           <table className="skill-table">
             <thead>
@@ -639,14 +675,14 @@ export function SkillManagementSection({ onError }: Props) {
               </tr>
             </thead>
             <tbody>
-              {skills.length === 0 ? (
+              {visibleSkills.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="table-empty">
-                    暂无技能记录
+                    当前筛选下暂无技能记录
                   </td>
                 </tr>
               ) : (
-                skills.map((item) => (
+                visibleSkills.map((item) => (
                   <tr
                     key={item.id}
                     className={selectedSkillId === item.id && detailDialogOpen ? 'selected' : ''}
@@ -718,27 +754,18 @@ export function SkillManagementSection({ onError }: Props) {
               </button>
               <button
                 type="button"
-                className={`inspector-tab-card ${detailTab === 'rendered' ? 'active' : ''}`}
-                onClick={() => setDetailTab('rendered')}
-                disabled={isCreating}
-              >
-                <span className="inspector-tab-card-key mono">03</span>
-                <span className="inspector-tab-card-label">渲染预览</span>
-              </button>
-              <button
-                type="button"
                 className={`inspector-tab-card ${detailTab === 'validation' ? 'active' : ''}`}
                 onClick={() => setDetailTab('validation')}
                 disabled={isCreating}
               >
-                <span className="inspector-tab-card-key mono">04</span>
+                <span className="inspector-tab-card-key mono">03</span>
                 <span className="inspector-tab-card-label">沙箱校验</span>
               </button>
             </div>
             <div className="modal-body">
               {detailTab === 'editor' ? (
-                <div className="detail-grid modal-grid">
-                  <article className="sub-panel">
+                <div className="skill-editor-layout">
+                  <article className="sub-panel skill-editor-main-panel">
                     <div className="editor-header">
                       <div>
                         <h3>{isCreating ? '基本信息' : '版本编辑器'}</h3>
@@ -747,6 +774,26 @@ export function SkillManagementSection({ onError }: Props) {
                         </p>
                       </div>
                     </div>
+                    {!isCreating && detail ? (
+                      <div className="skill-editor-context-strip">
+                        <div>
+                          <span>发布版本</span>
+                          <strong>{detail.publishedRevisionId ? `版本 ${revisions.find((item) => item.id === detail.publishedRevisionId)?.revisionNumber || '-'}` : '-'}</strong>
+                        </div>
+                        <div>
+                          <span>当前编辑</span>
+                          <strong>{selectedRevisionId ? `版本 ${revisions.find((item) => item.id === selectedRevisionId)?.revisionNumber || '-'}` : '-'}</strong>
+                        </div>
+                        <div>
+                          <span>资源数量</span>
+                          <strong>{detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</strong>
+                        </div>
+                        <div>
+                          <span>补充文档</span>
+                          <strong>{editor.documents.length}</strong>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="skill-form-grid">
                       <label className="form-field">
                         <span>唯一标识（Slug）</span>
@@ -934,41 +981,49 @@ export function SkillManagementSection({ onError }: Props) {
                       )}
                     </div>
                   </article>
-                  <article className="sub-panel">
-                    <p className="kpi-title">版本历史</p>
-                    <div className="revision-list">
+                </div>
+              ) : null}
+
+              {detailTab === 'resources' ? (
+                <div className="skill-resource-layout">
+                  <article className="sub-panel skill-version-history-panel">
+                    <div className="section-heading">
+                      <div>
+                        <p className="eyebrow">版本历史</p>
+                        <h2>选择版本</h2>
+                        <p className="cell-subtle">切换版本后，下方资源明细同步展示对应资源。</p>
+                      </div>
+                    </div>
+                    <div className="revision-list skill-version-list">
                       {revisions.map((item) => (
                         <button
                           key={item.id}
                           type="button"
-                          className={`revision-item ${selectedRevisionId === item.id ? 'active' : ''}`}
+                          className={`revision-item skill-version-item ${selectedRevisionId === item.id ? 'active' : ''}`}
                           onClick={() => setSelectedRevisionId(item.id)}
                         >
-                          <span>版本 {item.revisionNumber}</span>
-                          <span>{item.isPublished ? '已发布' : '草稿版本'}</span>
+                          <strong>版本 {item.revisionNumber}</strong>
+                          <span>{item.isPublished ? '已发布' : '历史版本'}</span>
                           <span>{formatDateTime(item.createdAt)}</span>
                         </button>
                       ))}
                       {!revisions.length ? <div className="table-empty">暂无版本记录</div> : null}
                     </div>
                     {!isCreating && detail ? (
-                      <div className="validation-result">
+                      <div className="validation-result skill-resource-summary-box">
                         <div>当前发布版本 ID: {detail.publishedRevisionId || '-'}</div>
-                        <div>资源数量: {detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</div>
-                        <div>引用路径数: {detail.resourceSummary?.paths?.length ?? 0}</div>
+                        <div>资源数量: {revisionResources?.resourceSummary.totalCount ?? detail.resourceSummary?.totalCount ?? detail.resources?.length ?? 0}</div>
+                        <div>参考文档: {revisionResources?.resourceSummary.referenceCount ?? detail.resourceSummary?.referenceCount ?? 0}</div>
+                        <div>模板片段: {revisionResources?.resourceSummary.templateCount ?? detail.resourceSummary?.templateCount ?? 0}</div>
                       </div>
                     ) : null}
                   </article>
-                </div>
-              ) : null}
-
-              {detailTab === 'resources' ? (
-                <div className="detail-grid modal-grid">
-                  <article className="sub-panel">
+                  <article className="sub-panel skill-resource-list-panel">
                     <div className="section-heading">
                       <div>
                         <p className="eyebrow">资源工作区</p>
-                        <h2>当前版本资源</h2>
+                        <h2>{revisionResources ? `版本 ${revisionResources.revision.revisionNumber} 资源` : '当前版本资源'}</h2>
+                        <p className="cell-subtle">先选版本，再选资源；右侧查看路径、存储与正文。</p>
                       </div>
                     </div>
                     <div className="revision-list">
@@ -989,7 +1044,7 @@ export function SkillManagementSection({ onError }: Props) {
                       ) : null}
                     </div>
                   </article>
-                  <article className="sub-panel">
+                  <article className="sub-panel skill-resource-detail-panel">
                     {(() => {
                       const resource =
                         revisionResources?.resources.find((item) => item.resourcePath === selectedResourcePath) || null;
@@ -1019,29 +1074,6 @@ export function SkillManagementSection({ onError }: Props) {
                       );
                     })()}
                   </article>
-                </div>
-              ) : null}
-
-              {detailTab === 'rendered' ? (
-                <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">当前版本</span>
-                      <strong>{renderedRevision ? `版本 ${renderedRevision.revisionNumber}` : '-'}</strong>
-                      <span className="session-meta">{selectedRevisionLabel}</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">校验签名</span>
-                      <strong>{renderedRevision?.signature?.slice(0, 12) || '-'}</strong>
-                      <span className="session-meta">当前技能 Markdown 的渲染结果</span>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">资源数</span>
-                      <strong>{revisionResources?.resourceSummary.totalCount ?? 0}</strong>
-                      <span className="session-meta">当前版本下的数据库与存储桶资源总数</span>
-                    </article>
-                  </section>
-                  <pre className="code-block">{renderedRevision?.renderedMarkdown || '选择版本后显示渲染结果'}</pre>
                 </div>
               ) : null}
 

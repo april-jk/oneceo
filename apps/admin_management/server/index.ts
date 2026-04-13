@@ -8,6 +8,7 @@ import { kvmOrchestratorConnector } from './connectors/kvm-orchestrator-connecto
 import { oneceoApiConnector } from './connectors/oneceo-api-connector';
 import { createAgentManagementRoutes } from './routes/agent-management-routes';
 import { createAdminAuthRoutes } from './routes/admin-auth-routes';
+import { createAdminThemeRoutes } from './routes/admin-theme-routes';
 import { createAuditRoutes } from './routes/audit-routes';
 import { createConversationRoutes } from './routes/conversation-routes';
 import { createConnectorGuideRoutes } from './routes/connector-guide-routes';
@@ -18,6 +19,7 @@ import { createSandboxManagementRoutes } from './routes/sandbox-management-route
 import { createSkillManagementRoutes } from './routes/skill-management-routes';
 import { createOsacReleaseRoutes } from './routes/osac-release-routes';
 import { AgentManagementService } from './services/agent-management-service';
+import { AdminThemeService } from './services/admin-theme-service';
 import { AuditService } from './services/audit-service';
 import { ConversationManagementService } from './services/conversation-management-service';
 import { ConnectorGuideManagementService } from './services/connector-guide-management-service';
@@ -43,6 +45,7 @@ const jsonBodyLimitMb = Number.isFinite(jsonBodyLimitMbRaw)
 const jsonBodyLimit = `${jsonBodyLimitMb}mb`;
 
 const auditService = new AuditService();
+const adminThemeService = new AdminThemeService();
 const kvmService = new KvmService(kvmOrchestratorConnector, auditService);
 const dashboardService = new DashboardService(kvmOrchestratorConnector, auditService);
 const hostRuntimeService = new HostRuntimeService(kvmOrchestratorConnector);
@@ -105,6 +108,7 @@ app.use('/api/dashboard', createDashboardRoutes(dashboardService));
 app.use('/api/audit', createAuditRoutes(auditService));
 app.use('/api/conversations', createConversationRoutes(conversationService));
 app.use('/api/agent-management', createAgentManagementRoutes(agentManagementService));
+app.use('/api/theme', createAdminThemeRoutes(adminThemeService));
 app.use('/api/sandbox-management', createSandboxManagementRoutes(sandboxManagementService));
 app.use('/api/skill-management', createSkillManagementRoutes(skillManagementService));
 app.use('/api/connector-guides', createConnectorGuideRoutes(connectorGuideManagementService));

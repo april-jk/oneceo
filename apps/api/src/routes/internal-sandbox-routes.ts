@@ -24,6 +24,20 @@ router.get('/sandbox/environment-registry', async (req, res) => {
   }
 });
 
+router.get('/sandbox/by-task-session/:taskSessionId', async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: await sandboxEnvironmentService.listTaskSessionEnvironments(req.params.taskSessionId),
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取会话 Sandbox 关联失败'),
+    });
+  }
+});
+
 router.get('/sandbox/:sandboxId/archive-history', async (req, res) => {
   try {
     return res.json({

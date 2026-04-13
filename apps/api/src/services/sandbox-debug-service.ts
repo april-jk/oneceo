@@ -252,6 +252,7 @@ type EnsureDebugResult = {
 type EnsureDebugOptions = {
   requireTurn?: boolean;
   strictIceCheck?: boolean;
+  iceServers?: Array<{ urls: string[]; username?: string; credential?: string }>;
 };
 
 export async function ensureNekoDebug(
@@ -265,8 +266,9 @@ export async function ensureNekoDebug(
   const display = process.env.NEKO_DISPLAY || ':0';
   const requireTurn = options.requireTurn ?? toBoolean(process.env.NEKO_DEBUG_REQUIRE_TURN, false);
   const strictIceCheck = options.strictIceCheck ?? requireTurn;
+  const inlineIceServers = Array.isArray(options.iceServers) ? options.iceServers : null;
   const iceServersRaw = asText(process.env.NEKO_ICE_SERVERS_JSON);
-  const iceServers = parseIceServers(iceServersRaw);
+  const iceServers = inlineIceServers && inlineIceServers.length > 0 ? parseIceServers(JSON.stringify(inlineIceServers)) : parseIceServers(iceServersRaw);
   const turnConfigured = hasTurnIceServer(iceServers);
   const webrtcEprRaw = asText(process.env.NEKO_WEBRTC_EPR);
   const webrtcEprDisabled =

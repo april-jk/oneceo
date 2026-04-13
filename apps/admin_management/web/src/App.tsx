@@ -2520,7 +2520,7 @@ export default function App() {
   const [sandboxPortInput, setSandboxPortInput] = useState('3000');
   const [sandboxPortResult, setSandboxPortResult] = useState<unknown>(null);
   const [sandboxCreatePayload, setSandboxCreatePayload] = useState(
-    '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
+    '{"template":"opencode-playwright-mcp-v4-neko-lockapi-20260413","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
   const [archiveDetailRow, setArchiveDetailRow] = useState<{

@@ -10,7 +10,7 @@
 pnpm --filter api exec -- tsx ../../e2b_templates/opencode-playwright-mcp/build.ts
 ```
 
-构建成功后模板名默认：`opencode-playwright-mcp-v2-min-eko`。
+构建成功后模板名默认：`opencode-playwright-mcp-v4-neko-lockapi-20260413`。
 
 可选环境变量：
 
@@ -25,5 +25,5 @@ pnpm --filter api exec -- tsx ../../e2b_templates/opencode-playwright-mcp/build.
 在运行时设置环境变量：
 
 ```
-E2B_TEMPLATE=opencode-playwright-mcp-v2-min-eko
+E2B_TEMPLATE=opencode-playwright-mcp-v4-neko-lockapi-20260413
 ```

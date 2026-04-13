@@ -19,7 +19,7 @@ async function main() {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
   }
 
-  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-playwright-mcp-v2-min-eko';
+  const templateName = process.env.E2B_TEMPLATE_NAME || 'opencode-playwright-mcp-v4-neko-lockapi-20260413';
   const patchUrl = await resolvePatchUrl();
 
   const template = buildTemplate(patchUrl);

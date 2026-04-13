@@ -4756,6 +4756,8 @@ function DebugPreview({
   onRequestStartDebugByMessage?: () => void;
 }) {
   const [debugLocked, setDebugLocked] = useState(true);
+  const [bridgeReady, setBridgeReady] = useState(false);
+  const [bridgeWaitExpired, setBridgeWaitExpired] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   const requestStartDebug = () => {
@@ -4829,6 +4831,15 @@ function DebugPreview({
 
   useEffect(() => {
     setDebugLocked(true);
+    setBridgeReady(false);
+    setBridgeWaitExpired(false);
+    if (!debugUrl) return;
+    const timer = window.setTimeout(() => {
+      setBridgeWaitExpired(true);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [debugUrl]);
 
   useEffect(() => {
@@ -4837,12 +4848,24 @@ function DebugPreview({
         return;
       }
       const payload = event.data as
-        | { source?: string; locked?: boolean }
+        | { source?: string; locked?: boolean; version?: string }
         | null
         | undefined;
-      if (!payload || payload.source !== "oneceo-neko-lock") {
+      if (!payload) {
         return;
       }
+      if (payload.source === "oneceo-neko-ready") {
+        setBridgeReady(true);
+        setBridgeWaitExpired(false);
+        if (typeof payload.locked === "boolean") {
+          setDebugLocked(payload.locked);
+        }
+        return;
+      }
+      if (payload.source !== "oneceo-neko-lock") {
+        return;
+      }
+      setBridgeReady(true);
       if (typeof payload.locked === "boolean") {
         setDebugLocked(payload.locked);
       }
@@ -4854,6 +4877,7 @@ function DebugPreview({
   }, []);
 
   const isFailed = info?.status === "failed";
+  const lockControlEnabled = bridgeReady;
 
   if (!runtimeReady) {
     return (
@@ -4922,7 +4946,9 @@ function DebugPreview({
             variant={debugLocked ? "default" : "outline"}
             size="sm"
             className="h-7 px-2 text-[11px]"
+            disabled={!lockControlEnabled}
             onClick={() => {
+              if (!lockControlEnabled) return;
               requestNekoLockState(!debugLocked);
             }}
           >
@@ -4961,6 +4987,11 @@ function DebugPreview({
         </div>
       </div>
       <div className="flex-1 min-h-0 p-3">
+        {!lockControlEnabled && bridgeWaitExpired ? (
+          <div className="mb-2 rounded-md border border-amber-300/70 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+            当前调试页未加载锁定桥接能力，请重新启用远程调试（通常是旧模板 sandbox）。
+          </div>
+        ) : null}
         <div
           className="group relative h-full w-full rounded-xl border border-border overflow-hidden bg-black/5"
         >
@@ -4971,14 +5002,22 @@ function DebugPreview({
             className="h-full w-full"
             allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
             onLoad={() => {
-              requestNekoLockState(debugLocked);
+              if (lockControlEnabled) {
+                requestNekoLockState(debugLocked);
+              }
             }}
           />
           {debugLocked ? (
             <button
               type="button"
-              className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/10 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
+              className={cn(
+                "absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/10 opacity-0 transition-opacity duration-150",
+                lockControlEnabled
+                  ? "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100"
+                  : "pointer-events-none opacity-0",
+              )}
               onClick={() => {
+                if (!lockControlEnabled) return;
                 requestNekoLockState(false);
               }}
               aria-label="解除调试锁定提示"

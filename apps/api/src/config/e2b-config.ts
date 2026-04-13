@@ -27,8 +27,8 @@ function toNumber(value: string | undefined, fallback: number): number {
 export const e2bConfig: E2bConfig = {
   apiKey: process.env.E2B_API_KEY ? process.env.E2B_API_KEY.trim() : null,
   template:
-    (process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v4-neko-lockapi-20260413').trim() ||
-    'opencode-playwright-mcp-v4-neko-lockapi-20260413',
+    (process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v5-neko-lockbridge-20260413').trim() ||
+    'opencode-playwright-mcp-v5-neko-lockbridge-20260413',
   codexTemplate:
     (process.env.E2B_CODEX_TEMPLATE || process.env.E2B_TEMPLATE_CODEX || 'codex').trim() || 'codex',
   codexWsTemplate:

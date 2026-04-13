@@ -47,7 +47,7 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   slack: {
     intro:
-      "Slack 连接器在 sandbox 外配置，sandbox 内只使用已绑定的 workspace 凭据。优先使用 Slack OAuth；如果你已经在 Slack App 后台拿到 token，也可以直接手动配置。",
+      "Slack 连接器在 sandbox 外完成授权，sandbox 内只复用已保存的用户授权。当前默认使用 Slack User OAuth Token，执行主体就是你本人，不是 oneceo bot。",
     quickLinks: [
       {
         label: "Slack Your Apps",
@@ -57,17 +57,17 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
       {
         label: "Slack Token Types",
         href: "https://api.slack.com/concepts/token-types",
-        description: "确认应使用 bot token、user token 还是 app token",
+        description: "确认当前链路应使用 user token",
       },
     ],
     steps: [
       "进入 Your Apps，创建或选择一个 Slack App。",
-      "在 OAuth & Permissions 中配置 scopes，并安装到目标 workspace。",
-      "复制生成的 token；通常填 bot token，格式类似 xoxb-...",
+      "在 OAuth & Permissions 中配置 user scopes，并完成面向用户本人的授权。",
+      "完成 OAuth 后，平台会保存 Slack user token；如果手动填写，也应使用 user token。",
     ],
     tips: [
-      "具体填哪种 token 取决于部署里的 Slack MCP adapter，默认优先使用 Bot token。",
-      "如果能力不生效，先检查 workspace install 和 scopes 是否完整，sandbox 内不会再要求重复授权。",
+      "这条 MCP 链路使用的是用户权限边界，能看到和能操作的内容以你本人在 Slack 里的真实权限为准。",
+      "如果能力不生效，先检查 user scopes 是否完整，以及当前授权用户是否本来就有目标频道或消息的访问权限。",
     ],
   },
   notion: {

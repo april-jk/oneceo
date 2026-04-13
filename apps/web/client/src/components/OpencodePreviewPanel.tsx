@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +38,8 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Lock,
+  Unlock,
   Rocket,
   ScrollText,
   Server,
@@ -4752,6 +4755,11 @@ function DebugPreview({
   onStart: () => void;
   onRequestStartDebugByMessage?: () => void;
 }) {
+  const [debugLocked, setDebugLocked] = useState(true);
+  const [bridgeReady, setBridgeReady] = useState(false);
+  const [bridgeWaitExpired, setBridgeWaitExpired] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+
   const requestStartDebug = () => {
     if (onRequestStartDebugByMessage) {
       onRequestStartDebugByMessage();
@@ -4785,21 +4793,91 @@ function DebugPreview({
       if (!url.searchParams.get("autoconnect")) {
         url.searchParams.set("autoconnect", "1");
       }
-      if (!url.searchParams.get("autoplay")) {
-        url.searchParams.set("autoplay", "1");
+      if (!url.searchParams.get("volume")) {
+        url.searchParams.set("volume", "0");
       }
       if (!url.searchParams.get("mute")) {
         url.searchParams.set("mute", "1");
       }
-      if (!url.searchParams.get("embed")) {
-        url.searchParams.set("embed", "1");
+      if (!url.searchParams.get("mute_chat")) {
+        url.searchParams.set("mute_chat", "1");
       }
       return url.toString();
     } catch {
       return info.url;
     }
   }, [info?.url]);
+
+  const requestNekoLockState = useCallback(
+    (nextLocked: boolean) => {
+      const frame = frameRef.current;
+      const target = frame?.contentWindow;
+      try {
+        if (target) {
+          target.postMessage(
+            {
+              source: "oneceo-debug-lock:set",
+              locked: nextLocked,
+            },
+            "*",
+          );
+        }
+      } catch {
+        // ignore cross-origin postMessage failures; keep local state
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    setDebugLocked(true);
+    setBridgeReady(false);
+    setBridgeWaitExpired(false);
+    if (!debugUrl) return;
+    const timer = window.setTimeout(() => {
+      setBridgeWaitExpired(true);
+    }, 4000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [debugUrl]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (!frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) {
+        return;
+      }
+      const payload = event.data as
+        | { source?: string; locked?: boolean; version?: string }
+        | null
+        | undefined;
+      if (!payload) {
+        return;
+      }
+      if (payload.source === "oneceo-neko-ready") {
+        setBridgeReady(true);
+        setBridgeWaitExpired(false);
+        if (typeof payload.locked === "boolean") {
+          setDebugLocked(payload.locked);
+        }
+        return;
+      }
+      if (payload.source !== "oneceo-neko-lock") {
+        return;
+      }
+      setBridgeReady(true);
+      if (typeof payload.locked === "boolean") {
+        setDebugLocked(payload.locked);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+    };
+  }, []);
+
   const isFailed = info?.status === "failed";
+  const lockControlEnabled = bridgeReady;
 
   if (!runtimeReady) {
     return (
@@ -4865,6 +4943,29 @@ function DebugPreview({
         <div className="flex items-center gap-2">
           <Button
             type="button"
+            variant={debugLocked ? "default" : "outline"}
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            disabled={!lockControlEnabled}
+            onClick={() => {
+              if (!lockControlEnabled) return;
+              requestNekoLockState(!debugLocked);
+            }}
+          >
+            {debugLocked ? (
+              <>
+                <Lock className="mr-1 h-3.5 w-3.5" />
+                锁定
+              </>
+            ) : (
+              <>
+                <Unlock className="mr-1 h-3.5 w-3.5" />
+                已解锁
+              </>
+            )}
+          </Button>
+          <Button
+            type="button"
             variant="outline"
             size="sm"
             className="h-7 px-2 text-[11px]"
@@ -4886,13 +4987,49 @@ function DebugPreview({
         </div>
       </div>
       <div className="flex-1 min-h-0 p-3">
-        <div className="h-full w-full rounded-xl border border-border overflow-hidden bg-black/5">
+        {!lockControlEnabled && bridgeWaitExpired ? (
+          <div className="mb-2 rounded-md border border-amber-300/70 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+            当前调试页未加载锁定桥接能力，请重新启用远程调试（通常是旧模板 sandbox）。
+          </div>
+        ) : null}
+        <div
+          className="group relative h-full w-full rounded-xl border border-border overflow-hidden bg-black/5"
+        >
           <iframe
+            ref={frameRef}
             title="remote-debug"
             src={debugUrl}
             className="h-full w-full"
-            allow="clipboard-read; clipboard-write; fullscreen; autoplay; microphone; camera; display-capture"
+            allow="autoplay; clipboard-read; clipboard-write; fullscreen; microphone; camera; display-capture"
+            onLoad={() => {
+              if (lockControlEnabled) {
+                requestNekoLockState(debugLocked);
+              }
+            }}
           />
+          {debugLocked ? (
+            <button
+              type="button"
+              className={cn(
+                "absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/10 opacity-0 transition-opacity duration-150",
+                lockControlEnabled
+                  ? "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100"
+                  : "pointer-events-none opacity-0",
+              )}
+              onClick={() => {
+                if (!lockControlEnabled) return;
+                requestNekoLockState(false);
+              }}
+              aria-label="解除调试锁定提示"
+            >
+              <span className="flex h-24 w-24 items-center justify-center rounded-full border border-white/60 bg-black/40 text-white shadow-lg backdrop-blur-[2px]">
+                <Lock className="h-10 w-10" />
+              </span>
+              <span className="mt-3 rounded-full border border-white/30 bg-black/35 px-3 py-1 text-xs text-white/90">
+                当前为锁定状态，点击解锁
+              </span>
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

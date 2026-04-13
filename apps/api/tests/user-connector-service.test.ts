@@ -7,6 +7,7 @@ import { connectorRedisCacheService } from '../src/services/connector-redis-cach
 import { userConnectorService } from '../src/services/user-connector-service';
 
 const originalFetch = global.fetch;
+const originalConnectorSecretKey = process.env.CONNECTOR_SECRET_KEY;
 const originalVercelClientId = process.env.VERCEL_CONNECTOR_CLIENT_ID;
 const originalVercelClientSecret = process.env.VERCEL_CONNECTOR_CLIENT_SECRET;
 const originalNotionClientId = process.env.NOTION_CONNECTOR_CLIENT_ID;
@@ -16,11 +17,17 @@ const originalSlackClientId = process.env.SLACK_CONNECTOR_CLIENT_ID;
 const originalSlackClientSecret = process.env.SLACK_CONNECTOR_CLIENT_SECRET;
 const originalSlackRedirectUri = process.env.SLACK_CONNECTOR_REDIRECT_URI;
 const originalSlackUserScopes = process.env.SLACK_CONNECTOR_USER_SCOPES;
+const originalSupabaseSecretKey = process.env.SUPABASE_CONNECTOR_SECRET_KEY;
 const originalFrontendUrl = process.env.FRONTEND_URL;
 
 afterEach(() => {
   mock.reset();
   global.fetch = originalFetch;
+  if (originalConnectorSecretKey === undefined) {
+    delete process.env.CONNECTOR_SECRET_KEY;
+  } else {
+    process.env.CONNECTOR_SECRET_KEY = originalConnectorSecretKey;
+  }
   if (originalVercelClientId === undefined) {
     delete process.env.VERCEL_CONNECTOR_CLIENT_ID;
   } else {
@@ -66,6 +73,11 @@ afterEach(() => {
   } else {
     process.env.SLACK_CONNECTOR_USER_SCOPES = originalSlackUserScopes;
   }
+  if (originalSupabaseSecretKey === undefined) {
+    delete process.env.SUPABASE_CONNECTOR_SECRET_KEY;
+  } else {
+    process.env.SUPABASE_CONNECTOR_SECRET_KEY = originalSupabaseSecretKey;
+  }
   if (originalFrontendUrl === undefined) {
     delete process.env.FRONTEND_URL;
   } else {
@@ -78,6 +90,7 @@ function encodeStatePayload(payload: Record<string, unknown>): string {
 }
 
 test('saveUserConnector validates GitHub token and persists resolved profile name', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
   let capturedCreate: Record<string, unknown> | null = null;
@@ -148,6 +161,8 @@ test('saveUserConnector rejects invalid GitHub token before persisting', async (
 });
 
 test('createProfile allows Supabase token-only save with empty profile/display names', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret';
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   mock.method(userConnectorProfileDAO, 'listByUserAndConnectorKey', async () => []);
   let capturedCreate: Record<string, unknown> | null = null;
@@ -180,7 +195,8 @@ test('createProfile allows Supabase token-only save with empty profile/display n
   assert.equal(capturedCreate?.displayName, null);
   assert.equal(
     connectorSecretService.decryptJson<{ accessToken?: string }>(
-      String(capturedCreate?.secretCiphertext || '')
+      String(capturedCreate?.secretCiphertext || ''),
+      'supabase'
     )?.accessToken,
     'sbp-token-only'
   );
@@ -444,6 +460,118 @@ test('getMeSnapshot deduplicates concurrent db loads on redis miss', async () =>
   assert.equal(second.profiles.length, 1);
 });
 
+test('getMeSnapshot downgrades unreadable Supabase secret to needs_auth with reconnect message', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret-old';
+  const expiredCiphertext = connectorSecretService.encrypt({ accessToken: 'sbp-expired-token' }, 'supabase');
+  process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret-new';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(connectorRedisCacheService, 'isEnabled', () => false);
+  mock.method(userConnectorProfileDAO, 'listByUserId', async () => [
+    {
+      id: 'profile-supabase-expired',
+      userId: 'user-supabase-expired',
+      connectorKey: 'supabase',
+      profileName: 'Supabase Default',
+      authMode: 'token',
+      authStatus: 'authorized',
+      displayName: null,
+      configJson: {},
+      metadataJson: {},
+      secretCiphertext: expiredCiphertext,
+      isDefault: true,
+      lastAuthAt: new Date('2026-04-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-01T00:00:00.000Z'),
+      lastError: null,
+    },
+  ] as any);
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-supabase-expired',
+      userId: 'user-supabase-expired',
+      connectorKey: 'supabase',
+      profileName: 'Supabase Default',
+      authMode: 'token',
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: {},
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: input.lastAuthAt,
+      updatedAt: new Date('2026-04-13T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+
+  const snapshot = await userConnectorService.getMeSnapshot('user-supabase-expired');
+
+  assert.equal(snapshot.profiles.length, 1);
+  assert.equal(snapshot.profiles[0]?.authStatus, 'needs_auth');
+  assert.equal(snapshot.profiles[0]?.lastError, 'Supabase connector 授权已过期，请重新连接。');
+  assert.equal(snapshot.profiles[0]?.secretSummary, null);
+  assert.equal(capturedUpdate?.authStatus, 'needs_auth');
+  assert.equal(capturedUpdate?.secretCiphertext, null);
+});
+
+test('getProfileMaterial downgrades unreadable Supabase secret before runtime use', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
+  process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret-old';
+  const expiredCiphertext = connectorSecretService.encrypt({ accessToken: 'sbp-expired-token' }, 'supabase');
+  process.env.SUPABASE_CONNECTOR_SECRET_KEY = 'unit-test-supabase-secret-new';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-supabase-expired',
+    userId: 'user-supabase-expired',
+    connectorKey: 'supabase',
+    profileName: 'Supabase Default',
+    authMode: 'token',
+    authStatus: 'authorized',
+    displayName: null,
+    configJson: {},
+    metadataJson: {},
+    secretCiphertext: expiredCiphertext,
+    isDefault: true,
+    lastAuthAt: new Date('2026-04-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-04-01T00:00:00.000Z'),
+    lastError: null,
+  }) as any);
+  let capturedUpdate: Record<string, unknown> | null = null;
+  mock.method(userConnectorProfileDAO, 'update', async (_profileId: string, _userId: string, input: any) => {
+    capturedUpdate = input;
+    return {
+      id: 'profile-supabase-expired',
+      userId: 'user-supabase-expired',
+      connectorKey: 'supabase',
+      profileName: 'Supabase Default',
+      authMode: 'token',
+      authStatus: input.authStatus,
+      displayName: null,
+      configJson: {},
+      metadataJson: {},
+      secretCiphertext: input.secretCiphertext,
+      isDefault: true,
+      lastAuthAt: input.lastAuthAt,
+      updatedAt: new Date('2026-04-13T00:00:00.000Z'),
+      lastError: input.lastError,
+    } as any;
+  });
+
+  const material = await userConnectorService.getProfileMaterial(
+    'user-supabase-expired',
+    'profile-supabase-expired'
+  );
+
+  assert.equal(material?.authStatus, 'needs_auth');
+  assert.equal(material?.secret, null);
+  assert.equal(capturedUpdate?.authStatus, 'needs_auth');
+  assert.equal(capturedUpdate?.lastError, 'Supabase connector 授权已过期，请重新连接。');
+});
+
 test('updateProfile invalidates connectors me cache after persistence', async () => {
   mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
     id: 'profile-update-1',
@@ -636,6 +764,7 @@ test('startOAuthForProfile uses fixed redirect uri and state payload for slack',
 });
 
 test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri for slack', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
   process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
   process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
@@ -713,13 +842,15 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
   assert.equal(result.profile.displayName, 'U12345');
   assert.equal(
     connectorSecretService.decryptJson<{ accessToken?: string; tokenType?: string }>(
-      String(capturedUpdate?.secretCiphertext || '')
+      String(capturedUpdate?.secretCiphertext || ''),
+      'slack'
     )?.accessToken,
     'xoxp-user-token'
   );
   assert.equal(
     connectorSecretService.decryptJson<{ accessToken?: string; tokenType?: string }>(
-      String(capturedUpdate?.secretCiphertext || '')
+      String(capturedUpdate?.secretCiphertext || ''),
+      'slack'
     )?.tokenType,
     'user'
   );
@@ -732,6 +863,7 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
 });
 
 test('getProfileMaterial invalidates legacy Slack bot token profiles before runtime use', async () => {
+  process.env.CONNECTOR_SECRET_KEY = 'unit-test-generic-secret';
   mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
   const legacySecret = connectorSecretService.encrypt(
     {

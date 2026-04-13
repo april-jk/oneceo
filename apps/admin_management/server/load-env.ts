@@ -47,7 +47,7 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function resolveCandidates(): string[] {
+export function resolveAdminEnvCandidates(): string[] {
   return [
     path.resolve(process.cwd(), '.env'),
     path.resolve(process.cwd(), 'apps', 'admin_management', '.env'),
@@ -57,6 +57,16 @@ function resolveCandidates(): string[] {
     path.resolve(process.cwd(), '..', '..', 'apps', 'admin_management', '.env'),
     path.resolve(process.cwd(), '..', '..', 'apps', '.env'),
   ];
+}
+
+export function getLoadedAdminEnvPath(): string | undefined {
+  const cached = asText((globalThis as Record<string, unknown>)[ADMIN_ENV_LOADED_KEY]);
+  if (!cached || cached === 'NO_ENV_FILE') return undefined;
+  return cached;
+}
+
+export function resolveAdminEnvWritePath(): string {
+  return getLoadedAdminEnvPath() || resolveAdminEnvCandidates()[0];
 }
 
 function isExclusiveBusinessEnvKey(key: string): boolean {
@@ -78,7 +88,7 @@ export function loadAdminEnv(): { loadedPath?: string } {
     return { loadedPath: cached === 'NO_ENV_FILE' ? undefined : cached };
   }
 
-  for (const candidate of resolveCandidates()) {
+  for (const candidate of resolveAdminEnvCandidates()) {
     if (!fs.existsSync(candidate)) {
       continue;
     }

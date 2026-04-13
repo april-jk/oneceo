@@ -7,3 +7,4 @@
 - 验证结果：`sandbox-debug-service` 新增测试通过；`debug_open_page` 新增失败分支测试通过；真实 sandbox 调用 `ensureNekoDebug(..., {requireTurn:true})` 已返回 `failed/missing_turn`，不再伪装“连接中”。
 - 当日补充验证：`pnpm --filter api type-check` 与 `pnpm --filter web check` 均通过；当前剩余事项仅为有 TURN 凭据下的真机成功态回归。
 - 晚间补丁：修复调试面板“请求超时后卡死无显示”问题，新增自动重试轮询与保留最近可用画面策略；`pnpm --filter web check` 通过。
+- 夜间补充：完成 Cloudflare TURN 用户级动态签发代码接入（用户维度持久 key + 会话临时 ICE）；当前提供的管理 token 实测创建 key 返回 Authorization Failure，已做容错并等待权限修正后完成真机验收。

@@ -147,7 +147,10 @@ function buildProfileView(
   }
 ): UserConnectorProfileView {
   const secret = row.secretCiphertext
-    ? connectorSecretService.decryptJson<ConnectorAccountSecret>(row.secretCiphertext)
+    ? connectorSecretService.decryptJson<ConnectorAccountSecret>(
+        row.secretCiphertext,
+        row.connectorKey as ConnectorKey
+      )
     : null;
   return {
     profileId: row.id,
@@ -406,6 +409,7 @@ function buildDefaultProfileName(connectorKey: ConnectorKey, catalogName: string
 }
 
 const NOTION_STATE_VERSION = 'oneceo_notion_v1';
+const SLACK_STATE_VERSION = 'oneceo_slack_v1';
 
 function parseBase64UrlJson(value: string): Record<string, unknown> | null {
   const raw = asText(value);
@@ -451,15 +455,126 @@ function parseNotionOauthState(state: string): { requestId: string; sessionId: s
   };
 }
 
+type UserConnectorProfileRow = {
+  id: string;
+  userId?: string;
+  connectorKey: string;
+  profileName: string;
+  displayName: string | null;
+  authMode: string;
+  authStatus: string;
+  configJson: unknown;
+  secretCiphertext: string | null;
+  metadataJson?: unknown;
+  isDefault: boolean;
+  lastAuthAt: Date | null;
+  lastError: string | null;
+  updatedAt: Date;
+};
+
+const SLACK_USER_OAUTH_MODE = 'user_oauth';
+const SLACK_USER_TOKEN_TYPE = 'user';
+const SLACK_USER_TOKEN_REAUTH_MESSAGE = 'Slack connector 已切换为 User OAuth Token，请重新连接。';
+
+function mergeMetadata(
+  current: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...pickObject(current),
+    ...patch,
+  };
+}
+
+function buildSlackUserOauthMetadata(tokenPayload: Record<string, unknown>): Record<string, unknown> {
+  const authedUser = pickObject(tokenPayload.authed_user);
+  const team = pickObject(tokenPayload.team);
+  const enterprise = pickObject(tokenPayload.enterprise);
+  const metadata: Record<string, unknown> = {
+    slackAuthMode: SLACK_USER_OAUTH_MODE,
+    slackTokenType: SLACK_USER_TOKEN_TYPE,
+  };
+  const slackUserId = asText(authedUser.id);
+  const slackTeamId = asText(team.id);
+  const slackEnterpriseId =
+    asText(enterprise.id) || asText(authedUser.enterprise_id) || asText(tokenPayload.enterprise_id);
+
+  if (slackUserId) {
+    metadata.slackUserId = slackUserId;
+  }
+  if (slackTeamId) {
+    metadata.slackTeamId = slackTeamId;
+  }
+  if (slackEnterpriseId) {
+    metadata.slackEnterpriseId = slackEnterpriseId;
+  }
+  return metadata;
+}
+
+function decryptProfileSecret(row: UserConnectorProfileRow): ConnectorAccountSecret | null {
+  if (!row.secretCiphertext) return null;
+  try {
+    return connectorSecretService.decryptJson<ConnectorAccountSecret>(
+      row.secretCiphertext,
+      row.connectorKey as ConnectorKey
+    );
+  } catch {
+    return null;
+  }
+}
+
+function shouldForceSlackUserOauthReconnect(row: UserConnectorProfileRow): boolean {
+  if (row.connectorKey !== 'slack' || !row.secretCiphertext) {
+    return false;
+  }
+  const metadata = pickObject(row.metadataJson);
+  const secret = decryptProfileSecret(row);
+  return !(
+    asText(metadata.slackAuthMode) === SLACK_USER_OAUTH_MODE &&
+    asText(metadata.slackTokenType) === SLACK_USER_TOKEN_TYPE &&
+    asText(secret?.tokenType) === SLACK_USER_TOKEN_TYPE
+  );
+}
+
+function buildSlackOauthState(input: {
+  requestId: string;
+  returnToSessionId: string | null;
+}): string {
+  const payload = {
+    rid: asText(input.requestId),
+    sid: asText(input.returnToSessionId),
+    ts: Date.now(),
+    nonce: base64Url(randomBytes(12)),
+  };
+  const encoded = base64Url(Buffer.from(JSON.stringify(payload), 'utf8'));
+  return `${SLACK_STATE_VERSION}.${encoded}`;
+}
+
+function parseSlackOauthState(state: string): { requestId: string; sessionId: string | null } | null {
+  const text = asText(state);
+  if (!text) return null;
+  const [version, encodedPayload] = text.split('.', 2);
+  if (version !== SLACK_STATE_VERSION || !encodedPayload) return null;
+  const payload = parseBase64UrlJson(encodedPayload);
+  if (!payload) return null;
+  const requestId = asText(payload.rid);
+  const sessionId = asText(payload.sid) || null;
+  if (!requestId) return null;
+  return {
+    requestId,
+    sessionId,
+  };
+}
+
 function resolveOauthRedirectUri(
   connectorKey: ConnectorKey,
   provider: { redirectUri?: string },
   inputRedirectUri: string
 ): string {
-  if (connectorKey === 'notion') {
+  if (connectorKey === 'notion' || connectorKey === 'slack') {
     const fixedRedirectUri = asText(provider.redirectUri);
     if (!fixedRedirectUri) {
-      throw new Error('Notion OAuth 固定回调地址未配置');
+      throw new Error(`${connectorKey} OAuth 固定回调地址未配置`);
     }
     return fixedRedirectUri;
   }
@@ -483,11 +598,66 @@ export class UserConnectorService {
 
   async listUserProfiles(userId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const profiles = await userConnectorProfileDAO.listByUserId(userId);
+    const profiles = await this.normalizeRowsForRead(
+      userId,
+      await userConnectorProfileDAO.listByUserId(userId)
+    );
     const visibleKeys = new Set(connectorRegistry.listVisibleCatalog().map((item) => item.key));
     return profiles
       .filter((row) => visibleKeys.has(row.connectorKey as ConnectorKey))
       .map((row) => buildProfileView(row as any));
+  }
+
+  private async normalizeSlackProfileForRead(
+    userId: string,
+    row: UserConnectorProfileRow | null
+  ): Promise<{ row: UserConnectorProfileRow | null; mutated: boolean }> {
+    if (!row || !shouldForceSlackUserOauthReconnect(row)) {
+      return { row, mutated: false };
+    }
+
+    const saved = await userConnectorProfileDAO.update(row.id, userId, {
+      authMode: 'oauth',
+      authStatus: 'needs_auth',
+      secretCiphertext: null,
+      lastAuthAt: null,
+      lastError: SLACK_USER_TOKEN_REAUTH_MESSAGE,
+    } as any);
+
+    return {
+      row:
+        (saved as UserConnectorProfileRow | undefined) ||
+        ({
+          ...row,
+          authMode: 'oauth',
+          authStatus: 'needs_auth',
+          secretCiphertext: null,
+          lastAuthAt: null,
+          lastError: SLACK_USER_TOKEN_REAUTH_MESSAGE,
+        } as UserConnectorProfileRow),
+      mutated: true,
+    };
+  }
+
+  private async normalizeRowsForRead(
+    userId: string,
+    rows: UserConnectorProfileRow[]
+  ): Promise<UserConnectorProfileRow[]> {
+    if (rows.length === 0) {
+      return rows;
+    }
+
+    const normalized: UserConnectorProfileRow[] = [];
+    let mutated = false;
+    for (const row of rows) {
+      const result = await this.normalizeSlackProfileForRead(userId, row);
+      normalized.push((result.row || row) as UserConnectorProfileRow);
+      mutated = mutated || result.mutated;
+    }
+    if (mutated) {
+      await this.invalidateMeCache(userId);
+    }
+    return normalized;
   }
 
   private async loadMeSnapshotFromDb(userId: string): Promise<ConnectorMeSnapshot> {
@@ -578,17 +748,30 @@ export class UserConnectorService {
 
   async getProfile(userId: string, profileId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const row = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
-    if (!row) {
+    const normalized = await this.normalizeSlackProfileForRead(
+      userId,
+      (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
+    );
+    if (!normalized.row) {
       throw new Error('连接器 profile 不存在');
     }
-    return buildProfileView(row as any);
+    if (normalized.mutated) {
+      await this.invalidateMeCache(userId);
+    }
+    return buildProfileView(normalized.row as any);
   }
 
   async getProfileMaterial(userId: string, profileId: string): Promise<ConnectorAccountMaterial | null> {
     await connectorStorageBootstrap.ensureReady();
-    const row = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    const normalized = await this.normalizeSlackProfileForRead(
+      userId,
+      (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
+    );
+    const row = normalized.row;
     if (!row) return null;
+    if (normalized.mutated) {
+      await this.invalidateMeCache(userId);
+    }
     return {
       profileId: row.id,
       connectorKey: row.connectorKey as ConnectorKey,
@@ -599,17 +782,21 @@ export class UserConnectorService {
       configJson: pickObject(row.configJson),
       metadataJson: pickObject(row.metadataJson),
       secret: row.secretCiphertext
-        ? connectorSecretService.decryptJson<ConnectorAccountSecret>(row.secretCiphertext)
+        ? connectorSecretService.decryptJson<ConnectorAccountSecret>(
+            row.secretCiphertext,
+            row.connectorKey as ConnectorKey
+          )
         : null,
     };
   }
 
   async listUserAccounts(userId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const [catalog, profiles] = await Promise.all([
-      Promise.resolve(connectorRegistry.listCatalog()),
-      userConnectorProfileDAO.listByUserId(userId),
-    ]);
+    const catalog = connectorRegistry.listCatalog();
+    const profiles = await this.normalizeRowsForRead(
+      userId,
+      await userConnectorProfileDAO.listByUserId(userId)
+    );
     const profilesByKey = new Map<ConnectorKey, UserConnectorProfileView[]>();
     for (const row of profiles) {
       const key = row.connectorKey as ConnectorKey;
@@ -623,7 +810,10 @@ export class UserConnectorService {
   async getUserAccount(userId: string, connectorKey: ConnectorKey) {
     await connectorStorageBootstrap.ensureReady();
     const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
-    const rows = await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey);
+    const rows = await this.normalizeRowsForRead(
+      userId,
+      await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey)
+    );
     return summarizeProfiles(
       catalogItem,
       rows.map((row) => buildProfileView(row as any))
@@ -632,7 +822,10 @@ export class UserConnectorService {
 
   async getDefaultOrFirstProfile(userId: string, connectorKey: ConnectorKey) {
     await connectorStorageBootstrap.ensureReady();
-    const rows = await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey);
+    const rows = await this.normalizeRowsForRead(
+      userId,
+      await userConnectorProfileDAO.listByUserAndConnectorKey(userId, connectorKey)
+    );
     const items = rows.map((row) => buildProfileView(row as any));
     return items.find((item) => item.isDefault) || items[0] || null;
   }
@@ -655,7 +848,10 @@ export class UserConnectorService {
       ? await userConnectorProfileDAO.getByIdAndUser(existingProfileId, userId)
       : null;
     const existingSecret = existing?.secretCiphertext
-      ? connectorSecretService.decryptJson<ConnectorAccountSecret>(existing.secretCiphertext)
+      ? connectorSecretService.decryptJson<ConnectorAccountSecret>(
+          existing.secretCiphertext,
+          existing.connectorKey as ConnectorKey
+        )
       : null;
     const config = pickObject(input.config);
     const credentials = pickObject(input.credentials);
@@ -700,7 +896,7 @@ export class UserConnectorService {
         authStatus,
         displayName: resolvedDisplayName || null,
         configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
-        secretCiphertext: connectorSecretService.encrypt(secret),
+        secretCiphertext: connectorSecretService.encrypt(secret, connectorKey),
         metadataJson: metadata,
         isDefault,
         lastAuthAt: authStatus === 'authorized' ? new Date() : null,
@@ -713,7 +909,7 @@ export class UserConnectorService {
         authStatus,
         displayName: resolvedDisplayName || null,
         configJson: sanitizeConfig(connectorKey, config, resolvedDisplayName),
-        secretCiphertext: connectorSecretService.encrypt(secret),
+        secretCiphertext: connectorSecretService.encrypt(secret, connectorKey),
         metadataJson: metadata,
         lastAuthAt: authStatus === 'authorized' ? new Date() : existing.lastAuthAt || null,
         lastError: null,
@@ -792,7 +988,10 @@ export class UserConnectorService {
     let remoteGrantRevoked = true;
     let remoteGrantError: string | null = null;
     if (existing.connectorKey === 'github' && existing.secretCiphertext) {
-      const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(existing.secretCiphertext);
+      const secret = connectorSecretService.decryptJson<ConnectorAccountSecret>(
+        existing.secretCiphertext,
+        existing.connectorKey as ConnectorKey
+      );
       const accessToken = asText(secret?.accessToken);
       if (accessToken) {
         try {
@@ -851,9 +1050,16 @@ export class UserConnectorService {
 
   async startOAuthForProfile(userId: string, profileId: string, input: StartOauthInput) {
     await connectorStorageBootstrap.ensureReady();
-    const profile = await userConnectorProfileDAO.getByIdAndUser(profileId, userId);
+    const normalized = await this.normalizeSlackProfileForRead(
+      userId,
+      (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
+    );
+    const profile = normalized.row;
     if (!profile) {
       throw new Error('连接器 profile 不存在');
+    }
+    if (normalized.mutated) {
+      await this.invalidateMeCache(userId);
     }
     const connectorKey = profile.connectorKey as ConnectorKey;
     const provider = connectorRegistry.getOauthProvider(connectorKey);
@@ -865,6 +1071,8 @@ export class UserConnectorService {
     const state =
       connectorKey === 'notion'
         ? buildNotionOauthState({ requestId, returnToSessionId })
+        : connectorKey === 'slack'
+          ? buildSlackOauthState({ requestId, returnToSessionId })
         : randomUUID();
     const pkce = provider.pkceMethod === 'S256' ? createPkcePair() : null;
     const redirectUri = resolveOauthRedirectUri(connectorKey, provider, input.redirectUri);
@@ -914,6 +1122,7 @@ export class UserConnectorService {
     if (!provider) {
       throw new Error('当前连接器未配置 OAuth');
     }
+    const catalogItem = connectorRegistry.getCatalogItem(connectorKey);
     const request = await connectorAuthRequestDAO.getByState(input.state);
     if (
       !request ||
@@ -929,8 +1138,9 @@ export class UserConnectorService {
     }
 
     try {
-      if (connectorKey === 'notion') {
-        const parsedState = parseNotionOauthState(input.state);
+      if (connectorKey === 'notion' || connectorKey === 'slack') {
+        const parsedState =
+          connectorKey === 'notion' ? parseNotionOauthState(input.state) : parseSlackOauthState(input.state);
         const storedSessionId = asText(request.returnToSessionId) || null;
         if (!parsedState || parsedState.requestId !== request.requestId || parsedState.sessionId !== storedSessionId) {
           throw new Error('OAuth state 校验失败');
@@ -984,6 +1194,7 @@ export class UserConnectorService {
       if (!accessToken) {
         throw new Error('OAuth 回调未返回 access_token');
       }
+      let metadataJson = pickObject(profile.metadataJson);
       let displayName =
         asText((tokenPayload.team as Record<string, unknown> | undefined)?.name) ||
         asText(tokenPayload.workspace_name) ||
@@ -995,7 +1206,7 @@ export class UserConnectorService {
           ? buildGithubProfileName(displayName)
           : connectorKey === 'notion'
             ? buildNotionProfileName(displayName)
-            : asText(profile.profileName));
+            : buildDefaultProfileName(connectorKey, catalogItem.name));
 
       const secret: ConnectorAccountSecret = {
         accessToken,
@@ -1006,7 +1217,7 @@ export class UserConnectorService {
 
       let authStatus: ConnectorAuthStatus = 'authorized';
       let lastError: string | null = null;
-      let secretCiphertext = connectorSecretService.encrypt(secret);
+      let secretCiphertext = connectorSecretService.encrypt(secret, connectorKey);
       let lastAuthAt: Date | null = new Date();
 
       if (connectorKey === 'github') {
@@ -1041,6 +1252,19 @@ export class UserConnectorService {
         if (!asText(profile.profileName) || profile.profileName === 'Vercel Default' || profile.profileName === 'Vercel') {
           profileName = displayName || 'Vercel';
         }
+      } else if (connectorKey === 'slack') {
+        if (secret.tokenType !== SLACK_USER_TOKEN_TYPE) {
+          throw new Error('Slack OAuth 未返回 user token');
+        }
+        const slackAuthedUser = pickObject(tokenPayload.authed_user);
+        const slackTeam = pickObject(tokenPayload.team);
+        displayName =
+          asText(profile.displayName) ||
+          asText(slackTeam.name) ||
+          asText(slackAuthedUser.id) ||
+          displayName;
+        profileName = asText(profile.profileName) || buildDefaultProfileName(connectorKey, catalogItem.name);
+        metadataJson = mergeMetadata(metadataJson, buildSlackUserOauthMetadata(tokenPayload));
       }
 
       await connectorAuthRequestDAO.markCompleted(request.requestId, 'completed');
@@ -1050,6 +1274,7 @@ export class UserConnectorService {
         authStatus,
         displayName: displayName || profile.displayName || null,
         secretCiphertext,
+        metadataJson,
         lastAuthAt,
         lastError,
       } as any);

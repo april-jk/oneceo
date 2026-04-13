@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => {
   const envDir = path.resolve(import.meta.dirname, "..");
   const env = loadEnv(mode, envDir, "");
   const apiTarget = trimTrailingSlash(
-    env.WEB_BFF_API_TARGET || env.ONECEO_API_URL || "http://127.0.0.1:4000"
+    env.WEB_BFF_API_TARGET || env.ONECEO_API_URL || "http://localhost:4000"
   );
 
   return {

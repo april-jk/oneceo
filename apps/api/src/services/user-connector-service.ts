@@ -475,6 +475,7 @@ type UserConnectorProfileRow = {
 const SLACK_USER_OAUTH_MODE = 'user_oauth';
 const SLACK_USER_TOKEN_TYPE = 'user';
 const SLACK_USER_TOKEN_REAUTH_MESSAGE = 'Slack connector 已切换为 User OAuth Token，请重新连接。';
+const SUPABASE_SECRET_REAUTH_MESSAGE = 'Supabase connector 授权已过期，请重新连接。';
 
 function mergeMetadata(
   current: Record<string, unknown> | null | undefined,
@@ -534,6 +535,13 @@ function shouldForceSlackUserOauthReconnect(row: UserConnectorProfileRow): boole
     asText(metadata.slackTokenType) === SLACK_USER_TOKEN_TYPE &&
     asText(secret?.tokenType) === SLACK_USER_TOKEN_TYPE
   );
+}
+
+function shouldForceSupabaseReconnect(row: UserConnectorProfileRow): boolean {
+  if (row.connectorKey !== 'supabase' || !row.secretCiphertext) {
+    return false;
+  }
+  return !decryptProfileSecret(row);
 }
 
 function buildSlackOauthState(input: {
@@ -639,6 +647,35 @@ export class UserConnectorService {
     };
   }
 
+  private async normalizeSupabaseProfileForRead(
+    userId: string,
+    row: UserConnectorProfileRow | null
+  ): Promise<{ row: UserConnectorProfileRow | null; mutated: boolean }> {
+    if (!row || !shouldForceSupabaseReconnect(row)) {
+      return { row, mutated: false };
+    }
+
+    const saved = await userConnectorProfileDAO.update(row.id, userId, {
+      authStatus: 'needs_auth',
+      secretCiphertext: null,
+      lastAuthAt: null,
+      lastError: SUPABASE_SECRET_REAUTH_MESSAGE,
+    } as any);
+
+    return {
+      row:
+        (saved as UserConnectorProfileRow | undefined) ||
+        ({
+          ...row,
+          authStatus: 'needs_auth',
+          secretCiphertext: null,
+          lastAuthAt: null,
+          lastError: SUPABASE_SECRET_REAUTH_MESSAGE,
+        } as UserConnectorProfileRow),
+      mutated: true,
+    };
+  }
+
   private async normalizeRowsForRead(
     userId: string,
     rows: UserConnectorProfileRow[]
@@ -650,9 +687,13 @@ export class UserConnectorService {
     const normalized: UserConnectorProfileRow[] = [];
     let mutated = false;
     for (const row of rows) {
-      const result = await this.normalizeSlackProfileForRead(userId, row);
-      normalized.push((result.row || row) as UserConnectorProfileRow);
-      mutated = mutated || result.mutated;
+      const slackNormalized = await this.normalizeSlackProfileForRead(userId, row);
+      const supabaseNormalized = await this.normalizeSupabaseProfileForRead(
+        userId,
+        (slackNormalized.row || row) as UserConnectorProfileRow
+      );
+      normalized.push((supabaseNormalized.row || slackNormalized.row || row) as UserConnectorProfileRow);
+      mutated = mutated || slackNormalized.mutated || supabaseNormalized.mutated;
     }
     if (mutated) {
       await this.invalidateMeCache(userId);
@@ -748,14 +789,18 @@ export class UserConnectorService {
 
   async getProfile(userId: string, profileId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const normalized = await this.normalizeSlackProfileForRead(
+    const slackNormalized = await this.normalizeSlackProfileForRead(
       userId,
       (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
+    );
+    const normalized = await this.normalizeSupabaseProfileForRead(
+      userId,
+      (slackNormalized.row || null) as UserConnectorProfileRow | null
     );
     if (!normalized.row) {
       throw new Error('连接器 profile 不存在');
     }
-    if (normalized.mutated) {
+    if (slackNormalized.mutated || normalized.mutated) {
       await this.invalidateMeCache(userId);
     }
     return buildProfileView(normalized.row as any);
@@ -763,13 +808,17 @@ export class UserConnectorService {
 
   async getProfileMaterial(userId: string, profileId: string): Promise<ConnectorAccountMaterial | null> {
     await connectorStorageBootstrap.ensureReady();
-    const normalized = await this.normalizeSlackProfileForRead(
+    const slackNormalized = await this.normalizeSlackProfileForRead(
       userId,
       (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
     );
+    const normalized = await this.normalizeSupabaseProfileForRead(
+      userId,
+      (slackNormalized.row || null) as UserConnectorProfileRow | null
+    );
     const row = normalized.row;
     if (!row) return null;
-    if (normalized.mutated) {
+    if (slackNormalized.mutated || normalized.mutated) {
       await this.invalidateMeCache(userId);
     }
     return {

@@ -21,7 +21,7 @@ import {
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { taskCreationCacheStore } from '../agents/task-creation/task-creation-cache-store';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
-import { restoreWorkspaceIfArchived } from './sandbox-archive-service';
+import { archiveSandboxWorkspace, restoreWorkspaceIfArchived } from './sandbox-archive-service';
 import { touchSandbox } from './sandbox-activity-service';
 import { osacAgentService } from './osac-agent-service';
 import { ensureNekoDebug } from './sandbox-debug-service';
@@ -133,32 +133,67 @@ function resolveProvisionTemplate(
 async function resolveReusableSandbox(
   taskSessionId: string,
   executor: ProvisionExecutor,
-  codexExecutionMode: ProvisionCodexMode | null
+  codexExecutionMode: ProvisionCodexMode | null,
+  selectedTemplate: string
 ) {
   const session = await taskCreationFileMemoryStore.getSession(taskSessionId);
   const orchestratorSessionId = pickString(session?.runtime?.orchestratorSessionId);
-  if (!orchestratorSessionId) return null;
+  if (!orchestratorSessionId) {
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
+  }
 
   const sessionExecutor = normalizeProvisionExecutor(
     session?.runtime?.executor || session?.executor || session?.driver
   );
   if (sessionExecutor !== executor) {
-    return null;
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
   }
 
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
-  if (!environment || environment.status !== 'ready') return null;
+  if (!environment || environment.status !== 'ready') {
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
+  }
 
   const metadata = (environment.metadata || {}) as Record<string, unknown>;
+  const replacedBySandboxId = pickString(metadata.dedupeReplacementSandboxId);
+  if (replacedBySandboxId) {
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
+  }
   const boundTaskSessionId = pickString(metadata.taskSessionId);
   if (boundTaskSessionId && boundTaskSessionId !== taskSessionId) {
-    return null;
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
   }
   const sandboxExecutor = normalizeProvisionExecutor(
     metadata.sandboxExecutor || metadata.executor || session?.runtime?.executor || session?.executor || session?.driver
   );
   if (sandboxExecutor !== executor) {
-    return null;
+    return {
+      reusable: null,
+      templateMismatchSandboxId: null,
+    };
+  }
+  const environmentTemplate = pickString((metadata.e2b as Record<string, unknown> | undefined)?.template);
+  // Reuse is allowed only when the running sandbox template exactly matches current selection.
+  if (!environmentTemplate || environmentTemplate !== selectedTemplate) {
+    return {
+      reusable: null,
+      templateMismatchSandboxId: orchestratorSessionId,
+    };
   }
   if (executor === 'codex') {
     const environmentCodexMode =
@@ -170,13 +205,19 @@ async function resolveReusableSandbox(
           : 'sdk'
       );
     if ((codexExecutionMode || environmentCodexMode) && codexExecutionMode !== environmentCodexMode) {
-      return null;
+      return {
+        reusable: null,
+        templateMismatchSandboxId: null,
+      };
     }
   }
 
   return {
-    sessionId: orchestratorSessionId,
-    environment,
+    reusable: {
+      sessionId: orchestratorSessionId,
+      environment,
+    },
+    templateMismatchSandboxId: null,
   };
 }
 
@@ -1110,11 +1151,29 @@ export class SandboxAgentProvisionService {
     const executor = normalizeProvisionExecutor(input.executor || input.metadata?.executor);
     const codexExecutionMode = await resolveProvisionCodexMode(taskSessionId, input.metadata);
     const selectedTemplate = resolveProvisionTemplate(executor, codexExecutionMode);
-    const initialReusable = taskSessionId
-      ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode)
-      : null;
+    const reusableResolution = taskSessionId
+      ? await resolveReusableSandbox(taskSessionId, executor, codexExecutionMode, selectedTemplate)
+      : { reusable: null, templateMismatchSandboxId: null };
+    const initialReusable = reusableResolution.reusable;
+    const mismatchSandboxToClose = reusableResolution.templateMismatchSandboxId || null;
     let reusable = initialReusable;
+    let preferredRestoreSnapshotKey: string | null = null;
     let lastRecoverableError: unknown = null;
+
+    if (taskSessionId && !initialReusable && reusableResolution.templateMismatchSandboxId) {
+      const archived = await runStep('archive_before_template_migration', () =>
+        archiveSandboxWorkspace(reusableResolution.templateMismatchSandboxId as string, 'template_migration', {
+          forceUpload: true,
+        })
+      );
+      preferredRestoreSnapshotKey = archived.snapshotKey || null;
+      writeConnectorDebugLog('[PROVISION_TEMPLATE_MIGRATION_ARCHIVED]', {
+        taskSessionId,
+        oldSandboxId: reusableResolution.templateMismatchSandboxId,
+        selectedTemplate,
+        snapshotKey: preferredRestoreSnapshotKey,
+      });
+    }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const environment = reusable
@@ -1153,7 +1212,13 @@ export class SandboxAgentProvisionService {
         let codexAuthJson: string | null = null;
 
         if (!isReused) {
-          const restored = await restoreWorkspaceIfArchived(sessionId);
+          const restored = await restoreWorkspaceIfArchived(
+            sessionId,
+            preferredRestoreSnapshotKey ? { snapshotKey: preferredRestoreSnapshotKey } : undefined
+          );
+          if (preferredRestoreSnapshotKey && !restored) {
+            throw new Error(`template migration restore failed: snapshot=${preferredRestoreSnapshotKey}`);
+          }
           if (restored && taskSessionId) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(taskSessionId);
             await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(taskSessionId);
@@ -1365,6 +1430,16 @@ export class SandboxAgentProvisionService {
         }
 
         await touchSandbox(sessionId, `provisioned_${executor}`);
+        if (mismatchSandboxToClose && mismatchSandboxToClose !== sessionId) {
+          await sandboxEnvironmentService.closeEnvironment(mismatchSandboxToClose).catch((error) => {
+            console.warn('[PROVISION_TEMPLATE_MIGRATION_CLOSE_OLD_FAILED]', {
+              taskSessionId,
+              oldSandboxId: mismatchSandboxToClose,
+              newSandboxId: sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
 
         return {
           sessionId,

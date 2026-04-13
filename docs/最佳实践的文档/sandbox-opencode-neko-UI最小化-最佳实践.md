@@ -50,7 +50,7 @@ pnpm --filter api exec -- tsx ../../e2b_templates/opencode-playwright-mcp/build.
 
 默认模板名：
 ```
-opencode-playwright-mcp-v2-min-eko
+opencode-playwright-mcp-v4-neko-lockapi-20260413
 ```
 
 ## 环境变量（构建时）
@@ -64,7 +64,7 @@ opencode-playwright-mcp-v2-min-eko
 后端默认模板配置：
 `oneceo/apps/api/src/config/e2b-config.ts`
 ```ts
-template: process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v2-min-eko'
+template: process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v4-neko-lockapi-20260413'
 ```
 
 如需切回旧模板，仅需调整 `E2B_TEMPLATE`。
@@ -85,5 +85,4 @@ template: process.env.E2B_TEMPLATE || 'opencode-playwright-mcp-v2-min-eko'
 - `R2_ENDPOINT`（可选）
 
 ### 3) UI 有回退或仍显示旧元素
-确认模板是否更新为 `opencode-playwright-mcp-v2-min-eko`，并确保新 sandbox 使用该模板。
-
+确认模板是否更新为 `opencode-playwright-mcp-v4-neko-lockapi-20260413`，并确保新 sandbox 使用该模板。

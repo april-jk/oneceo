@@ -5676,7 +5676,7 @@ tbody tr:hover {
 
 .file-explorer-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(220px, auto);
+  grid-template-columns: auto minmax(260px, 1fr) auto minmax(220px, auto);
   gap: 12px;
   align-items: end;
   padding: 12px;
@@ -5690,6 +5690,21 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: repeat(2, minmax(86px, auto));
   gap: 8px;
+}
+
+.file-explorer-file-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(72px, auto));
+  gap: 8px;
+}
+
+.file-explorer-file-actions .secondary-btn,
+.file-explorer-file-actions .table-btn {
+  min-width: 72px;
+}
+
+.file-explorer-upload-input {
+  display: none;
 }
 
 .file-explorer-address,

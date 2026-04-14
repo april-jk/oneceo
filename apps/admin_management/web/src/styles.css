@@ -2859,6 +2859,53 @@ select:focus-visible {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.conversation-dialog-infra-compact {
+  gap: 14px;
+}
+
+.conversation-infra-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.conversation-infra-caption {
+  margin: 4px 0 0;
+}
+
+.conversation-infra-kv-list {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.conversation-infra-kv-list > div {
+  min-height: 78px;
+}
+
+.conversation-infra-kv-list strong {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.conversation-infra-note,
+.conversation-infra-empty {
+  margin: 0;
+}
+
+.conversation-infra-related-section,
+.conversation-infra-related-list,
+.conversation-infra-related-item {
+  display: grid;
+  gap: 10px;
+}
+
+.conversation-infra-related-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .conversation-index-panel .conversation-index-summary-strip,
 .conversation-index-summary-strip {
   display: grid;

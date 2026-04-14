@@ -2999,7 +2999,7 @@ export default function App() {
   const [sandboxPortFetchedAt, setSandboxPortFetchedAt] = useState<number | null>(null);
   const [sandboxToolSnapshotClock, setSandboxToolSnapshotClock] = useState(() => Date.now());
   const [sandboxCreatePayload, setSandboxCreatePayload] = useState(
-    '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
+    '{"template":"opencode-playwright-mcp-v4-neko-lockapi-20260413","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
   const [archiveDetailRow, setArchiveDetailRow] = useState<{

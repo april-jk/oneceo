@@ -681,6 +681,14 @@ type SandboxFileItem = {
   modifiedAt?: string | null;
 };
 
+type SandboxFileTreeRow = SandboxFileItem & {
+  depth: number;
+  expanded: boolean;
+  loaded: boolean;
+  childCount: number;
+  isRoot: boolean;
+};
+
 type SandboxProcessRow = {
   pid: string;
   pidValue: number | null;
@@ -782,15 +790,81 @@ function formatBytes(value: number | null | undefined) {
   return `${(value / 1024 ** 3).toFixed(1)} GB`;
 }
 
-function formatFileItemMeta(item: SandboxFileItem) {
-  const parts: string[] = [];
-  if (item.kind !== 'dir' && item.sizeBytes !== null && item.sizeBytes !== undefined) {
-    parts.push(formatBytes(item.sizeBytes));
+function normalizeSandboxPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '/';
+  const normalized = trimmed.replace(/\/+/g, '/').replace(/\/+$/, '');
+  return normalized || '/';
+}
+
+function isPathWithin(rootPath: string, candidatePath: string) {
+  const root = normalizeSandboxPath(rootPath);
+  const candidate = normalizeSandboxPath(candidatePath);
+  return root === '/' || candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function addPathAndAncestors(target: Set<string>, path: string, rootPath?: string) {
+  const root = rootPath ? normalizeSandboxPath(rootPath) : null;
+  let current = normalizeSandboxPath(path);
+  target.add(current);
+  while (current !== '/') {
+    current = parentPath(current);
+    target.add(current);
+    if (root && current === root) break;
   }
-  if (item.modifiedAt) {
-    parts.push(formatDateTime(item.modifiedAt));
-  }
-  return parts.join(' · ');
+}
+
+function buildSandboxFileTreeRows(
+  rootPath: string,
+  itemsByPath: Record<string, SandboxFileItem[]>,
+  expandedPaths: string[]
+): SandboxFileTreeRow[] {
+  const root = normalizeSandboxPath(rootPath);
+  const expandedSet = new Set([root, ...expandedPaths.map(normalizeSandboxPath)]);
+  const rows: SandboxFileTreeRow[] = [];
+  const visited = new Set<string>();
+
+  const walk = (directoryPath: string, depth: number, includeSelf: boolean) => {
+    const path = normalizeSandboxPath(directoryPath);
+    if (visited.has(path)) return;
+    visited.add(path);
+    const loaded = Object.prototype.hasOwnProperty.call(itemsByPath, path);
+    const children = itemsByPath[path] || [];
+
+    if (includeSelf) {
+      rows.push({
+        path,
+        label: path === '/' ? '/' : path.split('/').filter(Boolean).at(-1) || path,
+        kind: 'dir',
+        depth,
+        expanded: expandedSet.has(path),
+        loaded,
+        childCount: children.length,
+        isRoot: path === root,
+      });
+    }
+
+    if (!expandedSet.has(path)) return;
+
+    children.forEach((item) => {
+      const itemLoaded = Object.prototype.hasOwnProperty.call(itemsByPath, item.path);
+      const itemExpanded = expandedSet.has(item.path);
+      rows.push({
+        ...item,
+        depth: depth + 1,
+        expanded: itemExpanded,
+        loaded: itemLoaded,
+        childCount: itemLoaded ? (itemsByPath[item.path] || []).length : 0,
+        isRoot: false,
+      });
+      if (item.kind === 'dir' && itemExpanded) {
+        walk(item.path, depth + 1, false);
+      }
+    });
+  };
+
+  walk(root, 0, true);
+  return rows;
 }
 
 function sandboxFileTypeLabel(item: SandboxFileItem) {
@@ -2767,6 +2841,9 @@ export default function App() {
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
   const [sandboxDirectoryPath, setSandboxDirectoryPath] = useState('/');
+  const [sandboxFileTreeRootPath, setSandboxFileTreeRootPath] = useState('/');
+  const [sandboxFileTreeItemsByPath, setSandboxFileTreeItemsByPath] = useState<Record<string, SandboxFileItem[]>>({});
+  const [sandboxFileExpandedPaths, setSandboxFileExpandedPaths] = useState<string[]>([]);
   const [sandboxFilePath, setSandboxFilePath] = useState('');
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
   const [sandboxFileContent, setSandboxFileContent] = useState('');
@@ -3277,6 +3354,9 @@ export default function App() {
             setSandboxConnectivityResult(null);
             setSandboxTerminalOutput('');
             setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
+            setSandboxFileTreeRootPath(detail.connectivity.workspaceRoot?.trim() || '/');
+            setSandboxFileTreeItemsByPath({});
+            setSandboxFileExpandedPaths([detail.connectivity.workspaceRoot?.trim() || '/']);
             setSandboxFilePath('');
             setSandboxFileContent('');
             setSandboxFileItems([]);
@@ -3472,9 +3552,9 @@ export default function App() {
     }
   }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxPidInput, loadSandboxProcesses]);
 
-  const listSandboxFiles = useCallback(async (targetPath?: string) => {
+  const listSandboxFiles = useCallback(async (targetPath?: string, options?: { resetTreeRoot?: boolean }) => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    const directoryPath = (targetPath ?? sandboxDirectoryPath).trim();
+    const directoryPath = normalizeSandboxPath(targetPath ?? sandboxDirectoryPath);
     if (!sandboxId || !directoryPath) return;
     try {
       setError(null);
@@ -3485,10 +3565,22 @@ export default function App() {
       const items = normalizeSandboxFileItems(result, directoryPath);
       const resolvedPath =
         result && typeof result === 'object' && typeof (result as Record<string, unknown>).path === 'string'
-          ? String((result as Record<string, unknown>).path)
+          ? normalizeSandboxPath(String((result as Record<string, unknown>).path))
           : directoryPath;
       setSandboxDirectoryPath(resolvedPath);
       setSandboxFileItems(items);
+      if (options?.resetTreeRoot) {
+        setSandboxFileTreeRootPath(resolvedPath);
+      }
+      setSandboxFileTreeItemsByPath((prev) => ({
+        ...prev,
+        [resolvedPath]: items,
+      }));
+      setSandboxFileExpandedPaths((prev) => {
+        const next = new Set(prev.map(normalizeSandboxPath));
+        addPathAndAncestors(next, resolvedPath, options?.resetTreeRoot ? resolvedPath : undefined);
+        return Array.from(next);
+      });
       setSandboxFileStatus(items.length ? `${resolvedPath} · ${items.length} 项` : `${resolvedPath} 为空目录`);
     } catch (toolError) {
       setSandboxFileItems([]);
@@ -3539,19 +3631,45 @@ export default function App() {
   }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath, sandboxFileContent, listSandboxFiles]);
 
   const goSandboxFileParent = useCallback(async () => {
-    await listSandboxFiles(parentPath(sandboxDirectoryPath));
-  }, [listSandboxFiles, sandboxDirectoryPath]);
+    const nextPath = parentPath(sandboxDirectoryPath);
+    await listSandboxFiles(nextPath, { resetTreeRoot: !isPathWithin(sandboxFileTreeRootPath, nextPath) });
+  }, [listSandboxFiles, sandboxDirectoryPath, sandboxFileTreeRootPath]);
 
   const openSandboxFileItem = useCallback(async (item: SandboxFileItem) => {
     if (item.kind === 'dir') {
       setSandboxFilePath('');
       setSandboxFileContent('');
+      setSandboxFileExpandedPaths((prev) => {
+        const next = new Set(prev.map(normalizeSandboxPath));
+        addPathAndAncestors(next, item.path, sandboxFileTreeRootPath);
+        return Array.from(next);
+      });
       await listSandboxFiles(item.path);
       return;
     }
 
     await readSandboxFile(item.path);
-  }, [listSandboxFiles, readSandboxFile]);
+  }, [listSandboxFiles, readSandboxFile, sandboxFileTreeRootPath]);
+
+  const toggleSandboxFileTreeDirectory = useCallback(async (item: SandboxFileTreeRow) => {
+    if (item.kind !== 'dir') {
+      await readSandboxFile(item.path);
+      return;
+    }
+
+    if (item.expanded && item.loaded) {
+      setSandboxDirectoryPath(item.path);
+      setSandboxFileExpandedPaths((prev) => prev.map(normalizeSandboxPath).filter((path) => path !== item.path));
+      return;
+    }
+
+    setSandboxFileExpandedPaths((prev) => {
+      const next = new Set(prev.map(normalizeSandboxPath));
+      addPathAndAncestors(next, item.path, sandboxFileTreeRootPath);
+      return Array.from(next);
+    });
+    await listSandboxFiles(item.path);
+  }, [listSandboxFiles, readSandboxFile, sandboxFileTreeRootPath]);
 
   const inspectSandboxPorts = useCallback(async () => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
@@ -7493,6 +7611,11 @@ export default function App() {
         ].filter((item): item is string => Boolean(item))
       )
     );
+    const sandboxFileTreeRows = buildSandboxFileTreeRows(
+      sandboxFileTreeRootPath || sandboxDirectoryPath || '/',
+      sandboxFileTreeItemsByPath,
+      sandboxFileExpandedPaths
+    );
     const processRows = getSandboxProcessRows(sandboxProcessResult);
     const portRows = getSandboxPortRows(sandboxPortResult);
 
@@ -8575,7 +8698,7 @@ export default function App() {
                       <button type="button" className="secondary-btn" onClick={() => void goSandboxFileParent()}>
                         上级
                       </button>
-                      <button type="button" className="secondary-btn" onClick={() => void listSandboxFiles()}>
+                      <button type="button" className="secondary-btn" onClick={() => void listSandboxFiles(undefined, { resetTreeRoot: true })}>
                         刷新
                       </button>
                     </div>
@@ -8588,7 +8711,7 @@ export default function App() {
                         onKeyDown={(event) => {
                           if (event.key === 'Enter') {
                             event.preventDefault();
-                            void listSandboxFiles();
+                            void listSandboxFiles(undefined, { resetTreeRoot: true });
                           }
                         }}
                         placeholder="/workspace"
@@ -8607,7 +8730,7 @@ export default function App() {
                           className={`file-explorer-sidebar-btn ${sandboxDirectoryPath === location ? 'active' : ''}`}
                           onClick={() => {
                             setSandboxDirectoryPath(location);
-                            void listSandboxFiles(location);
+                            void listSandboxFiles(location, { resetTreeRoot: true });
                           }}
                         >
                           <span className="file-explorer-sidebar-icon mono">{location === '/' ? 'ROOT' : 'DIR'}</span>
@@ -8617,54 +8740,56 @@ export default function App() {
                     </aside>
 
                     <article className="file-explorer-main">
-                      <div className="file-explorer-table-wrap">
-                        <table className="file-explorer-table">
-                          <thead>
-                            <tr>
-                              <th>名称</th>
-                              <th>修改日期</th>
-                              <th>类型</th>
-                              <th>大小</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sandboxFileItems.length ? (
-                              sandboxFileItems.map((item) => (
-                                <tr
-                                  key={item.path}
-                                  className={sandboxFilePath === item.path || sandboxDirectoryPath === item.path ? 'active' : undefined}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => void openSandboxFileItem(item)}
-                                  onKeyDown={(event) => {
-                                    if (event.key === 'Enter' || event.key === ' ') {
-                                      event.preventDefault();
-                                      void openSandboxFileItem(item);
-                                    }
-                                  }}
+                      <div className="file-tree-head">
+                        <div>
+                          <h3>文件树</h3>
+                          <span className="panel-caption">ranger / yazi 式目录导航</span>
+                        </div>
+                        <code className="mono">{sandboxDirectoryPath}</code>
+                      </div>
+                      <div className="file-tree-list" role="tree" aria-label="Sandbox 文件树">
+                        {sandboxFileTreeRows.length ? (
+                          sandboxFileTreeRows.map((item) => {
+                            const isActive = sandboxFilePath === item.path || sandboxDirectoryPath === item.path;
+                            return (
+                              <div
+                                key={`${item.path}-${item.depth}`}
+                                className={`file-tree-row ${isActive ? 'active' : ''} ${item.kind === 'dir' ? 'is-dir' : 'is-file'}`}
+                                style={{ paddingLeft: `${item.depth * 18 + 8}px` }}
+                                role="treeitem"
+                                aria-expanded={item.kind === 'dir' ? item.expanded : undefined}
+                              >
+                                <button
+                                  type="button"
+                                  className="file-tree-disclosure mono"
+                                  disabled={item.kind !== 'dir' || item.isRoot}
+                                  onClick={() => void toggleSandboxFileTreeDirectory(item)}
+                                  aria-label={item.expanded ? '折叠目录' : '展开目录'}
                                 >
-                                  <td>
-                                    <span className="file-explorer-name-cell">
-                                      <span className={`file-explorer-icon ${item.kind === 'dir' ? 'is-dir' : 'is-file'} mono`}>
-                                        {sandboxFileIconText(item)}
-                                      </span>
-                                      <span>{item.label}</span>
-                                    </span>
-                                  </td>
-                                  <td>{item.modifiedAt ? formatDateTime(item.modifiedAt) : '-'}</td>
-                                  <td>{sandboxFileTypeLabel(item)}</td>
-                                  <td>{item.kind === 'dir' ? '-' : formatBytes(item.sizeBytes)}</td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr>
-                                <td colSpan={4}>
-                                  <p className="empty">当前目录暂无内容，或请先刷新目录。</p>
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
+                                  {item.kind === 'dir' ? (item.isRoot || item.expanded ? 'v' : '>') : '-'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="file-tree-node"
+                                  onClick={() => void openSandboxFileItem(item)}
+                                >
+                                  <span className={`file-explorer-icon ${item.kind === 'dir' ? 'is-dir' : 'is-file'} mono`}>
+                                    {sandboxFileIconText(item)}
+                                  </span>
+                                  <span className="file-tree-node-main">
+                                    <span>{item.isRoot ? item.path : item.label}</span>
+                                    <small className="mono">{item.path}</small>
+                                  </span>
+                                </button>
+                                <span className="file-tree-meta">{item.kind === 'dir' ? (item.loaded ? `${item.childCount} 项` : '未展开') : formatBytes(item.sizeBytes)}</span>
+                                <span className="file-tree-meta">{sandboxFileTypeLabel(item)}</span>
+                                <span className="file-tree-meta">{item.modifiedAt ? formatDateTime(item.modifiedAt) : '-'}</span>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <p className="empty">当前目录暂无内容，或请先刷新目录。</p>
+                        )}
                       </div>
                     </article>
 

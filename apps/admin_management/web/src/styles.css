@@ -5790,11 +5790,135 @@ tbody tr:hover {
 }
 
 .file-explorer-main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   background: var(--surface-elevated);
 }
 
-.file-explorer-table-wrap,
+.file-tree-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.file-tree-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.file-tree-head code {
+  max-width: min(440px, 48%);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  color: var(--text-soft);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tree-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 28%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
+    var(--surface-elevated);
+}
+
+.file-tree-row {
+  display: grid;
+  grid-template-columns: 26px minmax(220px, 1fr) minmax(64px, 92px) minmax(84px, 112px) minmax(132px, 172px);
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding-block: 3px;
+  padding-right: 12px;
+  border-left: 3px solid transparent;
+  color: var(--text);
+}
+
+.file-tree-row:hover,
+.file-tree-row.active {
+  background: var(--active-control-bg);
+}
+
+.file-tree-row.active {
+  border-left-color: var(--primary);
+}
+
+.file-tree-disclosure,
+.file-tree-node {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.file-tree-disclosure {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.file-tree-disclosure:not(:disabled):hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+}
+
+.file-tree-disclosure:disabled {
+  opacity: 0.45;
+}
+
+.file-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.file-tree-node-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.file-tree-node-main > span,
+.file-tree-node-main small,
+.file-tree-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tree-node-main > span {
+  font-weight: 600;
+}
+
+.file-tree-node-main small,
+.file-tree-meta {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.file-tree-row.is-dir .file-tree-node-main > span {
+  color: var(--text);
+}
+
 .task-manager-table-wrap {
   min-width: 0;
   max-width: 100%;
@@ -5802,7 +5926,6 @@ tbody tr:hover {
   overflow: auto;
 }
 
-.file-explorer-table,
 .task-manager-table {
   width: 100%;
   border-collapse: separate;
@@ -5810,8 +5933,6 @@ tbody tr:hover {
   font-size: 12.5px;
 }
 
-.file-explorer-table th,
-.file-explorer-table td,
 .task-manager-table th,
 .task-manager-table td {
   padding: 9px 12px;
@@ -5821,7 +5942,6 @@ tbody tr:hover {
   vertical-align: middle;
 }
 
-.file-explorer-table th,
 .task-manager-table th {
   position: sticky;
   top: 0;
@@ -5834,31 +5954,13 @@ tbody tr:hover {
   text-transform: uppercase;
 }
 
-.file-explorer-table tbody tr,
 .task-manager-table tbody tr {
   cursor: pointer;
 }
 
-.file-explorer-table tbody tr:hover,
-.file-explorer-table tbody tr.active,
 .task-manager-table tbody tr:hover,
 .task-manager-table tbody tr.active {
   background: var(--active-control-bg);
-}
-
-.file-explorer-name-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.file-explorer-name-cell > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .file-explorer-icon.is-dir {
@@ -6242,6 +6344,22 @@ tbody tr:hover {
   .task-manager-toolbar,
   .file-explorer-toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .file-tree-head {
+    flex-direction: column;
+  }
+
+  .file-tree-head code {
+    max-width: 100%;
+  }
+
+  .file-tree-row {
+    grid-template-columns: 26px minmax(180px, 1fr) minmax(60px, 86px);
+  }
+
+  .file-tree-meta:nth-last-child(-n+2) {
+    display: none;
   }
 
   .task-manager-toolbar-note {
@@ -6650,6 +6768,7 @@ tbody tr:hover {
 :root[data-admin-tone='dark'] .file-explorer-shell,
 :root[data-admin-tone='dark'] .file-explorer-sidebar,
 :root[data-admin-tone='dark'] .file-explorer-preview,
+:root[data-admin-tone='dark'] .file-tree-head,
 :root[data-admin-tone='dark'] .task-manager-toolbar,
 :root[data-admin-tone='dark'] .task-manager-view-btn,
 :root[data-admin-tone='dark'] .thread-item,
@@ -6657,6 +6776,12 @@ tbody tr:hover {
   border-color: var(--border);
   background: var(--surface-strong);
   color: var(--text);
+}
+
+:root[data-admin-tone='dark'] .file-tree-list {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 44%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
+    var(--surface-elevated);
 }
 
 :root[data-admin-tone='dark'] .terminal-console {

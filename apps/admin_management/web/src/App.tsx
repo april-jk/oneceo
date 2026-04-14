@@ -9162,52 +9162,29 @@ export default function App() {
                   </section>
 
                   {sandboxProcessToolView === 'processes' ? (
-                    <section className="task-manager-toolbar" aria-label="Sandbox 进程工具栏">
-                      <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
-                        刷新进程
-                      </button>
-                      <label>
-                        <span>结束 PID</span>
-                        <input
-                          className="text-input mono"
-                          value={sandboxPidInput}
-                          onChange={(event) => setSandboxPidInput(event.target.value)}
-                          placeholder="PID"
-                        />
-                      </label>
-                      <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
-                        结束进程
-                      </button>
-                      <span className="task-manager-toolbar-note">单击表格行可把 PID 带入结束输入框</span>
-                    </section>
-                  ) : (
-                    <section className="task-manager-toolbar" aria-label="Sandbox 端口工具栏">
-                      <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
-                        刷新端口
-                      </button>
-                      <label>
-                        <span>端口映射</span>
-                        <input
-                          className="text-input mono"
-                          value={sandboxPortInput}
-                          onChange={(event) => setSandboxPortInput(event.target.value)}
-                          placeholder="3000"
-                        />
-                      </label>
-                      <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
-                        查询 Host
-                      </button>
-                      <span className="task-manager-toolbar-note">单击监听行可把端口带入映射输入框</span>
-                    </section>
-                  )}
-
-                  <section className="task-manager-fullscreen">
-                    {sandboxProcessToolView === 'processes' ? (
-                      <article className="inspector-card task-manager-panel task-manager-panel-full">
-                      <div className="inspector-card-header">
-                        <div>
+                    <article className="inspector-card task-manager-panel task-manager-panel-full">
+                      <div className="inspector-card-header task-manager-card-head">
+                        <div className="task-manager-panel-title">
                           <h3>进程</h3>
                           <span className="panel-caption">{processRows.length ? `${processRows.length} 个进程` : '等待刷新进程列表'}</span>
+                        </div>
+                        <div className="task-manager-panel-tools" aria-label="Sandbox 进程操作">
+                          <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
+                            刷新进程
+                          </button>
+                          <label>
+                            <span>结束 PID</span>
+                            <input
+                              className="text-input mono"
+                              value={sandboxPidInput}
+                              onChange={(event) => setSandboxPidInput(event.target.value)}
+                              placeholder="PID"
+                            />
+                          </label>
+                          <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
+                            结束进程
+                          </button>
+                          <span className="task-manager-toolbar-note">单击表格行可把 PID 带入结束输入框</span>
                         </div>
                       </div>
                       <div className="task-manager-table-wrap">
@@ -9257,13 +9234,31 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                      </article>
-                    ) : (
-                      <article className="inspector-card task-manager-panel task-manager-panel-full">
-                      <div className="inspector-card-header">
-                        <div>
+                    </article>
+                  ) : (
+                    <article className="inspector-card task-manager-panel task-manager-panel-full">
+                      <div className="inspector-card-header task-manager-card-head">
+                        <div className="task-manager-panel-title">
                           <h3>端口</h3>
                           <span className="panel-caption">{portRows.length ? `${portRows.length} 个监听项` : '等待刷新监听端口'}</span>
+                        </div>
+                        <div className="task-manager-panel-tools" aria-label="Sandbox 端口操作">
+                          <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
+                            刷新端口
+                          </button>
+                          <label>
+                            <span>端口映射</span>
+                            <input
+                              className="text-input mono"
+                              value={sandboxPortInput}
+                              onChange={(event) => setSandboxPortInput(event.target.value)}
+                              placeholder="3000"
+                            />
+                          </label>
+                          <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
+                            查询 Host
+                          </button>
+                          <span className="task-manager-toolbar-note">单击监听行可把端口带入映射输入框</span>
                         </div>
                       </div>
                       <div className="task-manager-table-wrap">
@@ -9307,9 +9302,8 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                      </article>
-                    )}
-                  </section>
+                    </article>
+                  )}
 
                   <details className="debug-disclosure task-manager-raw-output">
                     <summary>原始输出</summary>

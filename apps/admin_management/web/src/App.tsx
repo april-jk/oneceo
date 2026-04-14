@@ -52,6 +52,7 @@ import type {
 type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
+type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
 
 type UiToast = {
   id: number;
@@ -679,6 +680,30 @@ type SandboxFileItem = {
   modifiedAt?: string | null;
 };
 
+type SandboxProcessRow = {
+  pid: string;
+  pidValue: number | null;
+  ppid: string;
+  user: string;
+  cpuPercent: string;
+  memoryPercent: string;
+  elapsed: string;
+  state: string;
+  command: string;
+  args: string;
+};
+
+type SandboxPortRow = {
+  id: string;
+  protocol: string;
+  status: string;
+  localAddress: string;
+  port: string;
+  peerAddress: string;
+  process: string;
+  raw: string;
+};
+
 function normalizeSandboxFileItems(value: unknown, basePath: string): SandboxFileItem[] {
   const source =
     value && typeof value === 'object'
@@ -765,6 +790,107 @@ function formatFileItemMeta(item: SandboxFileItem) {
     parts.push(formatDateTime(item.modifiedAt));
   }
   return parts.join(' · ');
+}
+
+function sandboxFileTypeLabel(item: SandboxFileItem) {
+  if (item.kind === 'dir') return '文件夹';
+  const extension = item.label.includes('.') ? item.label.split('.').pop()?.trim() : '';
+  return extension ? `${extension.toUpperCase()} 文件` : item.kind === 'file' ? '文件' : '项目';
+}
+
+function sandboxFileIconText(item: SandboxFileItem) {
+  if (item.kind === 'dir') return 'DIR';
+  const extension = item.label.includes('.') ? item.label.split('.').pop()?.trim() : '';
+  return extension ? extension.slice(0, 4).toUpperCase() : 'FILE';
+}
+
+function processCellText(value: unknown, fallback = '-') {
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
+
+function getSandboxProcessRows(value: unknown): SandboxProcessRow[] {
+  if (!value || typeof value !== 'object') return [];
+  const items = (value as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => {
+      const pidNumber = Number(item.pid);
+      const command = processCellText(item.command ?? item.args);
+      const args = processCellText(item.args, '');
+      return {
+        pid: processCellText(item.pid),
+        pidValue: Number.isFinite(pidNumber) && pidNumber > 0 ? pidNumber : null,
+        ppid: processCellText(item.ppid),
+        user: processCellText(item.user),
+        cpuPercent: processCellText(item.cpuPercent),
+        memoryPercent: processCellText(item.memoryPercent),
+        elapsed: processCellText(item.elapsed),
+        state: processCellText(item.state),
+        command,
+        args: args && args !== command ? args : '',
+      };
+    });
+}
+
+function extractPortFromAddress(value: string) {
+  const bracketMatch = value.match(/\]:(\d+)(?:\b|$)/);
+  if (bracketMatch?.[1]) return bracketMatch[1];
+  const matches = [...value.matchAll(/[:.](\d+)(?=$|\s|\))/g)];
+  return matches.at(-1)?.[1] || '-';
+}
+
+function parseSandboxPortLine(rawLine: string, index: number): SandboxPortRow | null {
+  const raw = rawLine.trim();
+  if (!raw || /^netid\s+/i.test(raw) || /^command\s+pid\s+/i.test(raw) || /^proto\s+/i.test(raw)) {
+    return null;
+  }
+
+  const parts = raw.split(/\s+/);
+  const processMatch = raw.match(/users:\(\("([^"]+)",pid=(\d+)/);
+  let protocol = parts[0] || '-';
+  let status = parts[1] || '-';
+  let localAddress = parts[4] || parts[3] || '-';
+  let peerAddress = parts[5] || '-';
+  let process = processMatch ? `${processMatch[1]} (${processMatch[2]})` : parts.slice(6).join(' ') || '-';
+
+  if (!/^(tcp|udp|raw|unix|u_str)$/i.test(protocol) && parts.length >= 8) {
+    protocol = parts.find((part) => /^(tcp|udp)$/i.test(part)) || '-';
+    status = raw.includes('(LISTEN)') ? 'LISTEN' : parts.find((part) => /^[A-Z_]{2,}$/.test(part)) || '-';
+    localAddress = parts.slice(8).join(' ') || parts.at(-1) || '-';
+    peerAddress = '-';
+    process = [parts[0], parts[1]].filter(Boolean).join(' ') || '-';
+  }
+
+  return {
+    id: `${index}-${raw}`,
+    protocol,
+    status,
+    localAddress,
+    port: extractPortFromAddress(localAddress),
+    peerAddress,
+    process,
+    raw,
+  };
+}
+
+function getSandboxPortRows(value: unknown): SandboxPortRow[] {
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  const sourceLines = Array.isArray(record.lines)
+    ? record.lines
+    : typeof record.output === 'string'
+      ? record.output.split('\n')
+      : typeof record.stdout === 'string'
+        ? record.stdout.split('\n')
+        : [];
+
+  return sourceLines
+    .filter((line): line is string => typeof line === 'string')
+    .map(parseSandboxPortLine)
+    .filter((line): line is SandboxPortRow => Boolean(line));
 }
 
 function formatSandboxProcessResult(value: unknown) {
@@ -2632,7 +2758,7 @@ export default function App() {
   const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
-  const [sandboxDetailTab, setSandboxDetailTab] = useState<'overview' | 'connectivity' | 'archive' | 'advanced'>('overview');
+  const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>('overview');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
@@ -3856,7 +3982,7 @@ export default function App() {
   }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
-    if (!sandboxModalOpen || sandboxDetailTab !== 'advanced') {
+    if (!sandboxModalOpen || sandboxDetailTab !== 'files') {
       return;
     }
     if (!sandboxDirectoryPath.trim()) {
@@ -3869,6 +3995,29 @@ export default function App() {
       setError(toolError instanceof Error ? toolError.message : '加载目录失败');
     });
   }, [sandboxModalOpen, sandboxDetailTab, sandboxDirectoryPath, sandboxFileItems.length, listSandboxFiles]);
+
+  useEffect(() => {
+    if (!sandboxModalOpen || sandboxDetailTab !== 'processes') {
+      return;
+    }
+    if (!sandboxProcessResult) {
+      void loadSandboxProcesses().catch((toolError) => {
+        setError(toolError instanceof Error ? toolError.message : '加载进程失败');
+      });
+    }
+    if (!sandboxPortResult) {
+      void inspectSandboxPorts().catch((toolError) => {
+        setError(toolError instanceof Error ? toolError.message : '加载端口失败');
+      });
+    }
+  }, [
+    sandboxModalOpen,
+    sandboxDetailTab,
+    sandboxProcessResult,
+    sandboxPortResult,
+    loadSandboxProcesses,
+    inspectSandboxPorts,
+  ]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4757,7 +4906,7 @@ export default function App() {
 
         <article className="sub-panel">
           <div className="panel-header">
-            <h3>KVM / Sandbox 摘要</h3>
+            <h3>Sandbox 绑定信息</h3>
           </div>
           <div className="detail-kv-list">
             <div>
@@ -7183,34 +7332,6 @@ export default function App() {
       .filter((item) => item.riskTags.length > 0)
       .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
       .slice(0, 6);
-    const riskGroupMap = new Map<string, {
-      key: string;
-      label: string;
-      count: number;
-      lastSeenAt: string | null;
-    }>();
-    currentScopeItems.forEach((item) => {
-      item.riskTags.forEach((risk) => {
-        const previous = riskGroupMap.get(risk);
-        const candidateTime = item.lastActiveAt || item.updatedAt || item.createdAt || null;
-        if (!previous) {
-          riskGroupMap.set(risk, {
-            key: risk,
-            label: sandboxRiskLabel(risk),
-            count: 1,
-            lastSeenAt: candidateTime,
-          });
-          return;
-        }
-        previous.count += 1;
-        if (toTimestamp(candidateTime) > toTimestamp(previous.lastSeenAt)) {
-          previous.lastSeenAt = candidateTime;
-        }
-      });
-    });
-    const riskGroups = Array.from(riskGroupMap.values()).sort(
-      (a, b) => b.count - a.count || toTimestamp(b.lastSeenAt) - toTimestamp(a.lastSeenAt) || a.label.localeCompare(b.label)
-    );
     const executorDistribution = Array.from(
       currentScopeItems.reduce((acc, item) => {
         const key = item.executor || 'unknown';
@@ -7235,7 +7356,9 @@ export default function App() {
       { label: '暂停中', value: 'paused', count: summary?.paused ?? 0, meta: '暂停且不计费' },
       { label: '待归档', value: 'pending_archive', count: summary?.pendingArchive ?? 0, meta: '待归档更新' },
     ];
-    const riskOptions = riskGroups.map((item) => item.key);
+    const riskOptions = Array.from(new Set(currentScopeItems.flatMap((item) => item.riskTags))).sort((a, b) =>
+      sandboxRiskLabel(a).localeCompare(sandboxRiskLabel(b), 'zh-Hans-CN', { sensitivity: 'base' })
+    );
     const templateSummary = {
       total: templates.length,
       aliased: templates.filter((item) => templateAliasOf(item)).length,
@@ -7355,47 +7478,23 @@ export default function App() {
       archiveRows.find((row) => row.type === 'current') ||
       [...archiveRows].sort((a, b) => toTimestamp(b.timestamp) - toTimestamp(a.timestamp))[0] ||
       null;
+    const sandboxQuickLocations = Array.from(
+      new Set(
+        [
+          sandboxRuntimeDetail?.connectivity.workspaceRoot?.trim(),
+          sandboxDirectoryPath.trim(),
+          '/workspace',
+          '/tmp',
+          '/',
+        ].filter((item): item is string => Boolean(item))
+      )
+    );
+    const processRows = getSandboxProcessRows(sandboxProcessResult);
+    const portRows = getSandboxPortRows(sandboxPortResult);
 
     return (
       <>
         <main className="content-stack">
-          <section className="panel hero-panel fade-in sandbox-console-header">
-            <div className="panel-header panel-header-stack">
-              <div>
-                <p className="section-tag">Sandbox 摘要</p>
-                <h2>Sandbox、归档与连通性</h2>
-              </div>
-              <div className="action-inline">
-                <span className={`service-state ${sandboxApi?.online ? 'ok' : 'down'}`}>
-                  {sandboxApi?.online ? 'Sandbox 服务在线' : 'Sandbox 服务离线'}
-                </span>
-                <span className="updated-at">{formatDateTime(sandboxApi?.timestamp)}</span>
-              </div>
-            </div>
-            <div className="sandbox-summary-strip">
-              <div className="sandbox-summary-card">
-                <span className="hero-metric-label">总环境</span>
-                <strong>{summary?.total ?? 0}</strong>
-              </div>
-              <div className="sandbox-summary-card">
-                <span className="hero-metric-label">运行中</span>
-                <strong>{summary?.running ?? 0}</strong>
-              </div>
-              <div className="sandbox-summary-card">
-                <span className="hero-metric-label">暂停中</span>
-                <strong>{summary?.paused ?? 0}</strong>
-              </div>
-              <div className="sandbox-summary-card">
-                <span className="hero-metric-label">待归档</span>
-                <strong>{summary?.pendingArchive ?? 0}</strong>
-              </div>
-              <div className="sandbox-summary-card">
-                <span className="hero-metric-label">风险项</span>
-                <strong>{summary?.risky ?? 0}</strong>
-              </div>
-            </div>
-          </section>
-
           <section className="panel fade-in">
             <div className="panel-header">
               <div>
@@ -7416,7 +7515,7 @@ export default function App() {
                 className={`secondary-btn ${sandboxTab === 'overview' ? 'active' : ''}`}
                 onClick={() => setSandboxTab('overview')}
               >
-                摘要
+                概览
               </button>
               <button
                 type="button"
@@ -7537,31 +7636,6 @@ export default function App() {
                       <span className="session-status runtime-status-group-count">{item.count}</span>
                     </button>
                   ))}
-                </div>
-                <div className="runtime-risk-groups">
-                  <div className="runtime-risk-groups-head">
-                    <span className="panel-caption">风险聚合</span>
-                    <span className="session-status">{riskGroups.length} 类风险</span>
-                  </div>
-                  {riskGroups.length === 0 ? (
-                    <p className="empty runtime-risk-empty">当前没有高风险 Sandbox。</p>
-                  ) : (
-                    <div className="runtime-risk-group-list">
-                      {riskGroups.map((group) => (
-                        <button
-                          key={group.key}
-                          type="button"
-                          className={`secondary-btn runtime-risk-group-btn ${sandboxRiskFilter === group.key ? 'active' : ''}`}
-                          onClick={() => setSandboxRiskFilter((prev) => (prev === group.key ? 'all' : group.key))}
-                          title={`最近出现：${formatDateTime(group.lastSeenAt)}`}
-                        >
-                          <span className="runtime-risk-group-main">{group.label}</span>
-                          <span className="runtime-risk-group-meta">最近出现：{formatDateTime(group.lastSeenAt)}</span>
-                          <span className="session-status runtime-risk-group-count">{group.count}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
                 <div className="runtime-filter-grid">
                   <label className="state-filter-field">
@@ -8041,10 +8115,26 @@ export default function App() {
                 </button>
                 <button
                   type="button"
+                  className={`inspector-tab-card ${sandboxDetailTab === 'files' ? 'active' : ''}`}
+                  onClick={() => setSandboxDetailTab('files')}
+                >
+                  <span className="inspector-tab-card-key mono">02</span>
+                  <span className="inspector-tab-card-label">文件</span>
+                </button>
+                <button
+                  type="button"
+                  className={`inspector-tab-card ${sandboxDetailTab === 'processes' ? 'active' : ''}`}
+                  onClick={() => setSandboxDetailTab('processes')}
+                >
+                  <span className="inspector-tab-card-key mono">03</span>
+                  <span className="inspector-tab-card-label">进程与端口</span>
+                </button>
+                <button
+                  type="button"
                   className={`inspector-tab-card ${sandboxDetailTab === 'connectivity' ? 'active' : ''}`}
                   onClick={() => setSandboxDetailTab('connectivity')}
                 >
-                  <span className="inspector-tab-card-key mono">02</span>
+                  <span className="inspector-tab-card-key mono">04</span>
                   <span className="inspector-tab-card-label">连通性</span>
                 </button>
                 <button
@@ -8052,16 +8142,16 @@ export default function App() {
                   className={`inspector-tab-card ${sandboxDetailTab === 'archive' ? 'active' : ''}`}
                   onClick={() => setSandboxDetailTab('archive')}
                 >
-                  <span className="inspector-tab-card-key mono">03</span>
+                  <span className="inspector-tab-card-key mono">05</span>
                   <span className="inspector-tab-card-label">归档</span>
                 </button>
                 <button
                   type="button"
-                  className={`inspector-tab-card ${sandboxDetailTab === 'advanced' ? 'active' : ''}`}
-                  onClick={() => setSandboxDetailTab('advanced')}
+                  className={`inspector-tab-card ${sandboxDetailTab === 'terminal' ? 'active' : ''}`}
+                  onClick={() => setSandboxDetailTab('terminal')}
                 >
-                  <span className="inspector-tab-card-key mono">04</span>
-                  <span className="inspector-tab-card-label">高级调试</span>
+                  <span className="inspector-tab-card-key mono">06</span>
+                  <span className="inspector-tab-card-label">命令调试</span>
                 </button>
               </div>
 
@@ -8474,13 +8564,300 @@ export default function App() {
                 </div>
               ) : null}
 
-              {sandboxDetailTab === 'advanced' ? (
-                <div className="inspector-page-stack debug-console">
+              {sandboxDetailTab === 'files' ? (
+                <div className="inspector-page-stack file-explorer-page">
+                  <section className="file-explorer-toolbar" aria-label="Sandbox 文件工具栏">
+                    <div className="file-explorer-nav-actions">
+                      <button type="button" className="secondary-btn" onClick={() => void goSandboxFileParent()}>
+                        上级
+                      </button>
+                      <button type="button" className="secondary-btn" onClick={() => void listSandboxFiles()}>
+                        刷新
+                      </button>
+                    </div>
+                    <label className="file-explorer-address">
+                      <span>地址</span>
+                      <input
+                        className="text-input"
+                        value={sandboxDirectoryPath}
+                        onChange={(event) => setSandboxDirectoryPath(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void listSandboxFiles();
+                          }
+                        }}
+                        placeholder="/workspace"
+                      />
+                    </label>
+                    <span className="file-explorer-status">{sandboxFileStatus}</span>
+                  </section>
+
+                  <section className="file-explorer-shell">
+                    <aside className="file-explorer-sidebar" aria-label="快速访问">
+                      <span className="file-explorer-sidebar-title">快速访问</span>
+                      {sandboxQuickLocations.map((location) => (
+                        <button
+                          key={location}
+                          type="button"
+                          className={`file-explorer-sidebar-btn ${sandboxDirectoryPath === location ? 'active' : ''}`}
+                          onClick={() => {
+                            setSandboxDirectoryPath(location);
+                            void listSandboxFiles(location);
+                          }}
+                        >
+                          <span className="file-explorer-sidebar-icon mono">{location === '/' ? 'ROOT' : 'DIR'}</span>
+                          <span>{location}</span>
+                        </button>
+                      ))}
+                    </aside>
+
+                    <article className="file-explorer-main">
+                      <div className="file-explorer-table-wrap">
+                        <table className="file-explorer-table">
+                          <thead>
+                            <tr>
+                              <th>名称</th>
+                              <th>修改日期</th>
+                              <th>类型</th>
+                              <th>大小</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sandboxFileItems.length ? (
+                              sandboxFileItems.map((item) => (
+                                <tr
+                                  key={item.path}
+                                  className={sandboxFilePath === item.path || sandboxDirectoryPath === item.path ? 'active' : undefined}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => void openSandboxFileItem(item)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault();
+                                      void openSandboxFileItem(item);
+                                    }
+                                  }}
+                                >
+                                  <td>
+                                    <span className="file-explorer-name-cell">
+                                      <span className={`file-explorer-icon ${item.kind === 'dir' ? 'is-dir' : 'is-file'} mono`}>
+                                        {sandboxFileIconText(item)}
+                                      </span>
+                                      <span>{item.label}</span>
+                                    </span>
+                                  </td>
+                                  <td>{item.modifiedAt ? formatDateTime(item.modifiedAt) : '-'}</td>
+                                  <td>{sandboxFileTypeLabel(item)}</td>
+                                  <td>{item.kind === 'dir' ? '-' : formatBytes(item.sizeBytes)}</td>
+                                </tr>
+                              ))
+                            ) : (
+                              <tr>
+                                <td colSpan={4}>
+                                  <p className="empty">当前目录暂无内容，或请先刷新目录。</p>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </article>
+
+                    <aside className="file-explorer-preview">
+                      <div>
+                        <h3>文件内容</h3>
+                        <span className="panel-caption">读取和保存只作用于当前文件路径</span>
+                      </div>
+                      <label className="file-explorer-file-path">
+                        <span>文件路径</span>
+                        <input
+                          className="text-input"
+                          value={sandboxFilePath}
+                          onChange={(event) => setSandboxFilePath(event.target.value)}
+                          placeholder={`${sandboxDirectoryPath.replace(/\/+$/, '') || '/workspace'}/index.ts`}
+                        />
+                      </label>
+                      <div className="file-explorer-preview-actions">
+                        <button type="button" className="secondary-btn" onClick={() => void readSandboxFile()}>
+                          读取
+                        </button>
+                        <button type="button" className="primary-btn" onClick={() => void writeSandboxFile()}>
+                          保存
+                        </button>
+                      </div>
+                      <textarea
+                        className="input-area file-editor-textarea"
+                        rows={14}
+                        value={sandboxFileContent}
+                        onChange={(event) => setSandboxFileContent(event.target.value)}
+                        placeholder="选择一个文件，或输入路径后读取。"
+                      />
+                    </aside>
+                  </section>
+                </div>
+              ) : null}
+
+              {sandboxDetailTab === 'processes' ? (
+                <div className="inspector-page-stack task-manager-page">
+                  <section className="task-manager-toolbar" aria-label="Sandbox 进程与端口工具栏">
+                    <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
+                      刷新进程
+                    </button>
+                    <label>
+                      <span>结束 PID</span>
+                      <input
+                        className="text-input mono"
+                        value={sandboxPidInput}
+                        onChange={(event) => setSandboxPidInput(event.target.value)}
+                        placeholder="PID"
+                      />
+                    </label>
+                    <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
+                      结束进程
+                    </button>
+                    <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
+                      刷新端口
+                    </button>
+                    <label>
+                      <span>端口映射</span>
+                      <input
+                        className="text-input mono"
+                        value={sandboxPortInput}
+                        onChange={(event) => setSandboxPortInput(event.target.value)}
+                        placeholder="3000"
+                      />
+                    </label>
+                    <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
+                      查询 Host
+                    </button>
+                  </section>
+
+                  <section className="task-manager-grid">
+                    <article className="inspector-card task-manager-panel">
+                      <div className="inspector-card-header">
+                        <div>
+                          <h3>进程</h3>
+                          <span className="panel-caption">{processRows.length ? `${processRows.length} 个进程` : '等待刷新进程列表'}</span>
+                        </div>
+                      </div>
+                      <div className="task-manager-table-wrap">
+                        <table className="task-manager-table">
+                          <thead>
+                            <tr>
+                              <th>PID</th>
+                              <th>用户</th>
+                              <th>CPU</th>
+                              <th>内存</th>
+                              <th>状态</th>
+                              <th>运行时长</th>
+                              <th>命令</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {processRows.length ? (
+                              processRows.slice(0, 120).map((row) => (
+                                <tr
+                                  key={`${row.pid}-${row.command}`}
+                                  className={sandboxPidInput === row.pid ? 'active' : undefined}
+                                  onClick={() => {
+                                    if (row.pidValue) setSandboxPidInput(row.pid);
+                                  }}
+                                >
+                                  <td className="mono">{row.pid}</td>
+                                  <td>{row.user}</td>
+                                  <td className="mono">{row.cpuPercent}</td>
+                                  <td className="mono">{row.memoryPercent}</td>
+                                  <td>{row.state}</td>
+                                  <td className="mono">{row.elapsed}</td>
+                                  <td>
+                                    <span className="task-manager-process-cell">
+                                      <span>{row.command}</span>
+                                      {row.args ? <small>{row.args}</small> : null}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))
+                            ) : (
+                              <tr>
+                                <td colSpan={7}>
+                                  <p className="empty">当前还没有进程数据。</p>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </article>
+
+                    <article className="inspector-card task-manager-panel">
+                      <div className="inspector-card-header">
+                        <div>
+                          <h3>端口</h3>
+                          <span className="panel-caption">{portRows.length ? `${portRows.length} 个监听项` : '等待刷新监听端口'}</span>
+                        </div>
+                      </div>
+                      <div className="task-manager-table-wrap">
+                        <table className="task-manager-table">
+                          <thead>
+                            <tr>
+                              <th>协议</th>
+                              <th>状态</th>
+                              <th>本地地址</th>
+                              <th>端口</th>
+                              <th>对端</th>
+                              <th>进程</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {portRows.length ? (
+                              portRows.map((row) => (
+                                <tr
+                                  key={row.id}
+                                  className={sandboxPortInput === row.port ? 'active' : undefined}
+                                  title={row.raw}
+                                  onClick={() => {
+                                    if (row.port !== '-') setSandboxPortInput(row.port);
+                                  }}
+                                >
+                                  <td className="mono">{row.protocol}</td>
+                                  <td>{row.status}</td>
+                                  <td className="mono">{row.localAddress}</td>
+                                  <td className="mono">{row.port}</td>
+                                  <td className="mono">{row.peerAddress}</td>
+                                  <td>{row.process}</td>
+                                </tr>
+                              ))
+                            ) : (
+                              <tr>
+                                <td colSpan={6}>
+                                  <p className="empty">当前还没有端口数据。</p>
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </article>
+                  </section>
+
+                  <details className="debug-disclosure task-manager-raw-output">
+                    <summary>原始输出</summary>
+                    <div className="debug-disclosure-body debug-meta-grid">
+                      <pre className="json-block debug-output-block">{formatSandboxProcessResult(sandboxProcessResult)}</pre>
+                      <pre className="json-block debug-output-block">{formatSandboxPortResult(sandboxPortResult)}</pre>
+                    </div>
+                  </details>
+                </div>
+              ) : null}
+
+              {sandboxDetailTab === 'terminal' ? (
+                <div className="inspector-page-stack debug-console command-debug-console">
                   <article className="inspector-log-shell terminal-console">
                     <div className="inspector-card-header">
                       <div>
-                        <h2>Runtime Terminal</h2>
-                        <span className="panel-caption">命令执行与回显统一在终端中处理</span>
+                        <h2>命令调试</h2>
+                        <span className="panel-caption">命令、输入和回显统一使用等宽字体</span>
                       </div>
                     </div>
                     <pre className="inspector-log-body terminal-body">
@@ -8498,151 +8875,13 @@ export default function App() {
                             void runSandboxCommand();
                           }
                         }}
-                        placeholder="输入 shell 命令，例如: pwd && ls -la"
+                        placeholder="pwd && ls -la"
                       />
                       <button type="button" className="primary-btn" onClick={() => void runSandboxCommand()}>
-                        Send
+                        发送
                       </button>
                     </div>
                   </article>
-
-                  <section className="debug-tool-grid advanced-tool-grid">
-                    <article className="inspector-card debug-tool-card file-manager-card">
-                      <div className="inspector-card-header">
-                        <div>
-                          <h2>File Manager</h2>
-                          <span className="panel-caption">目录浏览与文件读写分离，避免路径语义互相污染</span>
-                        </div>
-                      </div>
-                      <div className="file-manager-layout">
-                        <aside className="file-manager-menu">
-                          <div className="file-manager-path-group">
-                            <span className="panel-caption">当前目录</span>
-                            <input
-                              className="text-input"
-                              value={sandboxDirectoryPath}
-                              onChange={(event) => setSandboxDirectoryPath(event.target.value)}
-                              placeholder="/workspace"
-                            />
-                          </div>
-                          <div className="file-manager-actions">
-                            <button type="button" className="secondary-btn" onClick={() => void goSandboxFileParent()}>
-                              返回上级
-                            </button>
-                            <button type="button" className="secondary-btn" onClick={() => void listSandboxFiles()}>
-                              刷新目录
-                            </button>
-                          </div>
-                          <div className="file-manager-status">{sandboxFileStatus}</div>
-                          <div className="file-manager-list">
-                            {sandboxFileItems.length ? (
-                              sandboxFileItems.map((item) => (
-                                <button
-                                  key={item.path}
-                                  type="button"
-                                  className={`file-entry-btn ${
-                                    sandboxFilePath === item.path || sandboxDirectoryPath === item.path ? 'active' : ''
-                                  }`}
-                                  onClick={() => void openSandboxFileItem(item)}
-                                >
-                                  <span className="mono">{item.kind === 'dir' ? 'DIR' : 'FILE'}</span>
-                                  <span className="file-entry-text">
-                                    <span>{item.label}</span>
-                                    {formatFileItemMeta(item) ? (
-                                      <span className="file-entry-meta">{formatFileItemMeta(item)}</span>
-                                    ) : null}
-                                  </span>
-                                </button>
-                              ))
-                            ) : (
-                              <p className="empty">当前目录暂无内容，或请先执行“刷新目录”。</p>
-                            )}
-                          </div>
-                        </aside>
-                        <div className="file-manager-editor">
-                          <div className="file-manager-path-group">
-                            <span className="panel-caption">文件路径</span>
-                            <input
-                              className="text-input"
-                              value={sandboxFilePath}
-                              onChange={(event) => setSandboxFilePath(event.target.value)}
-                              placeholder={`${sandboxDirectoryPath.replace(/\/+$/, '') || '/workspace'}/index.ts`}
-                            />
-                          </div>
-                          <div className="file-manager-actions editor-actions">
-                            <button type="button" className="secondary-btn" onClick={() => void readSandboxFile()}>
-                              读取文件
-                            </button>
-                            <button type="button" className="primary-btn" onClick={() => void writeSandboxFile()}>
-                              保存文件
-                            </button>
-                          </div>
-                          <div className="file-manager-directory-hint">
-                            目录刷新只作用于左侧当前目录，读取与保存只作用于右侧文件路径。
-                          </div>
-                          <textarea
-                            className="input-area"
-                            rows={11}
-                            value={sandboxFileContent}
-                            onChange={(event) => setSandboxFileContent(event.target.value)}
-                            placeholder="文件内容"
-                          />
-                        </div>
-                      </div>
-                    </article>
-
-                    <article className="inspector-card debug-tool-card">
-                      <div className="inspector-card-header">
-                        <div>
-                          <h2>进程</h2>
-                          <span className="panel-caption">真实系统进程视图，按 PID 发送终止信号</span>
-                        </div>
-                      </div>
-                      <div className="debug-inline-grid">
-                        <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
-                          刷新列表
-                        </button>
-                        <input
-                          className="text-input"
-                          value={sandboxPidInput}
-                          onChange={(event) => setSandboxPidInput(event.target.value)}
-                          placeholder="PID"
-                        />
-                        <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
-                          结束
-                        </button>
-                      </div>
-                      <pre className="json-block debug-output-block">
-                        {formatSandboxProcessResult(sandboxProcessResult)}
-                      </pre>
-                    </article>
-
-                    <article className="inspector-card debug-tool-card">
-                      <div className="inspector-card-header">
-                        <div>
-                          <h2>端口</h2>
-                          <span className="panel-caption">监听情况与 Host 映射</span>
-                        </div>
-                      </div>
-                      <div className="debug-inline-grid">
-                        <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
-                          查看监听
-                        </button>
-                        <input
-                          className="text-input"
-                          value={sandboxPortInput}
-                          onChange={(event) => setSandboxPortInput(event.target.value)}
-                          placeholder="3000"
-                        />
-                        <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
-                          查询映射
-                        </button>
-                      </div>
-                      <pre className="json-block debug-output-block">
-                        {formatSandboxPortResult(sandboxPortResult)}
-                      </pre>
-                    </article>
-                  </section>
 
                   <details className="debug-disclosure">
                     <summary>运行元数据</summary>

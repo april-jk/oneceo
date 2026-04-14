@@ -604,6 +604,7 @@ export class AltusRunCoordinator {
 
     const runtime = new AltusManagedToolRuntime({
       sessionId: state.input.sessionId,
+      userId: state.input.userId,
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
       activeSkills: state.input.skills,

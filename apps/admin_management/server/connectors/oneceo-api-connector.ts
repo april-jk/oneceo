@@ -14,6 +14,7 @@ type OneceoEnvelope<T> = {
 export type TaskCreationSession = {
   id: string;
   userId?: string | null;
+  user?: AdminTaskSessionUser | null;
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: 'collecting' | 'clarifying' | 'planning' | 'executing' | 'completed' | 'failed' | string;
@@ -33,6 +34,19 @@ export type TaskCreationSession = {
   createdAt: string;
   updatedAt: string;
   messages?: TaskCreationMessage[];
+};
+
+export type AdminTaskSessionUser = {
+  id: string;
+  source: 'app_user' | 'legacy_user_id' | 'missing_app_user' | string;
+  displayName?: string | null;
+  email?: string | null;
+  status?: string | null;
+  lastLoginAt?: string | null;
+  lastSeenAt?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  sessionCreatedAt?: string | null;
 };
 
 export type TaskCreationMessage = {
@@ -55,6 +69,25 @@ export type SandboxEnvironmentRecord = {
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
+};
+
+export type TaskSessionSandboxBinding = {
+  id: string;
+  sessionId: string;
+  sandboxId: string;
+  workspaceRoot?: string | null;
+  status?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  lastActiveAt?: string | null;
+};
+
+export type TaskSessionSandboxEnvironments = {
+  taskSessionId: string;
+  binding: TaskSessionSandboxBinding | null;
+  primaryEnvironment: SandboxEnvironmentRecord | null;
+  relatedEnvironments: SandboxEnvironmentRecord[];
 };
 
 export type TaskDebugInfo = {
@@ -475,6 +508,12 @@ export class OneceoApiConnector {
 
   listSandboxEnvironmentRegistry(limit = 20) {
     return this.request<SandboxEnvironmentRecord[]>(`/api/internal/sandbox/environment-registry?limit=${limit}`);
+  }
+
+  getTaskSessionSandboxEnvironments(taskSessionId: string) {
+    return this.request<TaskSessionSandboxEnvironments>(
+      `/api/internal/sandbox/by-task-session/${encodeURIComponent(taskSessionId)}`
+    );
   }
 
   listTaskCreationSessions(limit = 20) {

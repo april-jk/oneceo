@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { db } from '../../config/database';
 import { adminUserSessions, adminUsers, appUserSessions, appUsers } from '../schema';
 
@@ -100,6 +100,16 @@ class AppUserSessionDAO {
       .where(eq(appUserSessions.id, id as any))
       .returning();
     return updated;
+  }
+
+  async getLatestByUserId(userId: string) {
+    const [record] = await db
+      .select()
+      .from(appUserSessions)
+      .where(eq(appUserSessions.userId, userId as any))
+      .orderBy(desc(appUserSessions.lastSeenAt), desc(appUserSessions.createdAt))
+      .limit(1);
+    return record || null;
   }
 }
 

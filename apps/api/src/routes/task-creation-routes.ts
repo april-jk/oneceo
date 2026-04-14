@@ -26,10 +26,12 @@ import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
 import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
+import { sandboxEnvironmentService } from '../services/sandbox-environment-service';
 import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
 import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-service';
+import { cloudflareTurnService } from '../services/cloudflare-turn-service';
 import {
   getRailwayDeploymentPanel,
   triggerRailwayRedeploy,
@@ -620,7 +622,7 @@ async function reconcileTaskSessionDuplicateEnvironments(
     const isE2b = String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
     if (isE2b) {
       try {
-        await e2bConnector.killSandbox(env.sessionId);
+        await sandboxEnvironmentService.closeEnvironment(env.sessionId);
       } catch (error) {
         if (!isSandboxNotFoundError(error)) {
           console.warn('[TASK_RUNTIME_DUPLICATE_KILL_FAILED]', {
@@ -632,12 +634,11 @@ async function reconcileTaskSessionDuplicateEnvironments(
         }
       }
     }
-    await sandboxExecutionEnvironmentDAO.updateMetadata(env.sessionId, {
-      ...metadata,
+    await setSandboxMetadata(env.sessionId, {
       dedupeReplacedAt: new Date().toISOString(),
       dedupeReason: 'task_runtime_rebound',
       dedupeReplacementSandboxId: activeOrchestratorSessionId,
-    }).catch(() => null);
+    });
     await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName || null).catch(() => null);
   }
 }
@@ -4948,9 +4949,20 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
       });
     }
 
+    let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+    try {
+      dynamicIceServers = await cloudflareTurnService.issueIceServersForUser(currentUser.userId);
+    } catch (error) {
+      console.warn('[TURN_ICE_GENERATE_FAILED]', {
+        userId: currentUser.userId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error || ''),
+      });
+    }
     const result = await ensureNekoDebug(orchestratorSessionId, {
       requireTurn: true,
       strictIceCheck: true,
+      ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
     });
     return res.json({
       success: true,

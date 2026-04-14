@@ -5850,19 +5850,13 @@ tbody tr:hover {
 .file-tree-head {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--primary) 9%, transparent), transparent 42%),
     color-mix(in srgb, var(--surface-muted) 88%, transparent);
-}
-
-.file-tree-head h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 16px;
 }
 
 .file-tree-head code {

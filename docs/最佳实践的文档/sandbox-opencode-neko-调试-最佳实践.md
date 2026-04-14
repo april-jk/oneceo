@@ -22,6 +22,24 @@
 - 直接修复策略：E2B 场景默认改为 **mux 优先**（`tcpmux`/`udpmux`），默认禁用 `epr`；仅在显式配置时才启用 `epr`。
 - 防回归要求：调试启动逻辑必须将 `webrtc mode`、`mux/epr`、`nat` 等关键配置纳入版本/刷新判定，配置改变后强制重启 n.eko，避免旧坏配置持续复用。
 
+## 2026-04 调试页交互优化（声音与锁定提示）
+
+- 调试 iframe URL 改为显式携带 `volume=0` + `mute=1` + `mute_chat=1`，用于默认静音，避免连接后出现提示音/媒体音。
+- 不再强制 `embed=1`，避免 embed 模式下 `mute_chat` 初始化逻辑失效导致提示音残留。
+- 调试 iframe 保留 `autoplay` 权限，避免浏览器在无交互场景下抛出 `NotAllowedError: play() failed` 并中断画面播放流程。
+- 保持默认锁定行为不变（符合远程控制安全预期），仅在“鼠标进入调试画面且当前处于锁定态”时显示中心大号半透明锁提示。
+- 锁状态统一以 n.eko 原生 `remote.locked` 为单一真值源：iframe 内右上角按钮与 oneceo 外部“锁定/已解锁”按钮通过 `postMessage` 双向同步（`oneceo-debug-lock:set` / `oneceo-neko-lock`），避免出现本地 `uiLocked` 与 n.eko 状态漂移。
+- oneceo 调试页锁按钮仅发送锁定/解锁意图，不在父层本地直接改锁状态；最终状态必须以 n.eko 回传结果为准。
+- 锁控链路强制单路径：移除 `/debug/lock-state` 读写控制接口，锁定/解锁仅允许走 iframe `postMessage` 桥接链路。
+- 增加桥接握手门禁：iframe 需主动上报锁状态桥接消息（`oneceo-neko-lock`，可扩展 `oneceo-neko-ready`），父层在握手前禁用锁按钮并给出“旧模板 sandbox”提示，避免按钮点击静默失效。
+
+## 2026-04 模板切换与工作区恢复（防空工作区）
+
+- 当老会话因模板不一致触发“新 sandbox”时，必须先对旧 sandbox 执行强制归档（`template_migration`），拿到快照 key，并在新 sandbox 稳定后关闭旧 sandbox。
+- 新 sandbox 创建后恢复时优先使用该快照 key 定向恢复，不可仅依赖泛化候选 key。
+- 若处于模板迁移链路且恢复失败，必须直接报错中断，禁止继续进入空工作区执行。
+- 任务会话去重关闭旧 sandbox 时，应走 `closeEnvironment` 生命周期（包含归档），避免直接 `killSandbox` 跳过归档导致恢复源缺失。
+
 ## 实施步骤（单沙箱验证）
 
 ### 1) 运行临时脚本（本地）

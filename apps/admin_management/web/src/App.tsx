@@ -53,6 +53,7 @@ type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' 
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
+type SandboxProcessToolView = 'processes' | 'ports';
 
 type UiToast = {
   id: number;
@@ -2759,6 +2760,7 @@ export default function App() {
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
   const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>('overview');
+  const [sandboxProcessToolView, setSandboxProcessToolView] = useState<SandboxProcessToolView>('processes');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
@@ -3271,6 +3273,7 @@ export default function App() {
           async () => {
             const detail = await loadSandboxRuntimeDetail(sandboxId);
             setSandboxDetailTab('overview');
+            setSandboxProcessToolView('processes');
             setSandboxConnectivityResult(null);
             setSandboxTerminalOutput('');
             setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
@@ -4000,12 +4003,12 @@ export default function App() {
     if (!sandboxModalOpen || sandboxDetailTab !== 'processes') {
       return;
     }
-    if (!sandboxProcessResult) {
+    if (sandboxProcessToolView === 'processes' && !sandboxProcessResult) {
       void loadSandboxProcesses().catch((toolError) => {
         setError(toolError instanceof Error ? toolError.message : '加载进程失败');
       });
     }
-    if (!sandboxPortResult) {
+    if (sandboxProcessToolView === 'ports' && !sandboxPortResult) {
       void inspectSandboxPorts().catch((toolError) => {
         setError(toolError instanceof Error ? toolError.message : '加载端口失败');
       });
@@ -4013,6 +4016,7 @@ export default function App() {
   }, [
     sandboxModalOpen,
     sandboxDetailTab,
+    sandboxProcessToolView,
     sandboxProcessResult,
     sandboxPortResult,
     loadSandboxProcesses,
@@ -8700,41 +8704,68 @@ export default function App() {
 
               {sandboxDetailTab === 'processes' ? (
                 <div className="inspector-page-stack task-manager-page">
-                  <section className="task-manager-toolbar" aria-label="Sandbox 进程与端口工具栏">
-                    <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
-                      刷新进程
+                  <section className="task-manager-view-switch" aria-label="选择进程或端口视图">
+                    <button
+                      type="button"
+                      className={`task-manager-view-btn ${sandboxProcessToolView === 'processes' ? 'active' : ''}`}
+                      onClick={() => setSandboxProcessToolView('processes')}
+                    >
+                      <span>进程</span>
+                      <strong>{processRows.length || '-'}</strong>
                     </button>
-                    <label>
-                      <span>结束 PID</span>
-                      <input
-                        className="text-input mono"
-                        value={sandboxPidInput}
-                        onChange={(event) => setSandboxPidInput(event.target.value)}
-                        placeholder="PID"
-                      />
-                    </label>
-                    <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
-                      结束进程
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
-                      刷新端口
-                    </button>
-                    <label>
-                      <span>端口映射</span>
-                      <input
-                        className="text-input mono"
-                        value={sandboxPortInput}
-                        onChange={(event) => setSandboxPortInput(event.target.value)}
-                        placeholder="3000"
-                      />
-                    </label>
-                    <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
-                      查询 Host
+                    <button
+                      type="button"
+                      className={`task-manager-view-btn ${sandboxProcessToolView === 'ports' ? 'active' : ''}`}
+                      onClick={() => setSandboxProcessToolView('ports')}
+                    >
+                      <span>端口</span>
+                      <strong>{portRows.length || '-'}</strong>
                     </button>
                   </section>
 
-                  <section className="task-manager-grid">
-                    <article className="inspector-card task-manager-panel">
+                  {sandboxProcessToolView === 'processes' ? (
+                    <section className="task-manager-toolbar" aria-label="Sandbox 进程工具栏">
+                      <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
+                        刷新进程
+                      </button>
+                      <label>
+                        <span>结束 PID</span>
+                        <input
+                          className="text-input mono"
+                          value={sandboxPidInput}
+                          onChange={(event) => setSandboxPidInput(event.target.value)}
+                          placeholder="PID"
+                        />
+                      </label>
+                      <button type="button" className="primary-btn" onClick={() => void killSandboxProcess()}>
+                        结束进程
+                      </button>
+                      <span className="task-manager-toolbar-note">单击表格行可把 PID 带入结束输入框</span>
+                    </section>
+                  ) : (
+                    <section className="task-manager-toolbar" aria-label="Sandbox 端口工具栏">
+                      <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
+                        刷新端口
+                      </button>
+                      <label>
+                        <span>端口映射</span>
+                        <input
+                          className="text-input mono"
+                          value={sandboxPortInput}
+                          onChange={(event) => setSandboxPortInput(event.target.value)}
+                          placeholder="3000"
+                        />
+                      </label>
+                      <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
+                        查询 Host
+                      </button>
+                      <span className="task-manager-toolbar-note">单击监听行可把端口带入映射输入框</span>
+                    </section>
+                  )}
+
+                  <section className="task-manager-fullscreen">
+                    {sandboxProcessToolView === 'processes' ? (
+                      <article className="inspector-card task-manager-panel task-manager-panel-full">
                       <div className="inspector-card-header">
                         <div>
                           <h3>进程</h3>
@@ -8788,9 +8819,9 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                    </article>
-
-                    <article className="inspector-card task-manager-panel">
+                      </article>
+                    ) : (
+                      <article className="inspector-card task-manager-panel task-manager-panel-full">
                       <div className="inspector-card-header">
                         <div>
                           <h3>端口</h3>
@@ -8838,14 +8869,18 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                    </article>
+                      </article>
+                    )}
                   </section>
 
                   <details className="debug-disclosure task-manager-raw-output">
                     <summary>原始输出</summary>
                     <div className="debug-disclosure-body debug-meta-grid">
-                      <pre className="json-block debug-output-block">{formatSandboxProcessResult(sandboxProcessResult)}</pre>
-                      <pre className="json-block debug-output-block">{formatSandboxPortResult(sandboxPortResult)}</pre>
+                      <pre className="json-block debug-output-block">
+                        {sandboxProcessToolView === 'processes'
+                          ? formatSandboxProcessResult(sandboxProcessResult)
+                          : formatSandboxPortResult(sandboxPortResult)}
+                      </pre>
                     </div>
                   </details>
                 </div>

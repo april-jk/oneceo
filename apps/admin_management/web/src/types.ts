@@ -257,6 +257,7 @@ export interface ConversationSession {
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: string;
+  executor?: string | null;
   pendingQuestion?: string;
   pendingOptions?: string[];
   createdAt: string;

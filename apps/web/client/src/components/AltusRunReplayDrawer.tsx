@@ -3,11 +3,11 @@ import { Activity, Check, ChevronLeft, ChevronRight, Clock3, ExternalLink, Folde
 import AltusArtifactPreviewCard, { type AltusArtifactFile } from "@/components/AltusArtifactPreviewCard";
 import { Button } from "@/components/ui/button";
 import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerTitle,
-} from "@/components/ui/drawer";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
@@ -143,16 +143,19 @@ export default function AltusRunReplayDrawer({
   const completedCount = actions.filter((action) => action.status === "completed").length;
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange} direction="bottom">
-      <DrawerContent className="h-[90dvh] max-h-[90dvh] overflow-hidden flex flex-col">
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="top-4 right-4 bottom-4 left-auto flex h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col overflow-hidden rounded-2xl border border-border/70 p-0 shadow-sm sm:max-w-none md:w-[calc((100vw-6rem)*0.66)] lg:w-[calc((100vw-18rem)*0.66)] [&>button.absolute]:hidden"
+      >
         <div className="h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur-sm">
           <div className="flex items-center min-w-0">
-            <DrawerTitle className="text-base font-semibold truncate">
+            <SheetTitle className="text-base font-semibold truncate">
               {runTitle || "Altus Run Replay"}
-            </DrawerTitle>
-            <DrawerDescription className="sr-only">
+            </SheetTitle>
+            <SheetDescription className="sr-only">
               Altus 接管模式的 Actions 与 Files 回放查看器
-            </DrawerDescription>
+            </SheetDescription>
           </div>
           <div className="flex items-center gap-1.5">
             <div className="relative flex items-center rounded-full bg-zinc-100 dark:bg-zinc-800/90 p-[2px]">
@@ -191,7 +194,7 @@ export default function AltusRunReplayDrawer({
               onClick={() => onOpenChange(false)}
               title="关闭"
             >
-              <ChevronRight className="h-4 w-4 rotate-90" />
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -445,7 +448,7 @@ export default function AltusRunReplayDrawer({
             </Button>
           </div>
         </div>
-      </DrawerContent>
-    </Drawer>
+      </SheetContent>
+    </Sheet>
   );
 }

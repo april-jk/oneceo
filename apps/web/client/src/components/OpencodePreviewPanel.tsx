@@ -118,7 +118,7 @@ interface OpencodePreviewPanelProps {
 
 type PreviewTab = "files" | "changes" | "debug" | "deployment";
 const DIRECTORY_PAGE_SIZE = 200;
-type DirectoryLoadState = {
+export type DirectoryLoadState = {
   initialized: boolean;
   loading: boolean;
   error: string | null;
@@ -145,31 +145,25 @@ function isRetryableDebugError(message: string): boolean {
   );
 }
 
-export default function OpencodePreviewPanel({
+export function useWorkspaceFilePreviewState({
   messages,
   sessionId,
   open,
-  onToggle,
-  maximized = false,
-  onToggleMaximized,
-  activeTab,
-  onTabChange,
-  selectedDiffId: controlledSelectedDiffId,
-  onSelectDiff,
   runtimeReady,
   runtimeStarting,
   onEnsureRuntime,
-  onRequestStartDebugByMessage,
-  className,
   selectedWorkspacePath,
-}: OpencodePreviewPanelProps) {
-  const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
-
-  const [internalTab, setInternalTab] = useState<PreviewTab>("files");
-  const [internalSelectedDiffId, setInternalSelectedDiffId] = useState<
-    string | null
-  >(null);
-  const [autoDiff, setAutoDiff] = useState(true);
+  diffItems = [],
+}: {
+  messages?: AgentMessage[];
+  sessionId?: string | null;
+  open: boolean;
+  runtimeReady?: boolean;
+  runtimeStarting?: boolean;
+  onEnsureRuntime?: () => Promise<void>;
+  selectedWorkspacePath?: string | null;
+  diffItems?: PreviewDiffItem[];
+}) {
   const [tree, setTree] = useState<WorkspaceTree | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -181,28 +175,9 @@ export default function OpencodePreviewPanel({
   const [dirState, setDirState] = useState<Record<string, DirectoryLoadState>>(
     {},
   );
-  const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(
-    null,
-  );
-  const [debugLoading, setDebugLoading] = useState(false);
-  const [debugStarting, setDebugStarting] = useState(false);
-  const [debugError, setDebugError] = useState<string | null>(null);
-  const [deploymentInfo, setDeploymentInfo] =
-    useState<TaskCreationDeploymentInfo | null>(null);
-  const [deploymentLoading, setDeploymentLoading] = useState(false);
-  const [deploymentError, setDeploymentError] = useState<string | null>(null);
-  const [deploymentAction, setDeploymentAction] = useState<
-    "deploy" | "redeploy" | "rollback" | null
-  >(null);
-  const [selectedDeploymentId, setSelectedDeploymentId] = useState<
-    string | null
-  >(null);
   const refreshTimerRef = useRef<number | null>(null);
   const fileRequestSequenceRef = useRef(0);
-  const debugRuntimeBootRef = useRef(false);
-  const debugPollRef = useRef<number | null>(null);
-  const deploymentPollRef = useRef<number | null>(null);
-  const currentTab = activeTab ?? internalTab;
+  const ensureRuntimeRef = useRef(onEnsureRuntime);
   const diffDerivedTree = useMemo(
     () => buildWorkspaceTreeFromDiffItems(sessionId, diffItems),
     [sessionId, diffItems],
@@ -212,29 +187,9 @@ export default function OpencodePreviewPanel({
     [sessionId, tree, diffDerivedTree],
   );
 
-  const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
-  const setSelectedDiffId = (id: string | null) => {
-    if (onSelectDiff) {
-      onSelectDiff(id);
-    } else {
-      setInternalSelectedDiffId(id);
-    }
-  };
-
   useEffect(() => {
-    if (!open) return;
-    if (controlledSelectedDiffId) return;
-    if (autoDiff) {
-      const latest = diffItems[diffItems.length - 1];
-      setSelectedDiffId(latest ? latest.id : null);
-    } else if (
-      selectedDiffId &&
-      !diffItems.find((item) => item.id === selectedDiffId)
-    ) {
-      const latest = diffItems[diffItems.length - 1];
-      setSelectedDiffId(latest ? latest.id : null);
-    }
-  }, [autoDiff, diffItems, open, selectedDiffId, controlledSelectedDiffId]);
+    ensureRuntimeRef.current = onEnsureRuntime;
+  }, [onEnsureRuntime]);
 
   const normalizeWorkspacePath = (value: string) =>
     normalizeWorkspaceRelativePath(value, sessionId);
@@ -366,8 +321,8 @@ export default function OpencodePreviewPanel({
     const normalizedPath = normalizeWorkspacePath(path);
     if (!normalizedPath) return;
     if (runtimeReady === false) {
-      if (onEnsureRuntime) {
-        await onEnsureRuntime();
+      if (ensureRuntimeRef.current) {
+        await ensureRuntimeRef.current();
       } else {
         return;
       }
@@ -440,8 +395,8 @@ export default function OpencodePreviewPanel({
       return;
     }
     if (runtimeReady === false) {
-      if (mode === "manual" && onEnsureRuntime) {
-        await onEnsureRuntime();
+      if (mode === "manual" && ensureRuntimeRef.current) {
+        await ensureRuntimeRef.current();
       } else {
         setTree(null);
         setDirState({});
@@ -572,6 +527,72 @@ export default function OpencodePreviewPanel({
   ]);
 
   useEffect(() => {
+    if (!messages?.length) return;
+    if (!open || !sessionId) return;
+    if (runtimeReady === false) return;
+    const last = messages[messages.length - 1];
+    if (!shouldRefreshFromMessage(last)) return;
+    if (refreshTimerRef.current) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      void refreshTree("auto");
+    }, 800);
+    return () => {
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [messages, open, sessionId, runtimeReady]);
+
+  return {
+    effectiveTree,
+    treeError,
+    treeLoading,
+    selectedPath,
+    fileData,
+    fileError,
+    fileLoading,
+    expandedPaths,
+    dirState,
+    refreshTree,
+    handleFileSelect,
+    handleTogglePath,
+    handleLoadMoreDirectory,
+  };
+}
+
+export function useWorkspaceDebugPreviewState({
+  sessionId,
+  open,
+  active,
+  runtimeReady,
+  runtimeStarting,
+  onEnsureRuntime,
+}: {
+  sessionId?: string | null;
+  open: boolean;
+  active: boolean;
+  runtimeReady?: boolean;
+  runtimeStarting?: boolean;
+  onEnsureRuntime?: () => Promise<void>;
+}) {
+  const [debugInfo, setDebugInfo] = useState<TaskCreationDebugInfo | null>(
+    null,
+  );
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugStarting, setDebugStarting] = useState(false);
+  const [debugError, setDebugError] = useState<string | null>(null);
+  const debugRuntimeBootRef = useRef(false);
+  const debugPollRef = useRef<number | null>(null);
+  const ensureRuntimeRef = useRef(onEnsureRuntime);
+
+  useEffect(() => {
+    ensureRuntimeRef.current = onEnsureRuntime;
+  }, [onEnsureRuntime]);
+
+  useEffect(() => {
     debugRuntimeBootRef.current = false;
     if (debugPollRef.current) {
       window.clearTimeout(debugPollRef.current);
@@ -584,26 +605,13 @@ export default function OpencodePreviewPanel({
   }, [sessionId]);
 
   useEffect(() => {
-    if (deploymentPollRef.current) {
-      window.clearTimeout(deploymentPollRef.current);
-      deploymentPollRef.current = null;
-    }
-    setDeploymentInfo(null);
-    setDeploymentError(null);
-    setDeploymentLoading(false);
-    setDeploymentAction(null);
-    setSelectedDeploymentId(null);
-  }, [sessionId]);
-
-  useEffect(() => {
     if (runtimeReady === false) {
       debugRuntimeBootRef.current = false;
     }
   }, [runtimeReady]);
 
   useEffect(() => {
-    if (!open) return;
-    if (currentTab !== "debug") return;
+    if (!open || !active) return;
     if (!sessionId) {
       setDebugInfo(null);
       setDebugError("缺少会话信息");
@@ -612,10 +620,14 @@ export default function OpencodePreviewPanel({
     if (runtimeReady === false) {
       setDebugInfo(null);
       setDebugError(null);
-      if (onEnsureRuntime && !runtimeStarting && !debugRuntimeBootRef.current) {
+      if (
+        ensureRuntimeRef.current &&
+        !runtimeStarting &&
+        !debugRuntimeBootRef.current
+      ) {
         debugRuntimeBootRef.current = true;
         setDebugStarting(true);
-        onEnsureRuntime()
+        ensureRuntimeRef.current()
           .catch(() => undefined)
           .finally(() => {
             setDebugStarting(false);
@@ -624,7 +636,10 @@ export default function OpencodePreviewPanel({
       return;
     }
     let cancelled = false;
-    const scheduleDebugPoll = (silent = true, delayMs = DEBUG_POLL_STARTING_MS) => {
+    const scheduleDebugPoll = (
+      silent = true,
+      delayMs = DEBUG_POLL_STARTING_MS,
+    ) => {
       if (debugPollRef.current) {
         window.clearTimeout(debugPollRef.current);
       }
@@ -646,7 +661,6 @@ export default function OpencodePreviewPanel({
           if (!info?.ready || info?.status === "starting") {
             scheduleDebugPoll(true, DEBUG_POLL_STARTING_MS);
           } else {
-            // Keep a low-frequency heartbeat to recover from transient iframe/debug service issues.
             scheduleDebugPoll(true, DEBUG_POLL_READY_MS);
           }
         }
@@ -655,7 +669,6 @@ export default function OpencodePreviewPanel({
         const message =
           error instanceof Error ? error.message : "加载调试信息失败";
         setDebugError(message);
-        // Keep latest ready info in UI to avoid a blank panel caused by transient timeout.
         if (isRetryableDebugError(message)) {
           scheduleDebugPoll(true, DEBUG_POLL_RETRY_MS);
         }
@@ -674,7 +687,127 @@ export default function OpencodePreviewPanel({
         debugPollRef.current = null;
       }
     };
-  }, [open, currentTab, sessionId, runtimeReady]);
+  }, [open, active, sessionId, runtimeReady, runtimeStarting]);
+
+  const refreshDebug = async () => {
+    if (!sessionId) {
+      setDebugError("缺少会话信息");
+      return;
+    }
+    setDebugLoading(true);
+    setDebugError(null);
+    try {
+      const info = await getTaskCreationDebugInfo(sessionId);
+      setDebugInfo(info);
+    } catch (error) {
+      setDebugError(error instanceof Error ? error.message : "加载调试信息失败");
+    } finally {
+      setDebugLoading(false);
+    }
+  };
+
+  return {
+    debugInfo,
+    debugLoading,
+    debugStarting,
+    debugError,
+    refreshDebug,
+    setDebugError,
+    setDebugStarting,
+  };
+}
+
+export default function OpencodePreviewPanel({
+  messages,
+  sessionId,
+  open,
+  onToggle,
+  maximized = false,
+  onToggleMaximized,
+  activeTab,
+  onTabChange,
+  selectedDiffId: controlledSelectedDiffId,
+  onSelectDiff,
+  runtimeReady,
+  runtimeStarting,
+  onEnsureRuntime,
+  onRequestStartDebugByMessage,
+  className,
+  selectedWorkspacePath,
+}: OpencodePreviewPanelProps) {
+  const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
+
+  const [internalTab, setInternalTab] = useState<PreviewTab>("files");
+  const [internalSelectedDiffId, setInternalSelectedDiffId] = useState<
+    string | null
+  >(null);
+  const [autoDiff, setAutoDiff] = useState(true);
+  const [deploymentInfo, setDeploymentInfo] =
+    useState<TaskCreationDeploymentInfo | null>(null);
+  const [deploymentLoading, setDeploymentLoading] = useState(false);
+  const [deploymentError, setDeploymentError] = useState<string | null>(null);
+  const [deploymentAction, setDeploymentAction] = useState<
+    "deploy" | "redeploy" | "rollback" | null
+  >(null);
+  const [selectedDeploymentId, setSelectedDeploymentId] = useState<
+    string | null
+  >(null);
+  const deploymentPollRef = useRef<number | null>(null);
+  const currentTab = activeTab ?? internalTab;
+  const filePreview = useWorkspaceFilePreviewState({
+    messages,
+    sessionId,
+    open,
+    runtimeReady,
+    runtimeStarting,
+    onEnsureRuntime,
+    selectedWorkspacePath,
+    diffItems,
+  });
+  const debugPreview = useWorkspaceDebugPreviewState({
+    sessionId,
+    open,
+    active: currentTab === "debug",
+    runtimeReady,
+    runtimeStarting,
+    onEnsureRuntime,
+  });
+
+  const selectedDiffId = controlledSelectedDiffId ?? internalSelectedDiffId;
+  const setSelectedDiffId = (id: string | null) => {
+    if (onSelectDiff) {
+      onSelectDiff(id);
+    } else {
+      setInternalSelectedDiffId(id);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    if (controlledSelectedDiffId) return;
+    if (autoDiff) {
+      const latest = diffItems[diffItems.length - 1];
+      setSelectedDiffId(latest ? latest.id : null);
+    } else if (
+      selectedDiffId &&
+      !diffItems.find((item) => item.id === selectedDiffId)
+    ) {
+      const latest = diffItems[diffItems.length - 1];
+      setSelectedDiffId(latest ? latest.id : null);
+    }
+  }, [autoDiff, diffItems, open, selectedDiffId, controlledSelectedDiffId]);
+
+  useEffect(() => {
+    if (deploymentPollRef.current) {
+      window.clearTimeout(deploymentPollRef.current);
+      deploymentPollRef.current = null;
+    }
+    setDeploymentInfo(null);
+    setDeploymentError(null);
+    setDeploymentLoading(false);
+    setDeploymentAction(null);
+    setSelectedDeploymentId(null);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!open) return;
@@ -769,31 +902,11 @@ export default function OpencodePreviewPanel({
     selectedDeploymentId,
   ]);
 
-  useEffect(() => {
-    if (!open) return;
-    if (!sessionId) return;
-    if (runtimeReady === false) return;
-    const last = messages[messages.length - 1];
-    if (!shouldRefreshFromMessage(last)) return;
-    if (refreshTimerRef.current) {
-      window.clearTimeout(refreshTimerRef.current);
-    }
-    refreshTimerRef.current = window.setTimeout(() => {
-      void refreshTree("auto");
-    }, 800);
-    return () => {
-      if (refreshTimerRef.current) {
-        window.clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
-    };
-  }, [messages, open, sessionId]);
-
   if (!open) return null;
 
   const currentDiff =
     diffItems.find((item) => item.id === selectedDiffId) || null;
-  const treeCount = effectiveTree?.items.length || 0;
+  const treeCount = filePreview.effectiveTree?.items.length || 0;
 
   const refreshDeployment = async (deploymentId?: string) => {
     if (!sessionId) {
@@ -952,19 +1065,19 @@ export default function OpencodePreviewPanel({
         >
           <FilePreview
             sessionId={sessionId}
-            tree={effectiveTree}
-            loading={treeLoading}
-            error={treeError}
-            selectedPath={selectedPath}
-            file={fileData}
-            contentError={fileError}
-            contentLoading={fileLoading}
-            expandedPaths={expandedPaths}
-            dirState={dirState}
-            onTogglePath={handleTogglePath}
-            onLoadMoreDir={handleLoadMoreDirectory}
-            onRefresh={() => void refreshTree("manual")}
-            onSelectFile={handleFileSelect}
+            tree={filePreview.effectiveTree}
+            loading={filePreview.treeLoading}
+            error={filePreview.treeError}
+            selectedPath={filePreview.selectedPath}
+            file={filePreview.fileData}
+            contentError={filePreview.fileError}
+            contentLoading={filePreview.fileLoading}
+            expandedPaths={filePreview.expandedPaths}
+            dirState={filePreview.dirState}
+            onTogglePath={filePreview.handleTogglePath}
+            onLoadMoreDir={filePreview.handleLoadMoreDirectory}
+            onRefresh={() => void filePreview.refreshTree("manual")}
+            onSelectFile={filePreview.handleFileSelect}
             runtimeReady={runtimeReady !== false}
             runtimeStarting={runtimeStarting === true}
           />
@@ -1023,26 +1136,26 @@ export default function OpencodePreviewPanel({
           aria-hidden={currentTab !== "debug"}
         >
           <DebugPreview
-            info={debugInfo}
-            loading={debugLoading}
-            error={debugError}
+            info={debugPreview.debugInfo}
+            loading={debugPreview.debugLoading}
+            error={debugPreview.debugError}
             runtimeReady={runtimeReady !== false}
-            starting={debugStarting}
+            starting={debugPreview.debugStarting}
             onRequestStartDebugByMessage={onRequestStartDebugByMessage}
             onStart={async () => {
               if (runtimeReady === false) {
                 if (onEnsureRuntime) {
-                  setDebugStarting(true);
+                  debugPreview.setDebugStarting(true);
                   try {
                     await onEnsureRuntime();
                   } finally {
-                    setDebugStarting(false);
+                    debugPreview.setDebugStarting(false);
                   }
                 }
                 return;
               }
               if (!onRequestStartDebugByMessage) {
-                setDebugError("缺少启动调试消息入口");
+                debugPreview.setDebugError("缺少启动调试消息入口");
                 return;
               }
               onRequestStartDebugByMessage();
@@ -1364,7 +1477,7 @@ function mergeWorkspaceTrees(
   };
 }
 
-function FilePreview({
+export function FilePreview({
   sessionId,
   tree,
   loading,
@@ -1913,8 +2026,9 @@ function TreeList({
           sessionId && !isDir ? getWorkspaceRawFileUrl(sessionId, node.path) : "";
         return (
           <div key={node.path}>
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               onClick={() => {
                 if (isDir) {
                   onTogglePath(node.path);
@@ -1922,7 +2036,17 @@ function TreeList({
                   onSelectFile(node.path);
                 }
               }}
-              className={`group w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] transition-colors border ${
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  if (isDir) {
+                    onTogglePath(node.path);
+                  } else {
+                    onSelectFile(node.path);
+                  }
+                }
+              }}
+              className={`group w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] transition-colors border cursor-pointer ${
                 selectedPath === node.path
                   ? "bg-[var(--fill-tsp-white-dark)] border-slate-200 text-[var(--text-primary)]"
                   : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-slate-200"
@@ -1972,7 +2096,7 @@ function TreeList({
                   </button>
                 ) : null}
               </span>
-            </button>
+            </div>
             {isDir && isOpen ? (
               <div className="space-y-1">
                 {node.children.length > 0 ? (
@@ -2086,7 +2210,7 @@ function DiffPreview({
   );
 }
 
-function DeploymentPreview({
+export function DeploymentPreview({
   sessionId,
   info,
   loading,
@@ -2237,28 +2361,6 @@ function DeploymentPreview({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">部署</span>
-          <span
-            className={cn(
-              "rounded-full border px-2 py-0.5 text-[11px]",
-              statusMeta.badgeClass,
-            )}
-          >
-            {statusMeta.label}
-          </span>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 text-xs text-muted-foreground"
-          onClick={() => onRefresh(currentDeploymentId || undefined)}
-        >
-          <RefreshCw className="size-3.5" />
-          刷新状态
-        </Button>
-      </div>
       <div className="border-b border-border px-4 py-2">
         <div className="flex gap-2 overflow-x-auto pb-1">
           <DeploymentMenuButton
@@ -2292,6 +2394,28 @@ function DeploymentPreview({
             onClick={() => setSection("settings")}
           />
         </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">部署</span>
+          <span
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[11px]",
+              statusMeta.badgeClass,
+            )}
+          >
+            {statusMeta.label}
+          </span>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
+          onClick={() => onRefresh(currentDeploymentId || undefined)}
+        >
+          <RefreshCw className="size-3.5" />
+          刷新状态
+        </Button>
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto overscroll-contain px-4 py-4 space-y-4">
@@ -4738,7 +4862,7 @@ function DeploymentPlaceholderCard({
   );
 }
 
-function DebugPreview({
+export function DebugPreview({
   info,
   loading,
   error,

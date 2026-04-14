@@ -5673,6 +5673,17 @@ tbody tr:hover {
   display: grid;
   gap: 12px;
   position: relative;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, var(--primary) 12%);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--primary) 10%, transparent) 0%, transparent 34%),
+    linear-gradient(315deg, color-mix(in srgb, var(--secondary) 9%, transparent) 0%, transparent 38%),
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--border) 22%, transparent) 0 1px, transparent 1px 34px),
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--border) 18%, transparent) 0 1px, transparent 1px 34px),
+    color-mix(in srgb, var(--surface-muted) 78%, var(--bg));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 28%, transparent);
 }
 
 .file-explorer-toolbar {
@@ -5681,10 +5692,11 @@ tbody tr:hover {
   gap: 12px;
   align-items: end;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--surface-elevated));
   border-radius: 8px;
-  background: var(--surface-strong);
-  box-shadow: var(--shadow-soft);
+  background: color-mix(in srgb, var(--surface-strong) 88%, transparent);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--text) 7%, transparent);
+  backdrop-filter: blur(12px);
 }
 
 .file-explorer-nav-actions {
@@ -5726,11 +5738,12 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-height: min(68vh, 760px);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--surface-elevated));
   border-radius: 8px;
   overflow: hidden;
-  background: var(--surface-strong);
-  box-shadow: var(--shadow-soft);
+  background: color-mix(in srgb, var(--surface-strong) 88%, transparent);
+  box-shadow: 0 20px 42px color-mix(in srgb, var(--text) 8%, transparent);
+  backdrop-filter: blur(10px);
 }
 
 .file-explorer-page.is-transfer-active .file-explorer-toolbar,
@@ -5830,7 +5843,9 @@ tbody tr:hover {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
-  background: var(--surface-elevated);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-elevated) 88%, transparent), color-mix(in srgb, var(--surface-elevated) 76%, var(--bg))),
+    color-mix(in srgb, var(--surface-elevated) 92%, transparent);
 }
 
 .file-tree-head {
@@ -5840,7 +5855,9 @@ tbody tr:hover {
   gap: 12px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 9%, transparent), transparent 42%),
+    color-mix(in srgb, var(--surface-muted) 88%, transparent);
 }
 
 .file-tree-head h3 {
@@ -5867,8 +5884,9 @@ tbody tr:hover {
   overflow: auto;
   padding: 6px 0;
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--border) 28%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
-    var(--surface-elevated);
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 8%, transparent), transparent 24%),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 24%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
+    color-mix(in srgb, var(--surface-elevated) 88%, transparent);
 }
 
 .file-tree-row {

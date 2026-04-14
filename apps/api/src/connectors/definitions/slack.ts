@@ -38,11 +38,11 @@ export function resolveSlackOauthProvider(): ConnectorOauthProvider | undefined 
     redirectUri: redirectUri || undefined,
     authorizationUrl:
       asText(process.env.SLACK_CONNECTOR_AUTHORIZE_URL) ||
-      'https://slack.com/oauth/v2_user/authorize',
+      'https://slack.com/oauth/v2/authorize',
     tokenUrl:
       asText(process.env.SLACK_CONNECTOR_TOKEN_URL) ||
-      'https://slack.com/api/oauth.v2.user.access',
-    scopeParam: 'scope',
+      'https://slack.com/api/oauth.v2.access',
+    scopeParam: 'user_scope',
     scopes: parseScopes(process.env.SLACK_CONNECTOR_USER_SCOPES, [
       'channels:history',
       'groups:history',

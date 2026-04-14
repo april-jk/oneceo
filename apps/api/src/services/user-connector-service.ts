@@ -129,6 +129,36 @@ async function fetchJson(url: string, init: RequestInit): Promise<Record<string,
   return payload;
 }
 
+function assertSlackOauthPayload(tokenPayload: Record<string, unknown>) {
+  if (tokenPayload.ok === false) {
+    throw new Error(asText(tokenPayload.error) || 'slack_oauth_failed');
+  }
+}
+
+function resolveSlackUserOauthSecret(tokenPayload: Record<string, unknown>): ConnectorAccountSecret {
+  const authedUser = pickObject(tokenPayload.authed_user);
+  const accessToken =
+    asText(authedUser.access_token) ||
+    (asText(tokenPayload.token_type) === SLACK_USER_TOKEN_TYPE ? asText(tokenPayload.access_token) : '');
+  const tokenType = asText(authedUser.token_type) || asText(tokenPayload.token_type) || undefined;
+  const refreshToken = asText(authedUser.refresh_token) || asText(tokenPayload.refresh_token) || undefined;
+  const scope = asText(authedUser.scope) || asText(tokenPayload.scope) || undefined;
+
+  if (!accessToken) {
+    throw new Error('Slack OAuth 未返回 user access token');
+  }
+  if (tokenType !== SLACK_USER_TOKEN_TYPE) {
+    throw new Error('Slack OAuth 未返回 user token');
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    tokenType,
+    scope,
+  };
+}
+
 function buildProfileView(
   row: {
     id: string;
@@ -1239,8 +1269,11 @@ export class UserConnectorService {
         headers,
         body: payload,
       });
-      const accessToken = asText(tokenPayload.access_token);
-      if (!accessToken) {
+      if (connectorKey === 'slack') {
+        assertSlackOauthPayload(tokenPayload);
+      }
+      let accessToken = asText(tokenPayload.access_token);
+      if (!accessToken && connectorKey !== 'slack') {
         throw new Error('OAuth 回调未返回 access_token');
       }
       let metadataJson = pickObject(profile.metadataJson);
@@ -1257,12 +1290,19 @@ export class UserConnectorService {
             ? buildNotionProfileName(displayName)
             : buildDefaultProfileName(connectorKey, catalogItem.name));
 
-      const secret: ConnectorAccountSecret = {
-        accessToken,
-        refreshToken: asText(tokenPayload.refresh_token) || undefined,
-        tokenType: asText(tokenPayload.token_type) || undefined,
-        scope: asText(tokenPayload.scope) || undefined,
-      };
+      const secret: ConnectorAccountSecret =
+        connectorKey === 'slack'
+          ? resolveSlackUserOauthSecret(tokenPayload)
+          : {
+              accessToken,
+              refreshToken: asText(tokenPayload.refresh_token) || undefined,
+              tokenType: asText(tokenPayload.token_type) || undefined,
+              scope: asText(tokenPayload.scope) || undefined,
+            };
+      accessToken = asText(secret.accessToken);
+      if (!accessToken) {
+        throw new Error('OAuth 回调未返回 access_token');
+      }
 
       let authStatus: ConnectorAuthStatus = 'authorized';
       let lastError: string | null = null;

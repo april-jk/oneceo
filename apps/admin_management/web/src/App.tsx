@@ -2991,9 +2991,11 @@ export default function App() {
   const [sandboxFileOperation, setSandboxFileOperation] = useState<SandboxFileOperation | null>(null);
   const [sandboxFileTransferProgress, setSandboxFileTransferProgress] = useState<SandboxFileTransferProgress | null>(null);
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
+  const [sandboxProcessFetchedAt, setSandboxProcessFetchedAt] = useState<number | null>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
-  const [sandboxPortInput, setSandboxPortInput] = useState('3000');
   const [sandboxPortResult, setSandboxPortResult] = useState<unknown>(null);
+  const [sandboxPortFetchedAt, setSandboxPortFetchedAt] = useState<number | null>(null);
+  const [sandboxToolSnapshotClock, setSandboxToolSnapshotClock] = useState(() => Date.now());
   const [sandboxCreatePayload, setSandboxCreatePayload] = useState(
     '{"template":"opencode-playwright-mcp-v2-min-eko","timeoutMs":300000}'
   );
@@ -3507,7 +3509,9 @@ export default function App() {
             setSandboxFileTransferProgress(null);
             setSandboxFileStatus('目录根已重置为 /');
             setSandboxProcessResult(null);
+            setSandboxProcessFetchedAt(null);
             setSandboxPortResult(null);
+            setSandboxPortFetchedAt(null);
             setSandboxModalOpen(true);
           },
           { fallbackError: '加载 Sandbox 详情失败' }
@@ -3676,7 +3680,10 @@ export default function App() {
     try {
       setError(null);
       const result = await api.runSandboxToolAction(sandboxId, 'system.process.list');
+      const fetchedAt = Date.now();
       setSandboxProcessResult(result);
+      setSandboxProcessFetchedAt(fetchedAt);
+      setSandboxToolSnapshotClock(fetchedAt);
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '获取进程列表失败');
     }
@@ -3971,27 +3978,14 @@ export default function App() {
     try {
       setError(null);
       const result = await api.runSandboxToolAction(sandboxId, 'system.ports.inspect');
+      const fetchedAt = Date.now();
       setSandboxPortResult(result);
+      setSandboxPortFetchedAt(fetchedAt);
+      setSandboxToolSnapshotClock(fetchedAt);
     } catch (toolError) {
       setError(toolError instanceof Error ? toolError.message : '查看端口失败');
     }
   }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId]);
-
-  const resolveSandboxHost = useCallback(async () => {
-    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    const port = Number(sandboxPortInput);
-    if (!sandboxId || !Number.isFinite(port) || port <= 0) return;
-    try {
-      const result = await api.runSandboxToolAction(sandboxId, 'sandbox.host', {
-        port,
-      });
-      setSandboxPortResult({
-        stdout: `端口 ${port} 对外地址：https://${String(result)}`,
-      });
-    } catch (toolError) {
-      setError(toolError instanceof Error ? toolError.message : '查询端口映射失败');
-    }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxPortInput]);
 
   const createSandbox = useCallback(async () => {
     try {
@@ -4433,6 +4427,29 @@ export default function App() {
     sandboxPortResult,
     loadSandboxProcesses,
     inspectSandboxPorts,
+  ]);
+
+  useEffect(() => {
+    if (!sandboxModalOpen || sandboxDetailTab !== 'processes') {
+      return;
+    }
+    const activeFetchedAt = sandboxProcessToolView === 'processes' ? sandboxProcessFetchedAt : sandboxPortFetchedAt;
+    if (!activeFetchedAt) {
+      return;
+    }
+    setSandboxToolSnapshotClock(Date.now());
+    const timer = window.setInterval(() => {
+      setSandboxToolSnapshotClock(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [
+    sandboxModalOpen,
+    sandboxDetailTab,
+    sandboxProcessToolView,
+    sandboxProcessFetchedAt,
+    sandboxPortFetchedAt,
   ]);
 
   useEffect(() => {
@@ -7914,6 +7931,12 @@ export default function App() {
     );
     const processRows = getSandboxProcessRows(sandboxProcessResult);
     const portRows = getSandboxPortRows(sandboxPortResult);
+    const processListAgeLabel = sandboxProcessFetchedAt
+      ? `这是 ${Math.max(0, Math.floor((sandboxToolSnapshotClock - sandboxProcessFetchedAt) / 1000))} 秒前的进程列表`
+      : '等待刷新进程列表';
+    const portListAgeLabel = sandboxPortFetchedAt
+      ? `这是 ${Math.max(0, Math.floor((sandboxToolSnapshotClock - sandboxPortFetchedAt) / 1000))} 秒前的端口列表`
+      : '等待刷新端口列表';
 
     return (
       <>
@@ -9169,7 +9192,10 @@ export default function App() {
                             <h3>进程</h3>
                             <span className="task-manager-panel-pill">{processRows.length ? `${processRows.length} 个进程` : '等待刷新'}</span>
                           </div>
-                          <span className="task-manager-toolbar-note">点击列表行可快速带入 PID</span>
+                          <div className="task-manager-panel-meta">
+                            <span className="task-manager-toolbar-note">点击列表行可快速带入 PID</span>
+                            <span className="task-manager-panel-age mono">{processListAgeLabel}</span>
+                          </div>
                         </div>
                         <div className="task-manager-panel-tools" aria-label="Sandbox 进程操作">
                           <button type="button" className="secondary-btn" onClick={() => void loadSandboxProcesses()}>
@@ -9190,7 +9216,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="task-manager-table-wrap">
-                        <table className="task-manager-table">
+                        <table className="task-manager-table task-manager-table-selectable">
                           <thead>
                             <tr>
                               <th>PID</th>
@@ -9245,23 +9271,14 @@ export default function App() {
                             <h3>端口</h3>
                             <span className="task-manager-panel-pill">{portRows.length ? `${portRows.length} 个监听项` : '等待刷新'}</span>
                           </div>
-                          <span className="task-manager-toolbar-note">点击监听行可快速带入端口</span>
+                          <div className="task-manager-panel-meta">
+                            <span className="task-manager-toolbar-note">手动刷新可更新监听端口快照</span>
+                            <span className="task-manager-panel-age mono">{portListAgeLabel}</span>
+                          </div>
                         </div>
                         <div className="task-manager-panel-tools" aria-label="Sandbox 端口操作">
                           <button type="button" className="secondary-btn" onClick={() => void inspectSandboxPorts()}>
                             刷新端口
-                          </button>
-                          <label className="task-manager-inline-field">
-                            <span>端口映射</span>
-                            <input
-                              className="text-input mono"
-                              value={sandboxPortInput}
-                              onChange={(event) => setSandboxPortInput(event.target.value)}
-                              placeholder="3000"
-                            />
-                          </label>
-                          <button type="button" className="primary-btn" onClick={() => void resolveSandboxHost()}>
-                            查询 Host
                           </button>
                         </div>
                       </div>
@@ -9282,11 +9299,7 @@ export default function App() {
                               portRows.map((row) => (
                                 <tr
                                   key={row.id}
-                                  className={sandboxPortInput === row.port ? 'active' : undefined}
                                   title={row.raw}
-                                  onClick={() => {
-                                    if (row.port !== '-') setSandboxPortInput(row.port);
-                                  }}
                                 >
                                   <td className="mono">{row.protocol}</td>
                                   <td>{row.status}</td>

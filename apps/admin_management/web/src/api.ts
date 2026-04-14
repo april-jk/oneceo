@@ -1,4 +1,6 @@
 import type {
+  AdminThemeKey,
+  AdminThemeSettings,
   AgentManagementOverview,
   AuditDetailResponse,
   AuditResponse,
@@ -160,6 +162,13 @@ export const api = {
     request<{ ok: boolean }>('/api/admin/auth/logout', {
       method: 'POST',
       body: JSON.stringify({}),
+    }),
+
+  getAdminTheme: () => request<AdminThemeSettings>('/api/theme'),
+  updateAdminTheme: (themeKey: AdminThemeKey) =>
+    request<AdminThemeSettings>('/api/theme', {
+      method: 'PUT',
+      body: JSON.stringify({ themeKey }),
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),

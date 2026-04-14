@@ -584,6 +584,20 @@ function extractRuntimeBinding(input: {
     vmName = env?.vmName || undefined;
   }
 
+  if (!orchestratorSessionId) {
+    const env = input.relatedEnvironments.find((item) => !!item.sessionId || !!item.orchestratorSessionId) || null;
+    orchestratorSessionId = pickString(env?.sessionId, env?.orchestratorSessionId);
+    bindingUpdatedAt = bindingUpdatedAt || parseTimestamp(env?.updatedAt);
+  }
+
+  if (!opencodeSessionId) {
+    const env = orchestratorSessionId
+      ? input.relatedEnvironments.find((item) => item.sessionId === orchestratorSessionId) || null
+      : input.relatedEnvironments[0] || null;
+    const metadata = toRecord(env?.metadata);
+    opencodeSessionId = pickString(metadata.opencodeSessionId, metadata.opencode_session_id);
+  }
+
   return {
     orchestratorSessionId,
     opencodeSessionId,
@@ -1035,6 +1049,7 @@ export class ConversationManagementService {
       pendingOptions: item.pendingOptions,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
+      user: item.user || null,
     }));
 
     return {
@@ -1052,13 +1067,22 @@ export class ConversationManagementService {
 
     const sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
 
-    const [messages, intent, taskDescription, executionPlan] = await Promise.all([
+    const [messages, intent, taskDescription, executionPlan, preciseSandbox] = await Promise.all([
       sessionMessages.length > 0
         ? Promise.resolve(sessionMessages)
         : this.oneceoApi.getTaskCreationMessages(sessionId).catch(() => []),
       this.oneceoApi.getTaskCreationIntent(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationTaskDescription(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationExecutionPlan(sessionId).catch(() => null),
+      this.oneceoApi.getTaskSessionSandboxEnvironments(sessionId).catch((error) => {
+        sessionErrors.push(`getTaskSessionSandboxEnvironments: ${error instanceof Error ? error.message : String(error)}`);
+        return {
+          taskSessionId: sessionId,
+          binding: null,
+          primaryEnvironment: null,
+          relatedEnvironments: [] as SandboxEnvironmentRecord[],
+        };
+      }),
     ]);
 
     const safeSession: TaskCreationSession =
@@ -1075,10 +1099,13 @@ export class ConversationManagementService {
       } as TaskCreationSession);
 
     const normalizedMessages = Array.isArray(messages) ? messages : sessionMessages;
+    const relatedEnvironments = Array.isArray(preciseSandbox.relatedEnvironments)
+      ? preciseSandbox.relatedEnvironments
+      : [];
     const binding = extractRuntimeBinding({
       session: safeSession,
       messages: normalizedMessages,
-      relatedEnvironments: [],
+      relatedEnvironments,
     });
 
     const llmTraces = buildLlmTraces({
@@ -1099,7 +1126,7 @@ export class ConversationManagementService {
       vmName: binding.vmName || null,
       session: null,
       sessionVm: null,
-      sandbox: null,
+      sandbox: preciseSandbox.primaryEnvironment || null,
       sandboxIp: null,
       sandboxPorts: null,
       vmDetail: null,
@@ -1146,8 +1173,9 @@ export class ConversationManagementService {
         opencodeMessages,
         stateTransitions: transitions,
         sandbox: {
-          primaryEnvironment: null,
-          relatedEnvironments: [],
+          binding: preciseSandbox.binding || null,
+          primaryEnvironment: preciseSandbox.primaryEnvironment || relatedEnvironments[0] || null,
+          relatedEnvironments,
         },
         kvm: kvmSummary,
         osac: {
@@ -1184,14 +1212,22 @@ export class ConversationManagementService {
 
     const sessionMessages = Array.isArray(session?.messages) ? session!.messages : [];
 
-    const [messages, intent, taskDescription, executionPlan, sandboxEnvironments] = await Promise.all([
+    const [messages, intent, taskDescription, executionPlan, preciseSandbox] = await Promise.all([
       sessionMessages.length > 0
         ? Promise.resolve(sessionMessages)
         : this.oneceoApi.getTaskCreationMessages(sessionId).catch(() => []),
       this.oneceoApi.getTaskCreationIntent(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationTaskDescription(sessionId).catch(() => null),
       this.oneceoApi.getTaskCreationExecutionPlan(sessionId).catch(() => null),
-      this.oneceoApi.listSandboxEnvironments(200).catch(() => []),
+      this.oneceoApi.getTaskSessionSandboxEnvironments(sessionId).catch((error) => {
+        sessionErrors.push(`getTaskSessionSandboxEnvironments: ${error instanceof Error ? error.message : String(error)}`);
+        return {
+          taskSessionId: sessionId,
+          binding: null,
+          primaryEnvironment: null,
+          relatedEnvironments: [] as SandboxEnvironmentRecord[],
+        };
+      }),
     ]);
 
     const safeSession: TaskCreationSession =
@@ -1208,12 +1244,9 @@ export class ConversationManagementService {
       } as TaskCreationSession);
 
     const normalizedMessages = Array.isArray(messages) ? messages : sessionMessages;
-    const relatedEnvironments = (Array.isArray(sandboxEnvironments) ? sandboxEnvironments : []).filter((item) => {
-      if (!item || typeof item !== 'object') return false;
-      if (item.sessionId === sessionId) return true;
-      const metadata = toRecord(item.metadata);
-      return pickString(metadata.taskSessionId) === sessionId;
-    });
+    const relatedEnvironments = Array.isArray(preciseSandbox.relatedEnvironments)
+      ? preciseSandbox.relatedEnvironments
+      : [];
 
     const binding = extractRuntimeBinding({
       session: safeSession,
@@ -1221,9 +1254,9 @@ export class ConversationManagementService {
       relatedEnvironments,
     });
 
-    const environmentByOrchestrator = binding.orchestratorSessionId
+    const environmentByOrchestrator = preciseSandbox.primaryEnvironment || (binding.orchestratorSessionId
       ? relatedEnvironments.find((item) => item.sessionId === binding.orchestratorSessionId) || null
-      : relatedEnvironments[0] || null;
+      : relatedEnvironments[0] || null);
 
     const kvmErrors: string[] = [...sessionErrors];
     const osacErrors: string[] = [];
@@ -1431,6 +1464,7 @@ export class ConversationManagementService {
         opencodeMessages,
         stateTransitions: transitions,
         sandbox: {
+          binding: preciseSandbox.binding || null,
           primaryEnvironment: environmentByOrchestrator,
           relatedEnvironments,
         },

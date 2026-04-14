@@ -1,5 +1,23 @@
 export type VmState = 'running' | 'stopped' | 'paused' | 'error';
 export type HostStatus = 'online' | 'degraded' | 'offline' | 'maintenance';
+export type AdminThemeKey = string;
+
+export interface AdminThemeOption {
+  key: AdminThemeKey;
+  label: string;
+  family: string;
+  variant: string;
+  tone: 'light' | 'dark';
+  description: string;
+  swatches: string[];
+}
+
+export interface AdminThemeSettings {
+  currentTheme: AdminThemeKey;
+  envKey: string;
+  envPath: string;
+  themes: AdminThemeOption[];
+}
 
 export interface DashboardOverview {
   updatedAt: string;
@@ -243,6 +261,20 @@ export interface ConversationSession {
   pendingOptions?: string[];
   createdAt: string;
   updatedAt: string;
+  user?: ConversationSessionUser | null;
+}
+
+export interface ConversationSessionUser {
+  id: string;
+  source: 'app_user' | 'legacy_user_id' | 'missing_app_user' | string;
+  displayName?: string | null;
+  email?: string | null;
+  status?: string | null;
+  lastLoginAt?: string | null;
+  lastSeenAt?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  sessionCreatedAt?: string | null;
 }
 
 export interface ConversationMessage {
@@ -287,6 +319,7 @@ export interface ConversationSessionDetailResponse {
     opencodeMessages: ConversationMessage[];
     stateTransitions?: ConversationStateTransition[];
     sandbox: {
+      binding?: ConversationSandboxBinding | null;
       primaryEnvironment: SandboxEnvironmentItem | null;
       relatedEnvironments: SandboxEnvironmentItem[];
     };
@@ -321,6 +354,18 @@ export interface ConversationSessionDetailResponse {
       errors: string[];
     };
   };
+}
+
+export interface ConversationSandboxBinding {
+  id: string;
+  sessionId: string;
+  sandboxId: string;
+  workspaceRoot?: string | null;
+  status?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  lastActiveAt?: string | null;
 }
 
 export interface ConversationSessionInfraResponse {

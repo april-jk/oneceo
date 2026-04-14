@@ -5791,7 +5791,7 @@ tbody tr:hover {
 
 .file-tree-row {
   display: grid;
-  grid-template-columns: 24px minmax(240px, 1fr) minmax(72px, 100px) minmax(92px, 116px) minmax(132px, 176px);
+  grid-template-columns: 24px minmax(240px, 1fr) minmax(92px, 112px) minmax(72px, 100px) minmax(92px, 116px) minmax(132px, 176px);
   align-items: center;
   gap: 10px;
   min-height: 34px;
@@ -5859,6 +5859,7 @@ tbody tr:hover {
 
 .file-tree-node-main > span,
 .file-tree-node-main small,
+.file-tree-permissions,
 .file-tree-meta {
   min-width: 0;
   overflow: hidden;
@@ -5874,6 +5875,12 @@ tbody tr:hover {
 .file-tree-meta {
   color: var(--text-soft);
   font-size: 11px;
+}
+
+.file-tree-permissions {
+  color: color-mix(in srgb, var(--primary) 66%, var(--text));
+  font-size: 11px;
+  letter-spacing: 0;
 }
 
 .file-tree-empty-mark {
@@ -6309,7 +6316,7 @@ tbody tr:hover {
   }
 
   .file-tree-row {
-    grid-template-columns: 24px minmax(180px, 1fr) minmax(60px, 86px);
+    grid-template-columns: 24px minmax(180px, 1fr) minmax(92px, 112px) minmax(60px, 86px);
   }
 
   .file-tree-meta:nth-last-child(-n+2) {

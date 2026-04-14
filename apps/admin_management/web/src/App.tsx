@@ -679,6 +679,7 @@ type SandboxFileItem = {
   kind: 'dir' | 'file' | 'item';
   sizeBytes?: number | null;
   modifiedAt?: string | null;
+  permissions?: string | null;
 };
 
 type SandboxFileTreeRow = SandboxFileItem & {
@@ -745,6 +746,10 @@ function normalizeSandboxFileItems(value: unknown, basePath: string): SandboxFil
       kind: isDir ? 'dir' : typeRaw ? 'file' : 'item',
       sizeBytes: typeof record.sizeBytes === 'number' ? record.sizeBytes : null,
       modifiedAt: typeof record.modifiedAt === 'string' ? record.modifiedAt : null,
+      permissions:
+        (typeof record.permissions === 'string' && record.permissions) ||
+        (typeof record.mode === 'string' && record.mode) ||
+        null,
     });
   }
 
@@ -893,6 +898,12 @@ function sandboxFileIconText(item: SandboxFileItem) {
   if (item.kind === 'dir') return 'DIR';
   const extension = item.label.includes('.') ? item.label.split('.').pop()?.trim() : '';
   return extension ? extension.slice(0, 4).toUpperCase() : 'FILE';
+}
+
+function sandboxFilePermissionsText(item: Pick<SandboxFileItem, 'permissions'> & { isEmpty?: boolean }) {
+  if (item.isEmpty) return '-';
+  const permissions = item.permissions?.trim();
+  return permissions || '----------';
 }
 
 function processCellText(value: unknown, fallback = '-') {
@@ -8737,6 +8748,7 @@ export default function App() {
                                     </span>
                                   </button>
                                 )}
+                                <span className="file-tree-permissions mono">{sandboxFilePermissionsText(item)}</span>
                                 <span className="file-tree-meta">{item.isEmpty ? '0 项' : item.kind === 'dir' ? (item.loaded ? `${item.childCount} 项` : '未展开') : formatBytes(item.sizeBytes)}</span>
                                 <span className="file-tree-meta">{item.isEmpty ? '空' : sandboxFileTypeLabel(item)}</span>
                                 <span className="file-tree-meta">{item.isEmpty || !item.modifiedAt ? '-' : formatDateTime(item.modifiedAt)}</span>

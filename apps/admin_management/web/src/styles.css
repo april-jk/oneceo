@@ -2776,33 +2776,6 @@ select:focus-visible {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
-.sandbox-console-header {
-  display: grid;
-  gap: 14px;
-}
-
-.sandbox-summary-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.sandbox-summary-card {
-  display: grid;
-  gap: 6px;
-  min-height: 88px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: var(--surface-muted);
-}
-
-.sandbox-summary-card strong {
-  font-size: 1.5rem;
-  line-height: 1.05;
-  letter-spacing: 0;
-}
-
 .detail-kv-list {
   display: grid;
   gap: 10px;
@@ -4738,62 +4711,6 @@ select:focus-visible {
   overflow: auto;
 }
 
-.runtime-risk-groups {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.runtime-risk-groups-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.runtime-risk-empty {
-  margin: 0;
-}
-
-.runtime-risk-group-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
-}
-
-.runtime-risk-group-btn {
-  position: relative;
-  display: grid;
-  justify-items: start;
-  align-content: center;
-  gap: 2px;
-  min-height: 60px;
-  padding: 10px 46px 10px 12px;
-  text-align: left;
-}
-
-.runtime-risk-group-main {
-  min-width: 0;
-  max-width: 100%;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime-risk-group-meta {
-  color: var(--text-soft);
-  font-size: 12px;
-}
-
-.runtime-risk-group-count {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  min-width: 34px;
-  justify-content: center;
-}
-
 .chart-wrap {
   min-height: 280px;
 }
@@ -5701,15 +5618,26 @@ tbody tr:hover {
   gap: 16px;
 }
 
+.command-debug-console {
+  align-content: start;
+}
+
 .terminal-console {
   display: grid;
   gap: 12px;
+}
+
+.terminal-console .inspector-card-header h2 {
+  color: rgba(255, 255, 255, 0.94);
 }
 
 .terminal-body {
   min-height: 260px;
   max-height: 420px;
   background: rgba(5, 10, 21, 0.5);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
 }
 
 .terminal-input-row {
@@ -5717,6 +5645,11 @@ tbody tr:hover {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.38);
+  font-family: var(--font-mono);
 }
 
 .terminal-prompt {
@@ -5728,135 +5661,295 @@ tbody tr:hover {
   border-color: rgba(148, 163, 184, 0.35);
   background: rgba(15, 23, 42, 0.55);
   color: #dce8ff;
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 .terminal-input::placeholder {
   color: rgba(203, 213, 225, 0.75);
 }
 
-.debug-command-card,
-.debug-results-card,
-.debug-tool-card {
+.file-explorer-page {
   display: grid;
   gap: 12px;
 }
 
-.debug-tool-grid {
+.file-explorer-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.advanced-tool-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.file-manager-card {
-  grid-column: 1 / -1;
-}
-
-.file-manager-layout {
-  display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-  gap: 14px;
-}
-
-.file-manager-menu,
-.file-manager-editor {
-  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(180px, auto);
   gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
 }
 
-.file-manager-path-group {
+.file-explorer-nav-actions,
+.file-explorer-preview-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(80px, auto));
+  gap: 8px;
+}
+
+.file-explorer-address,
+.file-explorer-file-path,
+.task-manager-toolbar label {
   display: grid;
   gap: 6px;
-}
-
-.file-manager-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.file-manager-actions.editor-actions {
-  margin-top: 2px;
-}
-
-.file-manager-status {
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(147, 197, 253, 0.5);
-  background: rgba(239, 246, 255, 0.88);
-  color: #1d4ed8;
+  min-width: 0;
   font-size: 12px;
-  line-height: 1.5;
+  color: var(--text-soft);
 }
 
-.file-manager-list {
-  display: grid;
-  gap: 8px;
-  max-height: 320px;
-  overflow: auto;
-  padding: 8px;
+.file-explorer-address input,
+.file-explorer-file-path input {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.file-explorer-status {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
   border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(247, 249, 252, 0.96);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-muted));
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: right;
 }
 
-.file-entry-btn {
+.file-explorer-shell {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(360px, 1fr) minmax(300px, 0.72fr);
+  min-height: 560px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-strong);
+}
+
+.file-explorer-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 14px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.file-explorer-sidebar-title {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.file-explorer-sidebar-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  gap: 9px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: #ffffff;
-  color: #1f2937;
+  background: transparent;
+  color: var(--text);
   text-align: left;
 }
 
-.file-entry-btn:hover {
-  border-color: rgba(37, 99, 235, 0.28);
-  background: rgba(239, 246, 255, 0.62);
+.file-explorer-sidebar-btn:hover,
+.file-explorer-sidebar-btn.active {
+  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
+  background: var(--active-control-bg);
 }
 
-.file-entry-btn.active {
-  border-color: rgba(0, 61, 155, 0.35);
-  background: rgba(219, 234, 254, 0.55);
+.file-explorer-sidebar-btn span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-entry-text {
+.file-explorer-sidebar-icon,
+.file-explorer-icon {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--secondary) 12%, var(--surface-elevated));
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.file-explorer-main {
+  min-width: 0;
+  background: var(--surface-elevated);
+}
+
+.file-explorer-table-wrap,
+.task-manager-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.file-explorer-table,
+.task-manager-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.file-explorer-table th,
+.file-explorer-table td,
+.task-manager-table th,
+.task-manager-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.file-explorer-table th,
+.task-manager-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.file-explorer-table tbody tr,
+.task-manager-table tbody tr {
+  cursor: pointer;
+}
+
+.file-explorer-table tbody tr:hover,
+.file-explorer-table tbody tr.active,
+.task-manager-table tbody tr:hover,
+.task-manager-table tbody tr.active {
+  background: var(--active-control-bg);
+}
+
+.file-explorer-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.file-explorer-name-cell > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-explorer-icon.is-dir {
+  background: color-mix(in srgb, var(--warning) 14%, var(--surface-elevated));
+  color: var(--warning);
+}
+
+.file-explorer-preview {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  border-left: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.file-explorer-preview h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.file-editor-textarea {
+  min-height: 360px;
+  resize: vertical;
+}
+
+.task-manager-page {
+  gap: 12px;
+}
+
+.task-manager-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 160px) auto auto minmax(120px, 160px) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.task-manager-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.task-manager-panel {
+  min-width: 0;
+  align-content: start;
+  padding: 0;
+  overflow: hidden;
+}
+
+.task-manager-panel .inspector-card-header {
+  padding: 16px 16px 4px;
+}
+
+.task-manager-table-wrap {
+  max-height: 520px;
+}
+
+.task-manager-table {
+  min-width: 760px;
+}
+
+.task-manager-table td {
+  white-space: nowrap;
+}
+
+.task-manager-process-cell {
   display: grid;
   gap: 3px;
+  min-width: 260px;
+  max-width: 560px;
+}
+
+.task-manager-process-cell span,
+.task-manager-process-cell small {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.file-entry-meta {
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.file-manager-editor .input-area {
-  min-height: 280px;
-}
-
-.file-manager-directory-hint {
-  color: #475569;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(241, 245, 249, 0.9);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.debug-inline-grid {
-  display: grid;
-  grid-template-columns: minmax(100px, 132px) minmax(0, 1fr) minmax(100px, 132px);
-  gap: 10px;
-  align-items: center;
+.task-manager-process-cell small {
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .debug-meta-grid {
@@ -5865,11 +5958,10 @@ tbody tr:hover {
   gap: 12px;
 }
 
-.debug-results-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.task-manager-raw-output {
+  background: var(--surface-strong);
 }
+
 .debug-disclosure {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5930,19 +6022,11 @@ tbody tr:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sandbox-summary-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .sandbox-runtime-layout {
     grid-template-columns: 1fr;
   }
 
   .runtime-quick-filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .runtime-risk-group-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -5962,9 +6046,9 @@ tbody tr:hover {
     min-height: 460px;
   }
 
-  .debug-tool-grid,
   .debug-meta-grid,
-  .debug-results-grid,
+  .file-explorer-shell,
+  .task-manager-grid,
   .inspector-stat-grid,
   .inspector-main-grid,
   .inspector-overview-bottom-grid,
@@ -5980,8 +6064,19 @@ tbody tr:hover {
     grid-column: 1 / -1;
   }
 
-  .file-manager-layout {
-    grid-template-columns: 1fr;
+  .file-explorer-shell {
+    min-height: 0;
+  }
+
+  .file-explorer-sidebar,
+  .file-explorer-preview {
+    border-inline: 0;
+    border-block: 1px solid var(--border);
+  }
+
+  .task-manager-toolbar,
+  .file-explorer-toolbar {
+    grid-template-columns: 1fr 1fr;
   }
 
   .inspector-kv-grid {
@@ -6065,10 +6160,6 @@ tbody tr:hover {
     border-top-color: #003d9b;
   }
 
-  .sandbox-summary-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .runtime-filter-grid {
     grid-template-columns: 1fr;
   }
@@ -6077,11 +6168,8 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
-  .runtime-risk-group-list {
-    grid-template-columns: 1fr;
-  }
-
-  .debug-inline-grid {
+  .task-manager-toolbar,
+  .file-explorer-toolbar {
     grid-template-columns: 1fr;
   }
 
@@ -6311,8 +6399,6 @@ tbody tr:hover {
   .host-edit-grid,
   .kpi-grid,
   .usage-grid,
-  .sandbox-summary-strip,
-  .runtime-risk-group-list,
   .runtime-filter-grid,
   .conversation-index-summary-strip {
     grid-template-columns: 1fr;
@@ -6479,11 +6565,22 @@ tbody tr:hover {
 :root[data-admin-tone='dark'] .sandbox-run-card,
 :root[data-admin-tone='dark'] .inspector-section,
 :root[data-admin-tone='dark'] .terminal-input-row,
+:root[data-admin-tone='dark'] .debug-disclosure,
+:root[data-admin-tone='dark'] .file-explorer-toolbar,
+:root[data-admin-tone='dark'] .file-explorer-shell,
+:root[data-admin-tone='dark'] .file-explorer-sidebar,
+:root[data-admin-tone='dark'] .file-explorer-preview,
+:root[data-admin-tone='dark'] .task-manager-toolbar,
 :root[data-admin-tone='dark'] .thread-item,
 :root[data-admin-tone='dark'] .session-card {
   border-color: var(--border);
   background: var(--surface-strong);
   color: var(--text);
+}
+
+:root[data-admin-tone='dark'] .terminal-console {
+  background: linear-gradient(180deg, #172033, #111827);
+  border-color: rgba(23, 32, 51, 0.72);
 }
 
 :root[data-admin-tone='dark'] .admin-auth-form input,

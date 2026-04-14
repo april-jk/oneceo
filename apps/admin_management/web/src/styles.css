@@ -5685,15 +5685,13 @@ tbody tr:hover {
   background: var(--surface-strong);
 }
 
-.file-explorer-nav-actions,
-.file-explorer-preview-actions {
+.file-explorer-nav-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(80px, auto));
   gap: 8px;
 }
 
 .file-explorer-address,
-.file-explorer-file-path,
 .task-manager-toolbar label {
   display: grid;
   gap: 6px;
@@ -5702,8 +5700,7 @@ tbody tr:hover {
   color: var(--text-soft);
 }
 
-.file-explorer-address input,
-.file-explorer-file-path input {
+.file-explorer-address input {
   font-family: var(--font-mono);
   font-size: 12.5px;
 }
@@ -5725,7 +5722,7 @@ tbody tr:hover {
 
 .file-explorer-shell {
   display: grid;
-  grid-template-columns: minmax(180px, 220px) minmax(360px, 1fr) minmax(300px, 0.72fr);
+  grid-template-columns: minmax(0, 1fr);
   min-height: 560px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5733,50 +5730,6 @@ tbody tr:hover {
   background: var(--surface-strong);
 }
 
-.file-explorer-sidebar {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  padding: 14px;
-  border-right: 1px solid var(--border);
-  background: var(--surface-muted);
-}
-
-.file-explorer-sidebar-title {
-  color: var(--text-soft);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.file-explorer-sidebar-btn {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  padding: 8px 9px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-}
-
-.file-explorer-sidebar-btn:hover,
-.file-explorer-sidebar-btn.active {
-  border-color: color-mix(in srgb, var(--primary) 25%, var(--border));
-  background: var(--active-control-bg);
-}
-
-.file-explorer-sidebar-btn span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-explorer-sidebar-icon,
 .file-explorer-icon {
   flex: 0 0 auto;
   min-width: 38px;
@@ -5966,26 +5919,6 @@ tbody tr:hover {
 .file-explorer-icon.is-dir {
   background: color-mix(in srgb, var(--warning) 14%, var(--surface-elevated));
   color: var(--warning);
-}
-
-.file-explorer-preview {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-  gap: 12px;
-  padding: 16px;
-  border-left: 1px solid var(--border);
-  background: var(--surface-muted);
-}
-
-.file-explorer-preview h3 {
-  margin: 0;
-  color: var(--text);
-  font-size: 16px;
-}
-
-.file-editor-textarea {
-  min-height: 360px;
-  resize: vertical;
 }
 
 .task-manager-page {
@@ -6239,12 +6172,6 @@ tbody tr:hover {
 
   .file-explorer-shell {
     min-height: 0;
-  }
-
-  .file-explorer-sidebar,
-  .file-explorer-preview {
-    border-inline: 0;
-    border-block: 1px solid var(--border);
   }
 
   .task-manager-toolbar,
@@ -6766,8 +6693,6 @@ tbody tr:hover {
 :root[data-admin-tone='dark'] .debug-disclosure,
 :root[data-admin-tone='dark'] .file-explorer-toolbar,
 :root[data-admin-tone='dark'] .file-explorer-shell,
-:root[data-admin-tone='dark'] .file-explorer-sidebar,
-:root[data-admin-tone='dark'] .file-explorer-preview,
 :root[data-admin-tone='dark'] .file-tree-head,
 :root[data-admin-tone='dark'] .task-manager-toolbar,
 :root[data-admin-tone='dark'] .task-manager-view-btn,

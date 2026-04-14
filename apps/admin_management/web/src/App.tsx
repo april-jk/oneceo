@@ -2846,7 +2846,6 @@ export default function App() {
   const [sandboxFileExpandedPaths, setSandboxFileExpandedPaths] = useState<string[]>([]);
   const [sandboxFilePath, setSandboxFilePath] = useState('');
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
-  const [sandboxFileContent, setSandboxFileContent] = useState('');
   const [sandboxFileStatus, setSandboxFileStatus] = useState('等待加载目录');
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
@@ -3358,7 +3357,6 @@ export default function App() {
             setSandboxFileTreeItemsByPath({});
             setSandboxFileExpandedPaths([detail.connectivity.workspaceRoot?.trim() || '/']);
             setSandboxFilePath('');
-            setSandboxFileContent('');
             setSandboxFileItems([]);
             setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
             setSandboxProcessResult(null);
@@ -3589,47 +3587,6 @@ export default function App() {
     }
   }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxDirectoryPath]);
 
-  const readSandboxFile = useCallback(async (targetPath?: string) => {
-    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    const filePath = (targetPath ?? sandboxFilePath).trim();
-    if (!sandboxId || !filePath) return;
-    try {
-      setError(null);
-      const result = await api.runSandboxToolAction(sandboxId, 'files.read', {
-        path: filePath,
-      });
-      setSandboxFilePath(filePath);
-      if (typeof result === 'string') {
-        setSandboxFileContent(result);
-      } else if (result && typeof result === 'object' && 'content' in (result as Record<string, unknown>)) {
-        const content = (result as Record<string, unknown>).content;
-        setSandboxFileContent(typeof content === 'string' ? content : toJsonText(content));
-      } else {
-        setSandboxFileContent(toJsonText(result));
-      }
-      setSandboxFileStatus(`已读取文件 ${filePath}`);
-    } catch (toolError) {
-      setError(toolError instanceof Error ? toolError.message : '读取文件失败');
-    }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath]);
-
-  const writeSandboxFile = useCallback(async () => {
-    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
-    if (!sandboxId || !sandboxFilePath.trim()) return;
-    try {
-      setError(null);
-      await api.runSandboxToolAction(sandboxId, 'files.write', {
-        path: sandboxFilePath.trim(),
-        data: sandboxFileContent,
-      });
-      setSandboxFileStatus(`已保存文件 ${sandboxFilePath.trim()}`);
-      setSandboxTerminalOutput((prev) => `${prev}${prev ? '\n\n' : ''}[file] saved ${sandboxFilePath.trim()}`);
-      await listSandboxFiles(parentPath(sandboxFilePath));
-    } catch (toolError) {
-      setError(toolError instanceof Error ? toolError.message : '下发文件失败');
-    }
-  }, [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxFilePath, sandboxFileContent, listSandboxFiles]);
-
   const goSandboxFileParent = useCallback(async () => {
     const nextPath = parentPath(sandboxDirectoryPath);
     await listSandboxFiles(nextPath, { resetTreeRoot: !isPathWithin(sandboxFileTreeRootPath, nextPath) });
@@ -3638,7 +3595,6 @@ export default function App() {
   const openSandboxFileItem = useCallback(async (item: SandboxFileItem) => {
     if (item.kind === 'dir') {
       setSandboxFilePath('');
-      setSandboxFileContent('');
       setSandboxFileExpandedPaths((prev) => {
         const next = new Set(prev.map(normalizeSandboxPath));
         addPathAndAncestors(next, item.path, sandboxFileTreeRootPath);
@@ -3648,12 +3604,14 @@ export default function App() {
       return;
     }
 
-    await readSandboxFile(item.path);
-  }, [listSandboxFiles, readSandboxFile, sandboxFileTreeRootPath]);
+    setSandboxFilePath(item.path);
+    setSandboxFileStatus(`已选择文件 ${item.path}`);
+  }, [listSandboxFiles, sandboxFileTreeRootPath]);
 
   const toggleSandboxFileTreeDirectory = useCallback(async (item: SandboxFileTreeRow) => {
     if (item.kind !== 'dir') {
-      await readSandboxFile(item.path);
+      setSandboxFilePath(item.path);
+      setSandboxFileStatus(`已选择文件 ${item.path}`);
       return;
     }
 
@@ -3669,7 +3627,7 @@ export default function App() {
       return Array.from(next);
     });
     await listSandboxFiles(item.path);
-  }, [listSandboxFiles, readSandboxFile, sandboxFileTreeRootPath]);
+  }, [listSandboxFiles, sandboxFileTreeRootPath]);
 
   const inspectSandboxPorts = useCallback(async () => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
@@ -7600,17 +7558,6 @@ export default function App() {
       archiveRows.find((row) => row.type === 'current') ||
       [...archiveRows].sort((a, b) => toTimestamp(b.timestamp) - toTimestamp(a.timestamp))[0] ||
       null;
-    const sandboxQuickLocations = Array.from(
-      new Set(
-        [
-          sandboxRuntimeDetail?.connectivity.workspaceRoot?.trim(),
-          sandboxDirectoryPath.trim(),
-          '/workspace',
-          '/tmp',
-          '/',
-        ].filter((item): item is string => Boolean(item))
-      )
-    );
     const sandboxFileTreeRows = buildSandboxFileTreeRows(
       sandboxFileTreeRootPath || sandboxDirectoryPath || '/',
       sandboxFileTreeItemsByPath,
@@ -8721,24 +8668,6 @@ export default function App() {
                   </section>
 
                   <section className="file-explorer-shell">
-                    <aside className="file-explorer-sidebar" aria-label="快速访问">
-                      <span className="file-explorer-sidebar-title">快速访问</span>
-                      {sandboxQuickLocations.map((location) => (
-                        <button
-                          key={location}
-                          type="button"
-                          className={`file-explorer-sidebar-btn ${sandboxDirectoryPath === location ? 'active' : ''}`}
-                          onClick={() => {
-                            setSandboxDirectoryPath(location);
-                            void listSandboxFiles(location, { resetTreeRoot: true });
-                          }}
-                        >
-                          <span className="file-explorer-sidebar-icon mono">{location === '/' ? 'ROOT' : 'DIR'}</span>
-                          <span>{location}</span>
-                        </button>
-                      ))}
-                    </aside>
-
                     <article className="file-explorer-main">
                       <div className="file-tree-head">
                         <div>
@@ -8792,37 +8721,6 @@ export default function App() {
                         )}
                       </div>
                     </article>
-
-                    <aside className="file-explorer-preview">
-                      <div>
-                        <h3>文件内容</h3>
-                        <span className="panel-caption">读取和保存只作用于当前文件路径</span>
-                      </div>
-                      <label className="file-explorer-file-path">
-                        <span>文件路径</span>
-                        <input
-                          className="text-input"
-                          value={sandboxFilePath}
-                          onChange={(event) => setSandboxFilePath(event.target.value)}
-                          placeholder={`${sandboxDirectoryPath.replace(/\/+$/, '') || '/workspace'}/index.ts`}
-                        />
-                      </label>
-                      <div className="file-explorer-preview-actions">
-                        <button type="button" className="secondary-btn" onClick={() => void readSandboxFile()}>
-                          读取
-                        </button>
-                        <button type="button" className="primary-btn" onClick={() => void writeSandboxFile()}>
-                          保存
-                        </button>
-                      </div>
-                      <textarea
-                        className="input-area file-editor-textarea"
-                        rows={14}
-                        value={sandboxFileContent}
-                        onChange={(event) => setSandboxFileContent(event.target.value)}
-                        placeholder="选择一个文件，或输入路径后读取。"
-                      />
-                    </aside>
                   </section>
                 </div>
               ) : null}

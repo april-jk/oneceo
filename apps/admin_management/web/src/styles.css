@@ -5680,8 +5680,7 @@ tbody tr:hover {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--primary) 10%, transparent) 0%, transparent 34%),
     linear-gradient(315deg, color-mix(in srgb, var(--secondary) 9%, transparent) 0%, transparent 38%),
-    repeating-linear-gradient(90deg, color-mix(in srgb, var(--border) 22%, transparent) 0 1px, transparent 1px 34px),
-    repeating-linear-gradient(0deg, color-mix(in srgb, var(--border) 18%, transparent) 0 1px, transparent 1px 34px),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-muted) 62%, transparent), color-mix(in srgb, var(--bg) 70%, transparent)),
     color-mix(in srgb, var(--surface-muted) 78%, var(--bg));
   box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 28%, transparent);
 }
@@ -5885,7 +5884,7 @@ tbody tr:hover {
   padding: 6px 0;
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--primary) 8%, transparent), transparent 24%),
-    linear-gradient(90deg, color-mix(in srgb, var(--border) 24%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-elevated) 90%, transparent), color-mix(in srgb, var(--surface-muted) 62%, transparent)),
     color-mix(in srgb, var(--surface-elevated) 88%, transparent);
 }
 

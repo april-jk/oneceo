@@ -5720,7 +5720,7 @@ tbody tr:hover {
 }
 
 .file-explorer-address,
-.task-manager-toolbar label {
+.task-manager-panel-tools label {
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -6118,39 +6118,34 @@ tbody tr:hover {
   color: var(--primary);
 }
 
-.task-manager-toolbar {
+.task-manager-card-head {
   display: grid;
-  grid-template-columns: auto minmax(140px, 180px) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(420px, auto);
+  gap: 14px;
+  align-items: end;
+}
+
+.task-manager-panel-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-manager-panel-tools {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 180px) auto;
   gap: 10px;
   align-items: end;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-strong);
+  justify-content: end;
 }
 
 .task-manager-toolbar-note {
-  align-self: center;
+  grid-column: 1 / -1;
   justify-self: end;
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.4;
   text-align: right;
-}
-
-.task-manager-grid,
-.task-manager-fullscreen {
-  display: grid;
-  gap: 12px;
-  align-items: stretch;
-}
-
-.task-manager-grid {
-  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
-}
-
-.task-manager-fullscreen {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .task-manager-panel {
@@ -6165,7 +6160,11 @@ tbody tr:hover {
 }
 
 .task-manager-panel .inspector-card-header {
-  padding: 16px 16px 4px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--primary) 8%, transparent), transparent 46%),
+    var(--surface-muted);
 }
 
 .task-manager-table-wrap {
@@ -6305,7 +6304,6 @@ tbody tr:hover {
 
   .debug-meta-grid,
   .file-explorer-shell,
-  .task-manager-grid,
   .inspector-stat-grid,
   .inspector-main-grid,
   .inspector-overview-bottom-grid,
@@ -6325,9 +6323,18 @@ tbody tr:hover {
     min-height: 0;
   }
 
-  .task-manager-toolbar,
   .file-explorer-toolbar {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .task-manager-card-head {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .task-manager-panel-tools {
+    grid-template-columns: auto minmax(140px, 1fr) auto;
+    justify-content: stretch;
   }
 
   .inspector-kv-grid {
@@ -6419,8 +6426,11 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 
-  .task-manager-toolbar,
   .file-explorer-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .task-manager-panel-tools {
     grid-template-columns: 1fr;
   }
 
@@ -6845,7 +6855,7 @@ tbody tr:hover {
 :root[data-admin-tone='dark'] .file-explorer-toolbar,
 :root[data-admin-tone='dark'] .file-explorer-shell,
 :root[data-admin-tone='dark'] .file-tree-head,
-:root[data-admin-tone='dark'] .task-manager-toolbar,
+:root[data-admin-tone='dark'] .task-manager-panel .inspector-card-header,
 :root[data-admin-tone='dark'] .task-manager-view-btn,
 :root[data-admin-tone='dark'] .thread-item,
 :root[data-admin-tone='dark'] .session-card {

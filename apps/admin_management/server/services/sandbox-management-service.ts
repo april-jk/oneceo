@@ -176,6 +176,23 @@ function buildDirectoryListScript(path: string): string {
   ].join('\n');
 }
 
+function buildRemovePathScript(path: string): string {
+  return [
+    'set -euo pipefail',
+    `target=${shellEscape(path)}`,
+    'if [ "$target" = "/" ]; then',
+    "  printf '__ONECEO_REFUSE_ROOT__\\n'",
+    '  exit 46',
+    'fi',
+    'if [ ! -e "$target" ] && [ ! -L "$target" ]; then',
+    "  printf '__ONECEO_NOT_FOUND__\\n'",
+    '  exit 44',
+    'fi',
+    'rm -rf -- "$target"',
+    "printf '__ONECEO_REMOVED__\\n'",
+  ].join('\n');
+}
+
 function parseDirectoryEntries(stdout: string, basePath: string) {
   const normalizedBasePath = basePath.trim().replace(/\/+$/, '') || '/';
   const items = stdout
@@ -904,6 +921,26 @@ export class SandboxManagementService {
           return sandbox.files.writeFiles((payload?.files as any[]) ?? [], payload as any);
         case 'files.remove':
           return sandbox.files.remove(String(payload?.path ?? ''), payload as any);
+        case 'files.removeRecursive': {
+          const targetPath = String(payload?.path ?? '');
+          const result = await sandbox.commands.run(buildBashCommand(buildRemovePathScript(targetPath)), payload as any);
+          const stdout = extractCommandText(result, 'stdout');
+          const stderr = extractCommandText(result, 'stderr');
+          const exitCode = extractCommandExitCode(result);
+          if (exitCode === 44 || stdout.includes('__ONECEO_NOT_FOUND__')) {
+            throw new AppError(400, `删除失败，路径不存在：${targetPath}`);
+          }
+          if (exitCode === 46 || stdout.includes('__ONECEO_REFUSE_ROOT__')) {
+            throw new AppError(400, '删除失败，不能删除根目录');
+          }
+          if (exitCode !== null && exitCode !== 0) {
+            throw new AppError(400, stderr || stdout || `删除失败：${targetPath}`);
+          }
+          return {
+            path: targetPath,
+            removed: true,
+          };
+        }
         case 'files.mkdir':
           return sandbox.files.makeDir(String(payload?.path ?? ''), payload as any);
         case 'files.rename':

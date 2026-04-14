@@ -54,6 +54,7 @@ type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
 type SandboxProcessToolView = 'processes' | 'ports';
+type SandboxFileOperation = 'upload' | 'download' | 'delete';
 
 type UiToast = {
   id: number;
@@ -801,6 +802,38 @@ function normalizeSandboxPath(value: string) {
   if (!trimmed) return '/';
   const normalized = trimmed.replace(/\/+/g, '/').replace(/\/+$/, '');
   return normalized || '/';
+}
+
+function sandboxFileNameFromPath(value: string) {
+  const segments = normalizeSandboxPath(value).split('/').filter(Boolean);
+  return segments.at(-1) || 'sandbox-file';
+}
+
+function joinSandboxPath(directoryPath: string, filename: string) {
+  const directory = normalizeSandboxPath(directoryPath);
+  const safeName = filename.replace(/\\/g, '/').split('/').filter(Boolean).at(-1)?.trim() || 'upload.bin';
+  return directory === '/' ? `/${safeName}` : `${directory}/${safeName}`;
+}
+
+function sandboxToolStringResult(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const payload = value as Record<string, unknown>;
+  const candidates = [payload.url, payload.downloadUrl, payload.uploadUrl, payload.href, payload.data];
+  const matched = candidates.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  return matched || '';
+}
+
+async function uploadFileToSandboxUrl(uploadUrl: string, file: File) {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+  const response = await fetch(uploadUrl, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(`上传 ${file.name} 失败：${response.status}`);
+  }
 }
 
 function isPathWithin(rootPath: string, candidatePath: string) {
@@ -2872,8 +2905,10 @@ export default function App() {
   const [sandboxFileTreeItemsByPath, setSandboxFileTreeItemsByPath] = useState<Record<string, SandboxFileItem[]>>({});
   const [sandboxFileExpandedPaths, setSandboxFileExpandedPaths] = useState<string[]>([]);
   const [sandboxFilePath, setSandboxFilePath] = useState('');
+  const [sandboxFileTargetKind, setSandboxFileTargetKind] = useState<SandboxFileItem['kind'] | null>(null);
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
   const [sandboxFileStatus, setSandboxFileStatus] = useState('等待加载目录');
+  const [sandboxFileOperation, setSandboxFileOperation] = useState<SandboxFileOperation | null>(null);
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
   const [sandboxPortInput, setSandboxPortInput] = useState('3000');
@@ -2942,6 +2977,7 @@ export default function App() {
   const toastIdRef = useRef(1);
   const lastErrorToastRef = useRef<string | null>(null);
   const sidebarNavRef = useRef<HTMLElement | null>(null);
+  const sandboxFileUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const bootstrapAdminSession = useCallback(async () => {
     try {
@@ -3384,7 +3420,9 @@ export default function App() {
             setSandboxFileTreeItemsByPath({});
             setSandboxFileExpandedPaths([detail.connectivity.workspaceRoot?.trim() || '/']);
             setSandboxFilePath('');
+            setSandboxFileTargetKind(null);
             setSandboxFileItems([]);
+            setSandboxFileOperation(null);
             setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
             setSandboxProcessResult(null);
             setSandboxPortResult(null);
@@ -3593,6 +3631,8 @@ export default function App() {
           ? normalizeSandboxPath(String((result as Record<string, unknown>).path))
           : directoryPath;
       setSandboxDirectoryPath(resolvedPath);
+      setSandboxFilePath(resolvedPath);
+      setSandboxFileTargetKind('dir');
       setSandboxFileItems(items);
       if (options?.resetTreeRoot) {
         setSandboxFileTreeRootPath(resolvedPath);
@@ -3620,8 +3660,10 @@ export default function App() {
   }, [listSandboxFiles, sandboxDirectoryPath, sandboxFileTreeRootPath]);
 
   const openSandboxFileItem = useCallback(async (item: SandboxFileItem) => {
+    setSandboxFilePath(item.path);
+    setSandboxFileTargetKind(item.kind);
+
     if (item.kind === 'dir') {
-      setSandboxFilePath('');
       setSandboxFileExpandedPaths((prev) => {
         const next = new Set(prev.map(normalizeSandboxPath));
         addPathAndAncestors(next, item.path, sandboxFileTreeRootPath);
@@ -3631,17 +3673,19 @@ export default function App() {
       return;
     }
 
-    setSandboxFilePath(item.path);
     setSandboxFileStatus(`已选择文件 ${item.path}`);
   }, [listSandboxFiles, sandboxFileTreeRootPath]);
 
   const toggleSandboxFileTreeDirectory = useCallback(async (item: SandboxFileTreeRow) => {
     if (item.kind !== 'dir') {
       setSandboxFilePath(item.path);
+      setSandboxFileTargetKind(item.kind);
       setSandboxFileStatus(`已选择文件 ${item.path}`);
       return;
     }
 
+    setSandboxFilePath(item.path);
+    setSandboxFileTargetKind('dir');
     if (item.expanded && item.loaded) {
       setSandboxDirectoryPath(item.path);
       setSandboxFileExpandedPaths((prev) => prev.map(normalizeSandboxPath).filter((path) => path !== item.path));
@@ -3655,6 +3699,144 @@ export default function App() {
     });
     await listSandboxFiles(item.path);
   }, [listSandboxFiles, sandboxFileTreeRootPath]);
+
+  const openSandboxFileUploadPicker = useCallback(() => {
+    sandboxFileUploadInputRef.current?.click();
+  }, []);
+
+  const uploadSandboxFiles = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
+      const files = Array.from(event.currentTarget.files || []);
+      event.currentTarget.value = '';
+      if (!sandboxId || files.length === 0) return;
+
+      const directoryPath = normalizeSandboxPath(sandboxDirectoryPath);
+      setSandboxFileOperation('upload');
+      setSandboxFileStatus(`正在上传 ${files.length} 个文件到 ${directoryPath}`);
+      try {
+        for (const file of files) {
+          const targetPath = joinSandboxPath(directoryPath, file.name);
+          const uploadUrlResult = await api.runSandboxToolAction(sandboxId, 'sandbox.uploadUrl', {
+            path: targetPath,
+            useSignatureExpiration: 3600,
+          });
+          const uploadUrl = sandboxToolStringResult(uploadUrlResult);
+          if (!uploadUrl) {
+            throw new Error(`上传 ${file.name} 失败：上传链接返回为空`);
+          }
+          await uploadFileToSandboxUrl(uploadUrl, file);
+        }
+        await listSandboxFiles(directoryPath);
+        setSandboxFileStatus(`${directoryPath} · 已上传 ${files.length} 个文件`);
+        pushToast('success', '上传完成', `${files.length} 个文件已写入 ${directoryPath}`);
+      } catch (toolError) {
+        setSandboxFileStatus('上传失败');
+        setError(toolError instanceof Error ? toolError.message : '上传文件失败');
+      } finally {
+        setSandboxFileOperation(null);
+      }
+    },
+    [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxDirectoryPath, listSandboxFiles, pushToast]
+  );
+
+  const downloadSandboxFile = useCallback(async () => {
+    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
+    const targetPath = sandboxFilePath ? normalizeSandboxPath(sandboxFilePath) : '';
+    if (!sandboxId || !targetPath || sandboxFileTargetKind === 'dir') {
+      setSandboxFileStatus('请选择普通文件后下载');
+      return;
+    }
+
+    setSandboxFileOperation('download');
+    setSandboxFileStatus(`正在生成下载链接 ${targetPath}`);
+    try {
+      const result = await api.runSandboxToolAction(sandboxId, 'sandbox.downloadUrl', {
+        path: targetPath,
+        useSignatureExpiration: 3600,
+      });
+      const downloadUrl = sandboxToolStringResult(result);
+      if (!downloadUrl) {
+        throw new Error('下载链接返回为空');
+      }
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.download = sandboxFileNameFromPath(targetPath);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setSandboxFileStatus(`已开始下载 ${targetPath}`);
+      pushToast('success', '下载已开始', sandboxFileNameFromPath(targetPath));
+    } catch (toolError) {
+      setSandboxFileStatus('下载失败');
+      setError(toolError instanceof Error ? toolError.message : '下载文件失败');
+    } finally {
+      setSandboxFileOperation(null);
+    }
+  }, [
+    sandboxRuntimeDetail?.runtime.sandboxId,
+    sandboxDetail?.sandboxId,
+    sandboxFilePath,
+    sandboxFileTargetKind,
+    pushToast,
+  ]);
+
+  const deleteSandboxFileTarget = useCallback(async () => {
+    const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
+    const targetPath = normalizeSandboxPath(sandboxFilePath || sandboxDirectoryPath);
+    const targetKind = sandboxFileTargetKind || 'dir';
+    const treeRootPath = normalizeSandboxPath(sandboxFileTreeRootPath);
+    if (!sandboxId || !targetPath) return;
+    if (targetPath === '/' || targetPath === treeRootPath) {
+      setSandboxFileStatus('不能删除当前文件树根目录');
+      return;
+    }
+
+    const targetLabel = targetKind === 'dir' ? '目录' : '文件';
+    const confirmed = window.confirm(`确定删除${targetLabel}：${targetPath}？此操作不可撤销。`);
+    if (!confirmed) return;
+
+    const refreshPath = parentPath(targetPath);
+    setSandboxFileOperation('delete');
+    setSandboxFileStatus(`正在删除${targetLabel} ${targetPath}`);
+    try {
+      await api.runSandboxToolAction(sandboxId, 'files.removeRecursive', {
+        path: targetPath,
+        requestTimeoutMs: 120000,
+      });
+      setSandboxFileExpandedPaths((prev) =>
+        prev.map(normalizeSandboxPath).filter((path) => path !== targetPath && !path.startsWith(`${targetPath}/`))
+      );
+      setSandboxFileTreeItemsByPath((prev) => {
+        const next = { ...prev };
+        for (const path of Object.keys(next)) {
+          if (path === targetPath || path.startsWith(`${targetPath}/`)) {
+            delete next[path];
+          }
+        }
+        return next;
+      });
+      await listSandboxFiles(refreshPath, { resetTreeRoot: !isPathWithin(sandboxFileTreeRootPath, refreshPath) });
+      setSandboxFileStatus(`已删除${targetLabel} ${targetPath}`);
+      pushToast('success', '删除完成', targetPath);
+    } catch (toolError) {
+      setSandboxFileStatus('删除失败');
+      setError(toolError instanceof Error ? toolError.message : '删除失败');
+    } finally {
+      setSandboxFileOperation(null);
+    }
+  }, [
+    sandboxRuntimeDetail?.runtime.sandboxId,
+    sandboxDetail?.sandboxId,
+    sandboxFilePath,
+    sandboxDirectoryPath,
+    sandboxFileTargetKind,
+    sandboxFileTreeRootPath,
+    listSandboxFiles,
+    pushToast,
+  ]);
 
   const inspectSandboxPorts = useCallback(async () => {
     const sandboxId = sandboxRuntimeDetail?.runtime.sandboxId || sandboxDetail?.sandboxId;
@@ -7590,6 +7772,17 @@ export default function App() {
       sandboxFileTreeItemsByPath,
       sandboxFileExpandedPaths
     );
+    const selectedSandboxFilePath = sandboxFilePath ? normalizeSandboxPath(sandboxFilePath) : '';
+    const selectedSandboxFileKind =
+      sandboxFileTargetKind ||
+      (selectedSandboxFilePath && selectedSandboxFilePath === normalizeSandboxPath(sandboxDirectoryPath) ? 'dir' : null);
+    const sandboxFileActionsBusy = sandboxFileOperation !== null;
+    const canDownloadSandboxFile = Boolean(selectedSandboxFilePath && selectedSandboxFileKind !== 'dir');
+    const canDeleteSandboxFileTarget = Boolean(
+      selectedSandboxFilePath &&
+        selectedSandboxFilePath !== '/' &&
+        selectedSandboxFilePath !== normalizeSandboxPath(sandboxFileTreeRootPath)
+    );
     const processRows = getSandboxProcessRows(sandboxProcessResult);
     const portRows = getSandboxPortRows(sandboxPortResult);
 
@@ -8691,6 +8884,39 @@ export default function App() {
                         placeholder="/workspace"
                       />
                     </label>
+                    <div className="file-explorer-file-actions" aria-label="Sandbox 文件操作">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        disabled={sandboxFileActionsBusy}
+                        onClick={openSandboxFileUploadPicker}
+                      >
+                        {sandboxFileOperation === 'upload' ? '上传中' : '上传'}
+                      </button>
+                      <input
+                        ref={sandboxFileUploadInputRef}
+                        className="file-explorer-upload-input"
+                        type="file"
+                        multiple
+                        onChange={(event) => void uploadSandboxFiles(event)}
+                      />
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        disabled={sandboxFileActionsBusy || !canDownloadSandboxFile}
+                        onClick={() => void downloadSandboxFile()}
+                      >
+                        {sandboxFileOperation === 'download' ? '下载中' : '下载'}
+                      </button>
+                      <button
+                        type="button"
+                        className="table-btn danger"
+                        disabled={sandboxFileActionsBusy || !canDeleteSandboxFileTarget}
+                        onClick={() => void deleteSandboxFileTarget()}
+                      >
+                        {sandboxFileOperation === 'delete' ? '删除中' : '删除'}
+                      </button>
+                    </div>
                     <span className="file-explorer-status">{sandboxFileStatus}</span>
                   </section>
 

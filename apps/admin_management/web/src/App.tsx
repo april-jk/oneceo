@@ -9051,10 +9051,6 @@ export default function App() {
                   <section className="file-explorer-shell">
                     <article className="file-explorer-main">
                       <div className="file-tree-head">
-                        <div>
-                          <h3>文件树</h3>
-                          <span className="panel-caption">ranger / yazi 式目录导航</span>
-                        </div>
                         <code className="mono">{sandboxDirectoryPath}</code>
                       </div>
                       <div className="file-tree-list" role="tree" aria-label="Sandbox 文件树">

@@ -627,9 +627,9 @@ test('startOAuthForProfile uses fixed redirect uri and state payload for slack',
   });
 
   const authUrl = new URL(result.authUrl);
-  assert.equal(authUrl.origin + authUrl.pathname, 'https://slack.com/oauth/v2_user/authorize');
+  assert.equal(authUrl.origin + authUrl.pathname, 'https://slack.com/oauth/v2/authorize');
   assert.equal(authUrl.searchParams.get('redirect_uri'), 'https://dev.oneceo.ai/slack/callback');
-  assert.equal(authUrl.searchParams.get('scope'), 'channels:history chat:write');
+  assert.equal(authUrl.searchParams.get('user_scope'), 'channels:history chat:write');
   assert.equal(capturedCreate?.returnToSessionId, 'session-slack-1');
   assert.match(String(result.state), /^oneceo_slack_v1\./);
   assert.equal(result.state, capturedCreate?.state);
@@ -689,13 +689,16 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
   });
 
   global.fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    assert.equal(String(input), 'https://slack.com/api/oauth.v2.user.access');
+    assert.equal(String(input), 'https://slack.com/api/oauth.v2.access');
     assert.match(String(init?.body || ''), /redirect_uri=https%3A%2F%2Fdev.oneceo.ai%2Fslack%2Fcallback/);
     return new Response(
       JSON.stringify({
-        access_token: 'xoxp-user-token',
-        token_type: 'user',
-        authed_user: { id: 'U12345' },
+        ok: true,
+        authed_user: {
+          id: 'U12345',
+          access_token: 'xoxp-user-token',
+          token_type: 'user',
+        },
         team: { id: 'T12345' },
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -729,6 +732,65 @@ test('completeOAuthByProfile returns returnToSessionId and fixed redirect uri fo
     slackUserId: 'U12345',
     slackTeamId: 'T12345',
   });
+});
+
+test('completeOAuthByProfile surfaces slack oauth errors instead of generic access token failures', async () => {
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+  process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
+  process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
+  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+
+  mock.method(connectorStorageBootstrap, 'ensureReady', async () => {});
+  mock.method(userConnectorProfileDAO, 'getByIdAndUser', async () => ({
+    id: 'profile-slack',
+    userId: 'user-1',
+    connectorKey: 'slack',
+    profileName: 'Slack Default',
+    displayName: null,
+  }) as any);
+
+  const state = `oneceo_slack_v1.${encodeStatePayload({
+    rid: 'request-slack-error-1',
+    sid: '',
+    ts: Date.now(),
+    nonce: 'nonce-slack-error-1',
+  })}`;
+
+  mock.method(connectorAuthRequestDAO, 'getByState', async () => ({
+    requestId: 'request-slack-error-1',
+    userId: 'user-1',
+    connectorKey: 'slack',
+    profileId: 'profile-slack',
+    state,
+    returnToSessionId: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  }) as any);
+  const markFailedMock = mock.method(
+    connectorAuthRequestDAO,
+    'markFailedByState',
+    async () => ({}) as any
+  );
+
+  global.fetch = mock.fn(async () =>
+    new Response(
+      JSON.stringify({
+        ok: false,
+        error: 'bad_redirect_uri',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  ) as typeof fetch;
+
+  await assert.rejects(
+    () =>
+      userConnectorService.completeOAuthByProfile('user-1', 'profile-slack', {
+        state,
+        code: 'code-slack-error-1',
+        redirectUri: 'https://unexpected.example.com/callback',
+      }),
+    /bad_redirect_uri/
+  );
+  assert.equal(markFailedMock.mock.callCount(), 1);
 });
 
 test('getProfileMaterial invalidates legacy Slack bot token profiles before runtime use', async () => {

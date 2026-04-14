@@ -172,7 +172,7 @@ function buildDirectoryListScript(path: string): string {
     "  printf '__ONECEO_NOT_DIR__\\n'",
     '  exit 45',
     'fi',
-    'find "$target" -mindepth 1 -maxdepth 1 \\( -type d -o -type f -o -type l \\) -printf \'%P\\t%p\\t%y\\t%s\\t%T@\\n\' | sort',
+    'find "$target" -mindepth 1 -maxdepth 1 \\( -type d -o -type f -o -type l \\) -printf \'%P\\t%p\\t%y\\t%M\\t%s\\t%T@\\n\' | sort',
   ].join('\n');
 }
 
@@ -183,7 +183,7 @@ function parseDirectoryEntries(stdout: string, basePath: string) {
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .map((line) => {
-      const [name = '', path = '', type = '', sizeText = '0', modifiedAtText = ''] = line.split('\t');
+      const [name = '', path = '', type = '', permissions = '', sizeText = '0', modifiedAtText = ''] = line.split('\t');
       const normalizedType = type === 'd' ? 'dir' : type === 'f' ? 'file' : 'item';
       const size = Number(sizeText);
       const modifiedAtUnix = Number(modifiedAtText);
@@ -191,6 +191,7 @@ function parseDirectoryEntries(stdout: string, basePath: string) {
         name,
         path,
         type: normalizedType,
+        permissions: permissions || null,
         sizeBytes: Number.isFinite(size) ? size : null,
         modifiedAt:
           Number.isFinite(modifiedAtUnix) && modifiedAtUnix > 0

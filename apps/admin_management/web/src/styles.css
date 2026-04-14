@@ -3036,7 +3036,10 @@ select:focus-visible {
 
 .runtime-filter-grid.conversation-index-filter-grid,
 .conversation-index-filter-grid {
-  grid-template-columns: minmax(260px, 1.6fr) minmax(180px, 1fr) repeat(2, minmax(160px, 0.9fr)) minmax(108px, 0.6fr);
+  grid-template-columns:
+    minmax(240px, 1.45fr)
+    repeat(5, minmax(148px, 0.9fr))
+    minmax(108px, 0.6fr);
   margin-bottom: 0;
   align-items: end;
   width: 100%;

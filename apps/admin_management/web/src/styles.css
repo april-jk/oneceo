@@ -6052,12 +6052,16 @@ tbody tr:hover {
 }
 
 .task-manager-table tbody tr {
-  cursor: pointer;
+  cursor: default;
 }
 
 .task-manager-table tbody tr:hover,
 .task-manager-table tbody tr.active {
   background: var(--active-control-bg);
+}
+
+.task-manager-table-selectable tbody tr {
+  cursor: pointer;
 }
 
 .file-explorer-icon.is-dir {
@@ -6160,6 +6164,14 @@ tbody tr:hover {
   margin: 0;
 }
 
+.task-manager-panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
 .task-manager-panel-pill {
   display: inline-flex;
   align-items: center;
@@ -6187,6 +6199,18 @@ tbody tr:hover {
   font-size: 12px;
   line-height: 1.4;
   text-align: left;
+}
+
+.task-manager-panel-age {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-strong) 92%, transparent);
+  color: var(--text-soft);
+  font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
 }
 
 .task-manager-inline-field {

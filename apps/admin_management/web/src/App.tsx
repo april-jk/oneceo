@@ -3496,16 +3496,16 @@ export default function App() {
             setSandboxProcessToolView('processes');
             setSandboxConnectivityResult(null);
             setSandboxTerminalOutput('');
-            setSandboxDirectoryPath(detail.connectivity.workspaceRoot?.trim() || '/');
-            setSandboxFileTreeRootPath(detail.connectivity.workspaceRoot?.trim() || '/');
+            setSandboxDirectoryPath('/');
+            setSandboxFileTreeRootPath('/');
             setSandboxFileTreeItemsByPath({});
-            setSandboxFileExpandedPaths([detail.connectivity.workspaceRoot?.trim() || '/']);
+            setSandboxFileExpandedPaths(['/']);
             setSandboxFilePath('');
             setSandboxFileTargetKind(null);
             setSandboxFileItems([]);
             setSandboxFileOperation(null);
             setSandboxFileTransferProgress(null);
-            setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
+            setSandboxFileStatus('目录根已重置为 /');
             setSandboxProcessResult(null);
             setSandboxPortResult(null);
             setSandboxModalOpen(true);
@@ -9010,7 +9010,7 @@ export default function App() {
                             void listSandboxFiles(undefined, { resetTreeRoot: true });
                           }
                         }}
-                        placeholder="/workspace"
+                        placeholder="/"
                       />
                     </label>
                     <div className="file-explorer-file-actions" aria-label="Sandbox 文件操作">

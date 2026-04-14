@@ -55,6 +55,12 @@ type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
 type SandboxProcessToolView = 'processes' | 'ports';
 type SandboxFileOperation = 'upload' | 'download' | 'delete';
+type SandboxFileTransferProgress = {
+  operation: Extract<SandboxFileOperation, 'upload' | 'download'>;
+  label: string;
+  detail: string;
+  percent: number | null;
+};
 
 type UiToast = {
   id: number;
@@ -824,16 +830,90 @@ function sandboxToolStringResult(value: unknown) {
   return matched || '';
 }
 
-async function uploadFileToSandboxUrl(uploadUrl: string, file: File) {
-  const formData = new FormData();
-  formData.append('file', file, file.name);
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    body: formData,
+function clampTransferPercent(value: number) {
+  if (!Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function triggerBrowserDownload(downloadUrl: string, fileName: string) {
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function uploadFileToSandboxUrl(
+  uploadUrl: string,
+  file: File,
+  onProgress?: (loadedBytes: number, totalBytes: number) => void
+) {
+  return new Promise<void>((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+
+    const request = new XMLHttpRequest();
+    request.open('POST', uploadUrl);
+    request.upload.onprogress = (event) => {
+      onProgress?.(event.loaded, event.lengthComputable ? event.total : file.size);
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(file.size, file.size);
+        resolve();
+        return;
+      }
+      reject(new Error(`上传 ${file.name} 失败：${request.status}`));
+    };
+    request.onerror = () => reject(new Error(`上传 ${file.name} 失败：网络异常`));
+    request.send(formData);
   });
+}
+
+async function downloadFileFromSandboxUrl(
+  downloadUrl: string,
+  fileName: string,
+  onProgress?: (loadedBytes: number, totalBytes: number | null) => void
+) {
+  const response = await fetch(downloadUrl);
   if (!response.ok) {
-    throw new Error(`上传 ${file.name} 失败：${response.status}`);
+    throw new Error(`下载 ${fileName} 失败：${response.status}`);
   }
+
+  const contentLength = Number(response.headers.get('content-length'));
+  const totalBytes = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null;
+
+  if (!response.body) {
+    const blob = await response.blob();
+    onProgress?.(blob.size, totalBytes ?? blob.size);
+    const objectUrl = window.URL.createObjectURL(blob);
+    triggerBrowserDownload(objectUrl, fileName);
+    window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: BlobPart[] = [];
+  let loadedBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    const chunk = new ArrayBuffer(value.byteLength);
+    new Uint8Array(chunk).set(value);
+    chunks.push(chunk);
+    loadedBytes += value.byteLength;
+    onProgress?.(loadedBytes, totalBytes);
+  }
+
+  const blob = new Blob(chunks, {
+    type: response.headers.get('content-type') || 'application/octet-stream',
+  });
+  onProgress?.(blob.size, totalBytes ?? blob.size);
+  const objectUrl = window.URL.createObjectURL(blob);
+  triggerBrowserDownload(objectUrl, fileName);
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
 }
 
 function isPathWithin(rootPath: string, candidatePath: string) {
@@ -2907,8 +2987,9 @@ export default function App() {
   const [sandboxFilePath, setSandboxFilePath] = useState('');
   const [sandboxFileTargetKind, setSandboxFileTargetKind] = useState<SandboxFileItem['kind'] | null>(null);
   const [sandboxFileItems, setSandboxFileItems] = useState<SandboxFileItem[]>([]);
-  const [sandboxFileStatus, setSandboxFileStatus] = useState('等待加载目录');
+  const [, setSandboxFileStatus] = useState('等待加载目录');
   const [sandboxFileOperation, setSandboxFileOperation] = useState<SandboxFileOperation | null>(null);
+  const [sandboxFileTransferProgress, setSandboxFileTransferProgress] = useState<SandboxFileTransferProgress | null>(null);
   const [sandboxProcessResult, setSandboxProcessResult] = useState<unknown>(null);
   const [sandboxPidInput, setSandboxPidInput] = useState('');
   const [sandboxPortInput, setSandboxPortInput] = useState('3000');
@@ -3423,6 +3504,7 @@ export default function App() {
             setSandboxFileTargetKind(null);
             setSandboxFileItems([]);
             setSandboxFileOperation(null);
+            setSandboxFileTransferProgress(null);
             setSandboxFileStatus(`目录根已重置为 ${detail.connectivity.workspaceRoot?.trim() || '/'}`);
             setSandboxProcessResult(null);
             setSandboxPortResult(null);
@@ -3712,11 +3794,25 @@ export default function App() {
       if (!sandboxId || files.length === 0) return;
 
       const directoryPath = normalizeSandboxPath(sandboxDirectoryPath);
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+      let completedBytes = 0;
       setSandboxFileOperation('upload');
+      setSandboxFileTransferProgress({
+        operation: 'upload',
+        label: `上传到 ${directoryPath}`,
+        detail: `${files.length} 个文件等待传输`,
+        percent: 0,
+      });
       setSandboxFileStatus(`正在上传 ${files.length} 个文件到 ${directoryPath}`);
       try {
-        for (const file of files) {
+        for (const [index, file] of files.entries()) {
           const targetPath = joinSandboxPath(directoryPath, file.name);
+          setSandboxFileTransferProgress({
+            operation: 'upload',
+            label: `上传 ${file.name}`,
+            detail: `${index + 1}/${files.length} · ${formatBytes(file.size)}`,
+            percent: clampTransferPercent(totalBytes > 0 ? (completedBytes / totalBytes) * 100 : 0),
+          });
           const uploadUrlResult = await api.runSandboxToolAction(sandboxId, 'sandbox.uploadUrl', {
             path: targetPath,
             useSignatureExpiration: 3600,
@@ -3725,8 +3821,24 @@ export default function App() {
           if (!uploadUrl) {
             throw new Error(`上传 ${file.name} 失败：上传链接返回为空`);
           }
-          await uploadFileToSandboxUrl(uploadUrl, file);
+          await uploadFileToSandboxUrl(uploadUrl, file, (loadedBytes, fileTotalBytes) => {
+            const currentFileBytes = Math.min(loadedBytes, fileTotalBytes || file.size);
+            const nextPercent = totalBytes > 0 ? ((completedBytes + currentFileBytes) / totalBytes) * 100 : null;
+            setSandboxFileTransferProgress({
+              operation: 'upload',
+              label: `上传 ${file.name}`,
+              detail: `${index + 1}/${files.length} · ${formatBytes(currentFileBytes)} / ${formatBytes(file.size)}`,
+              percent: clampTransferPercent(nextPercent ?? 0),
+            });
+          });
+          completedBytes += file.size;
         }
+        setSandboxFileTransferProgress({
+          operation: 'upload',
+          label: `上传到 ${directoryPath}`,
+          detail: `${files.length} 个文件已完成`,
+          percent: 100,
+        });
         await listSandboxFiles(directoryPath);
         setSandboxFileStatus(`${directoryPath} · 已上传 ${files.length} 个文件`);
         pushToast('success', '上传完成', `${files.length} 个文件已写入 ${directoryPath}`);
@@ -3735,6 +3847,7 @@ export default function App() {
         setError(toolError instanceof Error ? toolError.message : '上传文件失败');
       } finally {
         setSandboxFileOperation(null);
+        setSandboxFileTransferProgress(null);
       }
     },
     [sandboxRuntimeDetail?.runtime.sandboxId, sandboxDetail?.sandboxId, sandboxDirectoryPath, listSandboxFiles, pushToast]
@@ -3749,6 +3862,12 @@ export default function App() {
     }
 
     setSandboxFileOperation('download');
+    setSandboxFileTransferProgress({
+      operation: 'download',
+      label: `准备下载 ${sandboxFileNameFromPath(targetPath)}`,
+      detail: targetPath,
+      percent: 0,
+    });
     setSandboxFileStatus(`正在生成下载链接 ${targetPath}`);
     try {
       const result = await api.runSandboxToolAction(sandboxId, 'sandbox.downloadUrl', {
@@ -3759,21 +3878,29 @@ export default function App() {
       if (!downloadUrl) {
         throw new Error('下载链接返回为空');
       }
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.download = sandboxFileNameFromPath(targetPath);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      const fileName = sandboxFileNameFromPath(targetPath);
+      await downloadFileFromSandboxUrl(downloadUrl, fileName, (loadedBytes, totalBytes) => {
+        setSandboxFileTransferProgress({
+          operation: 'download',
+          label: `下载 ${fileName}`,
+          detail: totalBytes ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}` : `${formatBytes(loadedBytes)} 已接收`,
+          percent: totalBytes ? clampTransferPercent((loadedBytes / totalBytes) * 100) : null,
+        });
+      });
+      setSandboxFileTransferProgress({
+        operation: 'download',
+        label: `下载 ${fileName}`,
+        detail: '下载文件已生成',
+        percent: 100,
+      });
       setSandboxFileStatus(`已开始下载 ${targetPath}`);
-      pushToast('success', '下载已开始', sandboxFileNameFromPath(targetPath));
+      pushToast('success', '下载完成', fileName);
     } catch (toolError) {
       setSandboxFileStatus('下载失败');
       setError(toolError instanceof Error ? toolError.message : '下载文件失败');
     } finally {
       setSandboxFileOperation(null);
+      setSandboxFileTransferProgress(null);
     }
   }, [
     sandboxRuntimeDetail?.runtime.sandboxId,
@@ -7777,6 +7904,8 @@ export default function App() {
       sandboxFileTargetKind ||
       (selectedSandboxFilePath && selectedSandboxFilePath === normalizeSandboxPath(sandboxDirectoryPath) ? 'dir' : null);
     const sandboxFileActionsBusy = sandboxFileOperation !== null;
+    const sandboxFileTransferActive = sandboxFileTransferProgress !== null;
+    const sandboxFileTransferPercent = sandboxFileTransferProgress?.percent ?? null;
     const canDownloadSandboxFile = Boolean(selectedSandboxFilePath && selectedSandboxFileKind !== 'dir');
     const canDeleteSandboxFileTarget = Boolean(
       selectedSandboxFilePath &&
@@ -8859,7 +8988,7 @@ export default function App() {
               ) : null}
 
               {sandboxDetailTab === 'files' ? (
-                <div className="inspector-page-stack file-explorer-page">
+                <div className={`inspector-page-stack file-explorer-page ${sandboxFileTransferActive ? 'is-transfer-active' : ''}`}>
                   <section className="file-explorer-toolbar" aria-label="Sandbox 文件工具栏">
                     <div className="file-explorer-nav-actions">
                       <button type="button" className="secondary-btn" onClick={() => void goSandboxFileParent()}>
@@ -8917,7 +9046,6 @@ export default function App() {
                         {sandboxFileOperation === 'delete' ? '删除中' : '删除'}
                       </button>
                     </div>
-                    <span className="file-explorer-status">{sandboxFileStatus}</span>
                   </section>
 
                   <section className="file-explorer-shell">
@@ -8987,6 +9115,32 @@ export default function App() {
                       </div>
                     </article>
                   </section>
+                  {sandboxFileTransferProgress ? (
+                    <div className="file-transfer-overlay" role="status" aria-live="polite">
+                      <div className="file-transfer-card">
+                        <span className="file-transfer-eyebrow">
+                          {sandboxFileTransferProgress.operation === 'upload' ? '上传文件' : '下载文件'}
+                        </span>
+                        <strong>{sandboxFileTransferProgress.label}</strong>
+                        <span className="file-transfer-detail mono">{sandboxFileTransferProgress.detail}</span>
+                        <div
+                          className={`file-transfer-progress-track ${sandboxFileTransferPercent === null ? 'is-indeterminate' : ''}`}
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={sandboxFileTransferPercent === null ? undefined : sandboxFileTransferPercent}
+                        >
+                          <span
+                            className="file-transfer-progress-bar"
+                            style={sandboxFileTransferPercent === null ? undefined : { width: `${sandboxFileTransferPercent}%` }}
+                          />
+                        </div>
+                        <span className="file-transfer-percent mono">
+                          {sandboxFileTransferPercent === null ? '处理中' : `${sandboxFileTransferPercent}%`}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

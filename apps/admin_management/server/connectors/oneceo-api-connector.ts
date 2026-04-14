@@ -21,6 +21,7 @@ export type TaskCreationSession = {
   runtime?: {
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
+    executor?: string | null;
     updatedAt?: string;
   };
   pendingQuestion?: string;

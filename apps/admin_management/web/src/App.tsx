@@ -2941,6 +2941,8 @@ export default function App() {
   const [conversationSearchQuery, setConversationSearchQuery] = useState('');
   const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
   const [conversationStageFilter, setConversationStageFilter] = useState('all');
+  const [conversationUserFilter, setConversationUserFilter] = useState('all');
+  const [conversationExecutorFilter, setConversationExecutorFilter] = useState('all');
   const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState('');
   const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState('');
   const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
@@ -4731,12 +4733,61 @@ export default function App() {
     { label: '最近活跃', value: formatDateTime(conversationSummary.latestUpdatedAt), meta: '按更新时间排序', tone: 'time' },
   ] as const;
   const conversationStageOptions = uniqueSorted(conversationSessions.map((session) => session.stage));
+  const conversationUserOptions = Array.from(
+    conversationSessions.reduce<Map<string, { value: string; label: string; count: number }>>((map, session) => {
+      const userValue = session.user?.id || '__unknown_user__';
+      const userLabel = conversationUserLabel(session.user);
+      const userMeta = session.user?.email || (session.user?.id && session.user.id !== userLabel ? session.user.id : '');
+      const optionLabel = userMeta ? `${userLabel} · ${userMeta}` : userLabel;
+      const existing = map.get(userValue);
+      if (existing) {
+        existing.count += 1;
+        return map;
+      }
+      map.set(userValue, {
+        value: userValue,
+        label: optionLabel,
+        count: 1,
+        });
+      return map;
+    }, new Map()).values()
+  ).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, 'zh-Hans-CN', { sensitivity: 'base' }));
+  const conversationExecutorOptions = Array.from(
+    conversationSessions.reduce<Map<string, { value: string; label: string; count: number }>>((map, session) => {
+      const executorValue = String(session.executor || '').trim().toLowerCase() || '__unknown_executor__';
+      const existing = map.get(executorValue);
+      if (existing) {
+        existing.count += 1;
+        return map;
+      }
+      map.set(executorValue, {
+        value: executorValue,
+        label: executorValue === '__unknown_executor__' ? '未记录执行器' : executorLabel(executorValue),
+        count: 1,
+        });
+      return map;
+    }, new Map()).values()
+  ).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, 'zh-Hans-CN', { sensitivity: 'base' }));
   const conversationScopeFilterValue =
     conversationStatusFilter !== 'all'
       ? `status:${conversationStatusFilter}`
       : conversationStageFilter !== 'all'
         ? `stage:${conversationStageFilter}`
         : 'all';
+  const activeConversationFilterLabels = [
+    conversationStatusFilter !== 'all'
+      ? `状态 ${conversationQuickStatusFilters.find((item) => item.value === conversationStatusFilter)?.label || conversationStatusFilter}`
+      : '',
+    conversationStageFilter !== 'all' ? `阶段 ${conversationStageLabel(conversationStageFilter)}` : '',
+    conversationUserFilter !== 'all'
+      ? `用户 ${conversationUserOptions.find((item) => item.value === conversationUserFilter)?.label || conversationUserFilter}`
+      : '',
+    conversationExecutorFilter !== 'all'
+      ? `执行器 ${conversationExecutorOptions.find((item) => item.value === conversationExecutorFilter)?.label || conversationExecutorFilter}`
+      : '',
+    conversationUpdatedFromDate ? `开始 ${conversationUpdatedFromDate}` : '',
+    conversationUpdatedToDate ? `结束 ${conversationUpdatedToDate}` : '',
+  ].filter(Boolean);
   const filteredConversationSessions = (() => {
     const query = conversationSearchQuery.trim().toLowerCase();
     const fromTime = conversationUpdatedFromDate ? new Date(`${conversationUpdatedFromDate}T00:00:00`).getTime() : null;
@@ -4746,6 +4797,14 @@ export default function App() {
         return false;
       }
       if (conversationStageFilter !== 'all' && (session.stage || '') !== conversationStageFilter) {
+        return false;
+      }
+      const sessionUserFilterValue = session.user?.id || '__unknown_user__';
+      if (conversationUserFilter !== 'all' && sessionUserFilterValue !== conversationUserFilter) {
+        return false;
+      }
+      const sessionExecutorFilterValue = String(session.executor || '').trim().toLowerCase() || '__unknown_executor__';
+      if (conversationExecutorFilter !== 'all' && sessionExecutorFilterValue !== conversationExecutorFilter) {
         return false;
       }
       const updatedAt = new Date(session.updatedAt).getTime();
@@ -4768,6 +4827,7 @@ export default function App() {
         session.pendingQuestion || '',
         session.stage || '',
         session.status,
+        session.executor || '',
       ]
         .join(' ')
         .toLowerCase();
@@ -7137,6 +7197,31 @@ export default function App() {
                   </select>
                 </label>
                 <label className="state-filter-field">
+                  <span>用户</span>
+                  <select value={conversationUserFilter} onChange={(event) => setConversationUserFilter(event.target.value)}>
+                    <option value="all">全部用户</option>
+                    {conversationUserOptions.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label} ({item.count})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="state-filter-field">
+                  <span>执行器</span>
+                  <select
+                    value={conversationExecutorFilter}
+                    onChange={(event) => setConversationExecutorFilter(event.target.value)}
+                  >
+                    <option value="all">全部执行器</option>
+                    {conversationExecutorOptions.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label} ({item.count})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="state-filter-field">
                   <span>更新开始日期</span>
                   <input
                     type="date"
@@ -7161,6 +7246,8 @@ export default function App() {
                     setConversationSearchQuery('');
                     setConversationStatusFilter('all');
                     setConversationStageFilter('all');
+                    setConversationUserFilter('all');
+                    setConversationExecutorFilter('all');
                     setConversationUpdatedFromDate('');
                     setConversationUpdatedToDate('');
                   }}
@@ -7170,6 +7257,7 @@ export default function App() {
               </div>
               <p className="panel-caption">
                 按更新时间排序 · 当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
+                {activeConversationFilterLabels.length ? ` · 已启用 ${activeConversationFilterLabels.join(' / ')}` : ''}
               </p>
             </div>
             <div className="table-wrap conversation-index-table-wrap">

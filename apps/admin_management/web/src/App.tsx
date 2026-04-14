@@ -4883,76 +4883,17 @@ export default function App() {
       entries,
     };
   })();
-  const osacMessages = conversationDetail?.trace?.osac?.messages || [];
   const primaryEnvironment = conversationDetail?.trace?.sandbox.primaryEnvironment ?? null;
   const relatedEnvironments = (conversationDetail?.trace?.sandbox.relatedEnvironments || []).filter(
     (environment) => environment.id !== primaryEnvironment?.id
   );
   const primaryEnvironmentSandboxId = environmentSandboxId(primaryEnvironment);
-  const primaryEnvironmentTaskSessionId = environmentTaskSessionId(primaryEnvironment);
   const primaryEnvironmentExecutor = environmentExecutor(primaryEnvironment);
   const primaryEnvironmentArchiveStatus = environmentArchiveStatus(primaryEnvironment);
   const primaryEnvironmentReplacementId = environmentReplacementSandboxId(primaryEnvironment);
-  const governanceGroups = Object.values(
-    relatedEnvironments.reduce<Record<string, { key: string; reason: string; items: SandboxEnvironmentItem[]; latestUpdatedAt: string }>>((groups, environment) => {
-      const reason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
-      const existing = groups[reason];
-      if (existing) {
-        existing.items.push(environment);
-        if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
-          existing.latestUpdatedAt = environment.updatedAt;
-        }
-        return groups;
-      }
-      groups[reason] = {
-        key: reason,
-        reason,
-        items: [environment],
-        latestUpdatedAt: environment.updatedAt,
-      };
-      return groups;
-    }, {})
-  ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
-  const relatedEnvironmentGroups = Object.values(
-    relatedEnvironments.reduce<Record<string, {
-      key: string;
-      status: string;
-      executor: string;
-      archiveStatus: string;
-      governanceReason: string;
-      items: SandboxEnvironmentItem[];
-      latestUpdatedAt: string;
-    }>>((groups, environment) => {
-      const executor = environmentExecutor(environment) || '-';
-      const archiveStatus = environmentArchiveStatus(environment) || '-';
-      const governanceReason = sandboxDedupeReasonLabel(environmentDedupeReason(environment));
-      const key = `${environment.status}__${executor}__${archiveStatus}__${governanceReason}`;
-      const existing = groups[key];
-      if (existing) {
-        existing.items.push(environment);
-        if (toTimestamp(environment.updatedAt) > toTimestamp(existing.latestUpdatedAt)) {
-          existing.latestUpdatedAt = environment.updatedAt;
-        }
-        return groups;
-      }
-      groups[key] = {
-        key,
-        status: environment.status,
-        executor,
-        archiveStatus,
-        governanceReason,
-        items: [environment],
-        latestUpdatedAt: environment.updatedAt,
-      };
-      return groups;
-    }, {})
-  ).sort((left, right) => right.items.length - left.items.length || toTimestamp(right.latestUpdatedAt) - toTimestamp(left.latestUpdatedAt));
-  const visibleRelatedEnvironmentGroups = conversationGovernanceFilter
-    ? relatedEnvironmentGroups.filter((group) => group.governanceReason === conversationGovernanceFilter)
-    : relatedEnvironmentGroups;
-  const finalVisibleRelatedEnvironmentGroups = conversationEnvironmentGroupFilter
-    ? visibleRelatedEnvironmentGroups.filter((group) => group.key === conversationEnvironmentGroupFilter)
-    : visibleRelatedEnvironmentGroups;
+  const recentRelatedEnvironments = [...relatedEnvironments]
+    .sort((left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt))
+    .slice(0, 3);
   const sortedTransitions = (() => {
     return [...stateTransitions].sort((a, b) => {
       const aTime = a.at ? Date.parse(a.at) : Number.MAX_SAFE_INTEGER;
@@ -5296,20 +5237,23 @@ export default function App() {
 
   const renderConversationInfraPanel = () => {
     if (!conversationDetail) {
-      return <p className="empty">选择会话后，可在此查看运行绑定、Sandbox 分组与 OSAC 诊断信息。</p>;
+      return <p className="empty">选择会话后，可在此查看来源用户与主 Sandbox 绑定信息。</p>;
     }
 
     return (
-      <div className="conversation-inspector-content conversation-dialog-infra">
+      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact">
         {conversationInfraError ? (
           <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
         ) : null}
-        <article className="sub-panel">
+        <article className="sub-panel conversation-infra-panel">
           <div className="panel-header">
-            <h3>当前会话</h3>
+            <div>
+              <h3>会话身份</h3>
+              <p className="panel-caption conversation-infra-caption">只保留定位当前对话所需的来源与状态信息。</p>
+            </div>
             <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
           </div>
-          <div className="detail-kv-list">
+          <div className="detail-kv-list conversation-infra-kv-list">
             <div>
               <span>阶段</span>
               <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
@@ -5323,25 +5267,23 @@ export default function App() {
               <strong className="mono">{conversationDetail.session.user?.ipAddress || '-'}</strong>
             </div>
             <div>
-              <span>OpenCode ID</span>
-              <strong className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</strong>
-            </div>
-            <div>
-              <span>待补充问题</span>
-              <strong>{conversationDetail.runtime?.pendingQuestion || '-'}</strong>
-            </div>
-            <div>
-              <span>挂起原因</span>
-              <strong>{conversationDetail.runtime?.pendingResume?.reason || '-'}</strong>
+              <span>最近活跃</span>
+              <strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong>
             </div>
           </div>
         </article>
 
-        <article className="sub-panel">
+        <article className="sub-panel conversation-infra-panel">
           <div className="panel-header">
-            <h3>Sandbox 绑定信息</h3>
+            <div>
+              <h3>运行绑定</h3>
+              <p className="panel-caption conversation-infra-caption">
+                {primaryEnvironmentSandboxId ? '优先聚焦主 Sandbox，附加记录仅展示最近几条。' : '当前暂无主 Sandbox 绑定。'}
+              </p>
+            </div>
+            <span className="panel-caption">附加关联 {relatedEnvironments.length} 条</span>
           </div>
-          <div className="detail-kv-list">
+          <div className="detail-kv-list conversation-infra-kv-list">
             <div>
               <span>编排 ID</span>
               {conversationDetail.runtime?.orchestratorSessionId ? (
@@ -5351,10 +5293,6 @@ export default function App() {
               ) : (
                 <strong className="mono">-</strong>
               )}
-            </div>
-            <div>
-              <span>VM 名称</span>
-              <strong className="mono">{conversationDetail.runtime?.vmName || '-'}</strong>
             </div>
             <div>
               <span>主 Sandbox</span>
@@ -5379,16 +5317,8 @@ export default function App() {
               <strong>{relatedEnvironments.length}</strong>
             </div>
           </div>
-          {primaryEnvironmentTaskSessionId ? (
-            <p className="session-meta">
-              主记录会话：
-              <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(primaryEnvironmentTaskSessionId)}>
-                {primaryEnvironmentTaskSessionId}
-              </button>
-            </p>
-          ) : null}
           {primaryEnvironmentReplacementId ? (
-            <p className="session-meta">
+            <p className="session-meta conversation-infra-note">
               已由{' '}
               <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
                 {primaryEnvironmentReplacementId}
@@ -5396,181 +5326,39 @@ export default function App() {
               接管
             </p>
           ) : null}
-        </article>
-
-        <article className="sub-panel">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <h3>Sandbox 分组</h3>
-              <span className="panel-caption">{conversationGovernanceFilter ? `当前筛选：${conversationGovernanceFilter}` : `共 ${governanceGroups.length} 类原因`}</span>
-            </div>
-            {conversationGovernanceFilter ? (
-              <button type="button" className="secondary-btn" onClick={() => setConversationGovernanceFilter(null)}>
-                清除
-              </button>
-            ) : null}
-          </div>
-          {governanceGroups.length === 0 ? (
-            <p className="empty">当前没有额外关联的 Sandbox 环境记录。</p>
-          ) : (
-            <div className="conversation-sandbox-governance-grid">
-              {governanceGroups.map((group) => (
-                <button
-                  key={group.key}
-                  type="button"
-                  className={`sub-panel conversation-sandbox-card conversation-sandbox-governance-card conversation-sandbox-governance-filter ${conversationGovernanceFilter === group.reason ? 'active' : ''}`}
-                  onClick={() => setConversationGovernanceFilter((prev) => (prev === group.reason ? null : group.reason))}
-                >
-                  <div className="trace-head">
-                    <strong>{group.reason}</strong>
-                    <span className="session-status session-status-governance">分组</span>
-                  </div>
-                  <p className="trace-meta">共 {group.items.length} 条 · 最近更新时间 {formatDateTime(group.latestUpdatedAt)}</p>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {finalVisibleRelatedEnvironmentGroups.length ? (
-            <div className="conversation-sandbox-list">
-              {finalVisibleRelatedEnvironmentGroups.map((group) => {
-                const groupSelected = conversationEnvironmentGroupFilter === group.key;
-                return (
-                  <article key={group.key} className={`sub-panel conversation-sandbox-card conversation-sandbox-group-filter ${groupSelected ? 'active' : ''}`}>
-                    <button
-                      type="button"
-                      className="conversation-sandbox-group-head"
-                      onClick={() => setConversationEnvironmentGroupFilter((prev) => (prev === group.key ? null : group.key))}
-                    >
+          {recentRelatedEnvironments.length ? (
+            <div className="conversation-infra-related-section">
+              <div className="panel-subtitle panel-subtitle-row">
+                <span>最近关联 Sandbox</span>
+                <span className="panel-caption">展示最近 {recentRelatedEnvironments.length} 条</span>
+              </div>
+              <div className="compact-list conversation-infra-related-list">
+                {recentRelatedEnvironments.map((environment) => {
+                  const sandboxId = environmentSandboxId(environment);
+                  return (
+                    <article key={environment.id} className="compact-item conversation-infra-related-item">
                       <div className="trace-head">
-                        <strong>
-                          {sandboxRuntimeStateLabel(group.status)} · {executorLabel(group.executor)}
-                        </strong>
-                        <span className="mono">{formatDateTime(group.latestUpdatedAt)}</span>
+                        <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
+                        <span className="mono">{formatDateTime(environment.updatedAt)}</span>
                       </div>
-                      <p className="trace-meta">
-                        归档: {archiveStatusLabel(group.archiveStatus)} · 原因: {group.governanceReason} · 共 {group.items.length} 条
-                      </p>
-                    </button>
-                    <details open={groupSelected}>
-                      <summary>{groupSelected ? '收起该组 Sandbox' : '查看该组 Sandbox'}</summary>
-                      <div className="conversation-sandbox-list">
-                        {group.items.map((environment) => {
-                          const sandboxId = environmentSandboxId(environment);
-                          const taskSessionId = environmentTaskSessionId(environment);
-                          return (
-                            <article key={environment.id} className="sub-panel conversation-sandbox-card">
-                              <div className="trace-head">
-                                <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
-                                <span className="mono">{formatDateTime(environment.updatedAt)}</span>
-                              </div>
-                              <p className="trace-meta">
-                                Sandbox：
-                                {sandboxId ? (
-                                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
-                                    {sandboxId}
-                                  </button>
-                                ) : (
-                                  '-'
-                                )}
-                              </p>
-                              <p className="trace-meta">
-                                会话：
-                                {taskSessionId ? (
-                                  <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationSessionFromSandbox(taskSessionId)}>
-                                    {taskSessionId}
-                                  </button>
-                                ) : (
-                                  '-'
-                                )}
-                              </p>
-                            </article>
-                          );
-                        })}
+                      <div className="conversation-infra-related-main">
+                        {sandboxId ? (
+                          <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
+                            {sandboxId}
+                          </button>
+                        ) : (
+                          <span className="mono">-</span>
+                        )}
+                        <span>{executorLabel(environmentExecutor(environment))}</span>
+                        <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
                       </div>
-                    </details>
-                  </article>
-                );
-              })}
+                    </article>
+                  );
+                })}
+              </div>
             </div>
           ) : null}
         </article>
-
-        <details className="sub-panel conversation-osac-panel">
-          <summary>
-            <div className="panel-header panel-header-stack">
-              <div>
-                <h3>OSAC / OpenCode</h3>
-                <span className="panel-caption">{osacMessages.length} 条消息</span>
-              </div>
-            </div>
-          </summary>
-          <div className="conversation-osac-panel-body">
-            <button type="button" className="secondary-btn" onClick={() => setShowOpencodePayload((prev) => !prev)}>
-              {showOpencodePayload ? '隐藏 payload' : '显示 payload'}
-            </button>
-            <div className="trace-list conversation-osac-list">
-              {osacMessages.length === 0 ? (
-                <p className="empty">无 OSAC 消息</p>
-              ) : (
-                osacMessages.map((message, index) => {
-                  const payload = (message.payload || {}) as Record<string, unknown>;
-                  const summary = summarizeText(
-                    [
-                      typeof payload.eventType === 'string' ? payload.eventType : '',
-                      typeof payload.message === 'string' ? payload.message : '',
-                      typeof payload.status === 'string' ? payload.status : '',
-                      typeof payload.output === 'string' ? payload.output : '',
-                    ].filter(Boolean).join(' | '),
-                    220
-                  );
-                  const payloadTimestamp =
-                    typeof payload.timestamp === 'string'
-                      ? payload.timestamp
-                      : typeof payload.time === 'string'
-                        ? payload.time
-                        : undefined;
-                  return (
-                    <article key={`${message.type}-${index}`} className="trace-item">
-                      <p className="trace-head">
-                        <span className="trace-level info">osac</span>
-                        <strong>{message.type}</strong>
-                        <span>{formatDateTime(payloadTimestamp)}</span>
-                      </p>
-                      {summary ? <p className="message-content">{summary}</p> : null}
-                      {showOpencodePayload ? <pre className="json-block">{toJsonText(payload)}</pre> : null}
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </details>
-
-        <details className="sub-panel">
-          <summary>KVM / Sandbox 原始状态</summary>
-          <pre className="json-block">
-            {toJsonText({
-              kvm: {
-                orchestratorSessionId: conversationDetail.trace?.kvm.orchestratorSessionId,
-                vmName: conversationDetail.trace?.kvm.vmName,
-                quota: conversationDetail.trace?.kvm.quota,
-                session: conversationDetail.trace?.kvm.session,
-                sessionVm: conversationDetail.trace?.kvm.sessionVm,
-                sandbox: conversationDetail.trace?.kvm.sandbox,
-                sandboxIp: conversationDetail.trace?.kvm.sandboxIp,
-                sandboxPorts: conversationDetail.trace?.kvm.sandboxPorts,
-                vmDetail: conversationDetail.trace?.kvm.vmDetail,
-                vmMetrics: conversationDetail.trace?.kvm.vmMetrics,
-                errors: conversationDetail.trace?.kvm.errors,
-              },
-              sandbox: {
-                primaryEnvironment,
-                relatedEnvironments,
-              },
-            })}
-          </pre>
-        </details>
       </div>
     );
   };

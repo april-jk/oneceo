@@ -687,6 +687,7 @@ type SandboxFileTreeRow = SandboxFileItem & {
   loaded: boolean;
   childCount: number;
   isRoot: boolean;
+  isEmpty?: boolean;
 };
 
 type SandboxProcessRow = {
@@ -845,6 +846,21 @@ function buildSandboxFileTreeRows(
     }
 
     if (!expandedSet.has(path)) return;
+
+    if (loaded && children.length === 0) {
+      rows.push({
+        path: `${path}::empty`,
+        label: '空目录',
+        kind: 'item',
+        depth: depth + 1,
+        expanded: false,
+        loaded: true,
+        childCount: 0,
+        isRoot: false,
+        isEmpty: true,
+      });
+      return;
+    }
 
     children.forEach((item) => {
       const itemLoaded = Object.prototype.hasOwnProperty.call(itemsByPath, item.path);
@@ -8679,40 +8695,51 @@ export default function App() {
                       <div className="file-tree-list" role="tree" aria-label="Sandbox 文件树">
                         {sandboxFileTreeRows.length ? (
                           sandboxFileTreeRows.map((item) => {
-                            const isActive = sandboxFilePath === item.path || sandboxDirectoryPath === item.path;
+                            const isActive = !item.isEmpty && (sandboxFilePath === item.path || sandboxDirectoryPath === item.path);
+                            const itemKindClass = item.isEmpty ? 'is-empty' : item.kind === 'dir' ? 'is-dir' : 'is-file';
                             return (
                               <div
                                 key={`${item.path}-${item.depth}`}
-                                className={`file-tree-row ${isActive ? 'active' : ''} ${item.kind === 'dir' ? 'is-dir' : 'is-file'}`}
+                                className={`file-tree-row ${isActive ? 'active' : ''} ${itemKindClass}`}
                                 style={{ paddingLeft: `${item.depth * 18 + 8}px` }}
                                 role="treeitem"
-                                aria-expanded={item.kind === 'dir' ? item.expanded : undefined}
+                                aria-expanded={item.kind === 'dir' && !item.isEmpty ? item.expanded : undefined}
                               >
                                 <button
                                   type="button"
                                   className="file-tree-disclosure mono"
-                                  disabled={item.kind !== 'dir' || item.isRoot}
+                                  disabled={item.isEmpty || item.kind !== 'dir' || item.isRoot}
                                   onClick={() => void toggleSandboxFileTreeDirectory(item)}
                                   aria-label={item.expanded ? '折叠目录' : '展开目录'}
                                 >
-                                  {item.kind === 'dir' ? (item.isRoot || item.expanded ? 'v' : '>') : '-'}
+                                  {item.isEmpty ? '·' : item.kind === 'dir' ? (item.isRoot || item.expanded ? 'v' : '>') : '-'}
                                 </button>
-                                <button
-                                  type="button"
-                                  className="file-tree-node"
-                                  onClick={() => void openSandboxFileItem(item)}
-                                >
-                                  <span className={`file-explorer-icon ${item.kind === 'dir' ? 'is-dir' : 'is-file'} mono`}>
-                                    {sandboxFileIconText(item)}
+                                {item.isEmpty ? (
+                                  <span className="file-tree-node file-tree-empty-node">
+                                    <span className="file-tree-empty-mark mono">EMPTY</span>
+                                    <span className="file-tree-node-main">
+                                      <span>空目录</span>
+                                      <small>没有子项</small>
+                                    </span>
                                   </span>
-                                  <span className="file-tree-node-main">
-                                    <span>{item.isRoot ? item.path : item.label}</span>
-                                    <small className="mono">{item.path}</small>
-                                  </span>
-                                </button>
-                                <span className="file-tree-meta">{item.kind === 'dir' ? (item.loaded ? `${item.childCount} 项` : '未展开') : formatBytes(item.sizeBytes)}</span>
-                                <span className="file-tree-meta">{sandboxFileTypeLabel(item)}</span>
-                                <span className="file-tree-meta">{item.modifiedAt ? formatDateTime(item.modifiedAt) : '-'}</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="file-tree-node"
+                                    onClick={() => void openSandboxFileItem(item)}
+                                  >
+                                    <span className={`file-explorer-icon ${item.kind === 'dir' ? 'is-dir' : 'is-file'} mono`}>
+                                      {sandboxFileIconText(item)}
+                                    </span>
+                                    <span className="file-tree-node-main">
+                                      <span>{item.isRoot ? item.path : item.label}</span>
+                                      <small className="mono">{item.path}</small>
+                                    </span>
+                                  </button>
+                                )}
+                                <span className="file-tree-meta">{item.isEmpty ? '0 项' : item.kind === 'dir' ? (item.loaded ? `${item.childCount} 项` : '未展开') : formatBytes(item.sizeBytes)}</span>
+                                <span className="file-tree-meta">{item.isEmpty ? '空' : sandboxFileTypeLabel(item)}</span>
+                                <span className="file-tree-meta">{item.isEmpty || !item.modifiedAt ? '-' : formatDateTime(item.modifiedAt)}</span>
                               </div>
                             );
                           })

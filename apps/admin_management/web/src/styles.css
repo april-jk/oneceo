@@ -5676,18 +5676,19 @@ tbody tr:hover {
 
 .file-explorer-toolbar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(180px, auto);
-  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) minmax(220px, auto);
+  gap: 12px;
   align-items: end;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 .file-explorer-nav-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(80px, auto));
+  grid-template-columns: repeat(2, minmax(86px, auto));
   gap: 8px;
 }
 
@@ -5710,8 +5711,8 @@ tbody tr:hover {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 8px 10px;
-  border: 1px solid rgba(59, 130, 246, 0.18);
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--primary) 8%, var(--surface-muted));
   color: var(--text);
@@ -5723,21 +5724,22 @@ tbody tr:hover {
 .file-explorer-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  min-height: 560px;
+  min-height: min(68vh, 760px);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 .file-explorer-icon {
   flex: 0 0 auto;
-  min-width: 38px;
-  padding: 3px 6px;
+  min-width: 34px;
+  padding: 2px 6px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--secondary) 12%, var(--surface-elevated));
   color: var(--secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   text-align: center;
 }
@@ -5754,7 +5756,7 @@ tbody tr:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-muted);
 }
@@ -5766,7 +5768,7 @@ tbody tr:hover {
 }
 
 .file-tree-head code {
-  max-width: min(440px, 48%);
+  max-width: min(560px, 56%);
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5781,7 +5783,7 @@ tbody tr:hover {
 .file-tree-list {
   min-height: 0;
   overflow: auto;
-  padding: 8px 0;
+  padding: 6px 0;
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--border) 28%, transparent) 1px, transparent 1px) 0 0 / 18px 100%,
     var(--surface-elevated);
@@ -5789,14 +5791,16 @@ tbody tr:hover {
 
 .file-tree-row {
   display: grid;
-  grid-template-columns: 26px minmax(220px, 1fr) minmax(64px, 92px) minmax(84px, 112px) minmax(132px, 172px);
+  grid-template-columns: 24px minmax(240px, 1fr) minmax(72px, 100px) minmax(92px, 116px) minmax(132px, 176px);
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding-block: 3px;
-  padding-right: 12px;
+  gap: 10px;
+  min-height: 34px;
+  padding-block: 2px;
+  padding-right: 14px;
   border-left: 3px solid transparent;
   color: var(--text);
+  font-size: 12.5px;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .file-tree-row:hover,
@@ -5817,8 +5821,8 @@ tbody tr:hover {
 }
 
 .file-tree-disclosure {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border-radius: 6px;
   color: var(--text-soft);
@@ -5838,9 +5842,13 @@ tbody tr:hover {
 .file-tree-node {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 4px 0;
   text-align: left;
+}
+
+.file-tree-empty-node {
+  color: var(--text-soft);
 }
 
 .file-tree-node-main {
@@ -5866,6 +5874,25 @@ tbody tr:hover {
 .file-tree-meta {
   color: var(--text-soft);
   font-size: 11px;
+}
+
+.file-tree-empty-mark {
+  flex: 0 0 auto;
+  min-width: 50px;
+  padding: 2px 6px;
+  border: 1px dashed color-mix(in srgb, var(--border) 72%, var(--text-soft));
+  border-radius: 6px;
+  color: var(--text-faint);
+  font-size: 9px;
+  text-align: center;
+}
+
+.file-tree-row.is-empty {
+  color: var(--text-soft);
+}
+
+.file-tree-row.is-empty:hover {
+  background: transparent;
 }
 
 .file-tree-row.is-dir .file-tree-node-main > span {
@@ -6282,7 +6309,7 @@ tbody tr:hover {
   }
 
   .file-tree-row {
-    grid-template-columns: 26px minmax(180px, 1fr) minmax(60px, 86px);
+    grid-template-columns: 24px minmax(180px, 1fr) minmax(60px, 86px);
   }
 
   .file-tree-meta:nth-last-child(-n+2) {

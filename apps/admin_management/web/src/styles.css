@@ -5736,6 +5736,7 @@ tbody tr:hover {
   flex: 0 0 auto;
   min-width: 34px;
   padding: 2px 6px;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: color-mix(in srgb, var(--secondary) 12%, var(--surface-elevated));
   color: var(--secondary);
@@ -5803,7 +5804,18 @@ tbody tr:hover {
   transition: background 120ms ease, border-color 120ms ease;
 }
 
-.file-tree-row:hover,
+.file-tree-row.is-dir {
+  --file-entry-accent: var(--warning);
+}
+
+.file-tree-row.is-file {
+  --file-entry-accent: var(--secondary);
+}
+
+.file-tree-row:hover {
+  background: color-mix(in srgb, var(--file-entry-accent, var(--primary)) 8%, var(--surface-elevated));
+}
+
 .file-tree-row.active {
   background: var(--active-control-bg);
 }
@@ -5902,8 +5914,14 @@ tbody tr:hover {
   background: transparent;
 }
 
-.file-tree-row.is-dir .file-tree-node-main > span {
-  color: var(--text);
+.file-tree-row.is-dir .file-tree-node-main > span,
+.file-tree-row.is-dir .file-tree-permissions {
+  color: color-mix(in srgb, var(--warning) 76%, var(--text));
+}
+
+.file-tree-row.is-file .file-tree-node-main > span,
+.file-tree-row.is-file .file-tree-permissions {
+  color: color-mix(in srgb, var(--secondary) 74%, var(--text));
 }
 
 .task-manager-table-wrap {
@@ -5952,7 +5970,14 @@ tbody tr:hover {
 
 .file-explorer-icon.is-dir {
   background: color-mix(in srgb, var(--warning) 14%, var(--surface-elevated));
-  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--border));
+  color: color-mix(in srgb, var(--warning) 82%, var(--text));
+}
+
+.file-explorer-icon.is-file {
+  background: color-mix(in srgb, var(--secondary) 14%, var(--surface-elevated));
+  border-color: color-mix(in srgb, var(--secondary) 34%, var(--border));
+  color: color-mix(in srgb, var(--secondary) 82%, var(--text));
 }
 
 .task-manager-page {

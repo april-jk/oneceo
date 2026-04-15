@@ -23,6 +23,7 @@ import { ConnectorGuideManagementSection } from './components/ConnectorGuideMana
 import { KvmControlCenter } from './components/KvmControlCenter';
 import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
 import { SkillManagementSection } from './components/SkillManagementSection';
+import { UserManagementSection } from './components/UserManagementSection';
 import type {
   AdminThemeKey,
   AdminThemeSettings,
@@ -49,7 +50,7 @@ import type {
   VmItem,
 } from './types';
 
-type SectionKey = 'kvm' | 'conversation' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
+type SectionKey = 'kvm' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
 type ToastTone = 'error' | 'success' | 'warning' | 'info';
 type SandboxDetailTab = 'overview' | 'files' | 'processes' | 'connectivity' | 'archive' | 'terminal';
@@ -225,6 +226,15 @@ const NAV_ITEMS: Array<{
     tag: 'MSG',
     description: '查看会话状态、轨迹和运行绑定信息。',
     signal: '会话状态',
+  },
+  {
+    key: 'user',
+    group: 'runtime',
+    label: '用户管理',
+    subtitle: 'App User',
+    tag: 'USR',
+    description: '查看 app_users 账号状态、登录来源和对话/Sandbox 归属。',
+    signal: '账号归属',
   },
   {
     key: 'audit',
@@ -2955,6 +2965,7 @@ export default function App() {
   const [transitionQuery, setTransitionQuery] = useState('');
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
+  const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -4247,6 +4258,8 @@ export default function App() {
           await Promise.all([loadKvmSection(), loadAuditSection()]);
         } else if (section === 'conversation') {
           await loadConversationSessions();
+        } else if (section === 'user') {
+          setError(null);
         } else if (section === 'agent') {
           await loadAgentSection();
         } else if (section === 'skill') {
@@ -5803,6 +5816,8 @@ export default function App() {
       ? agentOverview?.agentApi.online
       : activeSection === 'conversation'
         ? true
+      : activeSection === 'user'
+        ? true
       : activeSection === 'skill'
         ? true
         : activeSection === 'connectorGuide'
@@ -5819,6 +5834,8 @@ export default function App() {
       ? '智能体服务'
       : activeSection === 'conversation'
         ? '会话索引'
+      : activeSection === 'user'
+        ? '平台接口'
       : activeSection === 'skill'
         ? '平台接口'
         : activeSection === 'connectorGuide'
@@ -5835,6 +5852,8 @@ export default function App() {
       ? sandboxApi?.timestamp || sandboxOverviewItems[0]?.startedAt
       : activeSection === 'conversation'
         ? conversationDetail?.session.updatedAt || conversationSessions[0]?.updatedAt
+        : activeSection === 'user'
+          ? userManagementUpdatedAt
         : activeSection === 'agent'
           ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
         : activeSection === 'audit'
@@ -9705,6 +9724,21 @@ export default function App() {
 
     if (activeSection === 'kvm') return renderKvmSection();
     if (activeSection === 'conversation') return renderConversationOpsSection();
+    if (activeSection === 'user') {
+      return (
+        <UserManagementSection
+          onError={setError}
+          onUpdatedAtChange={setUserManagementUpdatedAt}
+          onOpenConversation={(sessionId) => {
+            setActiveSection('conversation');
+            openConversationDialog(sessionId, 'overview');
+          }}
+          onOpenSandbox={(sandboxId) => {
+            openSandboxFromConversation(sandboxId);
+          }}
+        />
+      );
+    }
     if (activeSection === 'agent') return renderAgentSection();
     if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
     if (activeSection === 'connectorGuide') return <ConnectorGuideManagementSection onError={setError} />;

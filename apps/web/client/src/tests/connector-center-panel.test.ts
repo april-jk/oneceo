@@ -6,6 +6,7 @@ import {
   resolveConnectorOauthCallbackContext,
   SLACK_FIXED_CALLBACK_PATH,
   shouldUseConnectorLevelOauth,
+  shouldUseUnifiedConnectorCard,
 } from "@/components/ConnectorCenterPanel";
 
 describe("connector center panel profile id normalization", () => {
@@ -21,6 +22,13 @@ describe("connector center panel profile id normalization", () => {
     expect(shouldUseConnectorLevelOauth("notion")).toBe(true);
     expect(shouldUseConnectorLevelOauth("slack")).toBe(true);
     expect(shouldUseConnectorLevelOauth("github")).toBe(false);
+  });
+
+  it("uses the unified OAuth card layout for GitHub, Slack, and Notion", () => {
+    expect(shouldUseUnifiedConnectorCard("github")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("slack")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("notion")).toBe(true);
+    expect(shouldUseUnifiedConnectorCard("supabase")).toBe(false);
   });
 
   it("uses the fixed Slack callback path", () => {

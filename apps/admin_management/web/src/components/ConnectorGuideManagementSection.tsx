@@ -33,8 +33,6 @@ const EMPTY_EDITOR: EditorState = {
   notes: '',
 };
 
-const BUILTIN_CANDIDATE_CONNECTOR_KEYS = ['github', 'supabase', 'vercel', 'notion'] as const;
-
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
@@ -86,21 +84,17 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     [detail, selectedRevisionId]
   );
 
-  const connectorOptions = useMemo(() => {
-    const candidates = new Set<string>(BUILTIN_CANDIDATE_CONNECTOR_KEYS);
-    policies.forEach((policy) => candidates.add(policy.connectorKey));
-    (catalogSummary?.items || []).forEach((item) => {
-      if (candidates.has(item.key) || policies.some((policy) => policy.connectorKey === item.key)) {
-        candidates.add(item.key);
-      }
-    });
-    return Array.from(candidates).sort((left, right) => left.localeCompare(right));
-  }, [catalogSummary?.items, policies]);
-
   const catalogVisibleItems = useMemo(
-    () => (catalogSummary?.items || []).filter((item) => item.visibleInMenu),
+    () => (catalogSummary?.items || []).filter((item) => item.visibleInMenu && item.available),
     [catalogSummary?.items]
   );
+
+  const connectorOptions = useMemo(() => {
+    const candidates = new Set<string>();
+    catalogVisibleItems.forEach((item) => candidates.add(item.key));
+    policies.forEach((policy) => candidates.add(policy.connectorKey));
+    return Array.from(candidates).sort((left, right) => left.localeCompare(right));
+  }, [catalogVisibleItems, policies]);
 
   const catalogKeySummary = useMemo(
     () =>

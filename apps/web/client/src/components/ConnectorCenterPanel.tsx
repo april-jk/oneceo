@@ -342,6 +342,10 @@ export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null |
   return connectorKey === "notion" || connectorKey === "slack";
 }
 
+export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
+  return connectorKey === "github" || shouldUseConnectorLevelOauth(connectorKey);
+}
+
 function getGithubAppReauthHint() {
   return "本地清除只会移除 oneceo 保存的授权态，不会撤销 GitHub 侧的 GitHub App 授权或安装批准。若需要强制重新走授权，请先到 GitHub 撤销授权或确认安装页已批准最新权限。";
 }
@@ -1014,12 +1018,12 @@ export function ConnectorCenterPanel({
     const Icon = resolveConnectorIcon(detailItem.icon);
     const guide = CONNECTOR_GUIDES[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
-    const connectorLevelOauth = detailItem.key === "notion";
+    const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
+    const unifiedOauthCard = shouldUseUnifiedConnectorCard(detailItem.key);
     const statusText = connectorStatusText({
       available: detailItem.available,
       authStatus: selectedDetailProfile?.authStatus,
     });
-    const profileCount = detailConnectorProfiles.length;
     const busy = Boolean(actionKey);
     const actionBusy =
       actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
@@ -1390,7 +1394,80 @@ export function ConnectorCenterPanel({
                 ) : null}
                 
                 {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
-                {detailItem.key !== "github" && detailItem.key !== "supabase" ? (
+                {unifiedOauthCard && !githubConnector && selectedDetailProfile?.lastError ? (
+                  <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
+                  </div>
+                ) : null}
+
+                {unifiedOauthCard && !githubConnector && !detailItem.available && detailItem.availabilityReason ? (
+                  <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="leading-relaxed">{detailItem.availabilityReason}</span>
+                  </div>
+                ) : null}
+
+                {unifiedOauthCard && !githubConnector && guide ? (
+                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <ShieldCheck className="h-4 w-4 text-foreground/70" />
+                        {detailItem.name} 使用指南
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">{guide.intro}</p>
+                    </div>
+
+                    {guide.steps?.length ? (
+                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-sm font-medium text-foreground">连接步骤</p>
+                        <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
+                          {guide.steps.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+
+                    {guide.tips?.length ? (
+                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-sm font-medium text-foreground">使用提示</p>
+                        <div className="space-y-2">
+                          {guide.tips.map((tip) => (
+                            <p key={tip} className="text-sm leading-6 text-muted-foreground">
+                              {tip}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {guide.quickLinks?.length ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-muted-foreground">相关文档</p>
+                        <div className="grid gap-2">
+                          {guide.quickLinks.map((link) => (
+                            <a
+                              key={link.href}
+                              href={link.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/40"
+                            >
+                              <div className="min-w-0">
+                                <div>{link.label}</div>
+                                <div className="text-xs text-muted-foreground">{link.description}</div>
+                              </div>
+                              <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {!unifiedOauthCard && detailItem.key !== "supabase" ? (
                   <>
                     <div className="space-y-2">
                       <Label className="text-base font-medium text-foreground">Profile 配置</Label>

@@ -2,6 +2,8 @@ import type {
   AdminThemeKey,
   AdminThemeSettings,
   AgentManagementOverview,
+  AppUserDetailResponse,
+  AppUserListResponse,
   AuditDetailResponse,
   AuditResponse,
   ConversationSessionDetailResponse,
@@ -583,6 +585,40 @@ export const api = {
   listHosts: () => request<HostListResponse>('/api/hosts'),
   listConversationSessions: (limit = 30) =>
     request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
+  listAppUsers: (query?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    activity?: string;
+    hasSession?: string;
+    hasConversation?: string;
+    hasSandbox?: string;
+    ownershipHealth?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    if (query?.query) params.set('query', query.query);
+    if (query?.status) params.set('status', query.status);
+    if (query?.activity) params.set('activity', query.activity);
+    if (query?.hasSession) params.set('hasSession', query.hasSession);
+    if (query?.hasConversation) params.set('hasConversation', query.hasConversation);
+    if (query?.hasSandbox) params.set('hasSandbox', query.hasSandbox);
+    if (query?.ownershipHealth) params.set('ownershipHealth', query.ownershipHealth);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<AppUserListResponse>(`/api/user-management/app-users${suffix}`);
+  },
+  getAppUserDetail: (userId: string) =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}`),
+  updateAppUserStatus: (userId: string, status: 'active' | 'disabled') =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    }),
+  revokeAppUserSessions: (userId: string) =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/revoke-sessions`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   getConversationSessionCore: (sessionId: string) =>
     request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/core`, {
       timeoutMs: 10000,

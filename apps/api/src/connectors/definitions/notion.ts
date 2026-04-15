@@ -77,37 +77,22 @@ export function buildNotionDefinition(): ConnectorDefinition {
       ? '部署环境未配置 Notion OAuth client'
       : !redirectUriRaw
         ? '部署环境未配置 Notion OAuth 回调路径'
-      : !redirectUriConfigured
-        ? 'Notion OAuth 回调地址解析失败，请检查 FRONTEND_URL 与 NOTION_CONNECTOR_REDIRECT_URI'
-      : undefined;
+        : !redirectUriConfigured
+          ? 'Notion OAuth 回调地址解析失败，请检查 FRONTEND_URL 与 NOTION_CONNECTOR_REDIRECT_URI'
+          : undefined;
+
   return {
     key: 'notion',
     category: 'app',
     name: 'Notion',
-    description: '在平台外部管理 Notion 授权，并按 profile 将能力投影到 sandbox 内使用。',
+    description: '在平台外完成 Notion OAuth 授权，并将可访问内容范围投影到 sandbox 内使用。',
     icon: 'notion',
     featured: true,
     sortOrder: 20,
     authMode: 'oauth',
     available,
     availabilityReason,
-    configFields: [
-      {
-        key: 'profileName',
-        label: 'Profile Name',
-        type: 'text',
-        required: false,
-        placeholder: 'Notion Default',
-        description: '可选。留空时系统会自动生成默认 profile 名称。',
-      },
-      {
-        key: 'displayName',
-        label: 'Display Name',
-        type: 'text',
-        placeholder: 'Workspace Alias',
-        description: '可选。OAuth 成功后会优先用 Notion workspace 信息自动回填。',
-      },
-    ],
+    configFields: [],
     oauth: {
       supported: oauthConfigured,
       provider: oauth?.provider,

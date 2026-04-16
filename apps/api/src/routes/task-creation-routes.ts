@@ -51,7 +51,7 @@ import { codexRuntimeConfigService } from '../services/codex-runtime-config-serv
 import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
-import { sessionConnectorService } from '../services/session-connector-service';
+import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
@@ -4629,27 +4629,31 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     }
     const ownershipError = resolveOwnedTaskSessionError(error);
     const connectorOwnershipError = resolveSessionConnectorOwnershipError(error);
+    const attachError = resolveAttachConnectorError(error);
     const message = ownershipError?.message || connectorOwnershipError?.message || error?.message || '挂载连接器失败';
     writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_FAILED]', {
       taskSessionId: req.params.sessionId,
       connectorKey: req.params.connectorKey,
+      errorCode: attachError?.code || null,
       error: message,
     }, 'error');
     const normalized = String(message).toLowerCase();
-    const status =
-      ownershipError?.status === 403 || connectorOwnershipError?.status === 403
+    const status = attachError?.status
+      ? attachError.status
+      : ownershipError?.status === 403 || connectorOwnershipError?.status === 403
         ? 403
         : connectorOwnershipError?.status === 401
           ? 401
-        : normalized.includes('无权') || normalized.includes('登录')
-        ? 401
-        : normalized.includes('未授权') || normalized.includes('尚未完成授权')
-          ? 409
-          : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
-            ? 504
-          : 400;
+          : normalized.includes('无权') || normalized.includes('登录')
+            ? 401
+            : normalized.includes('未授权') || normalized.includes('尚未完成授权')
+              ? 409
+              : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
+                ? 504
+                : 400;
     return res.status(status).json({
       success: false,
+      errorCode: attachError?.code,
       error: getPublicErrorMessage(message),
     });
   }

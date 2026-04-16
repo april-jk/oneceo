@@ -104,6 +104,7 @@ export function buildNotionDefinition(): ConnectorDefinition {
       urlEnv: 'NOTION_MCP_REMOTE_URL',
       headersEnv: 'NOTION_MCP_REMOTE_HEADERS_JSON',
       headerTemplate: 'bearer-token',
+      transport: 'streamable_http',
     },
   };
 }

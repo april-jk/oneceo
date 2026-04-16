@@ -14,6 +14,7 @@ type SchemaReadinessReport = {
 
 const REQUIRED_TABLES = [
   'app_users',
+  'app_user_legacy_id_mappings',
   'app_user_sessions',
   'admin_users',
   'admin_user_sessions',
@@ -57,6 +58,11 @@ const REQUIRED_COLUMNS = [
   ['app_users', 'email'],
   ['app_users', 'password_hash'],
   ['app_users', 'display_name'],
+  ['app_user_legacy_id_mappings', 'app_user_id'],
+  ['app_user_legacy_id_mappings', 'legacy_user_id'],
+  ['app_user_legacy_id_mappings', 'source'],
+  ['app_user_legacy_id_mappings', 'first_seen_at'],
+  ['app_user_legacy_id_mappings', 'last_seen_at'],
   ['app_user_sessions', 'user_id'],
   ['app_user_sessions', 'session_token_hash'],
   ['app_user_sessions', 'expires_at'],
@@ -178,6 +184,7 @@ const REQUIRED_COLUMNS = [
 
 const REQUIRED_INDEXES = [
   'idx_app_users_email',
+  'idx_app_user_legacy_mappings_legacy_user_id',
   'idx_app_user_sessions_token_hash',
   'idx_admin_users_login_name',
   'idx_admin_user_sessions_token_hash',
@@ -571,6 +578,17 @@ CREATE TABLE IF NOT EXISTS app_users (
   last_login_at TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_user_legacy_id_mappings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  legacy_user_id TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'request_header',
+  first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS app_user_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -611,6 +629,10 @@ CREATE TABLE IF NOT EXISTS admin_user_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email ON app_users(email);
 CREATE INDEX IF NOT EXISTS idx_app_users_status ON app_users(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_legacy_user_id
+  ON app_user_legacy_id_mappings(legacy_user_id);
+CREATE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_app_user_id
+  ON app_user_legacy_id_mappings(app_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_sessions_token_hash ON app_user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
@@ -1389,6 +1411,7 @@ export async function dropAllTables() {
       DROP TABLE IF EXISTS user_custom_skills CASCADE;
       DROP TABLE IF EXISTS user_platform_skill_bindings CASCADE;
       DROP TABLE IF EXISTS user_codex_runtime_configs CASCADE;
+      DROP TABLE IF EXISTS app_user_legacy_id_mappings CASCADE;
       DROP TABLE IF EXISTS user_connector_accounts CASCADE;
       DROP TABLE IF EXISTS task_creation_sessions CASCADE;
     `));

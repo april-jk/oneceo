@@ -4,6 +4,7 @@ import { after, beforeEach, test } from 'node:test';
 import express from 'express';
 import Redis from 'ioredis';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { closeDatabaseConnection } from '../src/config/database';
 import { taskSessionWorkspaceCacheDAO } from '../src/db/dao/task-session-workspace-cache.dao';
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../src/db/dao';
@@ -49,8 +50,20 @@ const originalSubscribeOpencodeEvent = opencodeEventStreamAny.subscribe;
 const originalSubscribeRemote = opencodeRemoteAny.subscribe;
 
 function buildScope(sessionId: string, userId = 'owner-user') {
+  const hexSeed = Array.from(sessionId)
+    .map((char) => char.codePointAt(0)?.toString(16) || '')
+    .join('')
+    .replace(/[^0-9a-f]/gi, '')
+    .padEnd(12, '1')
+    .slice(0, 12)
+    .toLowerCase();
+  const normalizedSessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    sessionId
+  )
+    ? sessionId
+    : `11111111-1111-4111-8111-${hexSeed}`;
   return {
-    sessionId,
+    sessionId: normalizedSessionId,
     userId,
     tenantKey: deriveTenantKeyForRedis(userId),
   };
@@ -94,6 +107,7 @@ function ownerSession(sessionId: string, userId = 'owner-user') {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
   const sockets = new Set<Socket>();
 
@@ -216,7 +230,7 @@ test('live route: recent messages route writes redis recent cache', async () => 
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/recent`, {
-      headers: { 'x-user-id': scope.userId },
+      headers: { 'x-test-user-id': scope.userId },
     });
     const payload = await response.json();
     assert.equal(response.status, 200);
@@ -268,7 +282,7 @@ test('live route: history route writes redis cursor snapshot', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/history?limit=1`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -332,7 +346,7 @@ test('live route: history route rebuilds cursor snapshot after redis cursor is c
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/messages/history?limit=1`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -359,7 +373,7 @@ test('live route: workspace dir route writes redis dir cache', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/dir?path=src`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -387,13 +401,35 @@ test('live route: workspace dir route writes redis dir cache', async () => {
   }
 });
 
+test('live route: workspace dir route normalizes workspace-absolute root path input', async () => {
+  const server = await startServer();
+  const scope = buildScope('live-dir-absolute-root');
+  const absoluteStyleRoot = `home/user/opencode/workspaces/${scope.sessionId}`;
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/dir?path=${encodeURIComponent(absoluteStyleRoot)}`,
+      {
+        headers: { 'x-test-user-id': scope.userId },
+      }
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.path, '');
+    assert.ok(Array.isArray(payload.data.items));
+    assert.ok(payload.data.items.some((item: { path: string }) => item.path === 'src'));
+  } finally {
+    await server.close();
+  }
+});
+
 test('live route: workspace tree route writes redis tree cache', async () => {
   const server = await startServer();
   const scope = buildScope('live-tree');
 
   try {
     const response = await testFetch(`${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/tree`, {
-      headers: { 'x-user-id': scope.userId },
+      headers: { 'x-test-user-id': scope.userId },
     });
     const payload = await response.json();
     assert.equal(response.status, 200);
@@ -423,7 +459,7 @@ test('live route: workspace file route writes redis file cache', async () => {
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/file?path=src/index.ts`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     const payload = await response.json();
@@ -440,6 +476,100 @@ test('live route: workspace file route writes redis file cache', async () => {
     const stored = JSON.parse(raw!);
     assert.equal(stored.path, 'src/index.ts');
     assert.equal(stored.content, 'export const liveRedis = true;\n');
+  } finally {
+    await server.close();
+  }
+});
+
+test('live route: workspace file route normalizes workspace-absolute path input', async () => {
+  const server = await startServer();
+  const scope = buildScope('live-file-absolute');
+  const workspaceRoot = `/home/user/opencode/workspaces/${scope.sessionId}`;
+  const absoluteStylePath = `home/user/opencode/workspaces/${scope.sessionId}/src/index.ts`;
+  let resolvedReadPath = '';
+  e2bConnectorAny.readFile = async (_sandboxId: string, filePath: string) => {
+    resolvedReadPath = filePath;
+    return Buffer.from('export const absolutePath = true;\n', 'utf8');
+  };
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/file?path=${encodeURIComponent(absoluteStylePath)}`,
+      {
+        headers: { 'x-test-user-id': scope.userId },
+      }
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.path, 'src/index.ts');
+    assert.equal(payload.data.content, 'export const absolutePath = true;\n');
+    assert.equal(resolvedReadPath, `${workspaceRoot}/src/index.ts`);
+  } finally {
+    await server.close();
+  }
+});
+
+test('live route: workspace dir fallback normalizes absolute paths from message history', async () => {
+  const server = await startServer();
+  const scope = buildScope('live-dir-history');
+  e2bConnectorAny.runCommand = async (_sandboxId: string, command: string) => {
+    if (command.includes('sorted(target.iterdir()')) {
+      return {
+        stdout: JSON.stringify([]),
+      };
+    }
+    throw new Error(`unexpected runCommand: ${command}`);
+  };
+  sessionDaoAny.getRecentMessages = async () => [
+    {
+      id: 'history-msg-1',
+      role: 'agent',
+      content: '',
+      messageType: 'executor_event',
+      metadata: {
+        filePaths: [`/home/user/opencode/workspaces/${scope.sessionId}/index.html`],
+      },
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  fileStoreAny.getMessages = async () => [];
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/dir`,
+      {
+        headers: { 'x-test-user-id': scope.userId },
+      }
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.cache.source, 'message_history');
+    assert.ok(Array.isArray(payload.data.items));
+    assert.equal(payload.data.items[0].path, 'index.html');
+    assert.equal(payload.data.items[0].type, 'file');
+  } finally {
+    await server.close();
+  }
+});
+
+test('live route: workspace file route marks html file as html preview type', async () => {
+  const server = await startServer();
+  const scope = buildScope('live-file-html');
+  e2bConnectorAny.readFile = async () =>
+    Buffer.from('<!doctype html><html><body>Hello</body></html>', 'utf8');
+
+  try {
+    const response = await testFetch(
+      `${server.origin}/api/task-creation/sessions/${scope.sessionId}/workspace/file?path=index.html`,
+      {
+        headers: { 'x-test-user-id': scope.userId },
+      }
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.path, 'index.html');
+    assert.equal(payload.data.previewType, 'html');
+    assert.equal(payload.data.isBinary, false);
   } finally {
     await server.close();
   }
@@ -466,7 +596,7 @@ test('live route: opencode events route replays redis session-events stream', as
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/opencode/events?since=300`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     assert.equal(response.status, 200);
@@ -544,7 +674,7 @@ test('live route: opencode events route falls back to db replay after redis sess
     const response = await testFetch(
       `${server.origin}/api/task-creation/sessions/${scope.sessionId}/opencode/events?since=300`,
       {
-        headers: { 'x-user-id': scope.userId },
+        headers: { 'x-test-user-id': scope.userId },
       }
     );
     assert.equal(response.status, 200);

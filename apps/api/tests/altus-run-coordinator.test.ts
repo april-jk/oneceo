@@ -16,13 +16,13 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-function createState(runId: string, sessionId: string) {
+function createState(runId: string, sessionId: string, userInput = '帮我开发 2048 小游戏') {
   return new AltusRunState({
     runId,
     sessionId,
     userId: 'user-1',
     model: 'altus-model',
-    userInput: '帮我开发 2048 小游戏',
+    userInput,
     sessionTitle: 'Build 2048',
     connectors: [],
     mcpProviders: [],
@@ -224,6 +224,320 @@ test('execute completes after tool round and final assistant response', async ()
   assert.equal(eventCalls[3]?.payload.toolName, 'write_file');
   assert.equal(eventCalls[5]?.payload.toolName, 'complete_task');
   assert.equal(eventCalls[6]?.payload.toolName, 'complete_task');
+});
+
+test('execute preserves richer assistant text when complete_task summary is concise', async () => {
+  const state = createState('run-coordinator-preserve-assistant', 'session-coordinator-preserve-assistant');
+  const setupCalls: Record<string, unknown>[] = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-preserve-assistant',
+      workspaceRoot: '/workspace/session-coordinator-preserve-assistant',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, _eventType: string, payload: Record<string, unknown>) => ({
+      sequence: 1,
+      payload,
+    })),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  const detailedAssistantContent =
+    '已查询并汇总 2026 年 4 月 9 日美股市场要点：\n- 标普与纳指期货盘前走强\n- 市场关注通胀与降息路径\n- 盘前成交情绪偏谨慎';
+
+  global.fetch = mock.fn(async () => {
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: detailedAssistantContent,
+              tool_calls: [
+                {
+                  id: 'tool-complete-preserve-1',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '已查询并汇总2026年4月9日美股市场最新动态。',
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => ({
+    type: 'complete' as const,
+    summary: '已查询并汇总2026年4月9日美股市场最新动态。',
+  }));
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+
+  const timelineCall = setupCalls.find((entry) => (entry as any).input?.messageType === 'assistant_message') as any;
+  assert.ok(timelineCall);
+  assert.equal(timelineCall.input.content, detailedAssistantContent);
+});
+
+test('execute blocks deployment completion until managed deployment succeeds', async () => {
+  const state = createState(
+    'run-coordinator-deployment-guard',
+    'session-coordinator-deployment-guard',
+    '帮我部署当前项目'
+  );
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-deployment-guard',
+      workspaceRoot: '/workspace/session-coordinator-deployment-guard',
+      reused: false,
+    })),
+    buildConversationMessages: mock.fn(async (_sessionId: string, input: string, systemPrompt: string) => [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: input },
+    ]),
+    refreshInlineImageUrls: mock.fn(async (messages: any[]) => messages),
+    persistTimelineMessage: mock.fn(async () => undefined),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(
+      async (
+        _runId: string,
+        _sessionId: string,
+        _userId: string,
+        eventType: string,
+        payload: Record<string, unknown>
+      ) => {
+        eventCalls.push({ eventType, payload });
+        return {
+          sequence: eventCalls.length,
+          payload,
+        };
+      }
+    ),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async () => {
+      lifecycleCalls.push('failed');
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  let fetchCount = 0;
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-complete-before-deploy',
+                    type: 'function',
+                    function: {
+                      name: 'complete_task',
+                      arguments: JSON.stringify({
+                        summary: '2048小游戏已成功部署并启动调试服务。',
+                        verification: ['本地调试页可访问'],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (fetchCount === 2) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-deploy-1',
+                    type: 'function',
+                    function: {
+                      name: 'deploy_application',
+                      arguments: JSON.stringify({}),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-deploy',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: '应用已完成线上发布。',
+                      verification: ['托管部署成功'],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const executeMock = mock.method(
+    AltusManagedToolRuntime.prototype,
+    'execute',
+    async (toolName: string) => {
+      if (toolName === 'deploy_application') {
+        return {
+          type: 'result' as const,
+          content: JSON.stringify({
+            status: 'success',
+            summary: '发布完成',
+            deploymentStatus: 'SUCCESS',
+            url: 'https://example.up.railway.app',
+          }),
+        };
+      }
+
+      return {
+        type: 'complete' as const,
+        summary:
+          fetchCount === 1
+            ? '2048小游戏已成功部署并启动调试服务。'
+            : '应用已完成线上发布。',
+        verification:
+          fetchCount === 1
+            ? ['本地调试页可访问']
+            : ['托管部署成功'],
+      };
+    }
+  );
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(fetchCount, 3);
+  assert.equal(executeMock.mock.callCount(), 3);
+  assert.deepEqual(lifecycleCalls, ['running', 'completed']);
+  assert.equal(state.status, 'completed');
+
+  const blockedComplete = eventCalls.find(
+    (entry) =>
+      entry.eventType === 'tool_call_failed' &&
+      entry.payload.toolName === 'complete_task'
+  );
+  assert.ok(blockedComplete);
+  assert.equal(
+    blockedComplete.payload.error,
+    '线上部署尚未完成，Altus 将继续修复并重试发布。'
+  );
+
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['deploy_application', 'complete_task']);
+
+  const deployCompleted = eventCalls.find(
+    (entry) =>
+      entry.eventType === 'tool_call_completed' &&
+      entry.payload.toolName === 'deploy_application'
+  );
+  assert.ok(deployCompleted);
+  assert.deepEqual(deployCompleted?.payload.userView, {
+    summary: '发布完成',
+    preview: '访问地址 https://example.up.railway.app',
+    detail: '发布完成\n当前状态：SUCCESS\n访问地址：https://example.up.railway.app',
+  });
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /工具: deploy_application/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentStatus: SUCCESS/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /url: https:\/\/example\.up\.railway\.app/);
 });
 
 test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {

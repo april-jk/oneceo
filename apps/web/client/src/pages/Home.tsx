@@ -88,7 +88,6 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
-  deployTaskCreationSession,
   getWorkspaceRawFileUrl,
   listTaskCreationSkills,
   uploadTaskCreationAttachment,
@@ -112,6 +111,11 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import {
+  buildTaskSessionDeploymentPrompt,
+  type TaskSessionDeploymentPromptAction,
+} from "@/lib/task-session-deployment-prompts";
+import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
@@ -121,6 +125,14 @@ type PersistedMessageScrollAnchor = {
   anchorMessageKey: string | null;
   anchorOffsetTop: number;
   scrollTop: number;
+  savedAt: number;
+};
+
+type PersistedPreviewState = {
+  previewOpen: boolean;
+  previewTab: "files" | "changes" | "debug" | "deployment";
+  selectedDiffId: string | null;
+  selectedDiffMessageKey: string | null;
   savedAt: number;
 };
 
@@ -205,8 +217,48 @@ function readPersistedScrollAnchor(
   return null;
 }
 
+function readPersistedPreviewState(
+  raw: string | null,
+): PersistedPreviewState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PersistedPreviewState;
+    if (!parsed || typeof parsed !== "object") return null;
+    const previewTab =
+      parsed.previewTab === "files" ||
+      parsed.previewTab === "changes" ||
+      parsed.previewTab === "debug" ||
+      parsed.previewTab === "deployment"
+        ? parsed.previewTab
+        : "files";
+    const previewOpen = Boolean(parsed.previewOpen);
+    const selectedDiffId =
+      typeof parsed.selectedDiffId === "string" && parsed.selectedDiffId.trim()
+        ? parsed.selectedDiffId.trim()
+        : null;
+    const selectedDiffMessageKey =
+      typeof parsed.selectedDiffMessageKey === "string" &&
+      parsed.selectedDiffMessageKey.trim()
+        ? parsed.selectedDiffMessageKey.trim()
+        : null;
+    return {
+      previewOpen,
+      previewTab,
+      selectedDiffId,
+      selectedDiffMessageKey,
+      savedAt:
+        typeof parsed.savedAt === "number" && Number.isFinite(parsed.savedAt)
+          ? parsed.savedAt
+          : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function Home() {
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
+  const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location] = useLocation();
   const search = useSearch();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
@@ -233,9 +285,6 @@ export default function Home() {
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [altusReplayOpen, setAltusReplayOpen] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
-  const [altusReplayView, setAltusReplayView] = useState<"actions" | "files">(
-    "actions",
-  );
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
@@ -249,6 +298,15 @@ export default function Home() {
     "files" | "changes" | "debug" | "deployment"
   >("files");
   const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [selectedDiffMessageKey, setSelectedDiffMessageKey] = useState<
+    string | null
+  >(null);
+  const [pendingDiffTarget, setPendingDiffTarget] = useState<{
+    diffId?: string | null;
+    filePath?: string | null;
+    messageKey?: string | null;
+    messageIndex?: number | null;
+  } | null>(null);
   const isMobile = useIsMobile();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
@@ -261,6 +319,7 @@ export default function Home() {
   const scrollRestoreDoneRef = useRef<string | null>(null);
   const stickToBottomRef = useRef(true);
   const olderHistoryIntentRef = useRef(false);
+  const previewStateRestoredSessionRef = useRef<string | null>(null);
   const sessionIdFromPath = useMemo(() => {
     const match = location.match(/^\/session\/([^/?#]+)/);
     return match ? decodeURIComponent(match[1]) : null;
@@ -525,6 +584,72 @@ export default function Home() {
     scrollRestoreDoneRef.current = null;
     olderHistoryIntentRef.current = false;
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      previewStateRestoredSessionRef.current = null;
+      setPreviewOpen(false);
+      setPreviewTab("files");
+      setSelectedDiffId(null);
+      setSelectedDiffMessageKey(null);
+      setPendingDiffTarget(null);
+      return;
+    }
+    if (previewStateRestoredSessionRef.current === sessionId) {
+      return;
+    }
+    setPendingDiffTarget(null);
+    try {
+      const raw = window.sessionStorage.getItem(
+        `${PREVIEW_STATE_CACHE_PREFIX}${sessionId}`,
+      );
+      const persisted = readPersistedPreviewState(raw);
+      if (!persisted) {
+        setPreviewOpen(false);
+        setPreviewTab("files");
+        setSelectedDiffId(null);
+        setSelectedDiffMessageKey(null);
+      } else {
+        setPreviewOpen(Boolean(persisted.previewOpen));
+        setPreviewTab(persisted.previewTab);
+        setSelectedDiffId(persisted.selectedDiffId);
+        setSelectedDiffMessageKey(persisted.selectedDiffMessageKey);
+      }
+    } catch {
+      setPreviewOpen(false);
+      setPreviewTab("files");
+      setSelectedDiffId(null);
+      setSelectedDiffMessageKey(null);
+    } finally {
+      previewStateRestoredSessionRef.current = sessionId;
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (previewStateRestoredSessionRef.current !== sessionId) return;
+    try {
+      const payload: PersistedPreviewState = {
+        previewOpen,
+        previewTab,
+        selectedDiffId,
+        selectedDiffMessageKey,
+        savedAt: Date.now(),
+      };
+      window.sessionStorage.setItem(
+        `${PREVIEW_STATE_CACHE_PREFIX}${sessionId}`,
+        JSON.stringify(payload),
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [
+    previewOpen,
+    previewTab,
+    selectedDiffId,
+    selectedDiffMessageKey,
+    sessionId,
+  ]);
 
   // 从根页面跳转到 /new-task?q=... 时，自动进入聊天态并发送首条消息
   useEffect(() => {
@@ -1232,6 +1357,17 @@ export default function Home() {
   const pickExistingDiffId = (id: string | null | undefined) =>
     id && diffItems.some((item) => item.id === id) ? id : null;
 
+  const findDiffIdForMessageKey = (messageKey: string | null | undefined) => {
+    const normalized = (messageKey || "").trim();
+    if (!normalized) return null;
+    for (let i = diffItems.length - 1; i >= 0; i -= 1) {
+      const item = diffItems[i];
+      if (item.eventMessageKey === normalized) return item.id;
+      if (item.relatedMessageKeys?.includes(normalized)) return item.id;
+    }
+    return null;
+  };
+
   const findDiffIdForFile = (filePath: string | null | undefined) => {
     if (!filePath) return null;
     const fileName = getFilename(filePath).toLowerCase();
@@ -1273,56 +1409,116 @@ export default function Home() {
     return null;
   };
 
+  const resolveDiffTarget = (options?: {
+    diffId?: string | null;
+    filePath?: string | null;
+    messageKey?: string | null;
+    messageIndex?: number | null;
+  }) =>
+    pickExistingDiffId(options?.diffId) ||
+    pickExistingDiffId(findDiffIdForMessageKey(options?.messageKey)) ||
+    pickExistingDiffId(findDiffIdForFile(options?.filePath || null)) ||
+    pickExistingDiffId(findDiffIdForMessageIndex(options?.messageIndex)) ||
+    diffItems[diffItems.length - 1]?.id ||
+    null;
+
   const openDiffPreview = (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => {
     setPreviewWorkspacePath(null);
     setPreviewTab("changes");
     setPreviewOpen(true);
-    const target =
-      pickExistingDiffId(options?.diffId) ||
-      pickExistingDiffId(findDiffIdForMessageIndex(options?.messageIndex)) ||
-      pickExistingDiffId(findDiffIdForFile(options?.filePath || null)) ||
-      diffItems[diffItems.length - 1]?.id ||
-      null;
+    const normalizedMessageKey = (options?.messageKey || "").trim() || null;
+    if (normalizedMessageKey) {
+      setSelectedDiffMessageKey(normalizedMessageKey);
+    }
+    const target = resolveDiffTarget(options);
+    if (
+      !target &&
+      (options?.diffId || options?.filePath || options?.messageKey || options?.messageIndex !== undefined)
+    ) {
+      setPendingDiffTarget({
+        diffId: options?.diffId || null,
+        filePath: options?.filePath || null,
+        messageKey: normalizedMessageKey,
+        messageIndex:
+          typeof options?.messageIndex === "number" &&
+          Number.isFinite(options.messageIndex)
+            ? options.messageIndex
+            : null,
+      });
+    } else {
+      setPendingDiffTarget(null);
+    }
     setSelectedDiffId(target);
   };
 
   const openWorkspacePreview = (path: string) => {
-    const normalizedPath = String(path || "").trim().replace(/\\/g, "/");
+    const normalizedPath = normalizeWorkspaceRelativePath(path, sessionId);
     if (!normalizedPath) return;
     setPreviewWorkspacePath(normalizedPath);
     setPreviewTab("files");
     setPreviewOpen(true);
   };
 
-  const deployFromArtifactCard = async (_path: string) => {
+  const submitDeploymentPrompt = async (
+    action: TaskSessionDeploymentPromptAction,
+  ) => {
     if (!sessionId) {
       toast.error("缺少会话信息");
       return;
     }
 
-    try {
-      const result = await deployTaskCreationSession(sessionId);
-      setPreviewWorkspacePath(null);
-      setPreviewTab("deployment");
-      setPreviewOpen(true);
+    setPreviewWorkspacePath(null);
+    setPreviewTab("deployment");
+    setPreviewOpen(true);
+    await submitPrompt(buildTaskSessionDeploymentPrompt(action));
+  };
 
-      const deploymentUrl = result?.latestStaticUrl || result?.latestUrl || "";
-      if (deploymentUrl) {
-        toast.success(
-          `已触发部署：${deploymentUrl.replace(/^https?:\/\//, "")}`,
-        );
-      } else {
-        toast.success("已触发部署");
-      }
+  const deployFromArtifactCard = async (_path: string) => {
+    try {
+      await submitDeploymentPrompt("deploy");
+      toast.success("已提交发布请求");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "触发部署失败");
+      toast.error(error instanceof Error ? error.message : "触发发布失败");
       throw error;
     }
   };
+
+  useEffect(() => {
+    if (!selectedDiffId) return;
+    const current = diffItems.find((item) => item.id === selectedDiffId);
+    if (!current) return;
+    const nextMessageKey =
+      current.eventMessageKey ||
+      current.relatedMessageKeys?.[0] ||
+      null;
+    if (!nextMessageKey || nextMessageKey === selectedDiffMessageKey) {
+      return;
+    }
+    setSelectedDiffMessageKey(nextMessageKey);
+  }, [diffItems, selectedDiffId, selectedDiffMessageKey]);
+
+  useEffect(() => {
+    if (!selectedDiffId) return;
+    if (diffItems.some((item) => item.id === selectedDiffId)) return;
+    const fallback =
+      pickExistingDiffId(findDiffIdForMessageKey(selectedDiffMessageKey)) ||
+      diffItems[diffItems.length - 1]?.id ||
+      null;
+    setSelectedDiffId(fallback);
+  }, [diffItems, selectedDiffId, selectedDiffMessageKey]);
+
+  useEffect(() => {
+    if (!pendingDiffTarget) return;
+    const target = resolveDiffTarget(pendingDiffTarget);
+    if (!target) return;
+    setSelectedDiffId(target);
+    setPendingDiffTarget(null);
+  }, [diffItems, pendingDiffTarget]);
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
@@ -1345,7 +1541,6 @@ export default function Home() {
   ) => {
     if (!runId) return;
     setAltusReplayRunId(runId);
-    setAltusReplayView(options?.view || "actions");
     setAltusReplayOpen(true);
     if (options?.toolCallId) {
       setPendingAltusReplayToolCallId(options.toolCallId);
@@ -1404,10 +1599,25 @@ export default function Home() {
         onTabChange={setPreviewTab}
         onToggle={() => setPreviewOpen(false)}
         selectedDiffId={selectedDiffId}
-        onSelectDiff={(id) => setSelectedDiffId(id)}
+        onSelectDiff={(id) => {
+          setPendingDiffTarget(null);
+          setSelectedDiffId(id);
+        }}
         runtimeReady={runtime.ready}
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
+        onRequestStartDebugByMessage={() => {
+          void submitPrompt("启动网站调试功能");
+        }}
+        onRequestDeployByMessage={() => {
+          void submitDeploymentPrompt("deploy");
+        }}
+        onRequestRedeployByMessage={() => {
+          void submitDeploymentPrompt("redeploy");
+        }}
+        onRequestRollbackByMessage={() => {
+          void submitDeploymentPrompt("rollback");
+        }}
         selectedWorkspacePath={previewWorkspacePath}
         className="h-full min-h-0 w-full"
       />
@@ -1429,7 +1639,7 @@ export default function Home() {
           <div className="flex min-w-0 items-center gap-2">
             {runtime.orchestratorSessionId && runtime.ready ? (
               <span className="truncate text-xs text-muted-foreground">
-                运行中 · {runtime.orchestratorSessionId}
+                执行环境 · {runtime.orchestratorSessionId}
               </span>
             ) : null}
             <Button
@@ -2017,11 +2227,26 @@ export default function Home() {
           onJumpToLatest={() =>
             setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
           }
-          activeView={altusReplayView}
-          onActiveViewChange={setAltusReplayView}
-          onOpenFile={(path) => {
-            setAltusReplayOpen(false);
-            openWorkspacePreview(path);
+          diffItems={diffItems}
+          runtimeReady={runtime.ready}
+          runtimeStarting={runtime.starting}
+          onEnsureRuntime={runtime.ensure}
+          onRequestStartDebugByMessage={() => {
+            void submitPrompt("启动网站调试功能");
+          }}
+          onRequestDeployByMessage={() => {
+            void submitDeploymentPrompt("deploy");
+          }}
+          onRequestRedeployByMessage={() => {
+            void submitDeploymentPrompt("redeploy");
+          }}
+          onRequestRollbackByMessage={() => {
+            void submitDeploymentPrompt("rollback");
+          }}
+          onOpenPreviewTab={(tab) => {
+            setPreviewOpen(true);
+            setPreviewMaximized(false);
+            setPreviewTab(tab);
           }}
         />
       ) : null}
@@ -3843,6 +4068,7 @@ function MessageBubble({
   onOpenDiffPreview?: (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => void;
   onOpenManagedReplay?: (
@@ -4058,7 +4284,6 @@ function MessageBubble({
         <AltusArtifactPreviewCard
           sessionId={item.sessionId}
           artifacts={item.artifacts}
-          displayMode="web-preview"
           onOpenViewer={onOpenWorkspacePreview}
           onDeployRequested={onDeployArtifact}
         />
@@ -4841,6 +5066,7 @@ function OpencodeToolCard({
   onOpenDiffPreview?: (options?: {
     diffId?: string | null;
     filePath?: string | null;
+    messageKey?: string | null;
     messageIndex?: number | null;
   }) => void;
 }) {
@@ -5047,6 +5273,7 @@ function OpencodeToolCard({
           onClick={() =>
             onOpenDiffPreview?.({
               diffId: item.diffId,
+              messageKey: item.messageKey || null,
               messageIndex: item.messageIndex,
             })
           }
@@ -5319,6 +5546,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: filePath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }
@@ -5496,6 +5724,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: primaryPath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }
@@ -5527,6 +5756,7 @@ function OpencodeToolCard({
             onClick={() =>
               onOpenDiffPreview?.({
                 filePath: filePath || null,
+                messageKey: item.messageKey || null,
                 messageIndex: item.messageIndex,
               })
             }
@@ -5619,6 +5849,27 @@ function ManagedToolCard({
       : item.status === "completed"
         ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
         : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
+  const writeFileProgress = readManagedWriteFileProgress(item.metadata);
+  const isWriteFileExpanded =
+    shouldExpandManagedWriteFileCard({
+      toolName: item.toolName,
+      status: item.status,
+      metadata: item.metadata,
+    });
+  const writeFilePath = writeFileProgress.path || summaryText || "写入文件";
+  const writeFileGeneratedLabel =
+    writeFileProgress.generatedChars > 0
+      ? `已生成 ${writeFileProgress.generatedChars} 字符`
+      : "正在生成代码";
+  const writeFilePreview = writeFileProgress.preview || previewText || "正在生成代码片段...";
+  const writeFilePreviewRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isWriteFileExpanded) return;
+    const node = writeFilePreviewRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [isWriteFileExpanded, writeFilePreview]);
 
   return (
     <motion.div
@@ -5636,24 +5887,69 @@ function ManagedToolCard({
                 onOpenReplay(item.runId, item.toolCallId);
               }
             }}
-            className={`group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`}
+            data-managed-tool-layout={isWriteFileExpanded ? "expanded" : "compact"}
+            className={
+              isWriteFileExpanded
+                ? `group w-full max-w-full lg:max-w-[min(86vw,720px)] rounded-2xl border p-0 text-left transition ${chipToneClass}`
+                : `group inline-flex max-w-[min(100%,42rem)] items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition ${chipToneClass}`
+            }
           >
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
-              <Icon className="h-3.5 w-3.5" />
-            </span>
-            <span className="min-w-0 flex items-center gap-2 overflow-hidden">
-              <span className="shrink-0 text-[11px] font-medium leading-5">
-                {displayName}
-              </span>
-              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
-                {statusLabel}
-              </span>
-              {summaryText ? (
-                <span className="truncate text-[11px] leading-5 opacity-75">
-                  {summaryText}
+            {isWriteFileExpanded ? (
+              <div className="w-full">
+                <div className="flex h-[190px] w-full flex-col lg:h-[220px]">
+                  <div className="flex items-center justify-between gap-3 border-b border-current/15 px-3 py-2">
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium leading-5">
+                          写入文件
+                        </div>
+                        <div className="truncate text-[11px] leading-5 opacity-75">
+                          {writeFilePath}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                        {statusLabel}
+                      </span>
+                      <div className="mt-1 text-[10px] leading-4 opacity-75">
+                        {writeFileGeneratedLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex-1 px-3 py-2">
+                    <div
+                      ref={writeFilePreviewRef}
+                      className="h-[126px] overflow-auto rounded-xl border border-current/15 bg-background/70 px-3 py-2 font-mono text-[11px] leading-5 whitespace-pre-wrap break-all lg:h-[152px]"
+                    >
+                      {writeFilePreview}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                  <Icon className="h-3.5 w-3.5" />
                 </span>
-              ) : null}
-            </span>
+                <span className="min-w-0 flex items-center gap-2 overflow-hidden">
+                  <span className="shrink-0 text-[11px] font-medium leading-5">
+                    {displayName}
+                  </span>
+                  <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                    {statusLabel}
+                  </span>
+                  {summaryText ? (
+                    <span className="truncate text-[11px] leading-5 opacity-75">
+                      {summaryText}
+                    </span>
+                  ) : null}
+                </span>
+              </>
+            )}
           </button>
         </HoverCardTrigger>
         <HoverCardContent
@@ -5776,6 +6072,33 @@ function extractManagedDeliverables(
   return Array.from(unique.values());
 }
 
+function collectManagedWebArtifacts(input: {
+  deliverables: TaskCreationDeliverableArtifact[];
+  managedArtifacts: AltusArtifactFile[];
+}): AltusArtifactFile[] {
+  const unique = new Map<string, AltusArtifactFile>();
+  const pushArtifact = (pathRaw: string, previewType?: AltusArtifactFile["previewType"]) => {
+    const path = String(pathRaw || "").trim().replace(/\\/g, "/");
+    if (!path) return;
+    const resolvedPreviewType = previewType || inferManagedArtifactPreviewType(path);
+    if (resolvedPreviewType !== "web") return;
+    if (unique.has(path)) return;
+    unique.set(path, {
+      path,
+      previewType: "web",
+    });
+  };
+
+  for (const deliverable of input.deliverables) {
+    pushArtifact(deliverable.path);
+  }
+  for (const artifact of input.managedArtifacts) {
+    pushArtifact(artifact.path, artifact.previewType);
+  }
+
+  return Array.from(unique.values());
+}
+
 export function buildManagedCompletionCardItem(input: {
   message: AgentMessage;
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
@@ -5793,7 +6116,26 @@ export function buildManagedCompletionCardItem(input: {
     return null;
   }
 
+  const eventType = asText(metadata.eventType).toLowerCase();
   const deliverables = extractManagedDeliverables(metadata);
+  const managedArtifacts = managedArtifactsByRun.get(runId) || [];
+  const webArtifacts = collectManagedWebArtifacts({
+    deliverables,
+    managedArtifacts,
+  });
+  const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const isRunCompletedContext = message.type === "status_update" && eventType === "run_completed";
+  if ((shouldEmitFromDeliverablesContext || isRunCompletedContext) && webArtifacts.length > 0) {
+    emittedManagedCompletionRuns.add(runId);
+    return {
+      kind: "managed_artifact_card",
+      sessionId,
+      runId,
+      artifacts: webArtifacts,
+      messageKey: `managed:${runId}:artifact_card`,
+    };
+  }
+
   if (deliverables.length > 0) {
     emittedManagedCompletionRuns.add(runId);
     return {
@@ -5805,15 +6147,11 @@ export function buildManagedCompletionCardItem(input: {
     };
   }
 
-  const eventType = asText(metadata.eventType).toLowerCase();
-  if (message.type !== "status_update" || eventType !== "run_completed") {
+  if (!isRunCompletedContext) {
     return null;
   }
 
-  const artifacts = (managedArtifactsByRun.get(runId) || []).filter(
-    (artifact) => artifact.previewType === "web",
-  );
-  if (artifacts.length === 0) {
+  if (webArtifacts.length === 0) {
     return null;
   }
 
@@ -5822,7 +6160,7 @@ export function buildManagedCompletionCardItem(input: {
     kind: "managed_artifact_card",
     sessionId,
     runId,
-    artifacts,
+    artifacts: webArtifacts,
     messageKey: `managed:${runId}:artifact_card`,
   };
 }
@@ -5840,6 +6178,18 @@ function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string
     }
   }
   return toRecord(outputPreviewRaw);
+}
+
+function readManagedToolViewProjection(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const userView = toRecord(metadata.userView);
+  const internalView = toRecord(metadata.internalView);
+  return {
+    userSummary: asText(userView.summary),
+    userPreview: asText(userView.preview),
+    userDetail: asText(userView.detail),
+    internalDetail: asText(internalView.detail),
+  };
 }
 
 function collectManagedReplayArtifactPaths(
@@ -5969,6 +6319,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
               : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
+        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       });
     } else {
@@ -5985,6 +6336,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
                 : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
+        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       };
     }
@@ -6011,6 +6363,31 @@ function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previ
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
+function isManagedDeploymentTool(toolName: string) {
+  return (
+    toolName === "deploy_application" ||
+    toolName === "redeploy_application" ||
+    toolName === "rollback_application_deployment" ||
+    toolName === "get_application_deployment_status"
+  );
+}
+
+function readManagedDeploymentToolOutput(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const repair = toRecord(output.repair);
+  return {
+    action: asText(output.action),
+    phase: asText(output.phase),
+    status: asText(output.status),
+    summary: asText(output.summary),
+    deploymentStatus: asText(output.deploymentStatus),
+    url: asText(output.url),
+    deploymentId: asText(output.deploymentId),
+    repairCategory: asText(repair.category),
+  };
+}
+
 function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
   if (toolName !== "write_file") return "";
   const metadata = toRecord(metadataRaw);
@@ -6033,6 +6410,14 @@ function getManagedToolDisplayName(toolName: string) {
       return "代码搜索";
     case "ask_user":
       return "请求澄清";
+    case "deploy_application":
+      return "发布应用";
+    case "redeploy_application":
+      return "重新发布";
+    case "rollback_application_deployment":
+      return "回滚部署";
+    case "get_application_deployment_status":
+      return "查询部署状态";
     case "complete_task":
       return "完成任务";
     default:
@@ -6040,14 +6425,63 @@ function getManagedToolDisplayName(toolName: string) {
   }
 }
 
+export function shouldExpandManagedWriteFileCard(input: {
+  toolName: string;
+  status: string;
+  metadataRaw?: unknown;
+  metadata?: unknown;
+}) {
+  if (input.toolName !== "write_file") return false;
+  if (input.status !== "running") return false;
+  const metadata = toRecord(input.metadataRaw ?? input.metadata);
+  const progress = toRecord(metadata.writeFileProgress);
+  const generatedCharsRaw = progress.generatedChars;
+  const generatedChars =
+    typeof generatedCharsRaw === "number" && Number.isFinite(generatedCharsRaw)
+      ? generatedCharsRaw
+      : typeof generatedCharsRaw === "string" && generatedCharsRaw.trim()
+        ? Number(generatedCharsRaw)
+        : 0;
+  const preview = asText(progress.preview);
+  return generatedChars > 0 || Boolean(preview);
+}
+
+function readManagedWriteFileProgress(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const progress = toRecord(metadata.writeFileProgress);
+  const path = asText(progress.path);
+  const generatedCharsRaw = progress.generatedChars;
+  const generatedChars =
+    typeof generatedCharsRaw === "number" && Number.isFinite(generatedCharsRaw)
+      ? Math.max(0, Math.floor(generatedCharsRaw))
+      : typeof generatedCharsRaw === "string" && generatedCharsRaw.trim()
+        ? Math.max(0, Math.floor(Number(generatedCharsRaw)))
+        : 0;
+  const preview = asText(progress.preview);
+  return {
+    path,
+    generatedChars,
+    preview,
+  };
+}
+
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
   if (toolName === "shell_execute") {
     return asText(args.command) || "执行 shell 命令";
   }
   if (toolName === "write_file") {
-    return asText(args.path) || "写入文件";
+    const path = asText(args.path) || writeFileProgress.path;
+    if (writeFileProgress.generatedChars > 0) {
+      return [path || "写入文件", `生成中 ${writeFileProgress.generatedChars} 字符`]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    return path || "写入文件";
   }
   if (toolName === "read_file") {
     return asText(args.path) || "读取文件";
@@ -6063,6 +6497,27 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   if (toolName === "ask_user") {
     return asText(args.question) || "请求用户澄清";
   }
+  if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userSummary) {
+      return projectedView.userSummary;
+    }
+    if (deploymentOutput.status === "retryable_repair_required") {
+      return "正在修复发布配置";
+    }
+    if (deploymentOutput.summary) {
+      return deploymentOutput.summary;
+    }
+    if (toolName === "deploy_application") {
+      return "准备发布应用";
+    }
+    if (toolName === "redeploy_application") {
+      return "准备重新发布";
+    }
+    if (toolName === "rollback_application_deployment") {
+      return "准备回滚部署";
+    }
+    return "查询部署状态";
+  }
   if (toolName === "complete_task") {
     return asText(args.summary) || "输出最终完成总结";
   }
@@ -6073,9 +6528,17 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
 
-  if (error) return error;
+  if (error) {
+    if (isManagedDeploymentTool(toolName)) {
+      return projectedView.userPreview || "发布暂未完成，内部调试信息已记录。";
+    }
+    return error;
+  }
 
   if (toolName === "shell_execute") {
     const stdout = asText(output.stdout);
@@ -6084,6 +6547,9 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   }
 
   if (toolName === "write_file") {
+    if (writeFileProgress.preview) {
+      return writeFileProgress.preview;
+    }
     const bytes = asText(output.bytes);
     return bytes ? `写入 ${bytes} bytes` : asText(output.path) || "已写入目标文件";
   }
@@ -6100,6 +6566,25 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
     return asText(output.output) || asText(args.query) || "已返回搜索结果";
   }
 
+  if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userPreview) {
+      return projectedView.userPreview;
+    }
+    if (deploymentOutput.status === "retryable_repair_required") {
+      return "已识别到发布配置问题，Altus 正在自动修复后重试。";
+    }
+    if (deploymentOutput.url) {
+      return `访问地址 ${deploymentOutput.url}`;
+    }
+    if (deploymentOutput.summary) {
+      return deploymentOutput.summary;
+    }
+    if (toolName === "get_application_deployment_status") {
+      return "已返回当前部署状态。";
+    }
+    return "平台正在处理当前部署请求。";
+  }
+
   if (toolName === "complete_task") {
     return asText(args.summary) || "任务已完成";
   }
@@ -6107,11 +6592,20 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   return asText(metadata.outputPreview) || asText(metadata.content);
 }
 
+function formatManagedToolInternalDetail(toolName: string, metadataRaw: unknown) {
+  if (!isManagedDeploymentTool(toolName)) return "";
+  const projectedView = readManagedToolViewProjection(metadataRaw);
+  return projectedView.internalDetail;
+}
+
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
   const lines: string[] = [];
   const pushLine = (label: string, value: unknown) => {
     const text = asText(value);
@@ -6129,7 +6623,9 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine("输出", output.stdout);
     pushLine("错误输出", output.stderr);
   } else if (toolName === "write_file") {
-    pushLine("目标文件", args.path || output.path);
+    pushLine("目标文件", args.path || output.path || writeFileProgress.path);
+    pushLine("已生成字符", writeFileProgress.generatedChars > 0 ? String(writeFileProgress.generatedChars) : "");
+    pushLine("代码预览", writeFileProgress.preview);
     pushLine("写入大小", output.bytes);
   } else if (toolName === "read_file") {
     pushLine("目标文件", args.path || output.path);
@@ -6142,6 +6638,20 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine("搜索词", args.query);
     pushLine("搜索范围", args.path || output.path);
     pushLine("结果预览", output.output);
+  } else if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userDetail) {
+      return projectedView.userDetail;
+    }
+    pushLine("阶段", deploymentOutput.phase || (error ? "failed" : "running"));
+    pushLine("状态", deploymentOutput.status || deploymentOutput.deploymentStatus);
+    pushLine("摘要", deploymentOutput.summary);
+    pushLine("访问地址", deploymentOutput.url);
+    pushLine("部署 ID", deploymentOutput.deploymentId);
+    if (deploymentOutput.status === "retryable_repair_required") {
+      pushLine("处理", "Altus 正在按平台部署基线自动修复后重试");
+    } else if (error || deploymentOutput.status === "fatal_error") {
+      pushLine("处理", "内部调试信息已记录，主界面不展示底层供应商错误");
+    }
   } else if (toolName === "ask_user") {
     pushLine("问题", args.question);
     if (Array.isArray(args.options)) {
@@ -6165,7 +6675,7 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   }
 
   if (error) {
-    pushLine("失败原因", error);
+    pushLine("失败原因", isManagedDeploymentTool(toolName) ? "发布暂未完成" : error);
   }
 
   if (lines.length === 1) {

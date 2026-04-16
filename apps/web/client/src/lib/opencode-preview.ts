@@ -7,6 +7,8 @@ export type PreviewDiffItem = {
   files?: StructuredFileDiff[];
   source?: string;
   createdAt?: string | null;
+  eventMessageKey?: string | null;
+  relatedMessageKeys?: string[];
   eventIndex?: number;
   relatedEventIndexes?: number[];
   canonicalFile?: string | null;
@@ -96,6 +98,115 @@ function stringifySafe(value: unknown): string {
   } catch {
     return String(value ?? "");
   }
+}
+
+function normalizeDiffIdPart(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+}
+
+function computeStableHash(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash +=
+      (hash << 1) +
+      (hash << 4) +
+      (hash << 7) +
+      (hash << 8) +
+      (hash << 24);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function uniqueMessageKeys(keys: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  keys.forEach((key) => {
+    const trimmed = (key || "").trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    result.push(trimmed);
+  });
+  return result;
+}
+
+function resolveMetadataMessageKey(
+  metadata: Record<string, unknown>,
+  event: Record<string, unknown>,
+  properties: Record<string, unknown>,
+  part: Record<string, unknown>
+): string {
+  const rawPayload = toRecord(metadata.rawPayload);
+  const rawEvent = toRecord(rawPayload.event);
+  const rawEventProps = toRecord(rawEvent.properties);
+  const rawPart = toRecord(rawEventProps.part);
+  return (
+    asText(metadata.messageKey) ||
+    asText(toRecord(metadata.event).messageKey) ||
+    asText(event.messageKey) ||
+    asText(properties.messageKey) ||
+    asText(part.messageKey) ||
+    asText(rawPayload.messageKey) ||
+    asText(rawEvent.messageKey) ||
+    asText(rawEventProps.messageKey) ||
+    asText(rawPart.messageKey)
+  );
+}
+
+function resolveStableMessageKey(input: {
+  message: AgentMessage;
+  metadata: Record<string, unknown>;
+  event: Record<string, unknown>;
+  properties: Record<string, unknown>;
+  part: Record<string, unknown>;
+  fallbackParts: string[];
+}): string {
+  const direct =
+    asText(input.message.messageKey) ||
+    asText(input.message.id) ||
+    resolveMetadataMessageKey(
+      input.metadata,
+      input.event,
+      input.properties,
+      input.part
+    );
+  if (direct) return direct;
+
+  const fingerprint = [
+    input.message.type,
+    asText(input.message.content),
+    asText(input.metadata.eventType),
+    asText(input.metadata.turnId),
+    asText(input.metadata.appServerMethod),
+    asText(input.metadata.itemType),
+    pickTimestamp(input.metadata, input.event) || "",
+    ...input.fallbackParts,
+    stringifySafe(input.part),
+    stringifySafe(input.properties),
+  ].join("|");
+  return `fingerprint:${computeStableHash(fingerprint)}`;
+}
+
+function buildStableDiffId(
+  source: string,
+  parts: Array<string | number | null | undefined>
+): string {
+  const normalizedSource = normalizeDiffIdPart(source) || "diff";
+  const digest = computeStableHash(
+    parts
+      .map((part) => {
+        if (part === null || part === undefined) return "";
+        return String(part).trim();
+      })
+      .join("|")
+  );
+  return `diff-${normalizedSource}-${digest}`;
 }
 
 function asStructuredDiff(value: unknown): StructuredFileDiff[] | null {
@@ -540,6 +651,7 @@ function extractSessionDiffPaths(payload: StructuredFileDiff[] | string | null):
 
 type MutationCandidate = {
   messageIndex: number;
+  messageKey: string;
   partId: string;
   toolName: string;
   fileHints: string[];
@@ -549,6 +661,7 @@ function upsertMutationCandidate(
   candidates: MutationCandidate[],
   byPartId: Map<string, MutationCandidate>,
   messageIndex: number,
+  messageKey: string,
   partId: string,
   toolName: string,
   fileHints: string[]
@@ -557,6 +670,7 @@ function upsertMutationCandidate(
   if (partId && byPartId.has(partId)) {
     const existing = byPartId.get(partId)!;
     existing.messageIndex = Math.max(existing.messageIndex, messageIndex);
+    existing.messageKey = messageKey || existing.messageKey;
     existing.toolName = toolName || existing.toolName;
     existing.fileHints = uniqueNormalizedPaths([...existing.fileHints, ...normalizedHints]);
     return;
@@ -564,6 +678,7 @@ function upsertMutationCandidate(
 
   const candidate: MutationCandidate = {
     messageIndex,
+    messageKey,
     partId,
     toolName,
     fileHints: normalizedHints,
@@ -784,11 +899,22 @@ export function buildPreviewItems(messages: AgentMessage[]) {
     if (message.type === "executor_event") {
       const metadata = toRecord(message.metadata);
       if (asText(metadata.executor).toLowerCase() !== "codex") return;
+      const event = toRecord(metadata.event);
+      const properties = toRecord(event.properties);
+      const part = toRecord(properties.part);
       const item = extractCodexItem(metadata);
       const itemType =
         asText(metadata.itemType).toLowerCase() || asText(item.type).toLowerCase();
       const appServerMethod = asText(metadata.appServerMethod).toLowerCase();
       const turnId = asText(metadata.turnId);
+      const eventMessageKey = resolveStableMessageKey({
+        message,
+        metadata,
+        event,
+        properties,
+        part,
+        fallbackParts: [appServerMethod, turnId, itemType],
+      });
 
       if (appServerMethod === "turn/diff/updated") {
         if (turnId && codexTurnLastDiffIndex.get(turnId) !== index) {
@@ -810,15 +936,24 @@ export function buildPreviewItems(messages: AgentMessage[]) {
           const signature = buildDiffSignature(payload);
           if (!signature || !seenDiffs.has(signature)) {
             if (signature) seenDiffs.add(signature);
+            const canonicalFile =
+              turnPaths.length === 1 ? normalizePath(turnPaths[0] || "") : null;
             diffItems.push({
-              id: `diff-${index}-codex-turn-diff`,
+              id: buildStableDiffId("codex.turn_diff", [
+                eventMessageKey,
+                turnId,
+                canonicalFile || "",
+                signature || "",
+              ]),
               title: buildDiffTitle(titlePayload, "codex.turn_diff", diffItems.length),
               diff,
               source: "codex.turn_diff",
-              createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+              createdAt: pickTimestamp(metadata, event),
+              eventMessageKey,
+              relatedMessageKeys: [eventMessageKey],
               eventIndex: index,
               relatedEventIndexes: [index],
-              canonicalFile: turnPaths.length === 1 ? normalizePath(turnPaths[0] || "") : null,
+              canonicalFile,
             });
           }
         }
@@ -844,16 +979,25 @@ export function buildPreviewItems(messages: AgentMessage[]) {
           if (signature) seenDiffs.add(signature);
           const titlePayload: StructuredFileDiff[] | string =
             files.length > 0 ? files : latestDiffText;
+          const canonicalFile =
+            files.length === 1 ? normalizePath(files[0]?.file || "") : null;
           diffItems.push({
-            id: `diff-${index}-codex-file-change-text`,
+            id: buildStableDiffId("codex.file_change", [
+              eventMessageKey,
+              turnId,
+              canonicalFile || "",
+              signature || "",
+              "text",
+            ]),
             title: buildDiffTitle(titlePayload, "codex.file_change", diffItems.length),
             diff: latestDiffText,
             source: "codex.file_change",
-            createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+            createdAt: pickTimestamp(metadata, event),
+            eventMessageKey,
+            relatedMessageKeys: [eventMessageKey],
             eventIndex: index,
             relatedEventIndexes: [index],
-            canonicalFile:
-              files.length === 1 ? normalizePath(files[0]?.file || "") : null,
+            canonicalFile,
           });
         }
         return;
@@ -861,16 +1005,24 @@ export function buildPreviewItems(messages: AgentMessage[]) {
 
       if (files.length === 0) return;
 
+      const canonicalFile =
+        files.length === 1 ? normalizePath(files[0]?.file || "") : null;
       diffItems.push({
-        id: `diff-${index}-codex-file_change`,
+        id: buildStableDiffId("codex.file_change", [
+          eventMessageKey,
+          turnId,
+          canonicalFile || "",
+          "structured",
+        ]),
         title: buildDiffTitle(files, "codex.file_change", diffItems.length),
         files,
         source: "codex.file_change",
-        createdAt: pickTimestamp(metadata, toRecord(metadata.event)),
+        createdAt: pickTimestamp(metadata, event),
+        eventMessageKey,
+        relatedMessageKeys: [eventMessageKey],
         eventIndex: index,
         relatedEventIndexes: [index],
-        canonicalFile:
-          files.length === 1 ? normalizePath(files[0]?.file || "") : null,
+        canonicalFile,
       });
       return;
     }
@@ -886,9 +1038,16 @@ export function buildPreviewItems(messages: AgentMessage[]) {
     const toolOutput = asText(toRecord(part.state).output) || asText(properties.output);
     const output = resolveDiffOutput(toolName, rawInput, input, toolOutput);
     const createdAt = pickTimestamp(metadata, event);
-    const idBase = `${index}-${eventType || "event"}-${toolName || "tool"}`;
     const partId =
       asText(part.id) || asText(part.callID) || asText(properties.partId);
+    const eventMessageKey = resolveStableMessageKey({
+      message,
+      metadata,
+      event,
+      properties,
+      part,
+      fallbackParts: [eventType, toolName, partId],
+    });
 
     if (toolName) {
       const lower = toolName.toLowerCase();
@@ -898,6 +1057,7 @@ export function buildPreviewItems(messages: AgentMessage[]) {
           mutationCandidates,
           mutationByPartId,
           index,
+          eventMessageKey,
           partId,
           lower,
           fileHints
@@ -914,16 +1074,25 @@ export function buildPreviewItems(messages: AgentMessage[]) {
           const signature = buildDiffSignature(payload);
           if (!signature || !seenDiffs.has(signature)) {
             if (signature) seenDiffs.add(signature);
+            const canonicalFile =
+              structured.length === 1 ? normalizePath(structured[0]?.file || "") : null;
             diffItems.push({
-              id: `diff-${idBase}-tool`,
+              id: buildStableDiffId(lower, [
+                eventMessageKey,
+                partId,
+                canonicalFile || "",
+                signature || "",
+                "tool",
+              ]),
               title: buildDiffTitle(structured, lower, diffItems.length),
               files: structured,
               source: lower,
               createdAt,
+              eventMessageKey,
+              relatedMessageKeys: [eventMessageKey],
               eventIndex: index,
               relatedEventIndexes: [index],
-              canonicalFile:
-                structured.length === 1 ? normalizePath(structured[0]?.file || "") : null,
+              canonicalFile,
             });
           }
         }
@@ -944,28 +1113,48 @@ export function buildPreviewItems(messages: AgentMessage[]) {
         if (blocks.length > 1) {
           blocks.forEach((block, blockIndex) => {
             const title = buildDiffTitle(block.text, "apply_patch", diffItems.length);
+            const canonicalFile =
+              normalizePath(extractFileFromApplyPatch(block.text) || "") || null;
             diffItems.push({
-              id: `diff-${idBase}-${blockIndex}`,
+              id: buildStableDiffId("apply_patch", [
+                eventMessageKey,
+                partId,
+                blockIndex,
+                canonicalFile || "",
+                signature || "",
+              ]),
               title,
               diff: block.text,
               source: "apply_patch",
               createdAt,
+              eventMessageKey,
+              relatedMessageKeys: [eventMessageKey],
               eventIndex: index,
               relatedEventIndexes: [index],
-              canonicalFile: normalizePath(extractFileFromApplyPatch(block.text) || "") || null,
+              canonicalFile,
             });
           });
         } else {
           const title = buildDiffTitle(output, "apply_patch", diffItems.length);
+          const canonicalFile =
+            normalizePath(extractFileFromApplyPatch(output) || "") || null;
           diffItems.push({
-            id: `diff-${idBase}-0`,
+            id: buildStableDiffId("apply_patch", [
+              eventMessageKey,
+              partId,
+              0,
+              canonicalFile || "",
+              signature || "",
+            ]),
             title,
             diff: output,
             source: "apply_patch",
             createdAt,
+            eventMessageKey,
+            relatedMessageKeys: [eventMessageKey],
             eventIndex: index,
             relatedEventIndexes: [index],
-            canonicalFile: normalizePath(extractFileFromApplyPatch(output) || "") || null,
+            canonicalFile,
           });
         }
       }
@@ -998,16 +1187,30 @@ export function buildPreviewItems(messages: AgentMessage[]) {
         }
         if (signature) seenDiffs.add(signature);
         const title = buildDiffTitle(filteredFiles, "session.diff", diffItems.length);
+        const canonicalFile =
+          filteredFiles.length === 1 ? normalizePath(filteredFiles[0]?.file || "") : null;
+        const relatedMessageKeys = uniqueMessageKeys([
+          candidate.messageKey,
+          eventMessageKey,
+        ]);
         diffItems.push({
-          id: `diff-${idBase}-0`,
+          id: buildStableDiffId("session.diff", [
+            eventMessageKey,
+            candidate.messageKey,
+            partId,
+            canonicalFile || "",
+            signature || "",
+            0,
+          ]),
           title,
           files: filteredFiles,
           source: "session.diff",
           createdAt,
+          eventMessageKey,
+          relatedMessageKeys,
           eventIndex: index,
           relatedEventIndexes: [candidate.messageIndex, index],
-          canonicalFile:
-            filteredFiles.length === 1 ? normalizePath(filteredFiles[0]?.file || "") : null,
+          canonicalFile,
         });
       } else {
         const diffPayload: DiffPayload = { kind: "text", text: payload };
@@ -1021,28 +1224,58 @@ export function buildPreviewItems(messages: AgentMessage[]) {
         if (blocks.length > 1) {
           blocks.forEach((block, blockIndex) => {
             const title = buildDiffTitle(block.text, "session.diff", diffItems.length);
+            const canonicalFile =
+              normalizePath(extractFileFromUnifiedDiff(block.text) || "") || null;
+            const relatedMessageKeys = uniqueMessageKeys([
+              candidate.messageKey,
+              eventMessageKey,
+            ]);
             diffItems.push({
-              id: `diff-${idBase}-${blockIndex}`,
+              id: buildStableDiffId("session.diff", [
+                eventMessageKey,
+                candidate.messageKey,
+                partId,
+                canonicalFile || "",
+                signature || "",
+                blockIndex,
+              ]),
               title,
               diff: block.text,
               source: "session.diff",
               createdAt,
+              eventMessageKey,
+              relatedMessageKeys,
               eventIndex: index,
               relatedEventIndexes: [candidate.messageIndex, index],
-              canonicalFile: normalizePath(extractFileFromUnifiedDiff(block.text) || "") || null,
+              canonicalFile,
             });
           });
         } else {
           const title = buildDiffTitle(payload, "session.diff", diffItems.length);
+          const canonicalFile =
+            normalizePath(extractFileFromUnifiedDiff(payload) || "") || null;
+          const relatedMessageKeys = uniqueMessageKeys([
+            candidate.messageKey,
+            eventMessageKey,
+          ]);
           diffItems.push({
-            id: `diff-${idBase}-0`,
+            id: buildStableDiffId("session.diff", [
+              eventMessageKey,
+              candidate.messageKey,
+              partId,
+              canonicalFile || "",
+              signature || "",
+              0,
+            ]),
             title,
             diff: payload,
             source: "session.diff",
             createdAt,
+            eventMessageKey,
+            relatedMessageKeys,
             eventIndex: index,
             relatedEventIndexes: [candidate.messageIndex, index],
-            canonicalFile: normalizePath(extractFileFromUnifiedDiff(payload) || "") || null,
+            canonicalFile,
           });
         }
       }

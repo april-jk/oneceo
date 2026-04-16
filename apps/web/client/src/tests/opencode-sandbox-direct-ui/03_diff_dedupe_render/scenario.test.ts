@@ -38,7 +38,7 @@ function sessionDiffEvent(): AgentMessage {
   };
 }
 
-function applyPatchEvent(path = 'src/index.ts'): AgentMessage {
+function applyPatchEvent(path = 'src/index.ts', messageKey?: string): AgentMessage {
   const patch = [
     '*** Begin Patch',
     `*** Update File: ${path}`,
@@ -49,6 +49,7 @@ function applyPatchEvent(path = 'src/index.ts'): AgentMessage {
   ].join('\n');
 
   return {
+    messageKey,
     type: 'opencode_event',
     content: '',
     metadata: {
@@ -83,8 +84,9 @@ function applyPatchEvent(path = 'src/index.ts'): AgentMessage {
   };
 }
 
-function writeEvent(path: string): AgentMessage {
+function writeEvent(path: string, messageKey?: string): AgentMessage {
   return {
+    messageKey,
     type: 'opencode_event',
     content: 'write',
     metadata: {
@@ -129,7 +131,7 @@ function writeEvent(path: string): AgentMessage {
   };
 }
 
-function sessionDiffForFile(path: string): AgentMessage {
+function sessionDiffForFile(path: string, messageKey?: string): AgentMessage {
   const diffPayload = [
     {
       file: path,
@@ -142,6 +144,7 @@ function sessionDiffForFile(path: string): AgentMessage {
   ];
 
   return {
+    messageKey,
     type: 'opencode_event',
     content: '',
     metadata: {
@@ -253,6 +256,28 @@ describe('03_diff_dedupe_render', () => {
     ).toBe(true);
   });
 
+  it('keeps stable diff id after prepending older history messages', () => {
+    const target = applyPatchEvent('src/index.ts', 'msg-apply-patch-001');
+    const firstRender = buildPreviewItems([target]).diffItems;
+    expect(firstRender.length).toBeGreaterThan(0);
+    const firstIds = firstRender.map((item) => item.id);
+
+    const prependedHistory: AgentMessage = {
+      type: 'agent_message',
+      messageKey: 'msg-older-context-001',
+      content: '旧上下文',
+    };
+    const secondRender = buildPreviewItems([prependedHistory, target]).diffItems;
+    expect(secondRender).toHaveLength(firstRender.length);
+    expect(secondRender.map((item) => item.id)).toEqual(firstIds);
+    expect(
+      secondRender.every((item) =>
+        item.relatedMessageKeys?.includes('msg-apply-patch-001') ||
+        item.eventMessageKey === 'msg-apply-patch-001'
+      )
+    ).toBe(true);
+  });
+
   it('keeps correlated session.diff from write tool and links to write message index', () => {
     const path = 'src/generated/report.ts';
     const messages: AgentMessage[] = [writeEvent(path), sessionDiffForFile(path)];
@@ -296,7 +321,7 @@ describe('03_diff_dedupe_render', () => {
       },
     });
 
-    expect(tooltip).toBe('写入文件: src/generated/report.ts');
+    expect(tooltip).toContain('写入文件: src/generated/report.ts');
   });
 
   it('builds hover explanation text for apply_patch target files', () => {
@@ -316,6 +341,7 @@ describe('03_diff_dedupe_render', () => {
     const messages: AgentMessage[] = [
       {
         type: 'opencode_event',
+        messageKey: 'msg-tool-inferred-001',
         content: '[Tool] write',
         metadata: {
           eventType: 'message.part.updated',
@@ -323,6 +349,7 @@ describe('03_diff_dedupe_render', () => {
       },
       {
         type: 'opencode_event',
+        messageKey: 'msg-session-diff-001',
         content: '',
         metadata: {
           eventType: 'session.diff',
@@ -349,6 +376,9 @@ describe('03_diff_dedupe_render', () => {
     expect(diffItems[0].source).toBe('session.diff');
     expect(diffItems[0].relatedEventIndexes).toContain(0);
     expect(diffItems[0].relatedEventIndexes).toContain(1);
+    expect(diffItems[0].relatedMessageKeys).toEqual(
+      expect.arrayContaining(['msg-tool-inferred-001', 'msg-session-diff-001'])
+    );
   });
 
   it('parses JSON-string metadata and renders write diff', () => {

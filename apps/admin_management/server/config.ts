@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { loadAdminEnv } from './load-env';
 
-loadAdminEnv();
+const { loadedPath: adminEnvLoadedPath } = loadAdminEnv();
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -22,6 +22,15 @@ function parseCommaSeparatedList(value: string) {
     .filter(Boolean);
 }
 
+function resolveDefaultAdminPort(loadedPath?: string) {
+  if (loadedPath) {
+    return 9310;
+  }
+
+  const runtimePort = Number(asText(process.env.PORT) || '9310');
+  return Number.isFinite(runtimePort) && runtimePort > 0 ? runtimePort : 9310;
+}
+
 function isPrivateIpv4(hostname: string) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return false;
   const parts = hostname.split('.').map((part) => Number(part));
@@ -38,7 +47,7 @@ const envSchema = z.object({
     .number()
     .int()
     .positive()
-    .default(Number(asText(process.env.PORT) || '9310')),
+    .default(resolveDefaultAdminPort(adminEnvLoadedPath)),
   KVM_ORCHESTRATOR_URL: z.string().url().default('http://192.168.10.128:8500'),
   KVM_ORCH_TOKEN: z.string().default(''),
   KVM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
@@ -48,6 +57,7 @@ const envSchema = z.object({
   ONECEO_API_URL: z.string().url().default('http://127.0.0.1:4000'),
   ONECEO_INTERNAL_TOKEN: requiredNonEmptyText('ONECEO_INTERNAL_TOKEN'),
   ONECEO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  ONECEO_OSAC_UPLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   ONECEO_REQUEST_RETRIES: z.coerce.number().int().min(0).max(5).default(1),
   ADMIN_MANAGEMENT_CORS_ORIGIN: z.string().default('http://localhost:5174'),
   E2B_API_KEY: z.string().optional(),
@@ -79,6 +89,7 @@ export const config = {
   oneceoApiUrl: parsed.ONECEO_API_URL.replace(/\/+$/, ''),
   oneceoInternalToken: parsed.ONECEO_INTERNAL_TOKEN,
   oneceoRequestTimeoutMs: parsed.ONECEO_REQUEST_TIMEOUT_MS,
+  oneceoOsacUploadTimeoutMs: parsed.ONECEO_OSAC_UPLOAD_TIMEOUT_MS,
   oneceoRequestRetries: parsed.ONECEO_REQUEST_RETRIES,
   e2bApiKey: parsed.E2B_API_KEY || '',
 };

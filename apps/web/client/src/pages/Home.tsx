@@ -111,6 +111,10 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import {
+  buildTaskSessionDeploymentPrompt,
+  type TaskSessionDeploymentPromptAction,
+} from "@/lib/task-session-deployment-prompts";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
 import { useLocation, useSearch } from "wouter";
@@ -1461,25 +1465,17 @@ export default function Home() {
   };
 
   const submitDeploymentPrompt = async (
-    action: "deploy" | "redeploy" | "rollback" | "status",
+    action: TaskSessionDeploymentPromptAction,
   ) => {
     if (!sessionId) {
       toast.error("缺少会话信息");
       return;
     }
-    const prompt =
-      action === "deploy"
-        ? "帮我部署当前项目"
-        : action === "redeploy"
-          ? "帮我重新部署当前项目"
-          : action === "rollback"
-            ? "请回滚到上一个可用部署版本"
-            : "帮我查看当前部署状态";
 
     setPreviewWorkspacePath(null);
     setPreviewTab("deployment");
     setPreviewOpen(true);
-    await submitPrompt(prompt);
+    await submitPrompt(buildTaskSessionDeploymentPrompt(action));
   };
 
   const deployFromArtifactCard = async (_path: string) => {

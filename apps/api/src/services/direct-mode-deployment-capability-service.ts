@@ -5,6 +5,8 @@ import {
   triggerRailwayRedeploy,
   triggerRailwayRollback,
   waitForRailwayDeploymentAfterSourceSync,
+  waitForRailwayDeploymentPublicReachability,
+  type DeploymentResourceBindingData,
   type RailwayDeploymentActionResult,
   type RailwayDeploymentPanelData,
 } from './railway-deployment-service';
@@ -12,6 +14,10 @@ import { publishTaskSessionWorkspaceToRepository } from './task-creation-deploym
 import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata } from './sandbox-activity-service';
+import {
+  buildTaskSessionAnalyticsPanel,
+  prepareTaskSessionAnalyticsBinding,
+} from './task-session-deployment-analytics-service';
 import type {
   DirectModeCapabilityExecutionInput,
   DirectModeCapabilityExecutionResult,
@@ -80,8 +86,9 @@ async function buildRailwayDeploymentResponse(
   userId: string,
   session: FileSessionRecord | null,
   selectedDeploymentId?: string
-) {
-  const account = await platformDeploymentAccountService.getUserAccount(userId);
+): Promise<RailwayDeploymentPanelData> {
+  const projectKey = asText(session?.id);
+  const account = await platformDeploymentAccountService.getProjectAccount(userId, projectKey);
   if (!account) {
     return {
       configured: false,
@@ -92,12 +99,13 @@ async function buildRailwayDeploymentResponse(
       deployments: [],
       logs: [],
       missing: [],
+      resourceBinding: undefined,
     } satisfies RailwayDeploymentPanelData;
   }
 
   const { environment } = await resolveTaskSessionEnvironment(session);
   const metadata = pickRecord(environment?.metadata);
-  return getRailwayDeploymentPanel(metadata, {
+  const panel = await getRailwayDeploymentPanel(metadata, {
     platformDeployment: {
       adminToken: process.env.RAILWAY_ADMIN_TOKEN,
       token: account.accessToken,
@@ -110,6 +118,38 @@ async function buildRailwayDeploymentResponse(
     },
     deploymentId: selectedDeploymentId,
   });
+  const analytics = await buildTaskSessionAnalyticsPanel(metadata);
+  return {
+    ...panel,
+    analytics,
+    resourceBinding: buildDeploymentResourceBinding(projectKey, account),
+  } satisfies RailwayDeploymentPanelData;
+}
+
+function buildDeploymentResourceBinding(
+  sessionProjectKey: string,
+  account: Awaited<ReturnType<typeof platformDeploymentAccountService.getProjectAccount>>
+): DeploymentResourceBindingData | undefined {
+  if (!account) return undefined;
+  const normalizedSessionProjectKey = asText(sessionProjectKey);
+  const projectKey = asText(account.projectKey) || 'default';
+  return {
+    projectKey,
+    isolationMode:
+      normalizedSessionProjectKey && projectKey === normalizedSessionProjectKey ? 'session' : 'default',
+    projectModel: 'per_user',
+    environmentModel: 'per_session',
+    tokenKind: 'project',
+    tokenScope: 'railway_project_environment',
+    tokenManagedBy: 'oneceo_platform',
+    tokenId: account.tokenId,
+    tokenRotatedAt: account.tokenRotatedAt,
+    repositoryOwner: account.githubRepoOwner,
+    repositoryName: account.githubRepoName,
+    repositoryFullName: account.githubRepoFullName,
+    repositoryUrl: account.githubRepoUrl,
+    repositoryBranch: account.githubDefaultBranch,
+  };
 }
 
 async function persistRailwayDeploymentSelection(
@@ -191,6 +231,51 @@ function pickRollbackTarget(panel: RailwayDeploymentPanelData): string {
   return asText(candidate);
 }
 
+function resolveDeploymentAnalyticsDomain(input: {
+  metadata: Record<string, unknown>;
+  accountDomain?: string;
+  panel?: RailwayDeploymentPanelData | null;
+}) {
+  const analytics = pickRecord(input.metadata.analytics);
+  return (
+    asText(input.panel?.latestStaticUrl) ||
+    asText(input.panel?.latestUrl) ||
+    asText(input.panel?.domains?.[0]) ||
+    asText(analytics.domain) ||
+    asText(input.accountDomain) ||
+    ''
+  );
+}
+
+async function prepareSessionAnalyticsBindingSafely(input: {
+  taskSessionId: string;
+  orchestratorSessionId: string;
+  environmentMetadata: unknown;
+  account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureUserAccount>>;
+  panel?: RailwayDeploymentPanelData | null;
+}) {
+  try {
+    await prepareTaskSessionAnalyticsBinding({
+      sessionId: input.taskSessionId,
+      orchestratorSessionId: input.orchestratorSessionId,
+      environmentMetadata: input.environmentMetadata,
+      account: input.account,
+      domain: resolveDeploymentAnalyticsDomain({
+        metadata: pickRecord(input.environmentMetadata),
+        accountDomain: input.account.serviceDomain,
+        panel: input.panel || null,
+      }),
+      tag: 'production',
+    });
+  } catch (error) {
+    console.warn('[DIRECT_MODE_DEPLOYMENT_ANALYTICS_BINDING_FAILED]', {
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId: input.orchestratorSessionId,
+      error,
+    });
+  }
+}
+
 export async function executeDirectModeDeploymentCapability(
   capabilityId: DirectModeCapabilityId,
   input: DirectModeCapabilityExecutionInput
@@ -214,7 +299,10 @@ export async function executeDirectModeDeploymentCapability(
   }
 
   if (capabilityId === 'deploy_session_website') {
-    const account = await platformDeploymentAccountService.ensureUserAccount(userId);
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      input.taskSessionId
+    );
     const workspaceRoot =
       asText(environmentMetadata.opencodeWorkspaceRoot) ||
       asText(input.workspacePath) ||
@@ -224,7 +312,13 @@ export async function executeDirectModeDeploymentCapability(
     }
 
     const deploymentRequestedAt = Date.now();
-    await publishTaskSessionWorkspaceToRepository({
+    await prepareSessionAnalyticsBindingSafely({
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId,
+      environmentMetadata,
+      account,
+    });
+    const publishReport = await publishTaskSessionWorkspaceToRepository({
       orchestratorSessionId,
       workspaceRoot,
       repository: {
@@ -235,6 +329,9 @@ export async function executeDirectModeDeploymentCapability(
         defaultBranch: account.githubDefaultBranch || 'main',
       },
       sessionId: input.taskSessionId,
+    });
+    await setSandboxMetadata(orchestratorSessionId, {
+      deploymentTemplateBaseline: publishReport.baseline,
     });
 
     const platformDeployment = {
@@ -262,6 +359,10 @@ export async function executeDirectModeDeploymentCapability(
     );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
     const panel = await buildRailwayDeploymentResponse(userId, session, actionResult.deploymentId);
+    await waitForRailwayDeploymentPublicReachability({
+      baseUrl: panel.latestStaticUrl || panel.latestUrl,
+      healthPath: '/api/system/health',
+    });
     return {
       capabilityId,
       message: `已触发网站部署。${formatDeploymentStatus(panel)}`,
@@ -272,8 +373,18 @@ export async function executeDirectModeDeploymentCapability(
   }
 
   if (capabilityId === 'redeploy_session_website') {
-    const account = await platformDeploymentAccountService.ensureUserAccount(userId);
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      input.taskSessionId
+    );
     const panel = await buildRailwayDeploymentResponse(userId, session);
+    await prepareSessionAnalyticsBindingSafely({
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId,
+      environmentMetadata,
+      account,
+      panel,
+    });
     const targetDeploymentId = asText(panel.deploymentId) || asText(panel.deployments[0]?.id);
     if (!targetDeploymentId) {
       throw new Error('当前没有可重新部署的历史版本');
@@ -297,6 +408,10 @@ export async function executeDirectModeDeploymentCapability(
     );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
     const nextPanel = await buildRailwayDeploymentResponse(userId, session, actionResult.deploymentId);
+    await waitForRailwayDeploymentPublicReachability({
+      baseUrl: nextPanel.latestStaticUrl || nextPanel.latestUrl,
+      healthPath: '/api/system/health',
+    });
     return {
       capabilityId,
       message: `已发起重新部署。${formatDeploymentStatus(nextPanel)}`,
@@ -308,8 +423,18 @@ export async function executeDirectModeDeploymentCapability(
   }
 
   if (capabilityId === 'rollback_session_deployment') {
-    const account = await platformDeploymentAccountService.ensureUserAccount(userId);
+    const account = await platformDeploymentAccountService.ensureProjectAccount(
+      userId,
+      input.taskSessionId
+    );
     const panel = await buildRailwayDeploymentResponse(userId, session);
+    await prepareSessionAnalyticsBindingSafely({
+      taskSessionId: input.taskSessionId,
+      orchestratorSessionId,
+      environmentMetadata,
+      account,
+      panel,
+    });
     const targetDeploymentId = pickRollbackTarget(panel);
     if (!targetDeploymentId) {
       throw new Error('没有可回滚的历史部署版本');
@@ -333,6 +458,10 @@ export async function executeDirectModeDeploymentCapability(
     );
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
     const nextPanel = await buildRailwayDeploymentResponse(userId, session, actionResult.deploymentId);
+    await waitForRailwayDeploymentPublicReachability({
+      baseUrl: nextPanel.latestStaticUrl || nextPanel.latestUrl,
+      healthPath: '/api/system/health',
+    });
     return {
       capabilityId,
       message: `已发起回滚。${formatDeploymentStatus(nextPanel)}`,
@@ -349,4 +478,3 @@ export async function executeDirectModeDeploymentCapability(
 export function getDirectModeDeploymentErrorMessage(error: unknown) {
   return getDeploymentErrorMessage(error);
 }
-

@@ -8,6 +8,15 @@ import {
   pushDirectoryToManagedRepository,
   type ManagedDeploymentRepository,
 } from './platform-managed-github-repo-service';
+import {
+  ensureDeploymentTemplateBootstrap,
+  type DeploymentTemplateBootstrapReport,
+} from './deployment-template-bootstrap-service';
+import {
+  ensureTemplateCompliance,
+  type OneCeoDeploymentManifest,
+  type TemplateComplianceReport,
+} from './template-compliance-service';
 
 const execFile = promisify(execFileCallback);
 
@@ -28,6 +37,91 @@ function asText(value: unknown): string {
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+export type DeploymentTemplateBaselineData = {
+  status: 'ready' | 'needs_attention' | 'unavailable';
+  checkedAt: string;
+  workspaceDetected: boolean;
+  analyticsMode: 'workspace' | 'platform_injected' | 'missing' | 'unknown';
+  manifestGenerated: boolean;
+  manifestPath?: string;
+  templateVersion?: string;
+  buildCommand?: string;
+  startCommand?: string;
+  healthcheckPath?: string;
+  features?: OneCeoDeploymentManifest['features'];
+  checks: {
+    build: boolean | null;
+    start: boolean | null;
+    analytics: boolean | null;
+    healthcheck: boolean | null;
+    database: boolean | null;
+  };
+  warnings: string[];
+  errors: string[];
+};
+
+export type DeploymentWorkspacePublishReport = {
+  bootstrap: DeploymentTemplateBootstrapReport;
+  compliance: TemplateComplianceReport;
+  baseline: DeploymentTemplateBaselineData;
+};
+
+export function buildDeploymentTemplateBaseline(input: {
+  workspaceDetected: boolean;
+  bootstrap?: DeploymentTemplateBootstrapReport | null;
+  compliance?: TemplateComplianceReport | null;
+  extraErrors?: string[];
+}): DeploymentTemplateBaselineData {
+  const bootstrap = input.bootstrap || null;
+  const compliance = input.compliance || null;
+  const errors = [
+    ...(bootstrap?.errors || []),
+    ...(compliance?.errors || []),
+    ...(input.extraErrors || []).map((item) => asText(item)).filter(Boolean),
+  ];
+  const warnings = [
+    ...(bootstrap?.warnings || []),
+    ...(compliance?.warnings || []),
+  ];
+  const analyticsMode: DeploymentTemplateBaselineData['analyticsMode'] =
+    bootstrap?.analyticsInjected
+      ? 'platform_injected'
+      : compliance?.checks.analyticsEntryDetected
+        ? 'workspace'
+        : compliance
+          ? 'missing'
+          : 'unknown';
+
+  return {
+    status: !input.workspaceDetected
+      ? 'unavailable'
+      : errors.length > 0
+        ? 'needs_attention'
+        : compliance
+          ? 'ready'
+          : 'unavailable',
+    checkedAt: new Date().toISOString(),
+    workspaceDetected: input.workspaceDetected,
+    analyticsMode,
+    manifestGenerated: Boolean(compliance?.generatedManifest),
+    manifestPath: compliance?.manifestPath,
+    templateVersion: compliance?.manifest.templateVersion,
+    buildCommand: compliance?.manifest.build.command,
+    startCommand: compliance?.manifest.start.command,
+    healthcheckPath: compliance?.manifest.healthcheck.path,
+    features: compliance?.manifest.features,
+    checks: {
+      build: compliance?.checks.buildCommandDetected ?? null,
+      start: compliance?.checks.startCommandDetected ?? null,
+      analytics: compliance?.checks.analyticsEntryDetected ?? null,
+      healthcheck: compliance?.checks.healthcheckRouteDetected ?? null,
+      database: compliance?.checks.databaseDependencyDetected ?? null,
+    },
+    warnings,
+    errors,
+  };
 }
 
 async function extractArchive(archivePath: string, outputDir: string) {
@@ -80,12 +174,82 @@ export async function publishTaskSessionWorkspaceToRepository(input: {
   workspaceRoot: string;
   repository: ManagedDeploymentRepository;
   sessionId: string;
-}) {
+}): Promise<DeploymentWorkspacePublishReport> {
   const sourceDir = await exportWorkspaceToLocalDirectory(input.orchestratorSessionId, input.workspaceRoot);
   try {
+    const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
+    if (bootstrap.warnings.length > 0) {
+      console.warn('[DEPLOYMENT_TEMPLATE_BOOTSTRAP_WARNINGS]', {
+        sessionId: input.sessionId,
+        warnings: bootstrap.warnings,
+        analyticsTargetPath: bootstrap.analyticsTargetPath,
+      });
+    }
+    if (bootstrap.errors.length > 0) {
+      throw new Error(`部署模板注入失败：${bootstrap.errors.join('；')}`);
+    }
+    const compliance = await ensureTemplateCompliance(sourceDir);
+    if (compliance.warnings.length > 0) {
+      console.warn('[DEPLOYMENT_TEMPLATE_COMPLIANCE_WARNINGS]', {
+        sessionId: input.sessionId,
+        warnings: compliance.warnings,
+        manifestPath: compliance.manifestPath,
+        generatedManifest: compliance.generatedManifest,
+      });
+    }
+    if (!compliance.ok) {
+      throw new Error(`部署前检查失败：${compliance.errors.join('；')}`);
+    }
     await pushDirectoryToManagedRepository(input.repository, sourceDir, {
       commitMessage: `chore: deploy session ${input.sessionId} ${new Date().toISOString()}`,
     });
+    return {
+      bootstrap,
+      compliance,
+      baseline: buildDeploymentTemplateBaseline({
+        workspaceDetected: true,
+        bootstrap,
+        compliance,
+      }),
+    };
+  } finally {
+    await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function inspectTaskSessionDeploymentTemplate(input: {
+  orchestratorSessionId: string;
+  workspaceRoot: string;
+}): Promise<DeploymentTemplateBaselineData> {
+  const normalizedSessionId = asText(input.orchestratorSessionId);
+  const normalizedWorkspaceRoot = asText(input.workspaceRoot);
+  if (!normalizedSessionId || !normalizedWorkspaceRoot) {
+    return buildDeploymentTemplateBaseline({
+      workspaceDetected: false,
+      extraErrors: ['未找到可检查的工作区'],
+    });
+  }
+
+  const sourceDir = await exportWorkspaceToLocalDirectory(
+    normalizedSessionId,
+    normalizedWorkspaceRoot
+  );
+  try {
+    const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
+    try {
+      const compliance = await ensureTemplateCompliance(sourceDir);
+      return buildDeploymentTemplateBaseline({
+        workspaceDetected: true,
+        bootstrap,
+        compliance,
+      });
+    } catch (error: any) {
+      return buildDeploymentTemplateBaseline({
+        workspaceDetected: true,
+        bootstrap,
+        extraErrors: [error?.message || '模板检查失败'],
+      });
+    }
   } finally {
     await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
   }

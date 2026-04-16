@@ -39,6 +39,7 @@ export type AltusReplayAction = {
   status: AltusReplayActionStatus;
   summary: string;
   detail: string;
+  internalDetail?: string;
   artifactPaths: string[];
 };
 
@@ -162,6 +163,9 @@ export default function AltusRunReplayDrawer({
   const [deploymentAction, setDeploymentAction] = useState<
     "deploy" | "redeploy" | "rollback" | null
   >(null);
+  const [detailViewMode, setDetailViewMode] = useState<"user" | "internal">(
+    "user",
+  );
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<
     string | null
   >(null);
@@ -198,6 +202,10 @@ export default function AltusRunReplayDrawer({
   useEffect(() => {
     setDrawerView("actions");
   }, [runId]);
+
+  useEffect(() => {
+    setDetailViewMode("user");
+  }, [runId, selectedAction?.toolCallId]);
 
   useEffect(() => {
     if (!diffItems.length) {
@@ -242,6 +250,11 @@ export default function AltusRunReplayDrawer({
     diffItems.find((item) => item.id === selectedDiffId) ||
     diffItems[diffItems.length - 1] ||
     null;
+  const canShowInternalDetail = Boolean(selectedAction?.internalDetail?.trim());
+  const selectedActionDetail =
+    detailViewMode === "internal" && canShowInternalDetail
+      ? selectedAction?.internalDetail || ""
+      : selectedAction?.detail || "";
 
   const refreshDeployment = async (deploymentId?: string) => {
     setDeploymentLoading(true);
@@ -475,8 +488,36 @@ export default function AltusRunReplayDrawer({
                               {getStatusBadgeCopy(selectedAction.status)}
                             </span>
                           </div>
+                          {canShowInternalDetail ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setDetailViewMode("user")}
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                                  detailViewMode === "user"
+                                    ? "border-zinc-300 bg-zinc-100 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                    : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
+                                )}
+                              >
+                                用户态
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDetailViewMode("internal")}
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                                  detailViewMode === "internal"
+                                    ? "border-zinc-300 bg-zinc-100 text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+                                    : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
+                                )}
+                              >
+                                内部态
+                              </button>
+                            </div>
+                          ) : null}
                           <pre className="whitespace-pre-wrap break-all rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                            {selectedAction.detail}
+                            {selectedActionDetail}
                           </pre>
                         </div>
                       ) : (

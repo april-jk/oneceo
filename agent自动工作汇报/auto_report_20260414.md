@@ -126,3 +126,34 @@
   - UI 负责发起自然语言部署意图
   - Altus / direct capability / 路由接口共用同一后端 deployment runtime
   - 部署详情查询仍保留独立读取接口，用于 deployment panel 和 replay 展示
+
+## 2026-04-16 managed deployment tools 并链记录
+
+- 已完成 Altus managed deployment tools 的正式并链：
+  - `deploy_application`
+  - `redeploy_application`
+  - `rollback_application_deployment`
+  - `get_application_deployment_status`
+- `altus-managed-deployment-tool-service.ts` 不再通过 `direct-mode-deployment-capability-service.ts` 间接转发部署动作。
+- 现在 managed tools 直接复用：
+  - `resolveTaskSessionRecord`
+  - `buildTaskSessionDeploymentResponse`
+  - `executeTaskSessionDeploymentAction`
+  - `getTaskSessionDeploymentErrorMessage`
+- 这意味着当前部署主链已经统一为：
+  - 平台 REST routes
+  - direct platform capability
+  - Altus managed tools
+  - 前端消息触发入口
+  - 全部收口到 `task-session-deployment-runtime-service.ts`
+- 已补 Altus deployment tool runtime 单测和 service 单测，确认 managed tool runtime 会携带 `userId` 下沉到统一 deployment runtime，并直接走 `deploy/redeploy/rollback/status` 对应动作。
+
+## 2026-04-16 Altus 部署结果双视图收口记录
+
+- 已把 Altus run 内部署工具的结果展示继续压缩为稳定的双视图投影：
+  - `userView`：只保留用户可理解的摘要、预览、详情
+  - `internalView`：承接 provider 状态、repair 检查项、raw error、baseline/debug 诊断
+- 投影写入点已前移到 `altus-run-coordinator.ts` 的 run event 持久化阶段，避免前端再自行猜测 deployment debug 文案。
+- `Home.tsx` 已优先消费 `userView`，旧事件无该字段时再回退到既有解析逻辑，降低历史数据兼容风险。
+- `AltusRunReplayDrawer.tsx` 已增加“用户态 / 内部态”切换，但默认始终停留在用户态；只有部署事件且存在内部细节时才展示切换按钮。
+- 已补 `altus-run-coordinator.test.ts`，锁定部署完成事件的 `userView/internalView` 结构，防止后续改动把底层错误重新暴露到用户主界面。

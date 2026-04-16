@@ -64,8 +64,8 @@ async function main() {
   });
   const sessionToken = await resolveSessionToken();
   await context.addCookies([
-    { name: 'app_session_id', value: sessionToken, url: WEB_BASE_URL, path: '/' },
-    { name: 'app_session_id', value: sessionToken, url: API_BASE_URL, path: '/' },
+    { name: 'app_session_id', value: sessionToken, url: WEB_BASE_URL },
+    { name: 'app_session_id', value: sessionToken, url: API_BASE_URL },
   ]);
   const page = await context.newPage();
 
@@ -85,31 +85,43 @@ async function main() {
     await preview.waitFor({ state: 'visible', timeout: 30000 });
 
     await preview.getByRole('button', { name: '部署' }).first().click();
-    await preview.getByRole('button', { name: '数据库' }).click();
-
-    await preview.getByRole('button', { name: /game_scores/ }).waitFor({ state: 'visible', timeout: 120000 });
-    await preview.getByRole('button', { name: /game_scores/ }).click();
-    await preview.locator('tbody').getByText('Ava').first().waitFor({ state: 'visible', timeout: 120000 });
-    await preview.locator('button').filter({ hasText: '设置' }).last().click();
-    await preview.getByText('switchback.proxy.rlwy.net', { exact: true }).waitFor({
+    await preview.getByRole('button', { name: '发布与访问' }).click();
+    await preview.getByText('网站地址', { exact: true }).waitFor({
       state: 'visible',
       timeout: 120000,
     });
 
     await preview.getByRole('button', { name: '仪表盘' }).click();
     await preview.getByRole('button', { name: '站点数据' }).click({ force: true });
-    await preview.getByText('分析').waitFor({ state: 'visible', timeout: 30000 });
-    await preview.getByText('没有数据').first().waitFor({ state: 'visible', timeout: 30000 });
+    await preview.getByText('当前平台已感知的数据', { exact: true }).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+    await preview.getByText('分析能力接入状态', { exact: true }).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+    await preview.getByText('页面访问统计', { exact: true }).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+    await page.screenshot({
+      path: '/Users/watson/codingProj/oneceo/apps/web/test-results/deployment-workbench-site-dashboard.png',
+      fullPage: true,
+    });
 
     await preview.getByRole('button', { name: '部署数据' }).click({ force: true });
     await preview.getByText('当前线上版本', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+    await preview.getByText('模板与平台接入基线', { exact: true }).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
     await preview.getByText('最近版本轨迹', { exact: true }).waitFor({ state: 'visible', timeout: 30000 });
 
     console.log(
       JSON.stringify({
         sessionId: SESSION_ID,
-        databaseTablesVisible: true,
-        databaseConnectionVisible: true,
+        deploymentOverviewVisible: true,
         dashboardDeploymentsVisible: true,
         dashboardSiteVisible: true,
         result: 'success',

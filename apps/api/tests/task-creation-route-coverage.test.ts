@@ -261,6 +261,7 @@ test('session-ownership protected attachment, deliverable, and deployment routes
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables/art-1/download' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment' },
+    { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment/template' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/deploy' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/redeploy', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/rollback', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },

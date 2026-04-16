@@ -4,6 +4,15 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export type RailwayAuthKind = 'bearer' | 'project';
+
+export type RailwayGraphqlAuth =
+  | string
+  | {
+      token: string;
+      kind?: RailwayAuthKind;
+    };
+
 function pickErrorMessage(payload: unknown) {
   if (!payload || typeof payload !== 'object') return '';
   const errors = (payload as { errors?: Array<{ message?: unknown }> }).errors;
@@ -11,11 +20,29 @@ function pickErrorMessage(payload: unknown) {
   return asText(errors[0]?.message);
 }
 
+function normalizeAuth(input: RailwayGraphqlAuth): { token: string; kind: RailwayAuthKind } {
+  if (typeof input === 'string') {
+    return {
+      token: asText(input),
+      kind: 'bearer',
+    };
+  }
+
+  return {
+    token: asText(input?.token),
+    kind: input?.kind === 'project' ? 'project' : 'bearer',
+  };
+}
+
 export async function requestRailwayGraphql<T>(
-  token: string,
+  authInput: RailwayGraphqlAuth,
   query: string,
   variables?: Record<string, unknown>
 ): Promise<T> {
+  const auth = normalizeAuth(authInput);
+  if (!auth.token) {
+    throw new Error('Railway API token 为空');
+  }
   const endpoint = new URL(process.env.RAILWAY_GRAPHQL_ENDPOINT || 'https://backboard.railway.app/graphql/v2');
   const requestBody = JSON.stringify({
     query,
@@ -36,7 +63,9 @@ export async function requestRailwayGraphql<T>(
             path: `${endpoint.pathname}${endpoint.search}`,
             method: 'POST',
             headers: {
-              Authorization: `Bearer ${token}`,
+              ...(auth.kind === 'project'
+                ? { 'Project-Access-Token': auth.token }
+                : { Authorization: `Bearer ${auth.token}` }),
               'Content-Type': 'application/json',
               'Content-Length': Buffer.byteLength(requestBody),
             },

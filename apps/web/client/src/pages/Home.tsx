@@ -282,9 +282,6 @@ export default function Home() {
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [altusReplayOpen, setAltusReplayOpen] = useState(false);
   const [altusReplayRunId, setAltusReplayRunId] = useState<string | null>(null);
-  const [altusReplayView, setAltusReplayView] = useState<"actions" | "files">(
-    "actions",
-  );
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
@@ -1543,7 +1540,6 @@ export default function Home() {
   ) => {
     if (!runId) return;
     setAltusReplayRunId(runId);
-    setAltusReplayView(options?.view || "actions");
     setAltusReplayOpen(true);
     if (options?.toolCallId) {
       setPendingAltusReplayToolCallId(options.toolCallId);
@@ -2221,11 +2217,17 @@ export default function Home() {
           onJumpToLatest={() =>
             setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
           }
-          activeView={altusReplayView}
-          onActiveViewChange={setAltusReplayView}
-          onOpenFile={(path) => {
-            setAltusReplayOpen(false);
-            openWorkspacePreview(path);
+          diffItems={diffItems}
+          runtimeReady={runtime.ready}
+          runtimeStarting={runtime.starting}
+          onEnsureRuntime={runtime.ensure}
+          onRequestStartDebugByMessage={() => {
+            void submitPrompt("启动网站调试功能");
+          }}
+          onOpenPreviewTab={(tab) => {
+            setPreviewOpen(true);
+            setPreviewMaximized(false);
+            setPreviewTab(tab);
           }}
         />
       ) : null}

@@ -223,6 +223,57 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'deploy_application',
+        description:
+          'Publish the current app workspace through the OneCEO managed deployment pipeline. Use this when the user asks to deploy, publish, go live, or上线 the current project.',
+        parameters: objectSchema({
+          notes: {
+            type: 'string',
+            description: 'Optional short note about the deploy request.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'redeploy_application',
+        description:
+          'Republish the current app workspace after code changes. Use this when the user asks to redeploy, republish, or publish the latest edits.',
+        parameters: objectSchema({
+          notes: {
+            type: 'string',
+            description: 'Optional short note about the redeploy request.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rollback_application_deployment',
+        description:
+          'Roll back the current app deployment to the previous available version when the user explicitly asks to revert or rollback deployment.',
+        parameters: objectSchema({
+          notes: {
+            type: 'string',
+            description: 'Optional short note about the rollback request.',
+          },
+        }),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_application_deployment_status',
+        description:
+          'Query the latest managed deployment status, current URL, and deployment health for the current app.',
+        parameters: objectSchema({}),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'read_file',
         description: 'Read a UTF-8 text file from the workspace.',
         parameters: objectSchema(

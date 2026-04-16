@@ -203,6 +203,43 @@ export type TaskCreationDeploymentRecord = {
   staticUrl?: string;
 };
 
+export type TaskCreationAnalyticsInfo = {
+  provider: "umami";
+  configured: boolean;
+  enabled: boolean;
+  status: "ready" | "pending" | "unconfigured" | "error";
+  host?: string;
+  websiteId?: string;
+  websiteName?: string;
+  domain?: string;
+  tag?: string;
+  pageviews?: number;
+  visits?: number;
+  visitors?: number;
+  events?: number;
+  activeVisitors?: number;
+  updatedAt?: string;
+  message?: string;
+  error?: string;
+};
+
+export type TaskCreationDeploymentResourceBinding = {
+  projectKey: string;
+  isolationMode: "session" | "default";
+  projectModel: "per_user";
+  environmentModel: "per_session";
+  tokenKind: "project";
+  tokenScope: "railway_project_environment";
+  tokenManagedBy: "oneceo_platform";
+  tokenId?: string;
+  tokenRotatedAt?: string;
+  repositoryOwner?: string;
+  repositoryName?: string;
+  repositoryFullName?: string;
+  repositoryUrl?: string;
+  repositoryBranch?: string;
+};
+
 export type TaskCreationDeploymentInfo = {
   configured: boolean;
   canDeploy: boolean;
@@ -222,6 +259,37 @@ export type TaskCreationDeploymentInfo = {
   deployments: TaskCreationDeploymentRecord[];
   logs: TaskCreationDeploymentLog[];
   missing: string[];
+  analytics?: TaskCreationAnalyticsInfo;
+  resourceBinding?: TaskCreationDeploymentResourceBinding;
+};
+
+export type TaskCreationDeploymentTemplateBaseline = {
+  status: "ready" | "needs_attention" | "unavailable";
+  checkedAt: string;
+  workspaceDetected: boolean;
+  analyticsMode: "workspace" | "platform_injected" | "missing" | "unknown";
+  manifestGenerated: boolean;
+  manifestPath?: string;
+  templateVersion?: string;
+  buildCommand?: string;
+  startCommand?: string;
+  healthcheckPath?: string;
+  features?: {
+    analytics: boolean;
+    userTracking: boolean;
+    database: "railway_postgres" | false;
+    auth: "optional" | false;
+    objectStorage: boolean;
+  };
+  checks: {
+    build: boolean | null;
+    start: boolean | null;
+    analytics: boolean | null;
+    healthcheck: boolean | null;
+    database: boolean | null;
+  };
+  warnings: string[];
+  errors: string[];
 };
 
 export type TaskCreationDatabaseConnectionInfo = {
@@ -914,9 +982,18 @@ export async function getTaskCreationDeploymentInfo(
   return result?.data || null;
 }
 
+export async function getTaskCreationDeploymentTemplateBaseline(
+  sessionId: string
+): Promise<TaskCreationDeploymentTemplateBaseline | null> {
+  const safeSessionId = encodeURIComponent(sessionId);
+  const url = `${getApiBaseUrl()}/api/task-creation/sessions/${safeSessionId}/deployment/template`;
+  const result = await fetchJson<{ data?: TaskCreationDeploymentTemplateBaseline }>(url);
+  return result?.data || null;
+}
+
 async function postTaskCreationDeploymentAction(
   sessionId: string,
-  action: "deploy" | "redeploy" | "rollback",
+  action: "deploy" | "redeploy" | "rollback" | "token/rotate",
   body?: Record<string, unknown>
 ): Promise<TaskCreationDeploymentInfo | null> {
   const safeSessionId = encodeURIComponent(sessionId);
@@ -953,6 +1030,12 @@ export async function rollbackTaskCreationSessionDeployment(
   deploymentId: string
 ): Promise<TaskCreationDeploymentInfo | null> {
   return postTaskCreationDeploymentAction(sessionId, "rollback", { deploymentId });
+}
+
+export async function rotateTaskCreationDeploymentToken(
+  sessionId: string
+): Promise<TaskCreationDeploymentInfo | null> {
+  return postTaskCreationDeploymentAction(sessionId, "token/rotate");
 }
 
 export async function getTaskCreationDatabaseInfo(

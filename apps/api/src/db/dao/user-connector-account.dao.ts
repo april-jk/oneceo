@@ -36,6 +36,14 @@ export class UserConnectorAccountDAO {
       .returning();
     return row;
   }
+
+  async deleteByUserAndConnectorKey(userId: string, connectorKey: string) {
+    const [row] = await db
+      .delete(userConnectorAccounts)
+      .where(and(eq(userConnectorAccounts.userId, userId), eq(userConnectorAccounts.connectorKey, connectorKey)))
+      .returning();
+    return row;
+  }
 }
 
 export const userConnectorAccountDAO = new UserConnectorAccountDAO();

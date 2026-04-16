@@ -206,7 +206,14 @@ async function executeRailwayGraphql<T>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<T> {
-  return requestRailwayGraphql<T>(token, query, variables);
+  return requestRailwayGraphql<T>(
+    {
+      token,
+      kind: 'project',
+    },
+    query,
+    variables
+  );
 }
 
 class RailwayDatabasePoolRegistry {

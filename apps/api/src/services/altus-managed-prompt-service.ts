@@ -157,6 +157,20 @@ function formatCodeList(values: readonly string[]): string {
   return values.map((value) => `\`${value}\``).join(', ');
 }
 
+function describeConnectorToolAccess(runtimeStatus: string): string {
+  switch (runtimeStatus) {
+    case 'connected':
+      return 'available';
+    case 'pending_recover':
+    case 'recovering':
+      return 'blocked_until_runtime_recovers';
+    case 'failed':
+      return 'blocked_attach_failed';
+    default:
+      return 'blocked_runtime_not_connected';
+  }
+}
+
 function formatConnectors(connectors: SessionConnectorStatus[]): string {
   const attached = connectors.filter((item) => item.attached);
   if (attached.length === 0) {
@@ -165,7 +179,12 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
 
   return attached
     .map((item) => {
-      const parts: string[] = [item.connectorKey];
+      const runtimeStatus = asText(item.runtimeStatus) || 'unknown';
+      const parts: string[] = [
+        item.connectorKey,
+        `runtime_status=${runtimeStatus}`,
+        `tool_access=${describeConnectorToolAccess(runtimeStatus)}`,
+      ];
       const profile = asText(item.attachedProfileName || item.selectedProfileName);
       if (profile) {
         parts.push(`profile=${profile}`);

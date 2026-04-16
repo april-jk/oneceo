@@ -24,8 +24,80 @@ function recoveryKeyFor(taskSessionId: string, orchestratorSessionId: string) {
   return `session:${taskSessionId}:sandbox:${orchestratorSessionId}:session_reconcile`;
 }
 
+const NOTION_REMOTE_SSE_TRANSPORT = 'remote_sse';
+const NOTION_REMOTE_SSE_MIGRATION_ERROR = 'notion_remote_sse_migration_pending_recover';
+
 export class SessionMcpRecoveryService {
   private runningTaskSessions = new Set<string>();
+
+  private buildNotionRemoteSseMigrationPatch(desiredState: unknown, now: Date) {
+    if (asText(desiredState) === 'attached') {
+      return {
+        runtimeStatus: 'pending_recover',
+        runtimeProviderId: null,
+        runtimeAttachedToolsJson: [],
+        runtimeTransport: NOTION_REMOTE_SSE_TRANSPORT,
+        runtimeLastStoppedAt: now,
+        recoveryQueuedAt: now,
+        recoveryStartedAt: null,
+        recoveryCompletedAt: null,
+        lastError: NOTION_REMOTE_SSE_MIGRATION_ERROR,
+      };
+    }
+    return {
+      runtimeStatus: 'detached',
+      runtimeProviderId: null,
+      runtimeAttachedToolsJson: [],
+      runtimeTransport: NOTION_REMOTE_SSE_TRANSPORT,
+      runtimeLastStoppedAt: now,
+      recoveryQueuedAt: null,
+      recoveryStartedAt: null,
+      recoveryCompletedAt: null,
+      lastError: null,
+    };
+  }
+
+  private async migrateLegacyNotionBindingsToRemoteSse(taskSessionId?: string) {
+    const bindings = taskSessionId
+      ? (await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId)).filter(
+          (item) => asText(item.connectorKey) === 'notion'
+        )
+      : await taskSessionConnectorBindingDAO.listByConnectorKey('notion');
+    const now = new Date();
+    const touchedTaskSessions = new Set<string>();
+    let migratedCount = 0;
+
+    for (const binding of bindings) {
+      if (asText(binding.runtimeTransport) === NOTION_REMOTE_SSE_TRANSPORT) {
+        continue;
+      }
+      const currentTaskSessionId = asText(binding.taskSessionId);
+      if (!currentTaskSessionId) {
+        continue;
+      }
+      await taskSessionConnectorBindingDAO.updateRuntime(
+        currentTaskSessionId,
+        'notion',
+        this.buildNotionRemoteSseMigrationPatch(binding.desiredState, now)
+      );
+      touchedTaskSessions.add(currentTaskSessionId);
+      migratedCount += 1;
+    }
+
+    for (const currentTaskSessionId of touchedTaskSessions) {
+      await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(currentTaskSessionId).catch(() => null);
+    }
+
+    if (migratedCount > 0) {
+      writeConnectorDebugLog('[SESSION_MCP_RECOVERY_NOTION_REMOTE_SSE_MIGRATED]', {
+        taskSessionId: taskSessionId || null,
+        migratedCount,
+        touchedTaskSessions: Array.from(touchedTaskSessions),
+      });
+    }
+
+    return migratedCount;
+  }
 
   private async isSessionAlreadyRecovered(
     taskSessionId: string,
@@ -107,6 +179,7 @@ export class SessionMcpRecoveryService {
   ) {
     const taskSessionId = await this.resolveTaskSessionId(orchestratorSessionId);
     if (!taskSessionId) return;
+    await this.migrateLegacyNotionBindingsToRemoteSse(taskSessionId);
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(taskSessionId);
     const now = new Date();
     for (const binding of bindings) {
@@ -176,6 +249,7 @@ export class SessionMcpRecoveryService {
   }
 
   async ensureSessionRecovered(taskSessionId: string, orchestratorSessionId: string) {
+    await this.migrateLegacyNotionBindingsToRemoteSse(taskSessionId);
     const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
     if (!environment || environment.status !== 'ready') {
       await this.markPendingRecoverByOrchestratorSessionId(
@@ -281,6 +355,17 @@ export class SessionMcpRecoveryService {
       );
       return;
     }
+
+    await this.migrateLegacyNotionBindingsToRemoteSse().catch((error) => {
+      writeConnectorDebugLog(
+        '[SESSION_MCP_RECOVERY_NOTION_REMOTE_SSE_MIGRATION_FAILED]',
+        {
+          limit,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'error'
+      );
+    });
 
     let jobs = [];
     try {

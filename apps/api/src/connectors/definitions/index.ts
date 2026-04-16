@@ -4,10 +4,20 @@ import { buildNotionDefinition, resolveNotionOauthProvider } from './notion';
 import { buildPostgresDefinition } from './postgres';
 import { buildSlackDefinition, resolveSlackOauthProvider } from './slack';
 import { buildSupabaseDefinition } from './supabase';
-import type { ConnectorDefinition, ConnectorKey, ConnectorOauthProvider } from './types';
+import type {
+  ConnectorDefinition,
+  ConnectorKey,
+  ConnectorOauthProvider,
+  RemoteMcpTransport,
+} from './types';
 import { buildVercelDefinition, resolveVercelOauthProvider } from './vercel';
 
-export type { ConnectorDefinition, ConnectorKey, ConnectorOauthProvider } from './types';
+export type {
+  ConnectorDefinition,
+  ConnectorKey,
+  ConnectorOauthProvider,
+  RemoteMcpTransport,
+} from './types';
 
 export const CONNECTOR_KEYS = [
   'github',

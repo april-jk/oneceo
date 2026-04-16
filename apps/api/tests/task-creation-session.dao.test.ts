@@ -56,3 +56,38 @@ test('sanitizeTimelineMetadataForStorage preserves attachment metadata needed fo
     options: ['A', 'B'],
   });
 });
+
+test('sanitizeTimelineMetadataForStorage normalizes workspace absolute paths to session-relative paths', () => {
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const workspaceRoot = `/home/user/opencode/workspaces/${sessionId}`;
+  const sanitized = (taskCreationSessionDAO as any).sanitizeTimelineMetadataForStorage(
+    {
+      workspacePath: workspaceRoot,
+      filePaths: [
+        `${workspaceRoot}/src/index.ts`,
+        `workspaces/${sessionId}/README.md`,
+        'src/index.ts',
+        '../unsafe.ts',
+      ],
+      fileChanges: [
+        { kind: 'update', path: `${workspaceRoot}/src/main.ts` },
+        { kind: 'create', path: `workspaces/${sessionId}/docs/spec.md` },
+        { kind: 'update', path: '../escape.ts' },
+        { kind: 'delete' },
+      ],
+      path: `${workspaceRoot}/docs/guide.md`,
+      targetPath: `workspaces/${sessionId}/docs/guide-next.md`,
+    },
+    sessionId
+  );
+
+  assert.deepEqual(sanitized.filePaths, ['src/index.ts', 'README.md']);
+  assert.deepEqual(sanitized.fileChanges, [
+    { kind: 'update', path: 'src/main.ts' },
+    { kind: 'create', path: 'docs/spec.md' },
+    { kind: 'update' },
+    { kind: 'delete' },
+  ]);
+  assert.equal(sanitized.path, 'docs/guide.md');
+  assert.equal(sanitized.targetPath, 'docs/guide-next.md');
+});

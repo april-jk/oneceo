@@ -2,8 +2,9 @@ import express from 'express';
 import { ensureTaskSessionRuntime } from './task-creation-routes';
 import { getPublicErrorMessage } from '../utils/error-response';
 import { createRequireInternalToken } from './internal-auth-middleware';
-import { taskCreationSessionDAO } from '../db/dao';
+import { appUserDAO, appUserSessionDAO, taskCreationSessionDAO } from '../db/dao';
 import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/task-creation/file-memory-store';
+import { isCanonicalAppUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
 const requireInternalToken = createRequireInternalToken({
@@ -21,25 +22,79 @@ function toIso(value: unknown): string {
   return new Date().toISOString();
 }
 
+function mapAdminStageFromStatus(status: unknown) {
+  const normalized = typeof status === 'string' ? status.trim() : '';
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'waiting_user') return 'clarifying';
+  return null;
+}
+
 function buildAdminSessionSummary(input: {
   dbSession: Awaited<ReturnType<typeof taskCreationSessionDAO.getSession>> | null;
   memorySession?: FileSessionRecord | null;
+  user?: Awaited<ReturnType<typeof resolveAdminSessionUser>>;
 }) {
   const memory = input.memorySession || null;
   const dbSession = input.dbSession;
   const id = memory?.id || dbSession?.id || '';
+  const dbStatus = typeof dbSession?.status === 'string' ? dbSession.status.trim() : '';
+  const memoryStatus = typeof memory?.status === 'string' ? memory.status.trim() : '';
+  const preferDbLifecycle =
+    Boolean(dbStatus) &&
+    dbStatus !== memoryStatus &&
+    (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user');
   return {
     id,
     userId: dbSession?.userId || null,
     title: memory?.title || `会话 ${id.slice(-6) || '-'}`,
-    status: memory?.status || dbSession?.status || 'in_progress',
-    stage: memory?.stage,
+    status: (preferDbLifecycle ? dbSession?.status : memory?.status) || dbSession?.status || 'in_progress',
+    stage: (preferDbLifecycle ? mapAdminStageFromStatus(dbSession?.status) : memory?.stage) || mapAdminStageFromStatus(dbSession?.status),
     phase: memory?.phase,
     runtime: memory?.runtime,
     pendingQuestion: memory?.pendingQuestion,
     pendingOptions: memory?.pendingOptions || [],
+    user: input.user || null,
     createdAt: toIso(memory?.createdAt || dbSession?.createdAt),
-    updatedAt: toIso(memory?.updatedAt || dbSession?.updatedAt),
+    updatedAt: toIso((preferDbLifecycle ? dbSession?.updatedAt : memory?.updatedAt) || dbSession?.updatedAt),
+  };
+}
+
+async function resolveAdminSessionUser(userId: unknown) {
+  const normalizedUserId = normalizeUserId(userId);
+  if (!normalizedUserId) return null;
+
+  if (!isCanonicalAppUserId(normalizedUserId)) {
+    return {
+      id: normalizedUserId,
+      source: 'legacy_user_id',
+      displayName: null,
+      email: null,
+      status: null,
+      lastLoginAt: null,
+      lastSeenAt: null,
+      ipAddress: null,
+      userAgent: null,
+      sessionCreatedAt: null,
+    };
+  }
+
+  const [user, latestSession] = await Promise.all([
+    appUserDAO.getById(normalizedUserId),
+    appUserSessionDAO.getLatestByUserId(normalizedUserId),
+  ]);
+
+  return {
+    id: normalizedUserId,
+    source: user ? 'app_user' : 'missing_app_user',
+    displayName: user?.displayName || null,
+    email: user?.email || null,
+    status: user?.status || null,
+    lastLoginAt: user?.lastLoginAt ? user.lastLoginAt.toISOString() : null,
+    lastSeenAt: latestSession?.lastSeenAt ? latestSession.lastSeenAt.toISOString() : null,
+    ipAddress: latestSession?.ipAddress || null,
+    userAgent: latestSession?.userAgent || null,
+    sessionCreatedAt: latestSession?.createdAt ? latestSession.createdAt.toISOString() : null,
   };
 }
 
@@ -50,12 +105,13 @@ router.get('/task-creation/admin/sessions', async (req, res) => {
     const dbSessions = await taskCreationSessionDAO.getRecentSessionsForAdmin(limit);
     const memorySessions = await taskCreationFileMemoryStore.listSessions(Math.max(limit * 3, limit));
     const memoryById = new Map(memorySessions.map((item) => [item.id, item]));
-    const data = dbSessions.map((item) =>
+    const data = await Promise.all(dbSessions.map(async (item) =>
       buildAdminSessionSummary({
         dbSession: item,
         memorySession: memoryById.get(item.id) || null,
+        user: await resolveAdminSessionUser(item.userId),
       })
-    );
+    ));
     return res.json({
       success: true,
       data,
@@ -84,7 +140,11 @@ router.get('/task-creation/admin/sessions/:sessionId', async (req, res) => {
     }
     return res.json({
       success: true,
-      data: buildAdminSessionSummary({ dbSession, memorySession }),
+      data: buildAdminSessionSummary({
+        dbSession,
+        memorySession,
+        user: await resolveAdminSessionUser(dbSession?.userId),
+      }),
     });
   } catch (error: any) {
     console.error('内部获取管理态会话详情失败:', error);

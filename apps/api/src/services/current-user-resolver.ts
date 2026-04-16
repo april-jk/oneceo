@@ -1,6 +1,6 @@
 import type express from 'express';
 
-export type CurrentUserSource = 'auth_context' | 'x-user-id';
+export type CurrentUserSource = 'auth_context';
 
 export type CurrentUserContext = {
   userId: string;
@@ -34,22 +34,13 @@ export class CurrentUserResolver {
       };
     }
 
-    const headerUser = pickString(req.header('X-User-Id'));
-    if (headerUser) {
-      return {
-        userId: headerUser,
-        source: 'x-user-id',
-        tenantKey: explicitTenantKey || headerUser,
-      };
-    }
-
     return null;
   }
 
   require(req: express.Request): CurrentUserContext {
     const resolved = this.resolve(req);
     if (!resolved?.userId) {
-      throw new Error('无法识别当前用户，请先登录或提供 X-User-Id');
+      throw new Error('无法识别当前用户，请先登录');
     }
     return resolved;
   }

@@ -58,6 +58,7 @@ test('markCompleted updates run status, session lifecycle, and completion event'
   assert.deepEqual((eventWriter.appendRunEvent as any).mock.calls[0]?.arguments, [
     'run-complete',
     'session-complete',
+    'user-1',
     'run_completed',
     {
       status: 'completed',
@@ -97,7 +98,23 @@ test('markFailed persists error timeline and failed event', async () => {
     },
   ]);
 
+  assert.equal((setupService.persistTimelineMessage as any).mock.callCount(), 2);
+
   assert.deepEqual((setupService.persistTimelineMessage as any).mock.calls[0]?.arguments, [
+    {
+      sessionId: 'session-failed',
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: '本次执行失败：tool schema invalid',
+      metadata: {
+        runId: 'run-failed',
+        error: 'tool schema invalid',
+      },
+      messageKey: 'managed:run-failed:failed_assistant',
+    },
+  ]);
+
+  assert.deepEqual((setupService.persistTimelineMessage as any).mock.calls[1]?.arguments, [
     {
       sessionId: 'session-failed',
       role: 'system',
@@ -113,6 +130,7 @@ test('markFailed persists error timeline and failed event', async () => {
   assert.deepEqual((eventWriter.appendRunEvent as any).mock.calls[0]?.arguments, [
     'run-failed',
     'session-failed',
+    'user-1',
     'run_failed',
     {
       status: 'failed',

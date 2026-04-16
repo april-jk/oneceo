@@ -16,7 +16,7 @@ type WorkspaceFileData = {
   isBinary?: boolean;
   encoding?: string;
   mimeType?: string;
-  previewType?: 'text' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+  previewType?: 'text' | 'markdown' | 'html' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
   previewAvailable?: boolean;
   binaryTooLarge?: boolean;
 };

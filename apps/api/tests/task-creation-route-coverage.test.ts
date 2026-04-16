@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
 import taskCreationRoutes from '../src/routes/task-creation-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { taskCreationSessionDAO } from '../src/db/dao';
 import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { sessionConnectorService } from '../src/services/session-connector-service';
@@ -24,6 +25,7 @@ const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
+const originalGetFileSession = fileStoreAny.getSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
 const originalAssertSessionOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListAvailableSkills = userSkillServiceAny.listAvailableSkills;
@@ -43,6 +45,7 @@ after(() => {
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
   sessionDaoAny.deleteSession = originalDeleteSession;
+  fileStoreAny.getSession = originalGetFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
   sessionConnectorAny.assertSessionOwnership = originalAssertSessionOwnership;
   userSkillServiceAny.listAvailableSkills = originalListAvailableSkills;
@@ -60,6 +63,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/task-creation', taskCreationRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -98,6 +102,8 @@ test('auth-only task-creation routes reject anonymous access', async () => {
     { method: 'PUT', path: '/api/task-creation/codex/runtime-config', body: { model: 'gpt-5.4' } },
     { method: 'POST', path: '/api/task-creation/sessions', body: { title: 'Session' } },
     { method: 'POST', path: '/api/task-creation/sessions/draft', body: { title: 'Draft' } },
+    { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/tree' },
+    { method: 'GET', path: '/api/task-creation/sessions/s-1/workspace/file?path=src/index.ts' },
   ];
 
   try {
@@ -136,12 +142,12 @@ test('skills and codex runtime routes bind requests to current user', async () =
 
   try {
     const skillsResponse = await fetch(`${server.origin}/api/task-creation/skills`, {
-      headers: { 'x-user-id': 'user-auth-1' },
+      headers: { 'x-test-user-id': 'user-auth-1' },
     });
     assert.equal(skillsResponse.status, 200);
 
     const getConfigResponse = await fetch(`${server.origin}/api/task-creation/codex/runtime-config`, {
-      headers: { 'x-user-id': 'user-auth-1' },
+      headers: { 'x-test-user-id': 'user-auth-1' },
     });
     assert.equal(getConfigResponse.status, 200);
 
@@ -149,7 +155,7 @@ test('skills and codex runtime routes bind requests to current user', async () =
       method: 'PUT',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'user-auth-1',
+        'x-test-user-id': 'user-auth-1',
       },
       body: JSON.stringify({ model: 'gpt-5.4-mini' }),
     });
@@ -187,7 +193,7 @@ test('owner-guarded task session routes reject foreign users', async () => {
         method: item.method,
         headers: {
           ...(item.body ? { 'content-type': 'application/json' } : {}),
-          'x-user-id': 'foreign-user',
+          'x-test-user-id': 'foreign-user',
         },
         body: item.body ? JSON.stringify(item.body) : undefined,
       });
@@ -221,7 +227,7 @@ test('intent and delete routes work for the owner', async () => {
 
   try {
     const intentResponse = await fetch(`${server.origin}/api/task-creation/sessions/s-2/intent`, {
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const intentPayload = await intentResponse.json();
     assert.equal(intentResponse.status, 200);
@@ -229,13 +235,51 @@ test('intent and delete routes work for the owner', async () => {
 
     const deleteResponse = await fetch(`${server.origin}/api/task-creation/sessions/s-2`, {
       method: 'DELETE',
-      headers: { 'x-user-id': 'owner-user' },
+      headers: { 'x-test-user-id': 'owner-user' },
     });
     const deletePayload = await deleteResponse.json();
     assert.equal(deleteResponse.status, 200);
     assert.equal(deletePayload.success, true);
     assert.equal(deletedSessionId, 's-2');
     assert.equal(deletedFileSessionId, 's-2');
+  } finally {
+    await server.close();
+  }
+});
+
+test('session detail prefers completed lifecycle from db over stale memory state', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'completed',
+    stage: 'completed',
+    updatedAt: new Date('2026-04-16T03:14:54.664Z'),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    title: 'Demo session',
+    status: 'in_progress',
+    stage: 'collecting',
+    phase: 'analysis',
+    mode: 'altus',
+    driver: 'altus',
+    executor: 'altus',
+    runtime: {},
+    messages: [],
+    createdAt: '2026-04-16T03:13:00.000Z',
+    updatedAt: '2026-04-16T03:14:11.865Z',
+  });
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/session-stale-status`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.status, 'completed');
+    assert.equal(payload.data.stage, 'completed');
   } finally {
     await server.close();
   }
@@ -257,6 +301,7 @@ test('session-ownership protected attachment, deliverable, and deployment routes
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables/art-1/download' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment' },
+    { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment/template' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/deploy' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/redeploy', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/rollback', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },
@@ -273,7 +318,7 @@ test('session-ownership protected attachment, deliverable, and deployment routes
         method: item.method,
         headers: {
           ...(item.headers || {}),
-          'x-user-id': 'foreign-user',
+          'x-test-user-id': 'foreign-user',
         },
         body: item.body,
       });

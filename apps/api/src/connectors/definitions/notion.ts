@@ -1,5 +1,7 @@
 import type { ConnectorDefinition, ConnectorOauthProvider } from './types';
 
+const NOTION_DEFAULT_MCP_REMOTE_URL = 'https://mcp.notion.com/sse';
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -13,14 +15,36 @@ function parseScopes(value: string | undefined, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+function resolveNotionRedirectUri(): string {
+  const configured = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
+  if (!configured) return '';
+
+  // Backward-compatible: allow full URL, but prefer path + FRONTEND_URL.
+  if (/^https?:\/\//i.test(configured)) {
+    return configured;
+  }
+
+  const frontendBaseUrl = asText(process.env.FRONTEND_URL);
+  if (!frontendBaseUrl) return '';
+
+  try {
+    const normalizedPath = configured.startsWith('/') ? configured : `/${configured}`;
+    return new URL(normalizedPath, frontendBaseUrl).toString();
+  } catch {
+    return '';
+  }
+}
+
 export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined {
   const clientId = asText(process.env.NOTION_CONNECTOR_CLIENT_ID);
   const clientSecret = asText(process.env.NOTION_CONNECTOR_CLIENT_SECRET);
   if (!clientId || !clientSecret) return undefined;
+  const redirectUri = resolveNotionRedirectUri();
   return {
     provider: 'notion',
     clientId,
     clientSecret,
+    redirectUri: redirectUri || undefined,
     authorizationUrl:
       asText(process.env.NOTION_CONNECTOR_AUTHORIZE_URL) ||
       'https://api.notion.com/v1/oauth/authorize',
@@ -42,45 +66,51 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
 
 export function buildNotionDefinition(): ConnectorDefinition {
   const oauth = resolveNotionOauthProvider();
-  const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
-  const oauthConfigured = Boolean(oauth);
-  const hasRemoteUrl = Boolean(remoteUrl);
-  const available = hasRemoteUrl && oauthConfigured;
-  const availabilityReason = !hasRemoteUrl
-    ? '部署环境未配置 Notion MCP remote URL'
-    : !oauthConfigured
+  const redirectUriRaw = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
+  const configuredRemoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
+  const oauthClientConfigured = Boolean(oauth);
+  const redirectUriConfigured = Boolean(asText(oauth?.redirectUri));
+  const oauthConfigured = oauthClientConfigured && redirectUriConfigured;
+  let remoteUrlValid = true;
+  let remoteAvailabilityReason: string | undefined;
+
+  try {
+    const parsed = new URL(configuredRemoteUrl || NOTION_DEFAULT_MCP_REMOTE_URL);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (!normalizedPath.endsWith('/sse')) {
+      remoteUrlValid = false;
+      remoteAvailabilityReason = 'Notion MCP remote URL 必须配置为 SSE 端点（/sse），不能继续使用 /mcp';
+    }
+  } catch {
+    remoteUrlValid = false;
+    remoteAvailabilityReason = 'Notion MCP remote URL 非法，请检查 NOTION_MCP_REMOTE_URL';
+  }
+
+  const available = remoteUrlValid && oauthConfigured;
+  const availabilityReason = !remoteUrlValid
+    ? remoteAvailabilityReason
+    : !oauthClientConfigured
       ? '部署环境未配置 Notion OAuth client'
-      : undefined;
+      : !redirectUriRaw
+        ? '部署环境未配置 Notion OAuth 回调路径'
+        : !redirectUriConfigured
+          ? 'Notion OAuth 回调地址解析失败，请检查 FRONTEND_URL 与 NOTION_CONNECTOR_REDIRECT_URI'
+          : undefined;
+
   return {
     key: 'notion',
     category: 'app',
     name: 'Notion',
-    description: '在平台外部管理 Notion 授权，并按 profile 将能力投影到 sandbox 内使用。',
+    description: '在平台外完成 Notion OAuth 授权，并将可访问内容范围投影到 sandbox 内使用。',
     icon: 'notion',
     featured: true,
     sortOrder: 20,
     authMode: 'oauth',
     available,
     availabilityReason,
-    configFields: [
-      {
-        key: 'profileName',
-        label: 'Profile Name',
-        type: 'text',
-        required: false,
-        placeholder: 'Notion Default',
-        description: '可选。留空时系统会自动生成默认 profile 名称。',
-      },
-      {
-        key: 'displayName',
-        label: 'Display Name',
-        type: 'text',
-        placeholder: 'Workspace Alias',
-        description: '可选。OAuth 成功后会优先用 Notion workspace 信息自动回填。',
-      },
-    ],
+    configFields: [],
     oauth: {
-      supported: Boolean(oauth),
+      supported: oauthConfigured,
       provider: oauth?.provider,
     },
     activityMatcherVerified: true,
@@ -88,8 +118,10 @@ export function buildNotionDefinition(): ConnectorDefinition {
     runtime: {
       type: 'remote',
       urlEnv: 'NOTION_MCP_REMOTE_URL',
+      urlDefault: NOTION_DEFAULT_MCP_REMOTE_URL,
       headersEnv: 'NOTION_MCP_REMOTE_HEADERS_JSON',
       headerTemplate: 'bearer-token',
+      transport: 'remote_sse',
     },
   };
 }

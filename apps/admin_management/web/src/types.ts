@@ -1,5 +1,23 @@
 export type VmState = 'running' | 'stopped' | 'paused' | 'error';
 export type HostStatus = 'online' | 'degraded' | 'offline' | 'maintenance';
+export type AdminThemeKey = string;
+
+export interface AdminThemeOption {
+  key: AdminThemeKey;
+  label: string;
+  family: string;
+  variant: string;
+  tone: 'light' | 'dark';
+  description: string;
+  swatches: string[];
+}
+
+export interface AdminThemeSettings {
+  currentTheme: AdminThemeKey;
+  envKey: string;
+  envPath: string;
+  themes: AdminThemeOption[];
+}
 
 export interface DashboardOverview {
   updatedAt: string;
@@ -197,7 +215,7 @@ export interface AuditLogEntry {
   id: string;
   timestamp: string;
   operator: string;
-  action: 'start' | 'stop';
+  action: string;
   targetVmId: string;
   sessionId?: string;
   result: 'success' | 'failed';
@@ -206,7 +224,32 @@ export interface AuditLogEntry {
 
 export interface AuditResponse {
   total: number;
+  filteredTotal: number;
+  limit: number;
+  offset: number;
   entries: AuditLogEntry[];
+  availableOperators?: string[];
+  availableActions?: string[];
+  availableTargets?: string[];
+}
+
+export interface AuditDetailResponse {
+  entry: AuditLogEntry;
+  relatedEntries: AuditLogEntry[];
+}
+
+export interface AgentStageDistributionItem {
+  stageKey: string;
+  label: string;
+  value: number;
+  statusSummary: Array<{ label: string; value: number }>;
+  recentSessions: Array<{
+    id: string;
+    title: string;
+    status: string;
+    updatedAt: string;
+    pendingQuestion?: string;
+  }>;
 }
 
 export interface ConversationSession {
@@ -214,10 +257,25 @@ export interface ConversationSession {
   title: string;
   status: 'in_progress' | 'waiting_user' | 'completed' | 'failed' | string;
   stage?: string;
+  executor?: string | null;
   pendingQuestion?: string;
   pendingOptions?: string[];
   createdAt: string;
   updatedAt: string;
+  user?: ConversationSessionUser | null;
+}
+
+export interface ConversationSessionUser {
+  id: string;
+  source: 'app_user' | 'legacy_user_id' | 'missing_app_user' | string;
+  displayName?: string | null;
+  email?: string | null;
+  status?: string | null;
+  lastLoginAt?: string | null;
+  lastSeenAt?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  sessionCreatedAt?: string | null;
 }
 
 export interface ConversationMessage {
@@ -262,6 +320,7 @@ export interface ConversationSessionDetailResponse {
     opencodeMessages: ConversationMessage[];
     stateTransitions?: ConversationStateTransition[];
     sandbox: {
+      binding?: ConversationSandboxBinding | null;
       primaryEnvironment: SandboxEnvironmentItem | null;
       relatedEnvironments: SandboxEnvironmentItem[];
     };
@@ -296,6 +355,18 @@ export interface ConversationSessionDetailResponse {
       errors: string[];
     };
   };
+}
+
+export interface ConversationSandboxBinding {
+  id: string;
+  sessionId: string;
+  sandboxId: string;
+  workspaceRoot?: string | null;
+  status?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+  lastActiveAt?: string | null;
 }
 
 export interface ConversationSessionInfraResponse {
@@ -343,6 +414,24 @@ export interface ConnectorGuideValidationResult {
   valid: boolean;
   errors: string[];
   warnings: string[];
+}
+
+export interface ConnectorCatalogItem {
+  key: string;
+  name: string;
+  available: boolean;
+  availabilityReason?: string;
+  visibleInMenu: boolean;
+}
+
+export interface ConnectorGuideCatalogSummary {
+  items: ConnectorCatalogItem[];
+  stats: {
+    total: number;
+    available: number;
+    unavailable: number;
+  };
+  updatedAt: string;
 }
 
 export interface SkillSummary {
@@ -606,7 +695,126 @@ export interface AgentManagementOverview {
     completed: number;
     failed: number;
   };
-  stageDistribution: Array<{ label: string; value: number }>;
+  stageDistribution: AgentStageDistributionItem[];
+}
+
+export interface AppUserSessionSummary {
+  id: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastSeenAt: string | null;
+  isActive: boolean;
+}
+
+export interface AppUserConversationSummary {
+  id: string;
+  userId?: string | null;
+  title: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface AppUserSandboxSummary {
+  sandboxId: string;
+  sessionId: string;
+  taskSessionId: string;
+  orchestratorSessionId?: string | null;
+  vmName?: string | null;
+  baseImage?: string | null;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  closedAt: string | null;
+}
+
+export interface AppUserLegacyMapping {
+  id: string;
+  legacyUserId: string;
+  source: string;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface AppUserListItem {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastLoginAt: string | null;
+  latestSession: AppUserSessionSummary | null;
+  sessionCount: number;
+  activeSessionCount: number;
+  conversationCount: number;
+  lastConversationAt: string | null;
+  sandboxCount: number;
+  lastSandboxAt: string | null;
+  legacyMappingCount: number;
+  lastLegacySeenAt: string | null;
+  lastActivityAt: string | null;
+  ownershipHealth: 'healthy' | 'legacy_mapping' | 'anomaly' | string;
+  ownershipReason: string;
+}
+
+export interface AppUserListResponse {
+  summary: {
+    totalUsers: number;
+    activeUsers7d: number;
+    disabledUsers: number;
+    ownershipAlertUsers: number;
+    generatedAt: string;
+  };
+  filters: {
+    limit: number;
+    query: string | null;
+    status: string;
+    activity: string;
+    hasSession: string;
+    hasConversation: string;
+    hasSandbox: string;
+    ownershipHealth: string;
+  };
+  items: AppUserListItem[];
+}
+
+export interface AppUserDetailResponse {
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+    lastLoginAt: string | null;
+  } | null;
+  stats: {
+    sessionCount: number;
+    activeSessionCount: number;
+    conversationCount: number;
+    sandboxCount: number;
+    legacyMappingCount: number;
+    lastActivityAt: string | null;
+    lastConversationAt: string | null;
+    lastSandboxAt: string | null;
+    lastLegacySeenAt: string | null;
+    ownershipHealth: 'healthy' | 'legacy_mapping' | 'anomaly' | string;
+    ownershipReason: string;
+  };
+  recentSessions: AppUserSessionSummary[];
+  recentConversations: AppUserConversationSummary[];
+  recentSandboxes: AppUserSandboxSummary[];
+  legacyMappings: AppUserLegacyMapping[];
+  revokedSessionCount?: number;
 }
 
 export interface SandboxEnvironmentItem {

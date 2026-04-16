@@ -23,9 +23,11 @@ import { ConnectorGuideManagementSection } from './components/ConnectorGuideMana
 import { KvmControlCenter } from './components/KvmControlCenter';
 import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
 import { SkillManagementSection } from './components/SkillManagementSection';
-import { UserManagementSection } from './components/UserManagementSection';
+import { DEFAULT_USER_MANAGEMENT_VIEW_STATE, UserManagementSection } from './components/UserManagementSection';
+import type { UserManagementViewState } from './components/UserManagementSection';
 import type {
   AdminThemeKey,
+  AdminThemeMode,
   AdminThemeSettings,
   AgentManagementOverview,
   AuditDetailResponse,
@@ -70,6 +72,17 @@ type UiToast = {
   message: string;
 };
 
+function sandboxDisplayLabel(detail: SandboxRuntimeDetail | null | undefined, fallback?: string | null) {
+  return (
+    detail?.runtime.taskTitle ||
+    detail?.runtime.sandboxId ||
+    detail?.liveSandboxDetail?.sandboxId ||
+    detail?.liveSandbox?.sandboxId ||
+    fallback ||
+    '当前环境'
+  );
+}
+
 type AuditFilterState = {
   query: string;
   operator: string;
@@ -82,6 +95,10 @@ type AuditFilterState = {
 };
 
 type ConversationDialogTab = 'overview' | 'interaction' | 'infra' | 'raw' | 'transitions';
+type AdminDetailOrigin = {
+  section: SectionKey;
+  trail: string;
+};
 
 // 左侧主导航分组：区分“运行态能力”和“平台配置能力”。
 type HostTrendPoint = {
@@ -95,89 +112,107 @@ type HostTrendPoint = {
 const SIDEBAR_STACK_BREAKPOINT = 920;
 const WHEEL_LINE_HEIGHT_PX = 16;
 const ADMIN_THEME_STORAGE_KEY = 'oneceo-admin-management-theme';
-const DEFAULT_ADMIN_THEME: AdminThemeKey = 'everforest-light';
+const ADMIN_THEME_MODE_STORAGE_KEY = 'oneceo-admin-management-theme-mode';
+const ADMIN_SIDEBAR_STORAGE_KEY = 'oneceo-admin-management-sidebar-collapsed';
+const DEFAULT_ADMIN_THEME: AdminThemeKey = 'github';
+const DEFAULT_ADMIN_THEME_MODE: AdminThemeMode = 'system';
 const FALLBACK_ADMIN_THEME_OPTIONS: AdminThemeSettings['themes'] = [
-  { key: 'github-light', label: 'GitHub Light', family: 'GitHub', variant: 'Light', tone: 'light', description: '清爽浅色，适合白天处理表格和日志。', swatches: ['#f6f8fa', '#24292f', '#0969da'] },
-  { key: 'github-dark', label: 'GitHub Dark', family: 'GitHub', variant: 'Dark', tone: 'dark', description: 'GitHub 暗色语义，适合夜间阅读。', swatches: ['#0d1117', '#e6edf3', '#2f81f7'] },
-  { key: 'github-dimmed', label: 'GitHub Dimmed', family: 'GitHub', variant: 'Dimmed', tone: 'dark', description: '低对比暗色，减少长时间日志阅读疲劳。', swatches: ['#22272e', '#adbac7', '#539bf5'] },
-  { key: 'dracula-classic', label: 'Dracula Classic', family: 'Dracula', variant: 'Classic', tone: 'dark', description: '高对比暗色，适合长时间排障。', swatches: ['#282a36', '#f8f8f2', '#bd93f9'] },
-  { key: 'dracula-soft', label: 'Dracula Soft', family: 'Dracula', variant: 'Soft', tone: 'dark', description: '降低紫色饱和度，保留 Dracula 的辨识度。', swatches: ['#2b2d3a', '#f3eefc', '#a98df2'] },
-  { key: 'everforest-light', label: 'Everforest Light', family: 'Everforest', variant: 'Light', tone: 'light', description: '柔和绿灰，适合默认运维控制台。', swatches: ['#f3f5f1', '#1f261f', '#16785f'] },
-  { key: 'everforest-dark', label: 'Everforest Dark', family: 'Everforest', variant: 'Dark', tone: 'dark', description: '森林暗色，兼顾控制台状态色可读性。', swatches: ['#2b3339', '#d3c6aa', '#a7c080'] },
-  { key: 'everforest-hard', label: 'Everforest Hard', family: 'Everforest', variant: 'Hard', tone: 'dark', description: '更深背景，适合大屏值守。', swatches: ['#1e2326', '#d3c6aa', '#83c092'] },
-  { key: 'onedark-classic', label: 'One Dark Classic', family: 'One Dark', variant: 'Classic', tone: 'dark', description: '克制暗色，偏工程编辑器风格。', swatches: ['#282c34', '#abb2bf', '#61afef'] },
-  { key: 'onedark-pro', label: 'One Dark Pro', family: 'One Dark', variant: 'Pro', tone: 'dark', description: '更强蓝绿强调，适合高频操作界面。', swatches: ['#1f2329', '#d7dae0', '#4fa6ed'] },
-  { key: 'catppuccin-latte', label: 'Catppuccin Latte', family: 'Catppuccin', variant: 'Latte', tone: 'light', description: '柔和浅色，保留 Catppuccin 的粉彩强调。', swatches: ['#eff1f5', '#4c4f69', '#8839ef'] },
-  { key: 'catppuccin-macchiato', label: 'Catppuccin Macchiato', family: 'Catppuccin', variant: 'Macchiato', tone: 'dark', description: '中等暗度，适合日夜混合使用。', swatches: ['#24273a', '#cad3f5', '#c6a0f6'] },
-  { key: 'catppuccin-mocha', label: 'Catppuccin Mocha', family: 'Catppuccin', variant: 'Mocha', tone: 'dark', description: '温和暗色，低疲劳阅读。', swatches: ['#1e1e2e', '#cdd6f4', '#cba6f7'] },
-  { key: 'tokyo-night-day', label: 'Tokyo Night Day', family: 'Tokyo Night', variant: 'Day', tone: 'light', description: 'Tokyo Night 的浅色变体，适合白天办公。', swatches: ['#e1e2e7', '#3760bf', '#2e7de9'] },
-  { key: 'tokyo-night-storm', label: 'Tokyo Night Storm', family: 'Tokyo Night', variant: 'Storm', tone: 'dark', description: '灰蓝暗色，适合控制台密集信息。', swatches: ['#24283b', '#c0caf5', '#7aa2f7'] },
-  { key: 'tokyo-night-night', label: 'Tokyo Night Night', family: 'Tokyo Night', variant: 'Night', tone: 'dark', description: '深夜蓝黑，突出状态色和代码块。', swatches: ['#1a1b26', '#c0caf5', '#7aa2f7'] },
-  { key: 'nord-polar-night', label: 'Nord Polar Night', family: 'Nord', variant: 'Polar Night', tone: 'dark', description: '冷静蓝灰，适合低饱和监控界面。', swatches: ['#2e3440', '#d8dee9', '#88c0d0'] },
-  { key: 'nord-frost', label: 'Nord Frost', family: 'Nord', variant: 'Frost', tone: 'light', description: 'Nord 的浅色霜感变体。', swatches: ['#eceff4', '#2e3440', '#5e81ac'] },
-  { key: 'solarized-light', label: 'Solarized Light', family: 'Solarized', variant: 'Light', tone: 'light', description: '经典低对比浅色，适合长文档阅读。', swatches: ['#fdf6e3', '#586e75', '#268bd2'] },
-  { key: 'solarized-dark', label: 'Solarized Dark', family: 'Solarized', variant: 'Dark', tone: 'dark', description: '经典低对比暗色，适合长时间终端风工作。', swatches: ['#002b36', '#93a1a1', '#268bd2'] },
-  { key: 'gruvbox-light', label: 'Gruvbox Light', family: 'Gruvbox', variant: 'Light', tone: 'light', description: '复古暖色浅色，适合低刺激阅读。', swatches: ['#fbf1c7', '#3c3836', '#b57614'] },
-  { key: 'gruvbox-dark', label: 'Gruvbox Dark', family: 'Gruvbox', variant: 'Dark', tone: 'dark', description: '复古暗色，高辨识度状态色。', swatches: ['#282828', '#ebdbb2', '#fabd2f'] },
-  { key: 'gruvbox-material', label: 'Gruvbox Material', family: 'Gruvbox', variant: 'Material', tone: 'dark', description: '更柔和的 Gruvbox 暗色变体。', swatches: ['#1d2021', '#ddc7a1', '#a9b665'] },
-  { key: 'monokai-classic', label: 'Monokai Classic', family: 'Monokai', variant: 'Classic', tone: 'dark', description: '经典高对比代码主题。', swatches: ['#272822', '#f8f8f2', '#a6e22e'] },
-  { key: 'monokai-pro', label: 'Monokai Pro', family: 'Monokai', variant: 'Pro', tone: 'dark', description: '更现代的 Monokai 暗色控制台。', swatches: ['#2d2a2e', '#fcfcfa', '#ffd866'] },
-  { key: 'material-ocean', label: 'Material Ocean', family: 'Material', variant: 'Ocean', tone: 'dark', description: 'Material 深海蓝，适合监控大屏。', swatches: ['#0f111a', '#b8c6db', '#82aaff'] },
-  { key: 'material-palenight', label: 'Material Palenight', family: 'Material', variant: 'Palenight', tone: 'dark', description: '柔和蓝紫暗色，适合夜间后台。', swatches: ['#292d3e', '#a6accd', '#c792ea'] },
-  { key: 'material-lighter', label: 'Material Lighter', family: 'Material', variant: 'Lighter', tone: 'light', description: 'Material 浅色，高可读表格体验。', swatches: ['#fafafa', '#546e7a', '#00bcd4'] },
-  { key: 'ayu-light', label: 'Ayu Light', family: 'Ayu', variant: 'Light', tone: 'light', description: '干净浅色，突出金色操作焦点。', swatches: ['#fafafa', '#5c6773', '#ff9940'] },
-  { key: 'ayu-mirage', label: 'Ayu Mirage', family: 'Ayu', variant: 'Mirage', tone: 'dark', description: '不太深的暗色，适合昼夜切换。', swatches: ['#1f2430', '#cbccc6', '#ffcc66'] },
-  { key: 'ayu-dark', label: 'Ayu Dark', family: 'Ayu', variant: 'Dark', tone: 'dark', description: '深色 Ayu，适合专注编辑。', swatches: ['#0f1419', '#bfbdb6', '#ffb454'] },
-  { key: 'rose-pine-dawn', label: 'Rose Pine Dawn', family: 'Rose Pine', variant: 'Dawn', tone: 'light', description: '柔和浅色，减少后台的冷硬感。', swatches: ['#faf4ed', '#575279', '#d7827e'] },
-  { key: 'rose-pine-moon', label: 'Rose Pine Moon', family: 'Rose Pine', variant: 'Moon', tone: 'dark', description: '中深玫瑰暗色，适合信息面板。', swatches: ['#232136', '#e0def4', '#c4a7e7'] },
-  { key: 'rose-pine-main', label: 'Rose Pine Main', family: 'Rose Pine', variant: 'Main', tone: 'dark', description: '经典 Rose Pine 暗色。', swatches: ['#191724', '#e0def4', '#ebbcba'] },
-  { key: 'kanagawa-lotus', label: 'Kanagawa Lotus', family: 'Kanagawa', variant: 'Lotus', tone: 'light', description: '水墨浅色，适合白天管理任务。', swatches: ['#f2ecbc', '#545464', '#b35b79'] },
-  { key: 'kanagawa-wave', label: 'Kanagawa Wave', family: 'Kanagawa', variant: 'Wave', tone: 'dark', description: '经典 Kanagawa 暗色。', swatches: ['#1f1f28', '#dcd7ba', '#7e9cd8'] },
-  { key: 'kanagawa-dragon', label: 'Kanagawa Dragon', family: 'Kanagawa', variant: 'Dragon', tone: 'dark', description: '更深的水墨暗色，适合夜间值守。', swatches: ['#181616', '#c5c9c5', '#8ba4b0'] },
-  { key: 'synthwave-84', label: 'SynthWave 84', family: 'SynthWave', variant: '84', tone: 'dark', description: '霓虹复古暗色，适合个性化后台。', swatches: ['#262335', '#f92aad', '#72f1b8'] },
-  { key: 'synthwave-dim', label: 'SynthWave Dim', family: 'SynthWave', variant: 'Dim', tone: 'dark', description: '降低霓虹亮度，兼顾可读性。', swatches: ['#241b2f', '#f6d5ff', '#36f9f6'] },
-  { key: 'night-owl', label: 'Night Owl', family: 'Night Owl', variant: 'Dark', tone: 'dark', description: '夜间编码经典主题，高可读蓝色调。', swatches: ['#011627', '#d6deeb', '#82aaff'] },
-  { key: 'night-owl-light', label: 'Night Owl Light', family: 'Night Owl', variant: 'Light', tone: 'light', description: 'Night Owl 的浅色变体。', swatches: ['#fbfbfb', '#403f53', '#4876d6'] },
-  { key: 'arc-light', label: 'Arc Light', family: 'Arc', variant: 'Light', tone: 'light', description: '现代 Linux 风浅色。', swatches: ['#f5f6f7', '#2f343f', '#5294e2'] },
-  { key: 'arc-dark', label: 'Arc Dark', family: 'Arc', variant: 'Dark', tone: 'dark', description: '现代 Linux 风暗色。', swatches: ['#2f343f', '#d3dae3', '#5294e2'] },
+  {
+    key: 'github',
+    label: 'GitHub',
+    description: '中性克制，适合高密度表格、索引和日志。',
+    lightSwatches: ['#f6f8fa', '#24292f', '#0969da'],
+    darkSwatches: ['#0d1117', '#e6edf3', '#2f81f7'],
+  },
+  {
+    key: 'nord',
+    label: 'Nord',
+    description: '冷静蓝灰，长时间值守也不刺眼。',
+    lightSwatches: ['#eceff4', '#2e3440', '#5e81ac'],
+    darkSwatches: ['#2e3440', '#e5e9f0', '#88c0d0'],
+  },
+  {
+    key: 'rose-pine',
+    label: 'Rose Pine',
+    description: '柔和暖调，让后台界面更温和但不发灰。',
+    lightSwatches: ['#faf4ed', '#575279', '#b4637a'],
+    darkSwatches: ['#191724', '#e0def4', '#c4a7e7'],
+  },
+];
+const FALLBACK_ADMIN_THEME_MODES: AdminThemeSettings['modes'] = [
+  { key: 'light', label: '亮色', description: '始终使用亮色外观。' },
+  { key: 'dark', label: '暗色', description: '始终使用暗色外观。' },
+  { key: 'system', label: '跟随系统', description: '自动跟随设备当前的明暗模式。' },
 ];
 const FALLBACK_ADMIN_THEME_KEYS = new Set(FALLBACK_ADMIN_THEME_OPTIONS.map((item) => item.key));
-const ADMIN_THEME_ALIASES = new Map<string, AdminThemeKey>([
-  ['github', 'github-light'],
-  ['dracula', 'dracula-classic'],
-  ['everforest', 'everforest-light'],
-  ['onedark', 'onedark-classic'],
-  ['catppuccin', 'catppuccin-mocha'],
-  ['tokyo-night', 'tokyo-night-night'],
-  ['nord', 'nord-polar-night'],
-  ['solarized', 'solarized-light'],
-  ['gruvbox', 'gruvbox-dark'],
-  ['monokai', 'monokai-classic'],
-  ['material', 'material-ocean'],
-  ['ayu', 'ayu-mirage'],
-  ['rose-pine', 'rose-pine-main'],
-  ['kanagawa', 'kanagawa-wave'],
-  ['synthwave', 'synthwave-84'],
-  ['night-owl-dark', 'night-owl'],
-  ['arc', 'arc-light'],
-]);
 
 function normalizeAdminThemeKey(value: unknown): AdminThemeKey {
   const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (ADMIN_THEME_ALIASES.has(key)) {
-    return ADMIN_THEME_ALIASES.get(key) || DEFAULT_ADMIN_THEME;
-  }
   return FALLBACK_ADMIN_THEME_KEYS.has(key) ? key : DEFAULT_ADMIN_THEME;
 }
 
-function getAdminThemeTone(themeKey: AdminThemeKey): 'light' | 'dark' {
+function normalizeAdminThemeMode(value: unknown): AdminThemeMode {
+  const mode = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return mode === 'light' || mode === 'dark' || mode === 'system' ? mode : DEFAULT_ADMIN_THEME_MODE;
+}
+
+function readLegacyAdminThemePreference(value: unknown): { theme: AdminThemeKey; mode: AdminThemeMode | null } {
+  const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (FALLBACK_ADMIN_THEME_KEYS.has(key)) {
+    return { theme: key, mode: null };
+  }
+  if (key === 'github' || key.startsWith('github-')) {
+    return { theme: 'github', mode: key === 'github' || key.includes('light') ? 'light' : 'dark' };
+  }
+  if (key === 'nord' || key.startsWith('nord-')) {
+    return { theme: 'nord', mode: key.includes('frost') ? 'light' : 'dark' };
+  }
+  if (key === 'rosepine' || key === 'rose-pine' || key.startsWith('rose-pine-')) {
+    return { theme: 'rose-pine', mode: key.includes('dawn') ? 'light' : 'dark' };
+  }
+  if (key.includes('light') || key.includes('dawn') || key.includes('day') || key.includes('frost')) {
+    return { theme: DEFAULT_ADMIN_THEME, mode: 'light' };
+  }
+  if (
+    key.includes('dark') ||
+    key.includes('night') ||
+    key.includes('moon') ||
+    key.includes('main') ||
+    key.includes('dimmed') ||
+    key.includes('storm') ||
+    key.includes('hard') ||
+    key.includes('mocha') ||
+    key.includes('macchiato') ||
+    key.includes('polar')
+  ) {
+    return { theme: DEFAULT_ADMIN_THEME, mode: 'dark' };
+  }
+  return { theme: DEFAULT_ADMIN_THEME, mode: null };
+}
+
+function getSystemThemeTone() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function resolveAdminThemeTone(mode: AdminThemeMode, systemTone: 'light' | 'dark') {
+  return mode === 'system' ? systemTone : mode;
+}
+
+function resolveAdminThemeVariant(themeKey: AdminThemeKey, tone: 'light' | 'dark') {
   const normalizedTheme = normalizeAdminThemeKey(themeKey);
-  return FALLBACK_ADMIN_THEME_OPTIONS.find((item) => item.key === normalizedTheme)?.tone || 'light';
+  if (normalizedTheme === 'nord') {
+    return tone === 'dark' ? 'nord-polar-night' : 'nord-frost';
+  }
+  if (normalizedTheme === 'rose-pine') {
+    return tone === 'dark' ? 'rose-pine-main' : 'rose-pine-dawn';
+  }
+  return tone === 'dark' ? 'github-dark' : 'github-light';
 }
 
 function readStoredAdminTheme(): AdminThemeKey {
   if (typeof window === 'undefined') return DEFAULT_ADMIN_THEME;
-  return normalizeAdminThemeKey(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY));
+  return readLegacyAdminThemePreference(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY)).theme;
 }
 
 function persistStoredAdminTheme(themeKey: AdminThemeKey) {
@@ -185,12 +220,36 @@ function persistStoredAdminTheme(themeKey: AdminThemeKey) {
   window.localStorage.setItem(ADMIN_THEME_STORAGE_KEY, themeKey);
 }
 
-function applyAdminTheme(themeKey: AdminThemeKey) {
+function readStoredAdminThemeMode(): AdminThemeMode {
+  if (typeof window === 'undefined') return DEFAULT_ADMIN_THEME_MODE;
+  const storedMode = window.localStorage.getItem(ADMIN_THEME_MODE_STORAGE_KEY);
+  if (storedMode) return normalizeAdminThemeMode(storedMode);
+  const legacy = readLegacyAdminThemePreference(window.localStorage.getItem(ADMIN_THEME_STORAGE_KEY));
+  return legacy.mode || DEFAULT_ADMIN_THEME_MODE;
+}
+
+function persistStoredAdminThemeMode(mode: AdminThemeMode) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ADMIN_THEME_MODE_STORAGE_KEY, mode);
+}
+
+function readStoredSidebarCollapsed() {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(ADMIN_SIDEBAR_STORAGE_KEY) === 'true';
+}
+
+function persistStoredSidebarCollapsed(collapsed: boolean) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ADMIN_SIDEBAR_STORAGE_KEY, collapsed ? 'true' : 'false');
+}
+
+function applyAdminTheme(themeKey: AdminThemeKey, mode: AdminThemeMode, systemTone: 'light' | 'dark') {
   if (typeof document === 'undefined') return;
-  const normalizedTheme = normalizeAdminThemeKey(themeKey);
-  const tone = getAdminThemeTone(normalizedTheme);
-  document.documentElement.dataset.adminTheme = normalizedTheme;
+  const tone = resolveAdminThemeTone(mode, systemTone);
+  const resolvedTheme = resolveAdminThemeVariant(themeKey, tone);
+  document.documentElement.dataset.adminTheme = resolvedTheme;
   document.documentElement.dataset.adminTone = tone;
+  document.documentElement.dataset.adminThemeMode = mode;
   document.documentElement.style.colorScheme = tone;
 }
 
@@ -231,10 +290,10 @@ const NAV_ITEMS: Array<{
     key: 'user',
     group: 'runtime',
     label: '用户管理',
-    subtitle: 'App User',
+    subtitle: '普通用户账号',
     tag: 'USR',
-    description: '查看 app_users 账号状态、登录来源和对话/Sandbox 归属。',
-    signal: '账号归属',
+    description: '查看普通用户账号状态、登录来源，以及对话和 Sandbox 的关联情况。',
+    signal: '账号关联',
   },
   {
     key: 'audit',
@@ -391,6 +450,17 @@ function toTimestamp(value?: string | null) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatRelativeTime(value?: string | null) {
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return '-';
+  const deltaMs = Date.now() - timestamp;
+  if (deltaMs < 60 * 1000) return '刚刚';
+  if (deltaMs < 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 1000))} 分钟前`;
+  if (deltaMs < 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 60 * 1000))} 小时前`;
+  if (deltaMs < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (24 * 60 * 60 * 1000))} 天前`;
+  return formatDateTime(value);
+}
+
 function stateClassName(state: string) {
   return `status-pill status-${state}`;
 }
@@ -439,7 +509,7 @@ function conversationUserMeta(user?: ConversationSession['user'] | null) {
 
 function conversationUserSourceLabel(source?: string | null) {
   if (source === 'app_user') return '用户账号';
-  if (source === 'legacy_user_id') return '旧版用户标识';
+  if (source === 'legacy_user_id') return '旧账号标识';
   if (source === 'missing_app_user') return '账号记录缺失';
   return source || '未知来源';
 }
@@ -470,7 +540,7 @@ function conversationMessageTypeLabel(messageType?: string | null) {
   if (messageType === 'opencode_event') return 'OpenCode 事件';
   if (messageType === 'opencode_status') return 'OpenCode 状态';
   if (messageType === 'opencode_error') return 'OpenCode 异常';
-  if (messageType === 'opencode_user_input') return '执行器转发输入';
+  if (messageType === 'opencode_user_input') return '系统转发输入';
   if (messageType === 'codex_user_input') return 'Codex 转发输入';
   if (messageType === 'status_update') return '状态更新';
   if (messageType === 'session_started') return '会话开始';
@@ -513,6 +583,19 @@ function adminRoleLabel(role?: string | null) {
 function adminDisplayNameLabel(displayName?: string | null, loginName?: string | null) {
   if (displayName === 'Platform Admin') return '平台管理员';
   return displayName || loginName || '-';
+}
+
+function adminInitials(displayName?: string | null, loginName?: string | null) {
+  const source = adminDisplayNameLabel(displayName, loginName).trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return parts
+      .slice(0, 2)
+      .map((part) => Array.from(part)[0] || '')
+      .join('')
+      .toUpperCase();
+  }
+  return Array.from(source.replace(/\s+/g, '')).slice(0, 2).join('').toUpperCase() || 'AD';
 }
 
 function capabilityStatusLabel(status?: string | null) {
@@ -1473,10 +1556,10 @@ function messageMetaSummary(message: ConversationMessage): string[] {
 
   if (toolName) parts.push(`工具: ${toolName}`);
   if (eventType) parts.push(`事件: ${eventType}`);
-  if (executor) parts.push(`执行器: ${executorLabel(executor)}`);
+  if (executor) parts.push(`处理方式: ${executorLabel(executor)}`);
   if (stage) parts.push(`阶段: ${conversationStageLabel(stage)}`);
   if (tone) parts.push(`语气: ${conversationToneLabel(tone)}`);
-  if (runId) parts.push(`Run: ${runId.slice(0, 8)}`);
+  if (runId) parts.push(`运行批次: ${runId.slice(0, 8)}`);
   if (!parts.length && question) parts.push(`问题: ${summarizeText(question, 80)}`);
   if (!parts.length && outputPreview) parts.push(`输出: ${summarizeText(outputPreview, 80)}`);
   return parts;
@@ -1528,19 +1611,19 @@ function messageDiagnosticSummary(message: ConversationMessage): string | null {
   const toolName = messageToolName(message);
   const metadata = toRecord(message.metadata);
   if (type === 'opencode_error') {
-    return '执行器链路异常，优先确认 sandbox 端口、订阅状态和 OpenCode 可达性。';
+    return '处理链路异常，优先确认 Sandbox 端口、订阅状态和 OpenCode 是否可用。';
   }
   if (type === 'error') {
-    return '当前轮次出现显式错误，需要结合 metadata 与时间线继续排障。';
+    return '当前这一轮出现明确错误，建议结合附带信息和时间线继续排查。';
   }
   if (type === 'clarification_request') {
     return '当前轮次在等待用户补充信息或确认下一步。';
   }
   if (type === 'executor_event' && eventType === 'tool_call_failed') {
-    return `${toolName || '工具'} 执行失败，优先检查参数、workspace 与 runtime 状态。`;
+    return `${toolName || '工具'} 执行失败，优先检查参数、工作目录和运行状态。`;
   }
   if (type === 'executor_event' && eventType === 'tool_call_completed') {
-    return `${toolName || '工具'} 已完成，可结合 outputPreview 判断是否产生有效结果。`;
+    return `${toolName || '工具'} 已完成，可结合结果摘要判断是否真的产出了可用结果。`;
   }
   if (type === 'status_update' && metadataString(metadata, 'stage') === 'failed') {
     return '会话进入 failed 阶段，本轮已终止。';
@@ -1549,10 +1632,10 @@ function messageDiagnosticSummary(message: ConversationMessage): string | null {
     return '交付已生成，建议核对文件与最终回复是否一致。';
   }
   if (type === 'status_update' && eventType === 'run_completed') {
-    return '本轮 managed run 已结束。';
+    return '这一轮自动处理已经结束。';
   }
   if (type === 'opencode_event') {
-    return '执行器原始事件，通常用于补充上下文，不代表用户可见主回复。';
+    return '这是系统底层记录，主要用于补充上下文，不代表用户会直接看到的回复。';
   }
   return null;
 }
@@ -2935,7 +3018,13 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<SectionKey>('sandbox');
   const [themeSettings, setThemeSettings] = useState<AdminThemeSettings | null>(null);
   const [currentTheme, setCurrentTheme] = useState<AdminThemeKey>(() => readStoredAdminTheme());
+  const [currentThemeMode, setCurrentThemeMode] = useState<AdminThemeMode>(() => readStoredAdminThemeMode());
   const [themeSaving, setThemeSaving] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [systemThemeTone, setSystemThemeTone] = useState<'light' | 'dark'>(() => getSystemThemeTone());
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readStoredSidebarCollapsed());
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false);
 
   const [kvmOverview, setKvmOverview] = useState<DashboardOverview | null>(null);
   const [vms, setVms] = useState<VmItem[]>([]);
@@ -2957,6 +3046,9 @@ export default function App() {
   const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState('');
   const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
+  const [conversationDialogOrigin, setConversationDialogOrigin] = useState<AdminDetailOrigin | null>(null);
+  const [conversationDialogZIndex, setConversationDialogZIndex] = useState(240);
+  const [conversationSectionOrigin, setConversationSectionOrigin] = useState<AdminDetailOrigin | null>(null);
   const [showOpencodePayload, setShowOpencodePayload] = useState(false);
   const [conversationGovernanceFilter, setConversationGovernanceFilter] = useState<string | null>(null);
   const [conversationEnvironmentGroupFilter, setConversationEnvironmentGroupFilter] = useState<string | null>(null);
@@ -2966,6 +3058,7 @@ export default function App() {
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
   const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
+  const [userManagementViewState, setUserManagementViewState] = useState<UserManagementViewState>(DEFAULT_USER_MANAGEMENT_VIEW_STATE);
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -2974,6 +3067,9 @@ export default function App() {
   const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
   const [sandboxArchiveHistory, setSandboxArchiveHistory] = useState<SandboxArchiveHistoryEntry[]>([]);
   const [sandboxModalOpen, setSandboxModalOpen] = useState(false);
+  const [sandboxModalOrigin, setSandboxModalOrigin] = useState<AdminDetailOrigin | null>(null);
+  const [sandboxModalZIndex, setSandboxModalZIndex] = useState(250);
+  const [sandboxSectionOrigin, setSandboxSectionOrigin] = useState<AdminDetailOrigin | null>(null);
   const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>('runtime');
   const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState('');
   const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState('all');
@@ -2989,7 +3085,6 @@ export default function App() {
   const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>('overview');
   const [sandboxProcessToolView, setSandboxProcessToolView] = useState<SandboxProcessToolView>('processes');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
-  const [pendingSandboxJumpId, setPendingSandboxJumpId] = useState<string | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
   const [sandboxCommandInput, setSandboxCommandInput] = useState('pwd && ls -la');
   const [sandboxTerminalOutput, setSandboxTerminalOutput] = useState('');
@@ -3013,6 +3108,7 @@ export default function App() {
     '{"template":"opencode-playwright-mcp-v4-neko-lockapi-20260413","timeoutMs":300000}'
   );
   const [sandboxCreateDrawerOpen, setSandboxCreateDrawerOpen] = useState(false);
+  const overlayZIndexRef = useRef(260);
   const [archiveDetailRow, setArchiveDetailRow] = useState<{
     id: string;
     snapshotKey: string | null;
@@ -3103,31 +3199,43 @@ export default function App() {
     [dismissToast]
   );
 
-  const handleThemeChange = useCallback(
-    async (event: React.ChangeEvent<HTMLSelectElement>) => {
-      const nextTheme = normalizeAdminThemeKey(event.target.value);
+  const saveThemePreferences = useCallback(
+    async (nextThemeRaw: AdminThemeKey, nextModeRaw: AdminThemeMode) => {
+      const nextTheme = normalizeAdminThemeKey(nextThemeRaw);
+      const nextMode = normalizeAdminThemeMode(nextModeRaw);
+      if (nextTheme === currentTheme && nextMode === currentThemeMode) return;
+
       const previousTheme = currentTheme;
+      const previousMode = currentThemeMode;
       setCurrentTheme(nextTheme);
+      setCurrentThemeMode(nextMode);
       persistStoredAdminTheme(nextTheme);
+      persistStoredAdminThemeMode(nextMode);
       setThemeSaving(true);
 
       try {
-        const settings = await api.updateAdminTheme(nextTheme);
+        const settings = await api.updateAdminTheme({ themeKey: nextTheme, mode: nextMode });
         setThemeSettings(settings);
         setCurrentTheme(settings.currentTheme);
+        setCurrentThemeMode(settings.currentMode);
         persistStoredAdminTheme(settings.currentTheme);
+        persistStoredAdminThemeMode(settings.currentMode);
         const themeLabel =
           settings.themes.find((item) => item.key === settings.currentTheme)?.label || settings.currentTheme;
-        pushToast('success', '主题已保存', `${themeLabel} 已写入 ${settings.envKey}`);
+        const modeLabel =
+          settings.modes.find((item) => item.key === settings.currentMode)?.label || settings.currentMode;
+        pushToast('success', '外观已保存', `${themeLabel} · ${modeLabel} 已写入 ${settings.envKey} / ${settings.envModeKey}`);
       } catch (themeError) {
         setCurrentTheme(previousTheme);
+        setCurrentThemeMode(previousMode);
         persistStoredAdminTheme(previousTheme);
-        setError(themeError instanceof Error ? themeError.message : '主题保存失败');
+        persistStoredAdminThemeMode(previousMode);
+        setError(themeError instanceof Error ? themeError.message : '外观保存失败');
       } finally {
         setThemeSaving(false);
       }
     },
-    [currentTheme, pushToast]
+    [currentTheme, currentThemeMode, pushToast]
   );
 
   const runBlockingTask = useCallback(
@@ -3227,17 +3335,25 @@ export default function App() {
     setConversationDetailLoading(true);
   }, [selectedSessionId]);
 
+  const claimOverlayZIndex = useCallback(() => {
+    overlayZIndexRef.current += 10;
+    return overlayZIndexRef.current;
+  }, []);
+
   const openConversationDialog = useCallback(
-    (sessionId: string, initialTab: ConversationDialogTab = 'overview') => {
+    (sessionId: string, initialTab: ConversationDialogTab = 'overview', origin: AdminDetailOrigin | null = null) => {
       selectConversationSession(sessionId);
       setConversationDialog({ sessionId });
+      setConversationDialogOrigin(origin);
       setConversationDialogTab(initialTab);
+      setConversationDialogZIndex(claimOverlayZIndex());
     },
-    [selectConversationSession]
+    [claimOverlayZIndex, selectConversationSession]
   );
 
   const closeConversationDialog = useCallback(() => {
     setConversationDialog(null);
+    setConversationDialogOrigin(null);
   }, []);
 
   const exportConversationDetail = useCallback(() => {
@@ -3480,6 +3596,52 @@ export default function App() {
     setSandboxFullInfo(result);
   }, []);
 
+  const currentConversationOrigin = useCallback((): AdminDetailOrigin | null => {
+    if (conversationDialog) {
+      const dialogLabel = conversationDetail?.session.title || conversationDialog.sessionId;
+      return {
+        section: 'conversation',
+        trail: conversationDialogOrigin?.trail
+          ? `${conversationDialogOrigin.trail} / ${dialogLabel}`
+          : `对话详情 / ${dialogLabel}`,
+      };
+    }
+    if (activeSection === 'conversation' && selectedSessionId) {
+      return {
+        section: 'conversation',
+        trail: `对话管理 / ${conversationDetail?.session.title || selectedSessionId}`,
+      };
+    }
+    return null;
+  }, [activeSection, conversationDetail?.session.title, conversationDialog, conversationDialogOrigin?.trail, selectedSessionId]);
+
+  const currentSandboxOrigin = useCallback((): AdminDetailOrigin | null => {
+    if (sandboxModalOpen && sandboxRuntimeDetail) {
+      const sandboxLabel = sandboxDisplayLabel(sandboxRuntimeDetail);
+      return {
+        section: 'sandbox',
+        trail: sandboxModalOrigin?.trail
+          ? `${sandboxModalOrigin.trail} / ${sandboxLabel}`
+          : `Sandbox 详情 / ${sandboxLabel}`,
+      };
+    }
+    if (activeSection === 'sandbox') {
+      return {
+        section: 'sandbox',
+        trail: `Sandbox 管理 / ${sandboxDisplayLabel(sandboxRuntimeDetail)}`,
+      };
+    }
+    return null;
+  }, [activeSection, sandboxModalOpen, sandboxModalOrigin?.trail, sandboxRuntimeDetail]);
+
+  const auditOriginForEntry = useCallback(
+    (entry: AuditLogEntry): AdminDetailOrigin => ({
+      section: 'audit',
+      trail: `审计日志 / ${auditActionLabel(entry.action)} / ${entry.id}`,
+    }),
+    []
+  );
+
   const openTemplateDetail = useCallback(async (templateId: string) => {
     try {
       await runBlockingTask(
@@ -3501,12 +3663,12 @@ export default function App() {
   }, [runBlockingTask]);
 
   const openSandboxDetail = useCallback(
-    async (sandboxId: string) => {
+    async (sandboxId: string, origin: AdminDetailOrigin | null = null) => {
       try {
         await runBlockingTask(
           '正在加载 Sandbox 详情',
           async () => {
-            const detail = await loadSandboxRuntimeDetail(sandboxId);
+            await loadSandboxRuntimeDetail(sandboxId);
             setSandboxDetailTab('overview');
             setSandboxProcessToolView('processes');
             setSandboxConnectivityResult(null);
@@ -3525,6 +3687,8 @@ export default function App() {
             setSandboxProcessFetchedAt(null);
             setSandboxPortResult(null);
             setSandboxPortFetchedAt(null);
+            setSandboxModalOrigin(origin);
+            setSandboxModalZIndex(claimOverlayZIndex());
             setSandboxModalOpen(true);
           },
           { fallbackError: '加载 Sandbox 详情失败' }
@@ -3533,11 +3697,12 @@ export default function App() {
         setError(detailError instanceof Error ? detailError.message : '加载 Sandbox 详情失败');
       }
     },
-    [loadSandboxRuntimeDetail, runBlockingTask]
+    [claimOverlayZIndex, loadSandboxRuntimeDetail, runBlockingTask]
   );
 
   const closeSandboxDetail = useCallback(() => {
     setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
   }, []);
 
   const closeTemplateDetail = useCallback(() => {
@@ -3556,18 +3721,44 @@ export default function App() {
   const openConversationSessionFromSandbox = useCallback((taskSessionId?: string | null) => {
     if (!taskSessionId) return;
     setError(null);
-    setSandboxModalOpen(false);
-    setConversationDetailLoading(true);
-    setSelectedSessionId(taskSessionId);
-    setActiveSection('conversation');
-  }, []);
+    openConversationDialog(taskSessionId, 'overview', currentSandboxOrigin());
+  }, [currentSandboxOrigin, openConversationDialog]);
 
-  const openSandboxFromConversation = useCallback((sandboxId?: string | null) => {
+  const openSandboxFromConversation = useCallback((sandboxId?: string | null, origin: AdminDetailOrigin | null = null) => {
     if (!sandboxId) return;
     setError(null);
-    setPendingSandboxJumpId(sandboxId);
+    void openSandboxDetail(sandboxId, origin || currentConversationOrigin());
+  }, [currentConversationOrigin, openSandboxDetail]);
+
+  const openConversationFromAudit = useCallback((entry: AuditLogEntry) => {
+    if (!entry.sessionId) return;
+    setError(null);
+    openConversationDialog(entry.sessionId, 'overview', auditOriginForEntry(entry));
+  }, [auditOriginForEntry, openConversationDialog]);
+
+  const openSandboxFromAudit = useCallback((entry: AuditLogEntry) => {
+    if (!entry.targetVmId) return;
+    setError(null);
+    void openSandboxDetail(entry.targetVmId, auditOriginForEntry(entry));
+  }, [auditOriginForEntry, openSandboxDetail]);
+
+  const openConversationManagementView = useCallback(() => {
+    setConversationSectionOrigin(conversationDialogOrigin);
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setActiveSection('conversation');
+  }, [conversationDialogOrigin]);
+
+  const openSandboxManagementView = useCallback(() => {
+    setSandboxSectionOrigin(sandboxModalOrigin);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
     setActiveSection('sandbox');
-  }, []);
+  }, [sandboxModalOrigin]);
 
   const closeSandbox = useCallback(
     async (sandboxId: string) => {
@@ -4299,8 +4490,43 @@ export default function App() {
   }, [bootstrapAdminSession]);
 
   useEffect(() => {
-    applyAdminTheme(currentTheme);
-  }, [currentTheme]);
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = () => {
+      setSystemThemeTone(mediaQuery.matches ? 'dark' : 'light');
+    };
+    handleChange();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    applyAdminTheme(currentTheme, currentThemeMode, systemThemeTone);
+  }, [currentTheme, currentThemeMode, systemThemeTone]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return undefined;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
+        setSettingsMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSettingsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [settingsMenuOpen]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4313,11 +4539,13 @@ export default function App() {
         if (stopped) return;
         setThemeSettings(settings);
         setCurrentTheme(settings.currentTheme);
+        setCurrentThemeMode(settings.currentMode);
         persistStoredAdminTheme(settings.currentTheme);
+        persistStoredAdminThemeMode(settings.currentMode);
       })
       .catch((themeError) => {
         if (stopped) return;
-        setError(themeError instanceof Error ? themeError.message : '主题设置加载失败');
+        setError(themeError instanceof Error ? themeError.message : '外观设置加载失败');
       });
     return () => {
       stopped = true;
@@ -4357,27 +4585,6 @@ export default function App() {
     }
     loadSection(activeSection, true);
   }, [activeSection, authStatus, loadSection]);
-
-  useEffect(() => {
-    if (activeSection === 'conversation') {
-      return;
-    }
-    setConversationDialog(null);
-  }, [activeSection]);
-
-  useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
-    if (activeSection !== 'sandbox' || !pendingSandboxJumpId) {
-      return;
-    }
-
-    const targetSandboxId = pendingSandboxJumpId;
-    void openSandboxDetail(targetSandboxId).finally(() => {
-      setPendingSandboxJumpId((current) => (current === targetSandboxId ? null : current));
-    });
-  }, [activeSection, authStatus, openSandboxDetail, pendingSandboxJumpId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4471,7 +4678,7 @@ export default function App() {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (!selectedSessionId || activeSection !== 'conversation') {
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
       return;
     }
 
@@ -4506,26 +4713,28 @@ export default function App() {
 
     void run();
 
-    void api.listConversationSessions(200)
-      .then((sessions) => {
-        if (!cancelled) {
-          setConversationSessions(sessions.sessions);
-        }
-      })
-      .catch(() => {
-        // ignore list refresh error here; detail view has higher priority
-      });
+    if (activeSection === 'conversation') {
+      void api.listConversationSessions(200)
+        .then((sessions) => {
+          if (!cancelled) {
+            setConversationSessions(sessions.sessions);
+          }
+        })
+        .catch(() => {
+          // ignore list refresh error here; detail view has higher priority
+        });
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, selectedSessionId]);
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (!selectedSessionId || activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
+    if (!selectedSessionId || !conversationAutoRefreshEnabled || (activeSection !== 'conversation' && !conversationDialog)) {
       return;
     }
 
@@ -4553,7 +4762,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSection, authStatus, selectedSessionId, conversationAutoRefreshEnabled]);
+  }, [activeSection, authStatus, conversationAutoRefreshEnabled, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -4589,7 +4798,7 @@ export default function App() {
     if (authStatus !== 'authenticated') {
       return;
     }
-    if (!selectedSessionId || activeSection !== 'conversation') {
+    if (!selectedSessionId || (activeSection !== 'conversation' && !conversationDialog)) {
       return;
     }
 
@@ -4653,7 +4862,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeSection, authStatus, selectedSessionId]);
+  }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
 
   useEffect(() => {
     setConversationDialogTab('overview');
@@ -4775,7 +4984,7 @@ export default function App() {
       }
       map.set(executorValue, {
         value: executorValue,
-        label: executorValue === '__unknown_executor__' ? '未记录执行器' : executorLabel(executorValue),
+        label: executorValue === '__unknown_executor__' ? '未记录处理方式' : executorLabel(executorValue),
         count: 1,
         });
       return map;
@@ -4796,7 +5005,7 @@ export default function App() {
       ? `用户 ${conversationUserOptions.find((item) => item.value === conversationUserFilter)?.label || conversationUserFilter}`
       : '',
     conversationExecutorFilter !== 'all'
-      ? `执行器 ${conversationExecutorOptions.find((item) => item.value === conversationExecutorFilter)?.label || conversationExecutorFilter}`
+      ? `处理方式 ${conversationExecutorOptions.find((item) => item.value === conversationExecutorFilter)?.label || conversationExecutorFilter}`
       : '',
     conversationUpdatedFromDate ? `开始 ${conversationUpdatedFromDate}` : '',
     conversationUpdatedToDate ? `结束 ${conversationUpdatedToDate}` : '',
@@ -4909,6 +5118,16 @@ export default function App() {
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
   })();
+  const auditActiveFilterCount = [
+    auditAppliedFilters.query.trim() ? 'query' : '',
+    auditAppliedFilters.operator !== 'all' ? 'operator' : '',
+    auditAppliedFilters.action !== 'all' ? 'action' : '',
+    auditAppliedFilters.result !== 'all' ? 'result' : '',
+    auditAppliedFilters.sessionId.trim() ? 'sessionId' : '',
+    auditAppliedFilters.targetVmId.trim() ? 'targetVmId' : '',
+    auditAppliedFilters.from ? 'from' : '',
+    auditAppliedFilters.to ? 'to' : '',
+  ].filter(Boolean).length;
   const selectedAgentStage =
     agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
     agentOverview?.stageDistribution[0] ||
@@ -5053,6 +5272,21 @@ export default function App() {
       phases: Array.from(phaseSet),
     };
   })();
+  const transitionActiveFilterCount = [
+    transitionQuery.trim() ? 'query' : '',
+    transitionFilters.fromTime ? 'fromTime' : '',
+    transitionFilters.toTime ? 'toTime' : '',
+    transitionFilters.fromStage !== 'all' ? 'fromStage' : '',
+    transitionFilters.toStage !== 'all' ? 'toStage' : '',
+    transitionFilters.status !== 'all' ? 'status' : '',
+    transitionFilters.phase !== 'all' ? 'phase' : '',
+    transitionFilters.messageType !== 'all' ? 'messageType' : '',
+    transitionFilters.role !== 'all' ? 'role' : '',
+    transitionFilters.agent !== 'all' ? 'agent' : '',
+    transitionFilters.tone !== 'all' ? 'tone' : '',
+  ].filter(Boolean).length;
+  const latestFilteredTransition = filteredTransitions[filteredTransitions.length - 1] || null;
+  const latestRelatedEnvironmentUpdatedAt = recentRelatedEnvironments[0]?.updatedAt || primaryEnvironment?.updatedAt || null;
   const conversationReplayItems = buildConversationReplayItems(conversationMessages);
   const conversationDialogDetail =
     conversationDialog && conversationDetail?.session.id === conversationDialog.sessionId
@@ -5060,233 +5294,283 @@ export default function App() {
       : null;
   const conversationDialogLoading = Boolean(conversationDialog) && !conversationDialogDetail;
 
-  const renderConversationTransitionsPanel = () => (
-    <>
-      <div className="panel-subtitle panel-subtitle-row">
-        <span>状态机流转 ({stateTransitions.length})</span>
-        <div className="panel-subtitle-actions">
-          <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
-            时间轴
-          </button>
-          <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
-            列表
-          </button>
-          <button
-            type="button"
-            className="secondary-btn"
-            onClick={() => {
-              setTransitionQuery('');
-              setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
-              setTransitionAdvancedFiltersOpen(false);
-            }}
-          >
-            重置筛选
-          </button>
-        </div>
-      </div>
+  const renderConversationTransitionsPanel = () => {
+    const stagePreview = transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无';
+    const statusPreview = transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无';
+    const phasePreview = transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无';
 
-      <div className="state-filter">
-        <div className="state-filter-row">
-          <label className="state-filter-field">
-            <span>搜索</span>
-            <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
-          </label>
-          <label className="state-filter-field">
-            <span>开始时间</span>
-            <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
-          </label>
-          <label className="state-filter-field">
-            <span>结束时间</span>
-            <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
-          </label>
-        </div>
-        <div className="state-filter-advanced-toggle">
-          <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
-            {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
-          </button>
-        </div>
-        {transitionAdvancedFiltersOpen ? (
-          <div className="state-filter-grid">
+    return (
+      <>
+        <article className="sub-panel state-transition-overview">
+          <div className="state-transition-overview-top">
+            <div>
+              <p className="section-tag">状态流转</p>
+              <h3 className="state-transition-overview-title">会话状态机轨迹</h3>
+              <p className="panel-caption state-transition-overview-caption">
+                {latestFilteredTransition
+                  ? `最近一次流转发生在 ${formatDateTime(latestFilteredTransition.at)}。`
+                  : '当前没有可展示的流转记录。'}
+              </p>
+            </div>
+            <div className="state-transition-overview-actions">
+              <div className="panel-subtitle-actions">
+                <button type="button" className={`toggle-btn ${transitionView === 'timeline' ? 'active' : ''}`} onClick={() => setTransitionView('timeline')}>
+                  时间轴
+                </button>
+                <button type="button" className={`toggle-btn ${transitionView === 'list' ? 'active' : ''}`} onClick={() => setTransitionView('list')}>
+                  列表
+                </button>
+              </div>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => {
+                  setTransitionQuery('');
+                  setTransitionFilters(DEFAULT_TRANSITION_FILTERS);
+                  setTransitionAdvancedFiltersOpen(false);
+                }}
+              >
+                重置筛选
+              </button>
+            </div>
+          </div>
+
+          <div className="state-transition-overview-stats">
+            <article className="state-transition-overview-stat">
+              <span>筛选后流转</span>
+              <strong>{transitionStats.filtered}</strong>
+              <small>总计 {transitionStats.total} 条</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中阶段</span>
+              <strong>{transitionStats.stages.length}</strong>
+              <small>{stagePreview}</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中状态</span>
+              <strong>{transitionStats.statuses.length}</strong>
+              <small>{statusPreview}</small>
+            </article>
+            <article className="state-transition-overview-stat">
+              <span>命中阶段相位</span>
+              <strong>{transitionStats.phases.length}</strong>
+              <small>{phasePreview}</small>
+            </article>
+          </div>
+
+          <div className="state-transition-overview-meta">
+            <span className="session-status">筛选条件 {transitionActiveFilterCount}</span>
+            <span className="session-status">{transitionView === 'timeline' ? '时间轴视图' : '列表视图'}</span>
+            {latestFilteredTransition?.trigger?.messageType ? (
+              <span className="session-status">
+                最近触发 {conversationMessageTypeLabel(latestFilteredTransition.trigger.messageType)}
+              </span>
+            ) : null}
+          </div>
+        </article>
+
+        <div className="state-filter state-filter-modern">
+          <div className="state-filter-summary-row">
+            <p className="panel-caption state-filter-caption">按时间、阶段或消息内容定位关键流转。</p>
+            <button type="button" className="secondary-btn" onClick={() => setTransitionAdvancedFiltersOpen((prev) => !prev)}>
+              {transitionAdvancedFiltersOpen ? '收起高级筛选' : '展开高级筛选'}
+            </button>
+          </div>
+          <div className="state-filter-row">
             <label className="state-filter-field">
-              <span>起始阶段</span>
-              <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              <span>搜索</span>
+              <input type="search" placeholder="按阶段 / 状态 / 消息内容搜索" value={transitionQuery} onChange={(event) => setTransitionQuery(event.target.value)} />
             </label>
             <label className="state-filter-field">
-              <span>目标阶段</span>
-              <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              <span>开始时间</span>
+              <input type="datetime-local" value={transitionFilters.fromTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromTime: event.target.value }))} />
             </label>
             <label className="state-filter-field">
-              <span>状态</span>
-              <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>阶段相位</span>
-              <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>消息类型</span>
-              <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>角色</span>
-              <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>智能体</span>
-              <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
-              </select>
-            </label>
-            <label className="state-filter-field">
-              <span>语气</span>
-              <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
-                <option value="all">全部</option>
-                {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
-              </select>
+              <span>结束时间</span>
+              <input type="datetime-local" value={transitionFilters.toTime} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toTime: event.target.value }))} />
             </label>
           </div>
-        ) : null}
-      </div>
+          {transitionAdvancedFiltersOpen ? (
+            <div className="state-filter-grid">
+              <label className="state-filter-field">
+                <span>起始阶段</span>
+                <select value={transitionFilters.fromStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, fromStage: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.fromStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>目标阶段</span>
+                <select value={transitionFilters.toStage} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, toStage: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.toStages.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>状态</span>
+                <select value={transitionFilters.status} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, status: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>阶段相位</span>
+                <select value={transitionFilters.phase} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, phase: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.phases.map((value) => <option key={value} value={value}>{conversationPhaseLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>消息类型</span>
+                <select value={transitionFilters.messageType} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, messageType: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.messageTypes.map((value) => <option key={value} value={value}>{conversationMessageTypeLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>角色</span>
+                <select value={transitionFilters.role} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, role: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.roles.map((value) => <option key={value} value={value}>{conversationRoleLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>智能体</span>
+                <select value={transitionFilters.agent} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.agents.map((value) => <option key={value} value={value}>{conversationAgentLabel(value)}</option>)}
+                </select>
+              </label>
+              <label className="state-filter-field">
+                <span>语气</span>
+                <select value={transitionFilters.tone} onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}>
+                  <option value="all">全部</option>
+                  {transitionOptions.tones.map((value) => <option key={value} value={value}>{conversationToneLabel(value)}</option>)}
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
 
-      <div className="kpi-grid conversation-kpi-grid">
-        <article className="kpi-card">
-          <p className="kpi-title">筛选后流转</p>
-          <p className="kpi-value">{transitionStats.filtered}</p>
-          <p className="kpi-meta">总计 {transitionStats.total} 条</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中阶段</p>
-          <p className="kpi-value">{transitionStats.stages.length}</p>
-          <p className="kpi-meta">{transitionStats.stages.slice(0, 3).map((value) => conversationStageLabel(value)).join(' / ') || '无'}</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中状态</p>
-          <p className="kpi-value">{transitionStats.statuses.length}</p>
-          <p className="kpi-meta">{transitionStats.statuses.slice(0, 3).map((value) => statusLabel(value)).join(' / ') || '无'}</p>
-        </article>
-        <article className="kpi-card">
-          <p className="kpi-title">命中阶段相位</p>
-          <p className="kpi-value">{transitionStats.phases.length}</p>
-          <p className="kpi-meta">{transitionStats.phases.slice(0, 3).map((value) => conversationPhaseLabel(value)).join(' / ') || '无'}</p>
-        </article>
-      </div>
-
-      {transitionView === 'timeline' ? (
-        <div className="state-timeline">
-          {filteredTransitions.length === 0 ? (
-            <p className="empty">当前筛选条件下无状态流转记录。</p>
-          ) : (
-            filteredTransitions.map((transition, index) => {
+        {transitionView === 'timeline' ? (
+          <div className="state-timeline">
+            {filteredTransitions.length === 0 ? (
+              <p className="empty">当前筛选条件下无状态流转记录。</p>
+            ) : (
+              filteredTransitions.map((transition, index) => {
+                const trigger = transition.trigger || {};
+                const triggerTags = [
+                  trigger.messageType ? `消息 ${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                  trigger.role ? `角色 ${conversationRoleLabel(trigger.role)}` : '',
+                  trigger.agent ? `智能体 ${conversationAgentLabel(trigger.agent)}` : '',
+                  trigger.tone ? `语气 ${conversationToneLabel(trigger.tone)}` : '',
+                  trigger.messageId ? `消息 ID ${trigger.messageId}` : '',
+                ].filter(Boolean);
+                const prev = index > 0 ? filteredTransitions[index - 1] : null;
+                const gap =
+                  prev?.at && transition.at
+                    ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
+                    : '-';
+                const transitionNumber = String(index + 1).padStart(2, '0');
+                const fromStage = conversationStageLabel(transition.from?.stage);
+                const toStage = conversationStageLabel(transition.to?.stage);
+                const toStatus = statusLabel(transition.to?.status || 'unknown');
+                const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
+                return (
+                  <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
+                    <div className="state-timeline-rail" aria-hidden="true">
+                      <span className="state-timeline-step mono">{transitionNumber}</span>
+                    </div>
+                    <div className="state-timeline-card">
+                      <div className="state-timeline-head">
+                        <div className="state-timeline-title-block">
+                          <span className={traceLevelClass('info')}>状态</span>
+                          <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
+                        </div>
+                        <div className="state-timeline-time">
+                          <span>{formatDateTime(transition.at)}</span>
+                          <span className="state-gap">间隔 {gap}</span>
+                        </div>
+                      </div>
+                      <div className="state-transition-flow">
+                        <span className="state-chip from">{fromStage}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip status">{toStatus}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip phase">{toPhase}</span>
+                        <span className="state-flow-arrow" aria-hidden="true">→</span>
+                        <span className="state-chip to">{toStage}</span>
+                      </div>
+                      <div className="state-timeline-meta">
+                        <span>
+                          <small>变更前</small>
+                          <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
+                        </span>
+                        <span>
+                          <small>变更后</small>
+                          <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
+                        </span>
+                      </div>
+                      <div className="state-trigger-stack">
+                        {triggerTags.length ? (
+                          <div className="state-trigger-badges">
+                            {triggerTags.map((tag) => (
+                              <span key={`${transitionNumber}-${tag}`} className="state-trigger-badge">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {trigger.content ? (
+                          <div className="state-trigger-content-card">
+                            <span className="state-trigger-content-label">触发内容</span>
+                            <p className="state-trigger-line">{summarizeText(trigger.content, 240)}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+        ) : (
+          <div className="trace-list">
+            {filteredTransitions.map((transition, index) => {
               const trigger = transition.trigger || {};
-              const triggerSummary = [
-                trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-                trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-                trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-                trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-                trigger.messageId ? `id=${trigger.messageId}` : '',
-              ].filter(Boolean).join(' / ');
-              const prev = index > 0 ? filteredTransitions[index - 1] : null;
-              const gap =
-                prev?.at && transition.at
-                  ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
-                  : '-';
-              const transitionNumber = String(index + 1).padStart(2, '0');
-              const fromStage = conversationStageLabel(transition.from?.stage);
-              const toStage = conversationStageLabel(transition.to?.stage);
-              const toStatus = statusLabel(transition.to?.status || 'unknown');
-              const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
+              const triggerTags = [
+                trigger.messageType ? `消息 ${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                trigger.role ? `角色 ${conversationRoleLabel(trigger.role)}` : '',
+                trigger.agent ? `智能体 ${conversationAgentLabel(trigger.agent)}` : '',
+                trigger.tone ? `语气 ${conversationToneLabel(trigger.tone)}` : '',
+                trigger.messageId ? `消息 ID ${trigger.messageId}` : '',
+              ].filter(Boolean);
               return (
-                <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
-                  <div className="state-timeline-rail" aria-hidden="true">
-                    <span className="state-timeline-step mono">{transitionNumber}</span>
-                  </div>
-                  <div className="state-timeline-card">
-                    <div className="state-timeline-head">
-                      <div className="state-timeline-title-block">
-                        <span className={traceLevelClass('info')}>state</span>
-                        <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
-                      </div>
-                      <div className="state-timeline-time">
-                        <span>{formatDateTime(transition.at)}</span>
-                        <span className="state-gap">间隔 {gap}</span>
-                      </div>
+                <article key={`${transition.at || 'transition'}-${index}`} className="trace-item state-transition-list-item">
+                  <p className="trace-head">
+                    <span className={traceLevelClass('info')}>状态</span>
+                    <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
+                    <span>{formatDateTime(transition.at)}</span>
+                  </p>
+                  <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
+                  {triggerTags.length ? (
+                    <div className="state-trigger-badges">
+                      {triggerTags.map((tag) => (
+                        <span key={`${index}-${tag}`} className="state-trigger-badge">
+                          {tag}
+                        </span>
+                      ))}
                     </div>
-                    <div className="state-timeline-meta">
-                      <span>
-                        <small>From</small>
-                        <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
-                      </span>
-                      <span>
-                        <small>To</small>
-                        <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
-                      </span>
-                    </div>
-                    <div className="state-transition-flow">
-                      <span className="state-chip from">{fromStage}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip status">{toStatus}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip phase">{toPhase}</span>
-                      <span className="state-flow-arrow" aria-hidden="true">→</span>
-                      <span className="state-chip to">{toStage}</span>
-                    </div>
-                    <div className="state-trigger-stack">
-                      {triggerSummary ? <p className="state-trigger-line">触发: {triggerSummary}</p> : null}
-                      {trigger.content ? <p className="state-trigger-line">内容: {summarizeText(trigger.content, 240)}</p> : null}
-                    </div>
-                  </div>
+                  ) : null}
+                  {trigger.content ? <p className="state-trigger-line">{summarizeText(trigger.content, 240)}</p> : null}
                 </article>
               );
-            })
-          )}
-        </div>
-      ) : (
-        <div className="trace-list">
-          {filteredTransitions.map((transition, index) => {
-            const trigger = transition.trigger || {};
-            const triggerSummary = [
-              trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
-              trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
-              trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
-              trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
-              trigger.messageId ? `id=${trigger.messageId}` : '',
-            ].filter(Boolean).join(' / ');
-            return (
-              <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
-                <p className="trace-head">
-                  <span className={traceLevelClass('info')}>state</span>
-                  <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
-                  <span>{formatDateTime(transition.at)}</span>
-                </p>
-                <p className="trace-meta mono">{formatStateSnapshot(transition.from)} → {formatStateSnapshot(transition.to)}</p>
-                {triggerSummary ? <p className="message-content">触发: {triggerSummary}</p> : null}
-                {trigger.content ? <p className="message-content">内容: {summarizeText(trigger.content, 240)}</p> : null}
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
+            })}
+          </div>
+        )}
+      </>
+    );
+  };
 
   const renderJsonWithLineNumbers = (value: unknown) => {
     const lines = toJsonText(value).split('\n');
@@ -5303,62 +5587,145 @@ export default function App() {
   };
 
   const renderConversationDetailedLogsPanel = () => (
-    <div className="sub-panel conversation-detailed-logs-panel">
-      {renderJsonWithLineNumbers(conversationDetailedLogs)}
+    <div className="conversation-detailed-logs-stack">
+      <article className="sub-panel conversation-detailed-logs-summary">
+        <div className="conversation-detailed-logs-summary-top">
+          <div>
+            <p className="section-tag">原始日志</p>
+            <h3 className="conversation-detailed-logs-title">结构化导出视图</h3>
+            <p className="panel-caption conversation-detailed-logs-caption">
+              保留完整结构，先给出消息量、LLM 轨迹和最近记录时间，再进入 JSON 正文。
+            </p>
+          </div>
+          <div className="conversation-detailed-logs-meta">
+            <span className="session-status">会话 {conversationDetailedLogs.sessionId || '-'}</span>
+            <span className="session-status">导出 {formatDateTime(conversationDetailedLogs.exportedAt)}</span>
+          </div>
+        </div>
+        <div className="conversation-detailed-logs-stat-strip">
+          <article className="conversation-detailed-logs-stat">
+            <span>消息记录</span>
+            <strong>{conversationDetailedLogs.counts.messages}</strong>
+            <small>用户、智能体与系统消息</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>LLM 轨迹</span>
+            <strong>{conversationDetailedLogs.counts.llm}</strong>
+            <small>模型调用与推断条目</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>总载荷</span>
+            <strong>{conversationDetailedLogs.counts.total}</strong>
+            <small>当前导出结构中的全部条目</small>
+          </article>
+          <article className="conversation-detailed-logs-stat">
+            <span>最近记录</span>
+            <strong>{formatDateTime(conversationDetailedLogs.entries[0]?.timestamp)}</strong>
+            <small>{conversationDetailedLogs.entries[0]?.summary || '当前没有日志条目'}</small>
+          </article>
+        </div>
+      </article>
+
+      <article className="sub-panel conversation-detailed-logs-panel">
+        <div className="conversation-detailed-logs-panel-head">
+          <div>
+            <h3>JSON 正文</h3>
+            <p className="panel-caption">左侧行号固定，便于定位字段和复制排障信息。</p>
+          </div>
+          <span className="session-status">只读视图</span>
+        </div>
+        <div className="conversation-detailed-logs-shell">
+          {renderJsonWithLineNumbers(conversationDetailedLogs)}
+        </div>
+      </article>
     </div>
   );
 
   const renderConversationInfraPanel = () => {
     if (!conversationDetail) {
-      return <p className="empty">选择会话后，可在此查看来源用户与主 Sandbox 绑定信息。</p>;
+      return <p className="empty">选择会话后，可在这里查看来源用户和主 Sandbox 的关联信息。</p>;
     }
 
+    const sourceUser = conversationDetail.session.user;
+
     return (
-      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact">
+      <div className="conversation-inspector-content conversation-dialog-infra conversation-dialog-infra-compact conversation-infra-layout">
         {conversationInfraError ? (
           <p className="panel-caption">关联信息加载异常：{conversationInfraError}</p>
         ) : null}
-        <article className="sub-panel conversation-infra-panel">
-          <div className="panel-header">
+        <article className="sub-panel conversation-infra-panel conversation-infra-panel-identity">
+          <div className="conversation-infra-panel-top">
             <div>
-              <h3>会话身份</h3>
-              <p className="panel-caption conversation-infra-caption">只保留定位当前对话所需的来源与状态信息。</p>
+              <p className="section-tag">会话身份</p>
+              <h3 className="conversation-infra-panel-title">{conversationUserLabel(sourceUser)}</h3>
+              <p className="panel-caption conversation-infra-caption">
+                {sourceUser?.email || '当前没有可识别邮箱'}{sourceUser?.source ? ` · ${conversationUserSourceLabel(sourceUser.source)}` : ''}
+              </p>
             </div>
-            <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
+            <div className="conversation-infra-pill-row">
+              <span className={stateClassName(conversationDetail.session.status)}>{statusLabel(conversationDetail.session.status)}</span>
+              <span className="session-status">{conversationStageLabel(conversationDetail.session.stage)}</span>
+            </div>
           </div>
-          <div className="detail-kv-list conversation-infra-kv-list">
-            <div>
-              <span>阶段</span>
-              <strong>{conversationStageLabel(conversationDetail.session.stage)}</strong>
-            </div>
+          <div className="conversation-infra-kv-grid">
             <div>
               <span>来源用户</span>
-              <strong>{conversationUserLabel(conversationDetail.session.user)}</strong>
+              <strong>{conversationUserLabel(sourceUser)}</strong>
             </div>
             <div>
               <span>来源 IP</span>
-              <strong className="mono">{conversationDetail.session.user?.ipAddress || '-'}</strong>
+              <strong className="mono">{sourceUser?.ipAddress || '-'}</strong>
             </div>
             <div>
               <span>最近活跃</span>
               <strong>{formatDateTime(conversationDetail.session.updatedAt)}</strong>
             </div>
+            <div>
+              <span>最近访问来源</span>
+              <strong>{conversationUserSourceLabel(sourceUser?.source)}</strong>
+            </div>
           </div>
+          {sourceUser?.userAgent ? (
+            <p className="conversation-infra-footnote">{conversationUserAgentLabel(sourceUser.userAgent)}</p>
+          ) : null}
         </article>
 
-        <article className="sub-panel conversation-infra-panel">
-          <div className="panel-header">
+        <article className="sub-panel conversation-infra-panel conversation-infra-panel-runtime">
+          <div className="conversation-infra-panel-top">
             <div>
-              <h3>运行绑定</h3>
+              <p className="section-tag">运行绑定</p>
+              <h3 className="conversation-infra-panel-title">{primaryEnvironmentSandboxId || '当前还没有主 Sandbox'}</h3>
               <p className="panel-caption conversation-infra-caption">
-                {primaryEnvironmentSandboxId ? '优先聚焦主 Sandbox，附加记录仅展示最近几条。' : '当前暂无主 Sandbox 绑定。'}
+                {primaryEnvironmentSandboxId ? '主 Sandbox、编排会话和最近关联实例都收在这里。' : '当前会话尚未绑定可排查的主 Sandbox。'}
               </p>
             </div>
-            <span className="panel-caption">附加关联 {relatedEnvironments.length} 条</span>
+            <div className="conversation-infra-pill-row">
+              <span className="session-status">{executorLabel(primaryEnvironmentExecutor)}</span>
+              <span className="session-status">{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+            </div>
           </div>
-          <div className="detail-kv-list conversation-infra-kv-list">
+          {primaryEnvironmentSandboxId ? (
+            <div className="conversation-infra-binding-hero">
+              <div className="conversation-infra-binding-copy">
+                <span className="conversation-infra-binding-label">主 Sandbox</span>
+                <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-binding-id" onClick={() => openSandboxFromConversation(primaryEnvironmentSandboxId)}>
+                  {primaryEnvironmentSandboxId}
+                </button>
+              </div>
+              <div className="conversation-infra-binding-summary">
+                <span>{executorLabel(primaryEnvironmentExecutor)}</span>
+                <span>{archiveStatusLabel(primaryEnvironmentArchiveStatus)}</span>
+                <span>{relatedEnvironments.length} 条关联记录</span>
+              </div>
+            </div>
+          ) : (
+            <div className="conversation-infra-binding-hero conversation-infra-binding-hero-empty">
+              <p className="conversation-infra-empty">当前还没有主 Sandbox 关联。</p>
+            </div>
+          )}
+          <div className="conversation-infra-kv-grid">
             <div>
-              <span>编排 ID</span>
+              <span>编排会话 ID</span>
               {conversationDetail.runtime?.orchestratorSessionId ? (
                 <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}>
                   {conversationDetail.runtime.orchestratorSessionId}
@@ -5378,7 +5745,7 @@ export default function App() {
               )}
             </div>
             <div>
-              <span>Executor</span>
+              <span>处理方式</span>
               <strong>{executorLabel(primaryEnvironmentExecutor)}</strong>
             </div>
             <div>
@@ -5389,42 +5756,44 @@ export default function App() {
               <span>关联记录数</span>
               <strong>{relatedEnvironments.length}</strong>
             </div>
+            <div>
+              <span>最近绑定变更</span>
+              <strong>{formatDateTime(latestRelatedEnvironmentUpdatedAt)}</strong>
+            </div>
           </div>
           {primaryEnvironmentReplacementId ? (
-            <p className="session-meta conversation-infra-note">
-              已由{' '}
+            <div className="conversation-infra-note">
+              <span className="conversation-infra-note-label">接管 Sandbox</span>
               <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(primaryEnvironmentReplacementId)}>
                 {primaryEnvironmentReplacementId}
-              </button>{' '}
-              接管
-            </p>
+              </button>
+            </div>
           ) : null}
           {recentRelatedEnvironments.length ? (
             <div className="conversation-infra-related-section">
               <div className="panel-subtitle panel-subtitle-row">
-                <span>最近关联 Sandbox</span>
-                <span className="panel-caption">展示最近 {recentRelatedEnvironments.length} 条</span>
+                <span>最近关联的 Sandbox</span>
+                <span className="panel-caption">最近 {recentRelatedEnvironments.length} 条</span>
               </div>
               <div className="compact-list conversation-infra-related-list">
                 {recentRelatedEnvironments.map((environment) => {
                   const sandboxId = environmentSandboxId(environment);
                   return (
                     <article key={environment.id} className="compact-item conversation-infra-related-item">
-                      <div className="trace-head">
-                        <strong>{sandboxRuntimeStateLabel(environment.status)}</strong>
+                      <div className="conversation-infra-related-head">
+                        <strong>{sandboxId || '-'}</strong>
                         <span className="mono">{formatDateTime(environment.updatedAt)}</span>
                       </div>
                       <div className="conversation-infra-related-main">
-                        {sandboxId ? (
-                          <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromConversation(sandboxId)}>
-                            {sandboxId}
-                          </button>
-                        ) : (
-                          <span className="mono">-</span>
-                        )}
+                        <span>{sandboxRuntimeStateLabel(environment.status)}</span>
                         <span>{executorLabel(environmentExecutor(environment))}</span>
                         <span>{archiveStatusLabel(environmentArchiveStatus(environment))}</span>
                       </div>
+                      {sandboxId ? (
+                        <button type="button" className="link-btn sandbox-jump-btn mono conversation-infra-related-link" onClick={() => openSandboxFromConversation(sandboxId)}>
+                          打开 {sandboxId}
+                        </button>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -5438,36 +5807,90 @@ export default function App() {
 
   const renderConversationContentOverview = () => {
     const sourceUser = conversationDetail?.session.user || null;
+    const latestPendingQuestion = conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary;
+    const conversationStatusText = conversationDetail ? statusLabel(conversationDetail.session.status) : '-';
+    const conversationStageText = conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-';
     return (
-      <div className="conversation-dialog-overview">
-        <div className="detail-grid detail-grid-wide summary-grid conversation-summary-grid">
-          <div>
-            <p className="kpi-title">会话 ID</p>
-            <p className="mono">{conversationDetail?.session.id}</p>
+      <div className="conversation-dialog-overview conversation-dialog-overview-layout">
+        <article className="sub-panel conversation-dialog-overview-hero">
+          <div className="conversation-dialog-overview-top">
+            <div>
+              <p className="section-tag">会话总览</p>
+              <h3 className="conversation-dialog-overview-title">{conversationDetail?.session.title || '未命名会话'}</h3>
+              <p className="conversation-dialog-overview-subtitle mono">{conversationDetail?.session.id || '-'}</p>
+            </div>
+            <div className="conversation-dialog-overview-badges">
+              <span className={stateClassName(conversationDetail?.session.status || 'unknown')}>
+                {conversationStatusText}
+              </span>
+              {conversationStageText !== conversationStatusText ? (
+                <span className="session-status">{conversationStageText}</span>
+              ) : null}
+              <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
+            </div>
           </div>
-          <div>
-            <p className="kpi-title">状态</p>
-            <p>{conversationDetail ? statusLabel(conversationDetail.session.status) : '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">阶段</p>
-            <p>{conversationDetail ? conversationStageLabel(conversationDetail.session.stage) : '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">OpenCode ID</p>
-            <p className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</p>
-          </div>
-          <div>
-            <p className="kpi-title">绑定更新时间</p>
-            <p>{formatDateTime(conversationDetail?.runtime?.bindingUpdatedAt)}</p>
-          </div>
-        </div>
 
-        <section className="sub-panel conversation-user-panel">
+          <div className="conversation-dialog-overview-stats">
+            <article className="conversation-dialog-overview-stat">
+              <span>最近更新</span>
+              <strong>{formatDateTime(conversationDetail?.session.updatedAt || conversationDetail?.runtime?.bindingUpdatedAt)}</strong>
+              <small>当前会话的最近更新时间</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>对话消息</span>
+              <strong>{conversationTabCounts.messages}</strong>
+              <small>用户与智能体消息总数</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>执行事件</span>
+              <strong>{conversationMessageSummary.executionCount}</strong>
+              <small>工具与执行节点记录</small>
+            </article>
+            <article className="conversation-dialog-overview-stat">
+              <span>状态流转</span>
+              <strong>{conversationTabCounts.transitions}</strong>
+              <small>{transitionStats.stages.length ? `覆盖 ${transitionStats.stages.length} 个阶段` : '当前无流转记录'}</small>
+            </article>
+          </div>
+
+          <dl className="conversation-dialog-overview-facts">
+            <div>
+              <dt>OpenCode 会话</dt>
+              <dd className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</dd>
+            </div>
+            <div>
+              <dt>编排会话</dt>
+              <dd>
+                {conversationDetail?.runtime?.orchestratorSessionId ? (
+                  <button
+                    type="button"
+                    className="link-btn sandbox-jump-btn mono"
+                    onClick={() => openSandboxFromConversation(conversationDetail.runtime?.orchestratorSessionId)}
+                  >
+                    {conversationDetail.runtime.orchestratorSessionId}
+                  </button>
+                ) : (
+                  <span className="mono">-</span>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>挂起原因</dt>
+              <dd>{conversationDetail?.runtime?.pendingResume?.reason || '-'}</dd>
+            </div>
+            <div>
+              <dt>待确认问题</dt>
+              <dd>{latestPendingQuestion ? summarizeText(latestPendingQuestion, 120) : '当前无需补充信息'}</dd>
+            </div>
+          </dl>
+        </article>
+
+        <div className="conversation-dialog-overview-side">
+          <section className="sub-panel conversation-user-panel conversation-dialog-side-panel">
           <div className="panel-header">
             <div>
               <h3>来源用户</h3>
-              <p className="panel-caption">对话归属、最近访问来源与会话身份线索。</p>
+              <p className="panel-caption">对话归属与最近访问来源。</p>
             </div>
             <span className="session-status">{conversationUserSourceLabel(sourceUser?.source)}</span>
           </div>
@@ -5490,42 +5913,35 @@ export default function App() {
             </div>
           </div>
           <p className="conversation-user-agent">{conversationUserAgentLabel(sourceUser?.userAgent)}</p>
-        </section>
+          </section>
 
-        <div className="conversation-message-summary-stats">
-          <span className="session-status">状态流转 {conversationTabCounts.transitions}</span>
-          <span className="session-status">对话消息 {conversationTabCounts.messages}</span>
-          <span className="session-status">详细日志 {conversationDetailedLogs.counts.total}</span>
+          <section className="sub-panel conversation-message-summary conversation-dialog-message-summary conversation-dialog-side-panel">
+            <div className="detail-grid conversation-message-summary-grid">
+              <div>
+                <p className="kpi-title">最近用户输入</p>
+                <p>{conversationMessageSummary.latestUserSummary}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近主回复</p>
+                <p>{conversationMessageSummary.latestAssistantSummary}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近轮次结果</p>
+                <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
+              </div>
+              <div>
+                <p className="kpi-title">最近阶段</p>
+                <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
+              </div>
+            </div>
+            {latestPendingQuestion ? (
+              <div className="conversation-message-inline-card">
+                <p className="kpi-title">当前待确认问题</p>
+                <p className="message-content">{latestPendingQuestion}</p>
+              </div>
+            ) : null}
+          </section>
         </div>
-
-        <section className="sub-panel conversation-message-summary">
-          <div className="detail-grid conversation-message-summary-grid">
-            <div>
-              <p className="kpi-title">最近用户输入</p>
-              <p>{conversationMessageSummary.latestUserSummary}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近主回复</p>
-              <p>{conversationMessageSummary.latestAssistantSummary}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近轮次结果</p>
-              <p>{conversationInteractionGroups[conversationInteractionGroups.length - 1]?.outcome || '暂无'}</p>
-            </div>
-            <div>
-              <p className="kpi-title">最近阶段</p>
-              <p>{conversationStageLabel(conversationMessageSummary.latestStatusStage || conversationDetail?.session.stage)}</p>
-            </div>
-          </div>
-          {conversationMessageSummary.latestClarificationSummary || conversationDetail?.runtime?.pendingQuestion ? (
-            <div className="conversation-message-inline-card">
-              <p className="kpi-title">当前待确认问题</p>
-              <p className="message-content">
-                {conversationDetail?.runtime?.pendingQuestion || conversationMessageSummary.latestClarificationSummary}
-              </p>
-            </div>
-          ) : null}
-        </section>
       </div>
     );
   };
@@ -5804,7 +6220,10 @@ export default function App() {
   const activeNavGroup = NAV_GROUPS.find((group) => group.key === activeNavItem.group) || NAV_GROUPS[0];
   const breadcrumbTitle = activeNavItem.label;
   const themeOptions = themeSettings?.themes.length ? themeSettings.themes : FALLBACK_ADMIN_THEME_OPTIONS;
+  const themeModeOptions = themeSettings?.modes.length ? themeSettings.modes : FALLBACK_ADMIN_THEME_MODES;
   const selectedThemeOption = themeOptions.find((item) => item.key === currentTheme) || themeOptions[0];
+  const selectedThemeMode = themeModeOptions.find((item) => item.key === currentThemeMode) || themeModeOptions[0];
+  const resolvedThemeTone = resolveAdminThemeTone(currentThemeMode, systemThemeTone);
   const sandboxApi = sandboxOverview?.sandboxApi ?? null;
   const sandboxOverviewItems = asArray(sandboxOverview?.sandboxes);
   const sandboxRegistryItems = asArray(sandboxRuntimeRegistry?.items).map((item) => ({
@@ -5859,6 +6278,13 @@ export default function App() {
         : activeSection === 'audit'
           ? auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
+  const lockMainAreaScroll =
+    activeSection === 'conversation' ||
+    activeSection === 'user' ||
+    activeSection === 'skill' ||
+    activeSection === 'osacRelease' ||
+    activeSection === 'audit' ||
+    (activeSection === 'sandbox' && sandboxTab === 'runtime');
   const currentTemplateId = templateIdOf(templateDetail);
   const currentTemplateAlias = templateAliasOf(templateDetail);
   const templateAliasCheck = parseAliasCheckResult(templateAliasResult);
@@ -6328,7 +6754,7 @@ export default function App() {
               <strong>{conversationDetail?.session.stage || '-'}</strong>
             </div>
             <div>
-              <span>OpenCode ID</span>
+              <span>OpenCode 会话 ID</span>
               <strong className="mono">{conversationDetail?.runtime?.opencodeSessionId || '-'}</strong>
             </div>
           </div>
@@ -6477,7 +6903,7 @@ export default function App() {
                 </div>
                 <div>
                   <p className="kpi-title">阶段</p>
-                  <p>{conversationDetail.session.stage || '-'}</p>
+                  <p>{conversationStageLabel(conversationDetail.session.stage)}</p>
                 </div>
                 <div>
                   <p className="kpi-title">编排 ID</p>
@@ -6494,7 +6920,7 @@ export default function App() {
                   )}
                 </div>
                 <div>
-                  <p className="kpi-title">OpenCode ID</p>
+                  <p className="kpi-title">OpenCode 会话 ID</p>
                   <p className="mono">{conversationDetail.runtime?.opencodeSessionId || '-'}</p>
                 </div>
                 <div>
@@ -6628,7 +7054,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>阶段(Phase)</span>
+                    <span>处理阶段</span>
                     <select
                       value={transitionFilters.phase}
                       onChange={(event) =>
@@ -6674,7 +7100,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>Agent</span>
+                    <span>智能体</span>
                     <select
                       value={transitionFilters.agent}
                       onChange={(event) => setTransitionFilters((prev) => ({ ...prev, agent: event.target.value }))}
@@ -6688,7 +7114,7 @@ export default function App() {
                     </select>
                   </label>
                   <label className="state-filter-field">
-                    <span>Tone</span>
+                    <span>语气</span>
                     <select
                       value={transitionFilters.tone}
                       onChange={(event) => setTransitionFilters((prev) => ({ ...prev, tone: event.target.value }))}
@@ -6722,7 +7148,7 @@ export default function App() {
                   <strong className="mono">{transitionStats.statuses.length}</strong>
                 </div>
                 <div className="compact-item">
-                  <span>涉及 Phase</span>
+                  <span>涉及处理阶段</span>
                   <strong className="mono">{transitionStats.phases.length}</strong>
                 </div>
               </div>
@@ -6734,11 +7160,11 @@ export default function App() {
                   {filteredTransitions.map((transition, index) => {
                     const trigger = transition.trigger || {};
                     const triggerSummary = [
-                      trigger.messageType ? `type=${trigger.messageType}` : '',
-                      trigger.role ? `role=${trigger.role}` : '',
-                      trigger.agent ? `agent=${trigger.agent}` : '',
-                      trigger.tone ? `tone=${trigger.tone}` : '',
-                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                      trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                      trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                      trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                      trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+                      trigger.messageId ? `消息 ID=${trigger.messageId}` : '',
                     ]
                       .filter(Boolean)
                       .join(' / ');
@@ -6748,10 +7174,10 @@ export default function App() {
                         ? formatDuration(Date.parse(transition.at) - Date.parse(prev.at))
                         : '-';
                     const transitionNumber = String(index + 1).padStart(2, '0');
-                    const fromStage = transition.from?.stage || '-';
-                    const toStage = transition.to?.stage || '-';
-                    const toStatus = transition.to?.status || '-';
-                    const toPhase = transition.to?.phase || '-';
+                    const fromStage = conversationStageLabel(transition.from?.stage);
+                    const toStage = conversationStageLabel(transition.to?.stage);
+                    const toStatus = statusLabel(transition.to?.status || 'unknown');
+                    const toPhase = transition.to?.phase ? conversationPhaseLabel(transition.to.phase) : '-';
                     return (
                       <article key={`${transition.at || 'transition'}-${index}`} className="state-timeline-item">
                         <div className="state-timeline-rail" aria-hidden="true">
@@ -6760,7 +7186,7 @@ export default function App() {
                         <div className="state-timeline-card">
                           <div className="state-timeline-head">
                             <div className="state-timeline-title-block">
-                              <span className={traceLevelClass('info')}>state</span>
+                              <span className={traceLevelClass('info')}>状态</span>
                               <strong className="state-timeline-title">{`${fromStage} → ${toStage}`}</strong>
                             </div>
                             <div className="state-timeline-time">
@@ -6770,11 +7196,11 @@ export default function App() {
                           </div>
                           <div className="state-timeline-meta">
                             <span>
-                              <small>From</small>
+                              <small>变更前</small>
                               <strong className="mono">{formatStateSnapshot(transition.from)}</strong>
                             </span>
                             <span>
-                              <small>To</small>
+                              <small>变更后</small>
                               <strong className="mono">{formatStateSnapshot(transition.to)}</strong>
                             </span>
                           </div>
@@ -6803,19 +7229,19 @@ export default function App() {
                   {filteredTransitions.map((transition, index) => {
                     const trigger = transition.trigger || {};
                     const triggerSummary = [
-                      trigger.messageType ? `type=${trigger.messageType}` : '',
-                      trigger.role ? `role=${trigger.role}` : '',
-                      trigger.agent ? `agent=${trigger.agent}` : '',
-                      trigger.tone ? `tone=${trigger.tone}` : '',
-                      trigger.messageId ? `id=${trigger.messageId}` : '',
+                      trigger.messageType ? `消息=${conversationMessageTypeLabel(trigger.messageType)}` : '',
+                      trigger.role ? `角色=${conversationRoleLabel(trigger.role)}` : '',
+                      trigger.agent ? `智能体=${conversationAgentLabel(trigger.agent)}` : '',
+                      trigger.tone ? `语气=${conversationToneLabel(trigger.tone)}` : '',
+                      trigger.messageId ? `消息 ID=${trigger.messageId}` : '',
                     ]
                       .filter(Boolean)
                       .join(' / ');
                     return (
                       <article key={`${transition.at || 'transition'}-${index}`} className="trace-item">
                         <p className="trace-head">
-                          <span className={traceLevelClass('info')}>state</span>
-                          <strong>{`${transition.from?.stage || '-'} → ${transition.to?.stage || '-'}`}</strong>
+                          <span className={traceLevelClass('info')}>状态</span>
+                          <strong>{`${conversationStageLabel(transition.from?.stage)} → ${conversationStageLabel(transition.to?.stage)}`}</strong>
                           <span>{formatDateTime(transition.at)}</span>
                         </p>
                         <p className="trace-meta mono">
@@ -6839,7 +7265,7 @@ export default function App() {
                   conversationDetail.messages.map((message) => (
                     <article key={message.id} className="message-item">
                       <p className="message-head">
-                        <strong>{message.role}</strong> · {formatDateTime(message.createdAt)}
+                        <strong>{conversationRoleLabel(message.role)}</strong> · {formatDateTime(message.createdAt)}
                       </p>
                       <p className="message-content">{message.content}</p>
                       {message.metadata !== undefined ? (
@@ -6903,7 +7329,7 @@ export default function App() {
                       )}
                     </div>
                     <div>
-                      <p className="kpi-title">主记录 Task Session</p>
+                      <p className="kpi-title">主记录会话 ID</p>
                       {primaryEnvironmentTaskSessionId ? (
                         <button
                           type="button"
@@ -6917,7 +7343,7 @@ export default function App() {
                       )}
                     </div>
                     <div>
-                      <p className="kpi-title">Executor</p>
+                      <p className="kpi-title">处理方式</p>
                       <p>{primaryEnvironmentExecutor || '-'}</p>
                     </div>
                     <div>
@@ -7151,7 +7577,7 @@ export default function App() {
               <div>
                 <p className="section-tag">会话索引</p>
                 <h2>会话索引</h2>
-                <p className="panel-caption">主工作区使用高密度明细列表承载索引；会话详情、关联信息与排障视图直接从列表行进入。</p>
+                <p className="panel-caption">按更新时间浏览会话，点一行直接进入详情。</p>
               </div>
               <label className="conversation-auto-refresh-toggle">
                 <input
@@ -7227,12 +7653,12 @@ export default function App() {
                   </select>
                 </label>
                 <label className="state-filter-field">
-                  <span>执行器</span>
+                  <span>处理方式</span>
                   <select
                     value={conversationExecutorFilter}
                     onChange={(event) => setConversationExecutorFilter(event.target.value)}
                   >
-                    <option value="all">全部执行器</option>
+                    <option value="all">全部处理方式</option>
                     {conversationExecutorOptions.map((item) => (
                       <option key={item.value} value={item.value}>
                         {item.label} ({item.count})
@@ -7282,27 +7708,25 @@ export default function App() {
             <div className="table-wrap conversation-index-table-wrap">
               <table className="conversation-index-table">
                 <colgroup>
-                  <col style={{ width: '51%' }} />
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '58%' }} />
+                  <col style={{ width: '24%' }} />
+                  <col style={{ width: '18%' }} />
                 </colgroup>
                 <thead>
                   <tr>
                     <th>会话</th>
                     <th>状态</th>
                     <th>时间</th>
-                    <th className="runtime-col-actions">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {conversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="empty">暂无对话会话。</td>
+                      <td colSpan={3} className="empty">暂无对话会话。</td>
                     </tr>
                   ) : filteredConversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="empty">当前筛选条件下无会话。</td>
+                      <td colSpan={3} className="empty">当前筛选条件下无会话。</td>
                     </tr>
                   ) : (
                     filteredConversationSessions.map((session) => {
@@ -7310,23 +7734,24 @@ export default function App() {
                       const stageLabel = conversationStageLabel(session.stage);
                       const statusText = statusLabel(session.status);
                       const stageDisplay = stageLabel !== '-' && stageLabel !== statusText ? stageLabel : null;
+                      const executorText = session.executor ? executorLabel(session.executor) : null;
                       const pendingSummary = session.pendingQuestion
-                        ? summarizeText(session.pendingQuestion, 120)
+                        ? summarizeText(session.pendingQuestion, 96)
                         : session.status === 'waiting_user'
                           ? '等待用户补充信息'
                           : session.status === 'failed'
-                            ? '存在阻塞错误，请查看详情'
+                            ? '执行受阻，等待排查'
                             : session.status === 'completed'
                               ? '对话已完成'
-                              : '暂无待确认问题';
+                              : '当前没有待确认问题';
                       const progressMeta = session.pendingOptions?.length
-                        ? `${session.pendingOptions.length} 个待确认选项`
+                        ? `待确认 ${session.pendingOptions.length} 项`
                         : session.status === 'in_progress'
-                          ? '会话正在推进'
+                          ? '系统处理中'
                           : session.status === 'waiting_user'
-                            ? '等待用户确认'
+                            ? '等待用户回复'
                             : session.status === 'failed'
-                              ? '需人工介入'
+                              ? '需要人工处理'
                               : '流程已结束';
                       const sourceUserLabel = conversationUserLabel(session.user);
                       const sourceUserMeta = conversationUserMeta(session.user);
@@ -7334,29 +7759,30 @@ export default function App() {
                         <tr
                           key={session.id}
                           className={`${isSelected ? 'selected-row' : ''} conversation-index-row`}
-                          onClick={() => selectConversationSession(session.id)}
+                          onClick={() => openConversationDialog(session.id, 'overview')}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              openConversationDialog(session.id, 'overview');
+                            }
+                          }}
                           aria-selected={isSelected}
+                          aria-label={`打开会话 ${session.title || session.id} 的详情`}
+                          role="button"
+                          tabIndex={0}
                         >
                           <td>
                             <div className="runtime-primary-cell conversation-index-primary-cell">
                               <p className="conversation-index-title" title={session.title || session.id}>{session.title || session.id}</p>
-                              <p className="conversation-index-summary">{pendingSummary}</p>
-                              <p className="conversation-index-user" title={sourceUserMeta}>
-                                <span>{sourceUserLabel}</span>
-                                <small>{sourceUserMeta}</small>
-                              </p>
-                              <div className="runtime-id-row conversation-index-id-row">
-                                <span className="mono mono-truncate" title={session.id}>{truncateMiddle(session.id, 10, 8)}</span>
-                                <button
-                                  type="button"
-                                  className="copy-btn"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void copyRuntimeField('会话 ID', session.id);
-                                  }}
-                                >
-                                  复制
-                                </button>
+                              <p className="conversation-index-summary" title={pendingSummary}>{pendingSummary}</p>
+                              <div className="conversation-index-meta-row" title={sourceUserMeta}>
+                                <span className="conversation-index-meta-pill conversation-index-meta-pill-user">
+                                  {sourceUserLabel}
+                                </span>
+                                {executorText ? <span className="conversation-index-meta-pill">{executorText}</span> : null}
+                                <span className="conversation-index-meta-pill conversation-index-meta-pill-id mono" title={session.id}>
+                                  {truncateMiddle(session.id, 10, 8)}
+                                </span>
                               </div>
                             </div>
                           </td>
@@ -7366,23 +7792,15 @@ export default function App() {
                                 <span className={stateClassName(session.status)}>{statusText}</span>
                                 {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
                               </div>
-                              <p className="session-meta">{progressMeta}</p>
+                              <p className="conversation-index-status-summary">{progressMeta}</p>
                             </div>
                           </td>
                           <td>
-                            <div className="conversation-index-time-cell">{formatDateTime(session.updatedAt)}</div>
-                            <p className="session-meta">创建于 {formatDateTime(session.createdAt)}</p>
-                          </td>
-                          <td className="runtime-col-actions">
-                            <div className="action-inline runtime-actions conversation-index-actions" onClick={(event) => event.stopPropagation()}>
-                              <button
-                                type="button"
-                                className={`secondary-btn conversation-index-detail-btn ${isSelected ? 'active' : ''}`}
-                                onClick={() => openConversationDialog(session.id, 'overview')}
-                              >
-                                查看详情
-                              </button>
+                            <div className="conversation-index-time-cell">
+                              <strong>{formatDateTime(session.updatedAt)}</strong>
+                              <span>{formatRelativeTime(session.updatedAt)}</span>
                             </div>
+                            <p className="conversation-index-time-meta">创建于 {formatDateTime(session.createdAt)}</p>
                           </td>
                         </tr>
                       );
@@ -7395,22 +7813,29 @@ export default function App() {
         </section>
       </main>
       {conversationDialog ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeConversationDialog} style={{ zIndex: conversationDialogZIndex }}>
           <div
             className="modal-card conversation-dialog-modal"
             onClick={(event) => {
               event.stopPropagation();
             }}
           >
-            <div className="modal-header">
-              <div>
-                <p className="section-tag">Dialogue</p>
-                <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
-                <p className="panel-copy">
-                  统一会话详情工作台：在同一 popup 中查看概览、交互回放、关联信息、详细日志与状态流转。
-                </p>
-              </div>
-              <div className="conversation-dialog-actions">
+              <div className="modal-header">
+                <div>
+                  <p className="section-tag">对话详情</p>
+                  <h2>{conversationDialogDetail?.session.title || conversationDialogDetail?.session.id || '正在加载会话...'}</h2>
+                  {conversationDialogOrigin ? <p className="modal-context-path">来自 {conversationDialogOrigin.trail}</p> : null}
+                </div>
+                <div className="conversation-dialog-actions">
+                  {activeSection !== 'conversation' ? (
+                    <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={openConversationManagementView}
+                  >
+                    在对话管理中查看
+                  </button>
+                ) : null}
                 {conversationDialogDetail ? (
                   <button type="button" className="secondary-btn" onClick={exportConversationDetail}>
                     下载会话
@@ -7430,11 +7855,11 @@ export default function App() {
               <>
                 <div className="button-grid modal-tab-grid conversation-dialog-tab-grid">
                   {[
-                    { key: 'overview', label: '概览' },
-                    { key: 'interaction', label: '交互回放' },
-                    { key: 'infra', label: '关联信息' },
-                    { key: 'raw', label: `详细日志 (${conversationDetailedLogs.counts.total})` },
-                    { key: 'transitions', label: `状态流转 (${conversationTabCounts.transitions})` },
+                    { key: 'overview', label: '概览', tabKey: '01' },
+                    { key: 'interaction', label: '交互回放', tabKey: '02' },
+                    { key: 'infra', label: '关联', tabKey: '03' },
+                    { key: 'raw', label: `日志 (${conversationDetailedLogs.counts.total})`, tabKey: '04' },
+                    { key: 'transitions', label: `流转 (${conversationTabCounts.transitions})`, tabKey: '05' },
                   ].map((item) => (
                     <button
                       key={item.key}
@@ -7442,6 +7867,7 @@ export default function App() {
                       className={`inspector-tab-card ${conversationDialogTab === item.key ? 'active' : ''}`}
                       onClick={() => setConversationDialogTab(item.key as ConversationDialogTab)}
                     >
+                      <span className="inspector-tab-card-key mono">{item.tabKey}</span>
                       <span className="inspector-tab-card-label">{item.label}</span>
                     </button>
                   ))}
@@ -7466,179 +7892,165 @@ export default function App() {
     );
   };
 
-  const renderAgentSection = () => (
-    <main className="content-stack agent-command-center">
-      <section className="page-intro-grid fade-in agent-hero-grid">
-        <article className="panel hero-panel agent-hero-panel">
-          <div className="panel-header panel-header-stack">
-            <div>
-              <p className="section-tag">服务健康</p>
-              <h2>平台接口、智能体服务和能力状态</h2>
-            </div>
-            <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
-              {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
-            </span>
-          </div>
-          <div className="hero-metrics">
-            <div>
-              <span className="hero-metric-label">能力总数</span>
-              <strong>{agentCapabilitySummary.total}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">可用</span>
-              <strong>{agentCapabilitySummary.available}</strong>
-            </div>
-            <div>
-              <span className="hero-metric-label">规划中</span>
-              <strong>{agentCapabilitySummary.planned}</strong>
-            </div>
-          </div>
-        </article>
+  const renderAgentSection = () => {
+    const taskSessions = agentOverview?.taskCreationSessions;
+    const overviewTimestamp = formatDateTime(agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp);
+    const selectedStageStatusText =
+      selectedAgentStage?.statusSummary
+        .filter((item) => item.value > 0)
+        .map((item) => `${item.label} ${item.value}`)
+        .join(' · ') || '当前没有状态构成';
 
-        <article className="panel aside-panel agent-session-summary-panel">
-          <div className="panel-header panel-header-stack">
+    return (
+      <main className="content-stack agent-command-center">
+        <section className="panel fade-in agent-overview-panel">
+          <div className="agent-overview-head">
             <div>
-              <p className="section-tag">会话状态</p>
-              <h2>会话状态摘要</h2>
+              <p className="section-tag">智能体总览</p>
+              <h2>服务、会话与能力</h2>
+              <p className="panel-caption">
+                {agentApiMessageLabel(agentOverview?.agentApi.message)} · 最近检查 {overviewTimestamp}
+              </p>
+            </div>
+            <div className="agent-overview-status-row">
+              <span className={`service-state ${agentOverview?.oneceoApi.online ? 'ok' : 'down'}`}>
+                {agentOverview?.oneceoApi.online ? '平台接口在线' : '平台接口离线'}
+              </span>
+              <span className={`service-state ${agentOverview?.agentApi.online ? 'ok' : 'down'}`}>
+                {agentOverview?.agentApi.online ? '智能体服务在线' : '智能体服务离线'}
+              </span>
             </div>
           </div>
-          <div className="detail-kv-list">
-            <div>
+
+          <div className="agent-overview-strip">
+            <article className="agent-overview-card">
               <span>总会话</span>
-              <strong>{agentOverview?.taskCreationSessions.total ?? 0}</strong>
-            </div>
-            <div>
+              <strong>{taskSessions?.total ?? 0}</strong>
+              <small>当前任务创建记录</small>
+            </article>
+            <article className="agent-overview-card">
               <span>待确认</span>
-              <strong>{agentOverview?.taskCreationSessions.waitingUser ?? 0}</strong>
-            </div>
+              <strong>{taskSessions?.waitingUser ?? 0}</strong>
+              <small>等用户补充信息</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>进行中</span>
+              <strong>{taskSessions?.inProgress ?? 0}</strong>
+              <small>仍在持续推进</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>失败</span>
+              <strong>{taskSessions?.failed ?? 0}</strong>
+              <small>优先排查异常链路</small>
+            </article>
+            <article className="agent-overview-card">
+              <span>可用能力</span>
+              <strong>
+                {agentCapabilitySummary.available}/{agentCapabilitySummary.total}
+              </strong>
+              <small>
+                {agentCapabilitySummary.planned > 0 ? `${agentCapabilitySummary.planned} 个规划中` : '当前都已落地'}
+              </small>
+            </article>
+          </div>
+        </section>
+
+        <section className="panel fade-in agent-stage-workbench">
+          <div className="panel-header panel-header-stack">
             <div>
-              <span>最近状态</span>
-              <strong>{agentApiMessageLabel(agentOverview?.agentApi.message)}</strong>
+              <h2>任务阶段</h2>
+              <span className="panel-caption">按阶段切换，只看当前最需要处理的会话。</span>
             </div>
           </div>
-        </article>
-      </section>
 
-      <section className="kpi-grid fade-in agent-health-grid">
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">平台接口</p>
-          <p className="kpi-value">{agentOverview?.oneceoApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{formatDateTime(agentOverview?.oneceoApi.timestamp)}</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">智能体服务</p>
-          <p className="kpi-value">{agentOverview?.agentApi.online ? '在线' : '离线'}</p>
-          <p className="kpi-meta">{agentApiMessageLabel(agentOverview?.agentApi.message)}</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">会话总数</p>
-          <p className="kpi-value">{agentOverview?.taskCreationSessions.total ?? 0}</p>
-          <p className="kpi-meta">当前会话记录</p>
-        </article>
-        <article className="kpi-card agent-health-card">
-          <p className="kpi-title">待确认会话</p>
-          <p className="kpi-value">{agentOverview?.taskCreationSessions.waitingUser ?? 0}</p>
-          <p className="kpi-meta">状态为待用户确认</p>
-        </article>
-      </section>
+          {(agentOverview?.stageDistribution || []).length > 0 ? (
+            <>
+              <div className="agent-stage-tabs" role="tablist" aria-label="任务阶段">
+                {(agentOverview?.stageDistribution || []).map((item) => (
+                  <button
+                    key={item.stageKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedAgentStage?.stageKey === item.stageKey}
+                    className={`agent-stage-tab ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
+                    onClick={() => setSelectedAgentStageKey(item.stageKey)}
+                  >
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </button>
+                ))}
+              </div>
 
-      <section className="chart-grid fade-in agent-intelligence-grid">
-        <article className="panel agent-stage-chart-panel">
+              {selectedAgentStage ? (
+                <div className="agent-stage-detail-surface" role="tabpanel">
+                  <div className="agent-stage-detail-head">
+                    <div>
+                      <p className="section-tag">当前阶段</p>
+                      <h3>{selectedAgentStage.label}</h3>
+                      <p className="panel-caption">{selectedStageStatusText}</p>
+                    </div>
+                    <span className="status-pill">{selectedAgentStage.value} 个会话</span>
+                  </div>
+
+                  <div className="agent-status-pills">
+                    {selectedAgentStage.statusSummary
+                      .filter((summary) => summary.value > 0)
+                      .map((summary) => (
+                        <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
+                          {summary.label} · {summary.value}
+                        </span>
+                      ))}
+                  </div>
+
+                  <div className="agent-session-compact-list">
+                    {selectedAgentStage.recentSessions.map((session) => (
+                      <article key={session.id} className="agent-session-compact-item">
+                        <div className="agent-session-compact-main">
+                          <strong title={session.title || session.id}>{session.title || '未命名会话'}</strong>
+                          <span className="session-status">{statusLabel(session.status)}</span>
+                        </div>
+                        <p className="agent-session-compact-meta">更新时间 {formatDateTime(session.updatedAt)}</p>
+                        {session.pendingQuestion ? (
+                          <p className="agent-session-pending">待补充: {summarizeText(session.pendingQuestion, 120)}</p>
+                        ) : null}
+                      </article>
+                    ))}
+                    {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="empty">当前没有阶段数据。</p>
+          )}
+        </section>
+
+        <section className="panel fade-in agent-capability-compact-panel">
           <div className="panel-header">
-            <h2>任务阶段概览</h2>
-            <span className="panel-caption">按任务创建阶段统计，标签已转成中文</span>
+            <h2>智能体能力</h2>
+            <span className="panel-caption">保留能力名称、接入方式和可用状态。</span>
           </div>
-          <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={agentOverview?.stageDistribution ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" name="数量" fill="#0f766e" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="agent-capability-summary">
+            <span className="session-status">可用 {agentCapabilitySummary.available}</span>
+            <span className="session-status">规划中 {agentCapabilitySummary.planned}</span>
+            <span className="session-status">总数 {agentCapabilitySummary.total}</span>
           </div>
-        </article>
-
-        <article className="panel agent-capability-panel">
-          <div className="panel-header">
-            <h2>智能体能力卡</h2>
-            <span className="panel-caption">可用性与接入方式</span>
-          </div>
-          <div className="capability-grid">
+          <div className="agent-capability-list">
             {(agentOverview?.capabilities || []).map((item) => (
-              <article key={item.key} className="capability-card">
-                <p className="capability-name">{capabilityNameLabel(item.name)}</p>
-                <p className="capability-meta">{item.transport}</p>
-                <p className="mono">{item.endpoint}</p>
+              <article key={item.key} className="agent-capability-row" title={item.endpoint || undefined}>
+                <div className="agent-capability-main">
+                  <strong>{capabilityNameLabel(item.name)}</strong>
+                  <span className="agent-capability-transport mono">{item.transport}</span>
+                </div>
                 <span className={`capability-status ${item.status}`}>{capabilityStatusLabel(item.status)}</span>
               </article>
             ))}
+            {(agentOverview?.capabilities || []).length === 0 ? <p className="empty">当前没有可展示的能力信息。</p> : null}
           </div>
-        </article>
-      </section>
-
-      <section className="panel fade-in agent-stage-workbench">
-        <div className="panel-header">
-          <h2>阶段详情</h2>
-          <span className="panel-caption">按阶段查看状态构成与最近会话</span>
-        </div>
-        <div className="agent-stage-grid">
-          <div className="agent-stage-nav">
-            {(agentOverview?.stageDistribution || []).map((item) => (
-              <button
-                key={item.stageKey}
-                type="button"
-                className={`agent-stage-nav-card ${selectedAgentStage?.stageKey === item.stageKey ? 'active' : ''}`}
-                onClick={() => setSelectedAgentStageKey(item.stageKey)}
-              >
-                <span className="agent-stage-nav-title">{item.label}</span>
-                <span className="agent-stage-nav-meta">共 {item.value} 个会话</span>
-              </button>
-            ))}
-          </div>
-          <div className="agent-stage-detail-panel">
-            {selectedAgentStage ? (
-              <>
-                <div className="agent-stage-summary-card">
-                  <div>
-                    <p className="section-tag">当前阶段</p>
-                    <h3>{selectedAgentStage.label}</h3>
-                    <p className="panel-caption">最近会话与状态构成只保留最有排障价值的信息。</p>
-                  </div>
-                  <span className="status-pill">{selectedAgentStage.value}</span>
-                </div>
-                <div className="agent-status-pills">
-                  {selectedAgentStage.statusSummary.map((summary) => (
-                    <span key={`${selectedAgentStage.stageKey}-${summary.label}`} className="session-status">
-                      {summary.label} · {summary.value}
-                    </span>
-                  ))}
-                </div>
-                <div className="agent-session-list">
-                  {selectedAgentStage.recentSessions.map((session) => (
-                    <article key={session.id} className="agent-session-item">
-                      <div className="trace-head">
-                        <strong>{session.title || session.id}</strong>
-                        <span>{session.status}</span>
-                      </div>
-                      <p className="trace-meta">{session.id}</p>
-                      <p className="trace-meta">更新时间：{formatDateTime(session.updatedAt)}</p>
-                      {session.pendingQuestion ? <p className="trace-meta">待确认：{session.pendingQuestion}</p> : null}
-                    </article>
-                  ))}
-                  {selectedAgentStage.recentSessions.length === 0 ? <p className="empty">当前阶段暂无最近会话。</p> : null}
-                </div>
-              </>
-            ) : (
-              <p className="empty">当前没有阶段数据。</p>
-            )}
-          </div>
-        </div>
-      </section>
-    </main>
-  );
+        </section>
+      </main>
+    );
+  };
 
   const renderSandboxSection = () => {
     const liveSandboxIdSet = new Set(sandboxOverviewItems.map((item) => item.sandboxId).filter(Boolean));
@@ -7835,7 +8247,7 @@ export default function App() {
 
     return (
       <>
-        <main className="content-stack">
+        <main className={`content-stack sandbox-page${sandboxTab === 'runtime' ? ' viewport-lock-page sandbox-page-runtime' : ''}`}>
           <section className="panel fade-in">
             <div className="panel-header">
               <div>
@@ -8429,7 +8841,7 @@ export default function App() {
         </main>
 
         {sandboxModalOpen && sandboxRuntimeDetail ? (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail}>
+          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeSandboxDetail} style={{ zIndex: sandboxModalZIndex }}>
             <div
               className="modal-card runtime-inspector-modal"
               onClick={(event) => {
@@ -8438,12 +8850,24 @@ export default function App() {
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">Sandbox 信息</p>
-                  <h2>Sandbox 详情</h2>
+                  <p className="section-tag">Sandbox 详情</p>
+                  <h2>{sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}</h2>
+                  {sandboxModalOrigin ? <p className="modal-context-path">来自 {sandboxModalOrigin.trail}</p> : null}
                 </div>
-                <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
-                  关闭
-                </button>
+                <div className="conversation-dialog-actions">
+                  {activeSection !== 'sandbox' ? (
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={openSandboxManagementView}
+                    >
+                      在 Sandbox 管理中查看
+                    </button>
+                  ) : null}
+                  <button type="button" className="secondary-btn" onClick={closeSandboxDetail}>
+                    关闭
+                  </button>
+                </div>
               </div>
               <div className="button-grid modal-tab-grid">
                 <button
@@ -8498,51 +8922,111 @@ export default function App() {
 
               <div className="modal-body">
               {sandboxDetailTab === 'overview' ? (
-                <div className="inspector-page-stack">
-                  <section className="inspector-stat-grid">
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">运行状态</span>
-                      <strong>{sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}</strong>
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">会话状态</span>
-                      <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
-                      {sandboxRuntimeDetail.runtime.taskSessionId ? (
-                        <button
-                          type="button"
-                          className="link-btn sandbox-jump-btn session-meta mono"
-                          onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
-                        >
-                          {sandboxRuntimeDetail.runtime.taskSessionId}
-                        </button>
-                      ) : (
-                        <span className="session-meta">未绑定会话</span>
-                      )}
-                    </article>
-                    <article className="inspector-stat-card">
-                      <span className="inspector-stat-label">最近活跃</span>
-                      <strong>{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</strong>
-                      <span className="session-meta">{sandboxRuntimeDetail.runtime.lastActiveReason || '-'}</span>
-                    </article>
-                  </section>
+                <div className="inspector-page-stack sandbox-overview-stack">
+                  <article className="inspector-card inspector-overview-hero">
+                    <div className="inspector-overview-hero-top">
+                      <div>
+                        <p className="section-tag">运行摘要</p>
+                        <h3 className="inspector-overview-title">
+                          {sandboxRuntimeDetail.runtime.alias || sandboxRuntimeDetail.taskSession?.title || sandboxDisplayLabel(sandboxRuntimeDetail)}
+                        </h3>
+                        <p className="inspector-overview-subtitle mono">{sandboxDisplayLabel(sandboxRuntimeDetail)}</p>
+                      </div>
+                      <div className="inspector-overview-badges">
+                        <span className={stateClassName(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}>
+                          {sandboxRuntimeStateLabel(sandboxRuntimeDetail.runtime.sandboxState || sandboxRuntimeDetail.runtime.status)}
+                        </span>
+                        <span className="session-status">
+                          {archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) === '-'
+                            ? '未归档'
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus)}
+                        </span>
+                        <span className="session-status">
+                          {sandboxRuntimeDetail.runtime.source === 'live_only' ? '仅实时发现' : '已纳管'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="inspector-overview-stat-strip">
+                      <article className="inspector-overview-stat">
+                        <span>会话状态</span>
+                        <strong>{sandboxRuntimeDetail.taskSession ? statusLabel(sandboxRuntimeDetail.taskSession.status) : '-'}</strong>
+                        <small>{sandboxRuntimeDetail.runtime.taskSessionId ? '已绑定任务会话' : '当前未绑定会话'}</small>
+                      </article>
+                      <article className="inspector-overview-stat">
+                        <span>最近活跃</span>
+                        <strong>{formatDateTime(sandboxRuntimeDetail.runtime.lastActiveAt)}</strong>
+                        <small>{sandboxRuntimeDetail.runtime.lastActiveReason || '暂无活跃原因'}</small>
+                      </article>
+                      <article className="inspector-overview-stat">
+                        <span>归档状态</span>
+                        <strong>
+                          {archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus) === '-'
+                            ? '未归档'
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || sandboxRuntimeDetail.runtime.archiveStatus)}
+                        </strong>
+                        <small>
+                          {sandboxRuntimeDetail.archive.archiveDirty
+                            ? '当前有未归档变更'
+                            : sandboxRuntimeDetail.archive.pendingArchiveUpdate
+                              ? '等待归档更新'
+                              : '归档状态稳定'}
+                        </small>
+                      </article>
+                    </div>
+
+                    <div className="inspector-kv-grid inspector-overview-kv-grid">
+                      <div><span>Sandbox 标识</span><strong className="mono">{sandboxDisplayLabel(sandboxRuntimeDetail)}</strong></div>
+                      <div><span>执行器</span><strong>{executorLabel(sandboxRuntimeDetail.runtime.executor)}</strong></div>
+                      <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
+                      <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
+                      <div><span>创建时间</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.createdAt || sandboxRuntimeDetail.runtime.startedAt)}</strong></div>
+                      <div><span>最后更新</span><strong>{formatDateTime(sandboxRuntimeDetail.runtime.updatedAt || sandboxRuntimeDetail.runtime.lastActiveAt)}</strong></div>
+                    </div>
+
+                    {sandboxRuntimeDetail.runtime.riskTags.length ? (
+                      <div className="runtime-risk-list inspector-overview-risk-list">
+                        {sandboxRuntimeDetail.runtime.riskTags.map((risk) => (
+                          <span key={risk} className="session-status">
+                            {sandboxRiskLabel(risk)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
 
                   <section className="inspector-overview-bottom-grid">
                     <article className="inspector-card inspector-card-large">
                       <div className="inspector-card-header">
-                        <h3>Sandbox 基础信息</h3>
-                        <span className="session-status">{executorLabel(sandboxRuntimeDetail.runtime.executor)}</span>
+                        <div>
+                          <h3>关联会话</h3>
+                          <p className="panel-caption">快速定位当前 Sandbox 的归属与运行入口。</p>
+                        </div>
+                        {sandboxRuntimeDetail.runtime.taskSessionId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono"
+                            onClick={() => openConversationSessionFromSandbox(sandboxRuntimeDetail.runtime.taskSessionId)}
+                          >
+                            {sandboxRuntimeDetail.runtime.taskSessionId}
+                          </button>
+                        ) : (
+                          <span className="session-meta">未绑定会话</span>
+                        )}
                       </div>
-                      <div className="inspector-kv-grid">
-                        <div><span>Sandbox 标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.sandboxId}</strong></div>
-                        <div><span>执行器</span><strong>{executorLabel(sandboxRuntimeDetail.runtime.executor)}</strong></div>
-                        <div><span>模板</span><strong className="mono">{sandboxRuntimeDetail.runtime.template || '-'}</strong></div>
+                      <div className="inspector-kv-grid inspector-overview-kv-grid">
+                        <div><span>会话标识</span><strong className="mono">{sandboxRuntimeDetail.runtime.taskSessionId || '-'}</strong></div>
                         <div><span>会话标题</span><strong>{sandboxRuntimeDetail.taskSession?.title || sandboxRuntimeDetail.runtime.taskTitle || '-'}</strong></div>
+                        <div><span>OpenCode 地址</span><strong className="mono">{sandboxRuntimeDetail.runtime.opencodeBaseUrl || '-'}</strong></div>
+                        <div><span>OSAC 地址</span><strong className="mono">{sandboxRuntimeDetail.runtime.osacEndpoint || '-'}</strong></div>
                       </div>
                     </article>
                     <article className="inspector-card inspector-overview-actions-card">
                       <div className="inspector-card-header">
-                        <h3>机器动作</h3>
-                        <span className="panel-caption">开机/关机/重启/归档</span>
+                        <div>
+                          <h3>运行动作</h3>
+                          <p className="panel-caption">开机、关机、重启与归档都集中在这里。</p>
+                        </div>
                       </div>
                       <div className="inspector-action-grid">
                         <button
@@ -8655,42 +9139,116 @@ export default function App() {
 
               {sandboxDetailTab === 'archive' ? (
                 <div className="inspector-page-stack">
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>当前快照</h3>
-                      <div className="action-inline runtime-actions">
-                        <button
-                          type="button"
-                          className="primary-btn"
-                          disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
-                          onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
-                        >
-                          手动归档
-                        </button>
+                  <article className="inspector-card archive-overview-hero">
+                    <div className="archive-overview-hero-top">
+                      <div>
+                        <p className="section-tag">归档摘要</p>
+                        <h3 className="archive-overview-title">
+                          {currentArchiveRow ? archiveEntryTypeLabel(currentArchiveRow.type) : '当前没有归档快照'}
+                        </h3>
+                        <p className="panel-caption archive-overview-caption">
+                          {currentArchiveRow
+                            ? `最近归档时间 ${formatDateTime(currentArchiveRow.timestamp)}`
+                            : '可在这里查看当前快照、历史快照以及归档元数据。'}
+                        </p>
+                      </div>
+                      <div className="inspector-overview-badges">
+                        <span className="session-status">快照 {archiveRows.length}</span>
+                        <span className={stateClassName(currentArchiveRow?.status || sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}>
+                          {currentArchiveRow
+                            ? archiveStatusLabel(currentArchiveRow.status)
+                            : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}
+                        </span>
+                        <span className="session-status">
+                          {sandboxRuntimeDetail.archive.archiveDirty
+                            ? '有未归档变更'
+                            : sandboxRuntimeDetail.archive.pendingArchiveUpdate
+                              ? '等待归档更新'
+                              : '状态稳定'}
+                        </span>
                       </div>
                     </div>
-                    {currentArchiveRow ? (
-                      <div className="inspector-governance-list">
-                        <article className="inspector-governance-event">
-                          <div className="inspector-governance-head">
-                            <span className="session-meta">{formatDateTime(currentArchiveRow.timestamp)}</span>
-                          </div>
-                          <div className="action-inline">
-                            <span className="session-status">归档事件</span>
-                            <span className={stateClassName(currentArchiveRow.status)}>{archiveStatusLabel(currentArchiveRow.status)}</span>
-                          </div>
-                          <p className="session-meta">{currentArchiveRow.reason} · {currentArchiveRow.size}</p>
-                          <p className="session-meta mono">{currentArchiveRow.hash}</p>
-                        </article>
+
+                    <div className="archive-overview-stat-strip">
+                      <article className="archive-overview-stat">
+                        <span>最近归档</span>
+                        <strong>{formatDateTime(currentArchiveRow?.timestamp)}</strong>
+                        <small>{currentArchiveRow?.reason || '当前没有归档原因'}</small>
+                      </article>
+                      <article className="archive-overview-stat">
+                        <span>快照数量</span>
+                        <strong>{archiveRows.length}</strong>
+                        <small>{archiveRows.length > 0 ? '含当前与历史快照' : '尚未生成快照'}</small>
+                      </article>
+                      <article className="archive-overview-stat">
+                        <span>当前体积</span>
+                        <strong>{currentArchiveRow?.size || '-'}</strong>
+                        <small>{currentArchiveRow?.hash ? '已记录校验哈希' : '暂未记录哈希'}</small>
+                      </article>
+                    </div>
+
+                    <div className="inspector-kv-grid archive-overview-kv-grid">
+                      <div>
+                        <span>当前快照</span>
+                        <strong className="mono">{currentArchiveRow?.id || sandboxRuntimeDetail.archive.snapshotKey || '-'}</strong>
                       </div>
-                    ) : (
-                      <p className="empty">当前没有归档记录。</p>
-                    )}
+                      <div>
+                        <span>归档状态</span>
+                        <strong>{currentArchiveRow ? archiveStatusLabel(currentArchiveRow.status) : archiveStatusLabel(sandboxRuntimeDetail.archive.archiveStatus || 'unknown')}</strong>
+                      </div>
+                      <div>
+                        <span>最近恢复</span>
+                        <strong>{formatDateTime(sandboxRuntimeDetail.archive.restoredAt)}</strong>
+                      </div>
+                      <div>
+                        <span>元数据键</span>
+                        <strong className="mono">{sandboxRuntimeDetail.archive.metadataKey || '-'}</strong>
+                      </div>
+                    </div>
+
+                    <div className="archive-overview-actions">
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId]}
+                        onClick={() => void runSandboxArchive(sandboxRuntimeDetail.runtime.sandboxId)}
+                      >
+                        手动归档
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn snapshot-action-download"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !currentArchiveRow?.snapshotKey}
+                        onClick={() =>
+                          currentArchiveRow?.snapshotKey
+                            ? void downloadSandboxSnapshot(sandboxRuntimeDetail.runtime.sandboxId, currentArchiveRow.snapshotKey)
+                            : undefined
+                        }
+                      >
+                        下载当前快照
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn snapshot-action-restore"
+                        disabled={sandboxBusyIds[sandboxRuntimeDetail.runtime.sandboxId] || !currentArchiveRow?.snapshotKey}
+                        onClick={() =>
+                          currentArchiveRow?.snapshotKey
+                            ? void runSandboxRestore(sandboxRuntimeDetail.runtime.sandboxId, currentArchiveRow.snapshotKey)
+                            : undefined
+                        }
+                      >
+                        恢复当前快照
+                      </button>
+                    </div>
                   </article>
 
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>历史快照</h3>
+                  <article className="inspector-card archive-history-card">
+                    <div className="inspector-card-header archive-history-head">
+                      <div>
+                        <h3>历史快照</h3>
+                        <p className="panel-caption">按时间查看快照、类型、体积和处理状态。</p>
+                      </div>
+                      <span className="session-status">共 {archiveSortedRows.length} 条</span>
                     </div>
                     <div className="table-wrap">
                       <table className="runtime-table archive-snapshot-table">
@@ -8818,12 +9376,16 @@ export default function App() {
                     </div>
                   </article>
 
-                  <article className="inspector-card">
-                    <div className="inspector-card-header">
-                      <h3>归档元数据</h3>
-                    </div>
+                  <details className="inspector-card archive-meta-card">
+                    <summary className="archive-meta-summary">
+                      <div>
+                        <h3>归档元数据</h3>
+                        <p className="panel-caption">原始元数据仍保留，默认收起避免打断主视线。</p>
+                      </div>
+                      <span className="session-status">JSON</span>
+                    </summary>
                     <pre className="json-block debug-output-block">{toJsonText(sandboxRuntimeDetail.archive)}</pre>
-                  </article>
+                  </details>
 
                   {archiveDetailRow ? (
                     <div className="archive-detail-popup-backdrop" role="dialog" aria-modal="true" onClick={() => setArchiveDetailRow(null)}>
@@ -8835,10 +9397,11 @@ export default function App() {
                       >
                         <div className="archive-detail-popup-head">
                           <div>
-                            <h3>快照详情</h3>
-                            <p className="panel-caption">完整标识与校验信息</p>
+                            <p className="section-tag">快照详情</p>
+                            <h3>{archiveDetailRow.id}</h3>
+                            <p className="panel-caption">完整标识、校验信息和恢复动作都集中在这里。</p>
                           </div>
-                          <div className="action-inline">
+                          <div className="archive-detail-popup-head-actions">
                             <span className={stateClassName(archiveDetailRow.status)}>{archiveStatusLabel(archiveDetailRow.status)}</span>
                             <button type="button" className="secondary-btn" onClick={() => setArchiveDetailRow(null)}>
                               关闭
@@ -8846,32 +9409,49 @@ export default function App() {
                           </div>
                         </div>
                         <div className="archive-detail-popup-body">
-                          <div className="archive-detail-facts">
-                            <article className="archive-detail-fact">
-                              <span>时间</span>
-                              <strong>{formatDateTime(archiveDetailRow.timestamp)}</strong>
+                          <article className="archive-detail-summary-card">
+                            <div className="archive-detail-summary-top">
+                              <div>
+                                <span className="archive-detail-summary-label">快照概览</span>
+                                <strong className="archive-detail-summary-title">{archiveEntryTypeLabel(archiveDetailRow.type)}</strong>
+                                <p className="panel-caption archive-detail-summary-caption">
+                                  {formatDateTime(archiveDetailRow.timestamp)} · {archiveDetailRow.reason}
+                                </p>
+                              </div>
+                              <div className="archive-detail-summary-badges">
+                                <span className="session-status">{archiveDetailRow.size}</span>
+                                <span className={stateClassName(archiveDetailRow.status)}>{archiveStatusLabel(archiveDetailRow.status)}</span>
+                              </div>
+                            </div>
+                            <div className="archive-detail-facts">
+                              <article className="archive-detail-fact">
+                                <span>时间</span>
+                                <strong>{formatDateTime(archiveDetailRow.timestamp)}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>类型</span>
+                                <strong>{archiveEntryTypeLabel(archiveDetailRow.type)}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>大小</span>
+                                <strong>{archiveDetailRow.size}</strong>
+                              </article>
+                              <article className="archive-detail-fact">
+                                <span>原因</span>
+                                <strong>{archiveDetailRow.reason}</strong>
+                              </article>
+                            </div>
+                          </article>
+                          <div className="archive-detail-code-grid">
+                            <article className="archive-detail-code-card">
+                              <span>快照标识</span>
+                              <code className="mono">{archiveDetailRow.id}</code>
                             </article>
-                            <article className="archive-detail-fact">
-                              <span>类型</span>
-                              <strong>{archiveDetailRow.type}</strong>
-                            </article>
-                            <article className="archive-detail-fact">
-                              <span>大小</span>
-                              <strong>{archiveDetailRow.size}</strong>
-                            </article>
-                            <article className="archive-detail-fact">
-                              <span>原因</span>
-                              <strong>{archiveDetailRow.reason}</strong>
+                            <article className="archive-detail-code-card">
+                              <span>哈希</span>
+                              <code className="mono">{archiveDetailRow.hash}</code>
                             </article>
                           </div>
-                          <article className="archive-detail-code-card">
-                            <span>快照标识</span>
-                            <code className="mono">{archiveDetailRow.id}</code>
-                          </article>
-                          <article className="archive-detail-code-card">
-                            <span>哈希</span>
-                            <code className="mono">{archiveDetailRow.hash}</code>
-                          </article>
                         </div>
                         <div className="archive-detail-popup-actions action-inline runtime-actions">
                           <button
@@ -9486,10 +10066,25 @@ export default function App() {
       </>
     );
   };
+  const renderAuditEntryActions = (entry: AuditLogEntry) => (
+    <div className="audit-link-stack">
+      {entry.targetVmId ? (
+        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openSandboxFromAudit(entry)}>
+          查看 Sandbox
+        </button>
+      ) : null}
+      {entry.sessionId ? (
+        <button type="button" className="link-btn sandbox-jump-btn mono" onClick={() => openConversationFromAudit(entry)}>
+          查看对话
+        </button>
+      ) : null}
+    </div>
+  );
+
   const renderAuditSection = () => (
     <>
-      <main className="content-stack">
-        <section className="page-intro-grid audit-intro-grid fade-in">
+      <main className="content-stack viewport-lock-page audit-page">
+        <section className="fade-in">
           <article className="panel hero-panel">
             <div className="panel-header panel-header-stack">
               <div>
@@ -9513,103 +10108,122 @@ export default function App() {
               </div>
             </div>
           </article>
+        </section>
 
-          <article className="panel aside-panel">
-            <div className="panel-header panel-header-stack">
-              <div>
-                <p className="section-tag">筛选状态</p>
-                <h2>当前范围</h2>
+        <section className="panel fade-in audit-filter-panel">
+          <div className="audit-filter-toolbar">
+            <div className="audit-filter-toolbar-copy">
+              <p className="section-tag">筛选条件</p>
+              <h2>筛选条件</h2>
+              <span className="panel-caption">按操作人、动作、结果、实例和时间快速定位。</span>
+            </div>
+            <div className="audit-filter-toolbar-meta">
+              <span className="audit-filter-meta-pill">当前 {auditEntries.length} 条</span>
+              <span className="audit-filter-meta-pill">
+                {auditActiveFilterCount > 0 ? `已生效 ${auditActiveFilterCount} 项` : '未启用筛选'}
+              </span>
+              <div className="action-inline audit-filter-actions">
+                <button type="button" className="primary-btn" onClick={() => void applyAuditFilters()}>
+                  应用筛选
+                </button>
+                <button type="button" className="secondary-btn" onClick={() => void resetAuditFilters()}>
+                  重置
+                </button>
               </div>
             </div>
-            <ul className="signal-list">
-              <li>总日志数：{auditResponseMeta.total}</li>
-              <li>当前筛选后：{auditResponseMeta.filteredTotal || auditEntries.length}</li>
-              <li>可筛维度：操作人 / 动作 / 结果 / 会话 / 目标实例 / 时间</li>
-            </ul>
-          </article>
-        </section>
-
-        <section className="panel fade-in">
-          <div className="panel-header">
-            <h2>筛选条件</h2>
-            <span className="panel-caption">按操作人、动作、结果、会话、目标实例和时间筛选</span>
           </div>
           <div className="audit-filter-grid">
-            <input
-              className="control-input"
-              placeholder="搜索日志 ID、详情、实例、会话"
-              value={auditFilters.query}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
-            />
-            <select
-              className="control-input"
-              value={auditFilters.operator}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
-            >
-              <option value="all">全部操作人</option>
-              {auditOperatorOptions.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-            <select
-              className="control-input"
-              value={auditFilters.action}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
-            >
-              <option value="all">全部动作</option>
-              {auditActionOptions.map((item) => (
-                <option key={item} value={item}>
-                  {auditActionLabel(item)}
-                </option>
-              ))}
-            </select>
-            <select
-              className="control-input"
-              value={auditFilters.result}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
-            >
-              <option value="all">全部结果</option>
-              <option value="success">成功</option>
-              <option value="failed">失败</option>
-            </select>
-            <input
-              className="control-input"
-              placeholder="会话 ID"
-              value={auditFilters.sessionId}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, sessionId: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              placeholder="目标实例 ID"
-              value={auditFilters.targetVmId}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, targetVmId: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              type="datetime-local"
-              value={auditFilters.from}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
-            />
-            <input
-              className="control-input"
-              type="datetime-local"
-              value={auditFilters.to}
-              onChange={(event) => setAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
-            />
-          </div>
-          <div className="action-inline">
-            <button type="button" className="primary-btn" onClick={() => void applyAuditFilters()}>
-              应用筛选
-            </button>
-            <button type="button" className="secondary-btn" onClick={() => void resetAuditFilters()}>
-              重置
-            </button>
+            <label className="audit-filter-field audit-filter-field-wide">
+              <span>搜索</span>
+              <input
+                className="control-input"
+                placeholder="日志 ID、详情、实例、会话"
+                value={auditFilters.query}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>操作人</span>
+              <select
+                className="control-input"
+                value={auditFilters.operator}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
+              >
+                <option value="all">全部操作人</option>
+                {auditOperatorOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>动作</span>
+              <select
+                className="control-input"
+                value={auditFilters.action}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
+              >
+                <option value="all">全部动作</option>
+                {auditActionOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {auditActionLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>结果</span>
+              <select
+                className="control-input"
+                value={auditFilters.result}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
+              >
+                <option value="all">全部结果</option>
+                <option value="success">成功</option>
+                <option value="failed">失败</option>
+              </select>
+            </label>
+            <label className="audit-filter-field">
+              <span>会话</span>
+              <input
+                className="control-input"
+                placeholder="会话 ID"
+                value={auditFilters.sessionId}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, sessionId: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>实例</span>
+              <input
+                className="control-input"
+                placeholder="目标实例 ID"
+                value={auditFilters.targetVmId}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, targetVmId: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>开始时间</span>
+              <input
+                className="control-input"
+                type="datetime-local"
+                value={auditFilters.from}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
+              />
+            </label>
+            <label className="audit-filter-field">
+              <span>结束时间</span>
+              <input
+                className="control-input"
+                type="datetime-local"
+                value={auditFilters.to}
+                onChange={(event) => setAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
+              />
+            </label>
           </div>
         </section>
 
-        <section className="panel fade-in">
+        <section className="panel fade-in audit-log-panel">
           <div className="panel-header">
             <h2>审计日志</h2>
             <span className="panel-caption">
@@ -9646,8 +10260,18 @@ export default function App() {
                         <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
                       </td>
                       <td>{entry.operator}</td>
-                      <td className="mono">{entry.targetVmId}</td>
-                      <td className="mono">{entry.sessionId || '-'}</td>
+                      <td>
+                        <div className="audit-linked-cell">
+                          <span className="mono">{entry.targetVmId}</span>
+                          {entry.targetVmId ? renderAuditEntryActions({ ...entry, sessionId: undefined }) : null}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="audit-linked-cell">
+                          <span className="mono">{entry.sessionId || '-'}</span>
+                          {entry.sessionId ? renderAuditEntryActions({ ...entry, targetVmId: '' }) : null}
+                        </div>
+                      </td>
                       <td>{entry.detail || '-'}</td>
                       <td>
                         <button type="button" className="table-btn" onClick={() => void openAuditDetail(entry.id)}>
@@ -9693,6 +10317,20 @@ export default function App() {
                   <div>会话 ID: {auditDetail.entry.sessionId || '-'}</div>
                   <div>关联记录: {auditDetail.relatedEntries.length || 0}</div>
                 </div>
+                {(auditDetail.entry.sessionId || auditDetail.entry.targetVmId) ? (
+                  <div className="action-inline audit-detail-actions">
+                    {auditDetail.entry.sessionId ? (
+                      <button type="button" className="secondary-btn" onClick={() => openConversationFromAudit(auditDetail.entry)}>
+                        查看对应对话
+                      </button>
+                    ) : null}
+                    {auditDetail.entry.targetVmId ? (
+                      <button type="button" className="secondary-btn" onClick={() => openSandboxFromAudit(auditDetail.entry)}>
+                        查看对应 Sandbox
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
               </article>
               {auditDetail.relatedEntries.length > 0 ? (
@@ -9704,6 +10342,7 @@ export default function App() {
                         <strong>{auditActionLabel(entry.action)} · {auditResultLabel(entry.result)}</strong>
                         <span>{formatDateTime(entry.timestamp)}</span>
                         <span className="mono">{entry.sessionId || entry.targetVmId}</span>
+                        {(entry.sessionId || entry.targetVmId) ? renderAuditEntryActions(entry) : null}
                         {entry.detail ? <p>{entry.detail}</p> : null}
                       </article>
                     ))}
@@ -9717,6 +10356,30 @@ export default function App() {
     </>
   );
 
+  const handleSidebarSectionOpen = (nextSection: SectionKey) => {
+    setConversationDialog(null);
+    setConversationDialogOrigin(null);
+    setConversationSectionOrigin(null);
+    setSandboxModalOpen(false);
+    setSandboxModalOrigin(null);
+    setSandboxSectionOrigin(null);
+    setSidebarMobileOpen(false);
+    setActiveSection(nextSection);
+  };
+
+  const handleSidebarToggle = () => {
+    if (typeof window !== 'undefined' && window.innerWidth <= SIDEBAR_STACK_BREAKPOINT) {
+      setSidebarMobileOpen((current) => !current);
+      return;
+    }
+
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      persistStoredSidebarCollapsed(next);
+      return next;
+    });
+  };
+
   const renderContent = () => {
     if (loading) {
       return <main className="loading-state">正在加载 {breadcrumbTitle} ...</main>;
@@ -9729,12 +10392,13 @@ export default function App() {
         <UserManagementSection
           onError={setError}
           onUpdatedAtChange={setUserManagementUpdatedAt}
-          onOpenConversation={(sessionId) => {
-            setActiveSection('conversation');
-            openConversationDialog(sessionId, 'overview');
+          persistedState={userManagementViewState}
+          onStateChange={setUserManagementViewState}
+          onOpenConversation={(sessionId, origin) => {
+            openConversationDialog(sessionId, 'overview', origin || null);
           }}
-          onOpenSandbox={(sandboxId) => {
-            openSandboxFromConversation(sandboxId);
+          onOpenSandbox={(sandboxId, origin) => {
+            void openSandboxDetail(sandboxId, origin || null);
           }}
         />
       );
@@ -9748,26 +10412,32 @@ export default function App() {
   };
 
   return (
-    <div className="page-shell">
+    <div
+      className={`page-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}${sidebarMobileOpen ? ' sidebar-mobile-open' : ''}`}
+    >
       <div className="background-glow" aria-hidden="true" />
+      <button
+        type="button"
+        className="sidebar-mobile-scrim"
+        aria-label="关闭侧边栏"
+        onClick={() => setSidebarMobileOpen(false)}
+      />
       <div className="app-layout">
         <aside className="sidebar fade-in" onWheelCapture={handleSidebarWheel}>
           <div className="sidebar-brand">
             <div className="sidebar-brand-row">
               <div>
-                <p className="eyebrow">ONECEO Control Rail</p>
+                <p className="eyebrow">ONECEO</p>
                 <p className="sidebar-title">管理控制台</p>
               </div>
               <span className="env-badge">OPS</span>
             </div>
-            <p className="sidebar-copy">按运行模块和平台配置分组展示后台模块。</p>
           </div>
           <nav className="sidebar-nav" aria-label="Primary" ref={sidebarNavRef}>
             {NAV_GROUPS.map((group) => (
               <section key={group.key} className="nav-group">
                 <div className="nav-group-header">
                   <p className="nav-group-title">{group.label}</p>
-                  <p className="nav-group-copy">{group.description}</p>
                 </div>
                 <div className="nav-group-list">
                   {NAV_ITEMS.filter((item) => item.group === group.key).map((item) => (
@@ -9775,13 +10445,12 @@ export default function App() {
                       key={item.key}
                       type="button"
                       className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
-                      onClick={() => setActiveSection(item.key)}
+                      onClick={() => handleSidebarSectionOpen(item.key)}
+                      title={sidebarCollapsed ? item.label : undefined}
                     >
                       <span className="nav-item-tag">{item.tag}</span>
                       <span className="nav-item-body">
                         <span>{item.label}</span>
-                        <small>{item.subtitle}</small>
-                        <em>{item.signal}</em>
                       </span>
                     </button>
                   ))}
@@ -9790,55 +10459,139 @@ export default function App() {
             ))}
           </nav>
           <div className="sidebar-footer">
-            <p className="sidebar-footer-title">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</p>
-            <p className="sidebar-footer-copy">{adminRoleLabel(adminUser?.role)}</p>
+            <span className="sidebar-footer-avatar" aria-hidden="true">
+              {adminInitials(adminUser?.displayName, adminUser?.loginName)}
+            </span>
+            <div className="sidebar-footer-body">
+              <p className="sidebar-footer-title">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</p>
+              <span className="sidebar-footer-role">{adminRoleLabel(adminUser?.role)}</span>
+            </div>
           </div>
         </aside>
 
-        <section className={`main-area ${activeSection === 'conversation' ? 'conversation-main-area' : ''}`}>
+        <section className={`main-area ${activeSection === 'conversation' ? 'conversation-main-area' : ''}${lockMainAreaScroll ? ' main-area-locked' : ''}`}>
           <header className="top-header fade-in">
             <div className="page-header-shell page-header-compact-bar">
               <div className="header-main page-header-mainline">
-                <span className="topbar-pill">{activeNavGroup.label}</span>
-                <p className="eyebrow">
-                  {activeNavGroup.label} / {breadcrumbTitle}
-                </p>
-                <h1>{breadcrumbTitle}</h1>
-                <p className="subtitle">{activeNavItem.description}</p>
-              </div>
-              <div className="page-header-compact-meta">
-                <span className="updated-at">最后更新: {formatDateTime(updatedAtLabel)}</span>
-                <span className={`service-state ${activeServiceOnline ? 'ok' : 'down'}`}>
-                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
-                </span>
-                <span className="updated-at">{adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}</span>
-              </div>
-              <div className="header-actions page-header-compact-actions">
-                <label className="theme-switcher" title={selectedThemeOption?.description || '切换后台主题'}>
-                  <span>主题</span>
-                  <select value={currentTheme} onChange={(event) => void handleThemeChange(event)} disabled={themeSaving}>
-                    {themeOptions.map((theme) => (
-                      <option key={theme.key} value={theme.key}>
-                        {theme.label}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="theme-switcher-swatches" aria-hidden="true">
-                    {(selectedThemeOption?.swatches || []).slice(0, 3).map((swatch) => (
-                      <i key={swatch} style={{ backgroundColor: swatch }} />
-                    ))}
-                  </span>
-                </label>
                 <button
                   type="button"
-                  className="primary-btn"
+                  className="icon-btn sidebar-toggle-btn"
+                  aria-label="切换侧边栏"
+                  onClick={handleSidebarToggle}
+                >
+                  <span aria-hidden="true">☰</span>
+                </button>
+                <span className="topbar-pill">{activeNavGroup.label}</span>
+                <div className="page-header-copy">
+                  <h1>{breadcrumbTitle}</h1>
+                </div>
+              </div>
+              <div className="page-header-compact-meta">
+                <span className="updated-at topbar-meta-pill topbar-meta-pill-time">最后更新: {formatDateTime(updatedAtLabel)}</span>
+                <span className={`service-state topbar-meta-pill ${activeServiceOnline ? 'ok' : 'down'}`}>
+                  {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
+                </span>
+                <span className="updated-at topbar-meta-pill topbar-meta-pill-user">
+                  {adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}
+                </span>
+              </div>
+              <div className="header-actions page-header-compact-actions">
+                <div className="topbar-settings" ref={settingsMenuRef}>
+                  <button
+                    type="button"
+                    className={`icon-btn topbar-settings-btn ${settingsMenuOpen ? 'active' : ''}`}
+                    aria-label="界面设置"
+                    aria-haspopup="dialog"
+                    aria-expanded={settingsMenuOpen}
+                    onClick={() => setSettingsMenuOpen((open) => !open)}
+                  >
+                    <svg className="topbar-settings-icon" viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M8.861 2.1a1.25 1.25 0 0 1 2.278 0l.41 1.008c.158.388.504.664.92.735l1.081.181a1.25 1.25 0 0 1 .904 1.813l-.516.968a1.19 1.19 0 0 0 0 1.12l.516.968a1.25 1.25 0 0 1-.904 1.813l-1.08.18a1.2 1.2 0 0 0-.922.736l-.41 1.008a1.25 1.25 0 0 1-2.277 0l-.41-1.008a1.2 1.2 0 0 0-.921-.735l-1.081-.181a1.25 1.25 0 0 1-.904-1.813l.516-.968a1.19 1.19 0 0 0 0-1.12l-.516-.968a1.25 1.25 0 0 1 .904-1.813l1.08-.18a1.2 1.2 0 0 0 .922-.736z" />
+                      <path d="M10 7.05A2.95 2.95 0 1 0 10 12.95A2.95 2.95 0 1 0 10 7.05Z" />
+                    </svg>
+                  </button>
+                  {settingsMenuOpen ? (
+                    <div className="topbar-settings-menu" role="dialog" aria-label="界面设置">
+                      <div className="topbar-settings-head">
+                        <div className="topbar-settings-copy">
+                          <strong>界面设置</strong>
+                          <span>
+                            {selectedThemeOption?.label} · {selectedThemeMode?.label}
+                            {currentThemeMode === 'system' ? `（当前${resolvedThemeTone === 'dark' ? '暗色' : '亮色'}）` : ''}
+                          </span>
+                        </div>
+                        {themeSaving ? <span className="session-status">保存中</span> : null}
+                      </div>
+
+                      <div className="topbar-settings-section">
+                        <div className="topbar-settings-section-head">
+                          <span>主题</span>
+                          <small>GitHub、Nord、Rose Pine</small>
+                        </div>
+                        <div className="theme-family-grid">
+                          {themeOptions.map((theme) => {
+                            const swatches = resolvedThemeTone === 'dark' ? theme.darkSwatches : theme.lightSwatches;
+                            return (
+                              <button
+                                key={theme.key}
+                                type="button"
+                                className={`theme-family-card ${theme.key === currentTheme ? 'active' : ''}`}
+                                onClick={() => void saveThemePreferences(theme.key, currentThemeMode)}
+                                disabled={themeSaving}
+                              >
+                                <div className="theme-family-card-copy">
+                                  <strong>{theme.label}</strong>
+                                  <span>{theme.description}</span>
+                                </div>
+                                <div className="theme-family-swatches" aria-hidden="true">
+                                  {swatches.map((swatch) => (
+                                    <i key={`${theme.key}-${swatch}`} style={{ backgroundColor: swatch }} />
+                                  ))}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="topbar-settings-section">
+                        <div className="topbar-settings-section-head">
+                          <span>外观</span>
+                          <small>亮色、暗色、跟随系统</small>
+                        </div>
+                        <div className="theme-mode-strip" role="group" aria-label="外观模式">
+                          {themeModeOptions.map((mode) => (
+                            <button
+                              key={mode.key}
+                              type="button"
+                              className={`theme-mode-btn ${mode.key === currentThemeMode ? 'active' : ''}`}
+                              onClick={() => void saveThemePreferences(currentTheme, mode.key)}
+                              disabled={themeSaving}
+                            >
+                              <strong>{mode.label}</strong>
+                              <span>{mode.description}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <p className="topbar-settings-note">
+                          当前使用 {selectedThemeOption?.label} · {resolvedThemeTone === 'dark' ? '暗色' : '亮色'}。
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="primary-btn topbar-btn topbar-refresh-btn"
                   onClick={() => void refreshActiveSection()}
                   disabled={refreshing}
                 >
-                  {refreshing ? '刷新中...' : '刷新当前页面'}
+                  <span aria-hidden="true">↻</span>
+                  <span>{refreshing ? '刷新中...' : '刷新'}</span>
                 </button>
-                <button type="button" className="secondary-btn" onClick={() => void handleAdminLogout()}>
-                  退出登录
+                <button type="button" className="secondary-btn topbar-btn topbar-logout-btn" onClick={() => void handleAdminLogout()}>
+                  <span aria-hidden="true">⎋</span>
+                  <span>退出</span>
                 </button>
               </div>
             </div>
@@ -9851,6 +10604,16 @@ export default function App() {
           ) : null}
 
           {renderContent()}
+          {activeSection !== 'conversation' && conversationDialog ? (
+            <div className="section-overlay-host section-overlay-host-conversation">
+              {renderConversationOpsSection()}
+            </div>
+          ) : null}
+          {activeSection !== 'sandbox' && sandboxModalOpen && sandboxRuntimeDetail ? (
+            <div className="section-overlay-host section-overlay-host-sandbox">
+              {renderSandboxSection()}
+            </div>
+          ) : null}
         </section>
       </div>
       {operationOverlay ? (

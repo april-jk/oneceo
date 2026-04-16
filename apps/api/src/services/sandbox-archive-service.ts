@@ -140,6 +140,10 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
 function asBoolean(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   const normalized = asText(value).toLowerCase();
@@ -334,10 +338,20 @@ async function resolveWorkspaceRoot(sandboxId: string): Promise<{
   existingMetadata: Record<string, unknown>;
 }> {
   const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
-  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const liveSandboxInfo = await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null);
+  const metadata = {
+    ...asRecord(env?.metadata),
+    ...asRecord(liveSandboxInfo?.metadata),
+  };
   const taskSessionId = extractTaskSessionId(metadata);
-  const fromMeta = asText((metadata as any).opencodeWorkspaceRoot);
-  const stateFromMeta = asText((metadata as any).opencodeStateRoot);
+  const fromMeta =
+    asText((metadata as any).opencodeWorkspaceRoot) ||
+    asText((metadata as any).altusWorkspaceRoot) ||
+    asText((metadata as any).workspaceRoot);
+  const stateFromMeta =
+    asText((metadata as any).opencodeStateRoot) ||
+    asText((metadata as any).altusStateRoot) ||
+    asText((metadata as any).stateRoot);
   const codexArchiveHomeFromMeta = asText((metadata as any).codexArchiveHome);
   const codexDotCodexPathFromMeta = asText((metadata as any).codexDotCodexPath);
 
@@ -659,7 +673,11 @@ export async function restoreWorkspaceIfArchived(
 
 export async function resolveTaskSessionIdBySandbox(sandboxId: string): Promise<string | null> {
   const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
-  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const liveSandboxInfo = await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null);
+  const metadata = {
+    ...asRecord(env?.metadata),
+    ...asRecord(liveSandboxInfo?.metadata),
+  };
   const taskSessionId = extractTaskSessionId(metadata);
   if (taskSessionId) return taskSessionId;
   const found = await sandboxArchiveServiceDeps.taskCreationFileMemoryStore.findSessionByOrchestratorSessionId(
@@ -670,7 +688,11 @@ export async function resolveTaskSessionIdBySandbox(sandboxId: string): Promise<
 
 export async function listSandboxArchiveHistory(sandboxId: string): Promise<SandboxArchiveHistoryEntry[]> {
   const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
-  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const liveSandboxInfo = await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null);
+  const metadata = {
+    ...asRecord(env?.metadata),
+    ...asRecord(liveSandboxInfo?.metadata),
+  };
   const taskSessionId = extractTaskSessionId(metadata) || (await resolveTaskSessionIdBySandbox(sandboxId));
   const metadataKey = asText((metadata as any).r2ArchiveMetadataKey) || buildMetadataKey(taskSessionId, sandboxId);
 
@@ -783,7 +805,11 @@ export async function getSandboxArchiveDownloadSpec(
   }
 
   const env = await sandboxArchiveServiceDeps.sandboxExecutionEnvironmentDAO.getBySessionId(sandboxId);
-  const metadata = (env?.metadata || {}) as Record<string, unknown>;
+  const liveSandboxInfo = await sandboxArchiveServiceDeps.e2bConnector.getSandboxInfo(sandboxId).catch(() => null);
+  const metadata = {
+    ...asRecord(env?.metadata),
+    ...asRecord(liveSandboxInfo?.metadata),
+  };
   const requestedSnapshotKey = asText(options?.snapshotKey);
 
   const history = await listSandboxArchiveHistory(sandboxId).catch(() => []);

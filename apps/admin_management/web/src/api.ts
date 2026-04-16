@@ -1,5 +1,6 @@
 import type {
   AdminThemeKey,
+  AdminThemeMode,
   AdminThemeSettings,
   AgentManagementOverview,
   AppUserDetailResponse,
@@ -167,10 +168,10 @@ export const api = {
     }),
 
   getAdminTheme: () => request<AdminThemeSettings>('/api/theme'),
-  updateAdminTheme: (themeKey: AdminThemeKey) =>
+  updateAdminTheme: (payload: { themeKey: AdminThemeKey; mode: AdminThemeMode }) =>
     request<AdminThemeSettings>('/api/theme', {
       method: 'PUT',
-      body: JSON.stringify({ themeKey }),
+      body: JSON.stringify(payload),
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
@@ -594,6 +595,8 @@ export const api = {
     hasConversation?: string;
     hasSandbox?: string;
     ownershipHealth?: string;
+    sortKey?: string;
+    sortDirection?: string;
   }) => {
     const params = new URLSearchParams();
     if (query?.limit !== undefined) params.set('limit', String(query.limit));
@@ -604,6 +607,8 @@ export const api = {
     if (query?.hasConversation) params.set('hasConversation', query.hasConversation);
     if (query?.hasSandbox) params.set('hasSandbox', query.hasSandbox);
     if (query?.ownershipHealth) params.set('ownershipHealth', query.ownershipHealth);
+    if (query?.sortKey) params.set('sortKey', query.sortKey);
+    if (query?.sortDirection) params.set('sortDirection', query.sortDirection);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<AppUserListResponse>(`/api/user-management/app-users${suffix}`);
   },
@@ -613,11 +618,6 @@ export const api = {
     request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/status`, {
       method: 'POST',
       body: JSON.stringify({ status }),
-    }),
-  revokeAppUserSessions: (userId: string) =>
-    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/revoke-sessions`, {
-      method: 'POST',
-      body: JSON.stringify({}),
     }),
   getConversationSessionCore: (sessionId: string) =>
     request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/core`, {

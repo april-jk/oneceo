@@ -105,3 +105,24 @@
   - 移动端视口下页面可正常打开且未出现横向溢出
   - 页面内已实际插入 `https://analytics.oneceo.ai/script.js`，并带上正确的 `data-website-id`
   - 平台 deployment panel 已显示 `latestStatus=SUCCESS`，Umami 统计已出现 `pageviews/visits/visitors/activeVisitors`
+
+## 2026-04-16 统一 deployment runtime 收口记录
+
+- 已在 API 侧新增 `task-session-deployment-runtime-service.ts`，把以下公共步骤收敛为一条共享运行时：
+  - 会话运行环境解析
+  - 部署面板数据构建
+  - Umami 绑定准备
+  - GitHub 工作区发布
+  - Railway source refresh / deploy / redeploy / rollback
+  - 公网健康检查等待
+- 已让两条后端入口改为共用同一 deployment runtime：
+  - `direct-mode-deployment-capability-service.ts`
+  - `task-creation-routes.ts`
+- 已让平台按钮和消息触发继续向“一条执行链”收口：
+  - Home 会话页统一使用固定 deployment prompt 构造器
+  - `TaskCreationChat` 预览面板接入消息触发部署
+  - `OpencodePreviewPanel` 与 `AltusRunReplayDrawer` 不再保留旧部署 API 作为默认动作链路
+- 当前平台侧的部署执行语义收敛为：
+  - UI 负责发起自然语言部署意图
+  - Altus / direct capability / 路由接口共用同一后端 deployment runtime
+  - 部署详情查询仍保留独立读取接口，用于 deployment panel 和 replay 展示

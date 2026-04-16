@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createSign } from 'node:crypto';
 import { execFile as execFileCallback } from 'node:child_process';
 import { readdir, rm } from 'node:fs/promises';
 import https from 'node:https';
@@ -27,6 +27,15 @@ type GithubRepoResponse = {
   } | null;
 };
 
+type GithubBranchResponse = {
+  name?: string;
+};
+
+type GithubDeploymentAuth = {
+  token: string;
+  owner: string;
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -43,15 +52,40 @@ function sanitizeUserSegment(userId: string) {
   return userId.replace(/[^a-zA-Z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '') || 'user';
 }
 
-function buildRepoName(userId: string) {
+function sanitizeProjectSegment(projectKey: string) {
+  return projectKey.replace(/[^a-zA-Z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
+
+function buildRepoName(userId: string, projectKey = 'default') {
   const prefix = asText(process.env.GITHUB_DEPLOYMENT_REPO_PREFIX) || 'oneceo-deploy';
+  if (projectKey === 'default') {
+    const normalized = sanitizeUserSegment(userId).slice(0, 48);
+    const hash = createHash('sha1').update(userId).digest('hex').slice(0, 8);
+    return `${prefix}-${normalized}-${hash}`.slice(0, 96);
+  }
   const normalized = sanitizeUserSegment(userId).slice(0, 48);
-  const hash = createHash('sha1').update(userId).digest('hex').slice(0, 8);
-  return `${prefix}-${normalized}-${hash}`.slice(0, 96);
+  const userHash = createHash('sha1').update(userId).digest('hex').slice(0, 6);
+  const projectSegment = sanitizeProjectSegment(projectKey).slice(0, 24);
+  const projectHash = createHash('sha1').update(projectKey).digest('hex').slice(0, 8);
+  return `${prefix}-${normalized}-${userHash}-${projectSegment}-${projectHash}`.slice(0, 96);
 }
 
 function resolveDefaultBranch() {
   return asText(process.env.GITHUB_DEPLOYMENT_BRANCH) || 'main';
+}
+
+function base64UrlEncode(value: string) {
+  return Buffer.from(value, 'utf8')
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+function normalizeGithubAppPrivateKey(value: string) {
+  const trimmed = asText(value);
+  if (!trimmed) return '';
+  return trimmed.replace(/\\n/g, '\n');
 }
 
 async function githubRequest<T>(
@@ -139,15 +173,6 @@ async function githubRequest<T>(
   return (payload || null) as T | null;
 }
 
-async function resolveGithubLogin(token: string) {
-  const payload = await githubRequest<{ login?: string }>(token, '/user');
-  const login = asText(payload?.login);
-  if (!login) {
-    throw new Error('无法获取 GitHub 账号信息');
-  }
-  return login;
-}
-
 function mapRepository(payload: GithubRepoResponse | null, fallbackOwner?: string, fallbackName?: string) {
   if (!payload) return null;
   const owner = asText(payload.owner?.login) || fallbackOwner || '';
@@ -173,8 +198,136 @@ async function getRepository(token: string, owner: string, name: string) {
   return mapRepository(payload, owner, name);
 }
 
-async function createRepository(token: string, owner: string, actorLogin: string, userId: string) {
-  const name = buildRepoName(userId);
+function parseRepositoryFullName(repositoryFullName: string) {
+  const normalized = asText(repositoryFullName);
+  const [owner, name] = normalized.split('/');
+  if (!owner || !name) {
+    throw new Error('GitHub 仓库标识无效');
+  }
+  return {
+    owner,
+    name,
+  };
+}
+
+function hasGithubAppDeploymentConfig() {
+  return Boolean(
+    asText(process.env.GITHUB_DEPLOYMENT_APP_ID) &&
+      asText(process.env.GITHUB_DEPLOYMENT_INSTALLATION_ID) &&
+      asText(process.env.GITHUB_DEPLOYMENT_APP_PRIVATE_KEY)
+  );
+}
+
+function createGithubAppJwt(appId: string, privateKey: string) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      iat: now - 60,
+      exp: now + 9 * 60,
+      iss: appId,
+    })
+  );
+  const signingInput = `${header}.${payload}`;
+  const signature = createSign('RSA-SHA256')
+    .update(signingInput)
+    .end()
+    .sign(privateKey, 'base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  return `${signingInput}.${signature}`;
+}
+
+async function createGithubInstallationToken() {
+  const appId = requireEnv('GITHUB_DEPLOYMENT_APP_ID');
+  const installationId = requireEnv('GITHUB_DEPLOYMENT_INSTALLATION_ID');
+  const owner = requireEnv('GITHUB_DEPLOYMENT_OWNER');
+  const privateKey = normalizeGithubAppPrivateKey(requireEnv('GITHUB_DEPLOYMENT_APP_PRIVATE_KEY'));
+  const jwt = createGithubAppJwt(appId, privateKey);
+  const payload = await githubRequest<{
+    token?: string;
+  }>(jwt, `/app/installations/${encodeURIComponent(installationId)}/access_tokens`, {
+    method: 'POST',
+    headers: {
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  const token = asText(payload?.token);
+  if (!token) {
+    throw new Error('GitHub App installation token 获取失败');
+  }
+  return {
+    token,
+    owner,
+  } satisfies GithubDeploymentAuth;
+}
+
+async function getGithubDeploymentAuth(): Promise<GithubDeploymentAuth> {
+  if (!hasGithubAppDeploymentConfig()) {
+    throw new Error('GitHub App 部署配置未完成，缺少 GITHUB_DEPLOYMENT_APP_* 环境变量');
+  }
+  return createGithubInstallationToken();
+}
+
+async function getRepositoryBranch(
+  token: string,
+  owner: string,
+  name: string,
+  branch: string
+) {
+  return githubRequest<GithubBranchResponse>(
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(branch)}`,
+    {
+      allowNotFound: true,
+    }
+  );
+}
+
+async function initializeRepositoryBranch(
+  token: string,
+  owner: string,
+  name: string,
+  branch: string
+) {
+  await githubRequest(
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/README.md`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        message: 'chore: initialize managed deployment repository',
+        branch,
+        content: Buffer.from(
+          '# OneCEO Managed Deployment Repository\n\nThis repository is managed by the OneCEO deployment pipeline.\n',
+          'utf-8'
+        ).toString('base64'),
+      }),
+    }
+  );
+}
+
+async function ensureRepositoryBranchReady(token: string, repository: ManagedDeploymentRepository) {
+  const branch = asText(repository.defaultBranch) || resolveDefaultBranch();
+  const existingBranch = await getRepositoryBranch(token, repository.owner, repository.name, branch);
+  if (asText(existingBranch?.name)) {
+    return repository;
+  }
+  await initializeRepositoryBranch(token, repository.owner, repository.name, branch);
+  return {
+    ...repository,
+    defaultBranch: branch,
+  } satisfies ManagedDeploymentRepository;
+}
+
+async function createRepository(
+  token: string,
+  owner: string,
+  userId: string,
+  projectKey = 'default'
+) {
+  const name = buildRepoName(userId, projectKey);
   const branch = resolveDefaultBranch();
   const body = JSON.stringify({
     name,
@@ -184,16 +337,11 @@ async function createRepository(token: string, owner: string, actorLogin: string
   });
 
   try {
-    const payload = owner && owner !== actorLogin
-      ? await githubRequest<GithubRepoResponse>(token, `/orgs/${encodeURIComponent(owner)}/repos`, {
-          method: 'POST',
-          body,
-        })
-      : await githubRequest<GithubRepoResponse>(token, '/user/repos', {
-          method: 'POST',
-          body,
-        });
-    const mapped = mapRepository(payload, owner || actorLogin, name);
+    const payload = await githubRequest<GithubRepoResponse>(token, `/orgs/${encodeURIComponent(owner)}/repos`, {
+      method: 'POST',
+      body,
+    });
+    const mapped = mapRepository(payload, owner, name);
     if (!mapped) {
       throw new Error('GitHub 仓库创建响应无效');
     }
@@ -206,7 +354,7 @@ async function createRepository(token: string, owner: string, actorLogin: string
     if (!message.toLowerCase().includes('already exists')) {
       throw error;
     }
-    const existing = await getRepository(token, owner || actorLogin, name);
+    const existing = await getRepository(token, owner, name);
     if (!existing) {
       throw error;
     }
@@ -269,21 +417,30 @@ async function runGit(args: string[], cwd: string) {
   }
 }
 
-export async function ensureManagedDeploymentRepository(userId: string): Promise<ManagedDeploymentRepository> {
+export async function ensureManagedDeploymentRepository(
+  userId: string,
+  projectKey = 'default'
+): Promise<ManagedDeploymentRepository> {
   const normalizedUserId = asText(userId);
   if (!normalizedUserId) {
     throw new Error('缺少用户信息，无法准备托管仓库');
   }
 
-  const token = requireEnv('GITHUB_DEPLOYMENT_TOKEN');
-  const actorLogin = await resolveGithubLogin(token);
-  const owner = asText(process.env.GITHUB_DEPLOYMENT_OWNER) || actorLogin;
-  const name = buildRepoName(normalizedUserId);
+  const auth = await getGithubDeploymentAuth();
+  const token = auth.token;
+  const owner = auth.owner;
+  const name = buildRepoName(normalizedUserId, projectKey);
   const existing = await getRepository(token, owner, name);
   if (existing) {
-    return existing;
+    return ensureRepositoryBranchReady(token, existing);
   }
-  return createRepository(token, owner, actorLogin, normalizedUserId);
+  const created = await createRepository(
+    token,
+    owner,
+    normalizedUserId,
+    projectKey
+  );
+  return ensureRepositoryBranchReady(token, created);
 }
 
 export async function pushDirectoryToManagedRepository(
@@ -293,7 +450,7 @@ export async function pushDirectoryToManagedRepository(
     commitMessage?: string;
   }
 ): Promise<{ branch: string }> {
-  const token = requireEnv('GITHUB_DEPLOYMENT_TOKEN');
+  const { token } = await getGithubDeploymentAuth();
   const branch = asText(repository.defaultBranch) || resolveDefaultBranch();
   const gitUserName = asText(process.env.GITHUB_DEPLOYMENT_COMMIT_NAME) || 'OneCEO Deploy Bot';
   const gitUserEmail = asText(process.env.GITHUB_DEPLOYMENT_COMMIT_EMAIL) || 'deploy-bot@oneceo.ai';
@@ -316,3 +473,31 @@ export async function pushDirectoryToManagedRepository(
     await rm(join(gitDir, '.git'), { recursive: true, force: true }).catch(() => undefined);
   }
 }
+
+export async function deleteManagedDeploymentRepository(repositoryFullName: string): Promise<boolean> {
+  const normalized = asText(repositoryFullName);
+  if (!normalized) {
+    return false;
+  }
+
+  const { token } = await getGithubDeploymentAuth();
+  const { owner, name } = parseRepositoryFullName(normalized);
+  const existing = await getRepository(token, owner, name);
+  if (!existing) {
+    return false;
+  }
+
+  await githubRequest(
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+  return true;
+}
+
+export const __testing = {
+  normalizeGithubAppPrivateKey,
+  hasGithubAppDeploymentConfig,
+};

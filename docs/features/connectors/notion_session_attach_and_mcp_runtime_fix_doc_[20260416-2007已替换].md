@@ -1,6 +1,8 @@
-# Notion 会话挂载失败与 MCP 工具误暴露修复文档 [20260415-2155已采用]
+# Notion 会话挂载失败与 MCP 工具误暴露修复文档 [20260416-2007已替换]
 
 更新时间：2026-04-15
+
+> 已被 `notion_mcp_sse_transport_fix_doc_[20260416-2007已采用].md` 替换，本文件仅保留历史方案记录。
 
 ## 1. 背景与现象
 
@@ -337,3 +339,24 @@
 
 1. 会话挂载失败可被明确定位
 2. 工具调用失败不再因为脏快照和误暴露被反复放大
+
+## 10. 2026-04-16 实施补充
+
+本次线上复现已经进一步确认：当前实际运行的 OSAC/runtime 链路仍会拒绝直接注册
+`streamable_http` transport，前端报错即为：
+
+- `unsupported mcp transport: streamable_http`
+
+因此，本方案在“不回退 Notion 上游协议事实”的前提下，最终实现收口调整为：
+
+1. Notion connector definition 仍显式声明上游 remote transport 是 `streamable_http`
+2. API 在 materialize runtime config 时，不再把该 transport 直接下发给 OSAC
+3. 改为通过 sandbox 内本地 `local_stdio` bridge 代理上游 `streamable_http`
+4. OSAC 只接收其当前稳定支持的 `local_stdio`
+5. OpenCode sandbox bootstrap 与 session attach 共用同一套 bridge runtime config，避免两条链路再出现 transport 偏差
+
+这次补充不引入兼容分支，也不把 Notion 伪装成 `remote_sse`。
+唯一落地方式就是：
+
+- `Notion upstream = streamable_http`
+- `OneCEO runtime registration = local_stdio bridge`

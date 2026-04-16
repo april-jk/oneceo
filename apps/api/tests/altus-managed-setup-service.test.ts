@@ -127,7 +127,7 @@ test('captureMcpToolSnapshot only exposes connected bindings with live provider 
       desiredState: 'attached',
       runtimeStatus: 'failed',
       runtimeProviderId: 'provider-failed',
-      runtimeTransport: 'streamable_http',
+      runtimeTransport: 'remote_sse',
       runtimeEnvVersion: 2,
       runtimeAttachedToolsJson: [{ providerId: 'provider-failed', toolName: 'notion_list_pages' }],
     },

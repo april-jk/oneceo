@@ -1,4 +1,4 @@
-# Agent、生成链路与部署编排改造设计 [尚未采用]
+# Agent、生成链路与部署编排改造设计 [20260415-1048已采用]
 
 ## 1. 现状
 
@@ -208,3 +208,65 @@ agent 完成生成后，必须保证下列文件存在：
 - 是否同意第一阶段把重点放在“模板合规”而不是“新增很多 capability”。
 - 是否同意 agent 生成网站时强制从官方模板起步。
 - 是否同意部署前加一层硬检查。
+
+## 11. 当前实现进度
+
+截至 2026-04-15，已经落地：
+
+1. managed prompt 增加 OneCEO web app 契约
+2. 部署前新增 `template-compliance-service`
+3. 缺少 `oneceo.manifest.json` 时，部署导出阶段会自动补一份平台默认契约
+4. 真正阻塞部署的仅保留在 `package.json`、`build/start` 和 manifest/数据库契约冲突这类硬错误
+5. 平台部署账号已切换到“每用户固定 Railway project + 每会话独立 environment / service / repo / project token”的服务层模型，旧默认账号仅用于历史兼容迁移
+6. 部署导出阶段新增强制模板 bootstrap，会自动把 OneCEO analytics 脚本注入到 HTML 入口，不再只依赖弱提示
+7. 模板合规检查已把 analytics 注入从 warning 提升为硬校验，缺失 bootstrap 会直接阻塞部署
+8. 部署工作台设置页展示的资源信息已与新模型对齐，包括共享用户 project、会话独立 environment、仓库、分支和 token 作用域
+9. 平台新增当前会话 Project Token 轮换接口，后端切换到新 token 后立即生效，前端已提供入口
+
+## 12. 下一步收口
+
+下一步要继续补齐三类能力：
+
+1. token 审计链路
+   - 记录轮换操作者、时间、来源和影响会话
+2. 用户自定义环境变量
+   - 在工作台里管理业务侧密钥，并和平台托管 token 分离
+3. 模板能力状态总览
+   - 明确展示 analytics / database / auth / storage 各项基线是否已经注入完成
+
+仍待继续：
+
+1. 官方模板 materialize 能力
+2. 前端工作台展示模板合规状态
+
+## 13. 2026-04-16 平台接入补齐
+
+本轮继续补齐了平台侧正式接入，不再只停留在“部署成功 / 失败”结果层：
+
+1. 新增部署模板基线检查接口  
+   - `GET /api/task-creation/sessions/:sessionId/deployment/template`
+   - 平台会真实导出当前工作区，在临时目录执行 bootstrap + compliance 检查，再把结果返回给前端
+
+2. 模板检查结果结构化  
+   - `template-compliance-service` 现在除了 `warnings/errors`，还会返回结构化 `checks`
+   - 包括：`build/start/analytics/healthcheck/database` 五项
+
+3. 部署工作台已展示模板基线总览  
+   - 前端在部署面板里新增“模板与平台接入基线”
+   - 用户可以直接看到：
+     - manifest 是否已存在或由平台补齐
+     - analytics 是源码自带还是平台注入
+     - 数据库是否按 Railway Postgres 契约声明
+     - 健康检查路径是否已识别
+     - 当前 warnings / errors
+
+4. 发布后回写基线结果  
+   - 平台在成功导出并推送仓库后，会把本次模板基线摘要写回 sandbox metadata
+   - 这样部署链路和工作台看到的是同一套检查结论
+
+这意味着下一步待补的已经不再是“有没有模板状态”，而是：
+
+1. 官方模板 materialize 能力
+2. 失败态模板检查结果的持久化与审计
+3. agent 生成完成阶段主动写入更完整的 manifest，而不是只依赖部署导出阶段补齐
+4. 项目列表、environment 列表、token 轮换与吊销的管理界面

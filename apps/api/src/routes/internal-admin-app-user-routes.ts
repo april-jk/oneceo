@@ -26,6 +26,8 @@ router.get('/admin/app-users', async (req, res) => {
       hasConversation: pickQueryValue(req.query.hasConversation) as any,
       hasSandbox: pickQueryValue(req.query.hasSandbox) as any,
       ownershipHealth: pickQueryValue(req.query.ownershipHealth) as any,
+      sortKey: pickQueryValue(req.query.sortKey),
+      sortDirection: pickQueryValue(req.query.sortDirection),
     });
     return res.json({
       success: true,
@@ -76,22 +78,6 @@ router.post('/admin/app-users/:userId/status', async (req, res) => {
     return res.status(isNotFound ? 404 : 400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '更新 app 用户状态失败'),
-    });
-  }
-});
-
-router.post('/admin/app-users/:userId/revoke-sessions', async (req, res) => {
-  try {
-    const data = await adminAppUserService.revokeUserSessions(req.params.userId);
-    return res.json({
-      success: true,
-      data,
-    });
-  } catch (error: any) {
-    const isNotFound = error?.message === '用户不存在';
-    return res.status(isNotFound ? 404 : 400).json({
-      success: false,
-      error: getPublicErrorMessage(error?.message || '强制下线 app 用户会话失败'),
     });
   }
 });

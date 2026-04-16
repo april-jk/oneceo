@@ -1,22 +1,30 @@
 export type VmState = 'running' | 'stopped' | 'paused' | 'error';
 export type HostStatus = 'online' | 'degraded' | 'offline' | 'maintenance';
 export type AdminThemeKey = string;
+export type AdminThemeMode = 'light' | 'dark' | 'system';
 
 export interface AdminThemeOption {
   key: AdminThemeKey;
   label: string;
-  family: string;
-  variant: string;
-  tone: 'light' | 'dark';
   description: string;
-  swatches: string[];
+  lightSwatches: string[];
+  darkSwatches: string[];
+}
+
+export interface AdminThemeModeOption {
+  key: AdminThemeMode;
+  label: string;
+  description: string;
 }
 
 export interface AdminThemeSettings {
   currentTheme: AdminThemeKey;
+  currentMode: AdminThemeMode;
   envKey: string;
+  envModeKey: string;
   envPath: string;
   themes: AdminThemeOption[];
+  modes: AdminThemeModeOption[];
 }
 
 export interface DashboardOverview {
@@ -708,6 +716,7 @@ export interface AppUserSessionSummary {
   updatedAt: string | null;
   lastSeenAt: string | null;
   isActive: boolean;
+  isOnline: boolean;
 }
 
 export interface AppUserConversationSummary {
@@ -783,6 +792,8 @@ export interface AppUserListResponse {
     hasConversation: string;
     hasSandbox: string;
     ownershipHealth: string;
+    sortKey: string;
+    sortDirection: string;
   };
   items: AppUserListItem[];
 }

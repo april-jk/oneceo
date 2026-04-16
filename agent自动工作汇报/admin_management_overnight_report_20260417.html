@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2026-04-17 管理后台夜间迭代报告</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: rgba(255, 255, 255, 0.9);
+        --panel-border: rgba(15, 23, 42, 0.08);
+        --text: #14213d;
+        --muted: #52607a;
+        --accent: #2563eb;
+        --accent-soft: rgba(37, 99, 235, 0.1);
+        --shadow: 0 20px 60px rgba(15, 23, 42, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 28%),
+          linear-gradient(180deg, #f8fbff 0%, var(--bg) 55%, #edf2f9 100%);
+        color: var(--text);
+      }
+
+      .page {
+        width: min(1200px, calc(100vw - 48px));
+        margin: 0 auto;
+        padding: 40px 0 64px;
+      }
+
+      .hero,
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(16px);
+      }
+
+      .hero {
+        padding: 32px;
+        margin-bottom: 20px;
+      }
+
+      .eyebrow {
+        margin: 0 0 12px;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(30px, 4vw, 42px);
+        line-height: 1.08;
+      }
+
+      .hero p,
+      .panel p,
+      .panel li {
+        margin: 0;
+        line-height: 1.7;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .chip {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px;
+      }
+
+      .panel {
+        padding: 24px;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 20px;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      .gallery {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 20px;
+      }
+
+      figure {
+        margin: 0;
+        overflow: hidden;
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      figcaption {
+        padding: 12px 14px 14px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      .footer {
+        margin-top: 20px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      code {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 13px;
+        color: #0f172a;
+        background: rgba(15, 23, 42, 0.06);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+
+      @media (max-width: 900px) {
+        .page {
+          width: min(100vw - 24px, 1200px);
+          padding-top: 20px;
+        }
+
+        .grid,
+        .gallery {
+          grid-template-columns: 1fr;
+        }
+
+        .hero,
+        .panel {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">ONECEO / ADMIN MANAGEMENT</p>
+        <h1>2026-04-17 管理后台夜间迭代报告</h1>
+        <p>
+          这一晚主要把管理后台收成更稳、更顺手的一版：用户管理、对话管理、Sandbox、技能管理、OSAC、主题设置和详情弹层都做了减法，
+          同时补上了登录状态口径、Sandbox 归档/连通性回退、固定首屏与列表内滚动这些容易在真实值守里踩坑的地方。
+        </p>
+        <div class="meta">
+          <span class="chip">用户管理重构</span>
+          <span class="chip">Sandbox 详情重排</span>
+          <span class="chip">主题系统收口</span>
+          <span class="chip">固定视口与内滚动</span>
+          <span class="chip">回归测试已补</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>今晚做了什么</h2>
+          <ul>
+            <li>把用户管理改成 AWS 风格的索引表 + 顶部筛选 + 居中浮层详情，去掉重复按钮和不说人话的字段。</li>
+            <li>把“登录状态”从“cookie 还没过期”改成“当前是否在线”，避免后台全部显示成已登录。</li>
+            <li>收紧对话管理、技能管理、审计日志、智能体管理和 OSAC 页面，把首屏信息密度压回可读范围。</li>
+            <li>整理 Sandbox 详情，把文件管理、进程/端口、归档、连通性拆成更符合使用习惯的层级，并修掉 live metadata 回退故障。</li>
+            <li>主题设置收口为 <code>GitHub / Nord / Rose Pine</code> 三套主题，叠加 <code>亮色 / 暗色 / 跟随系统</code> 三种模式。</li>
+            <li>把列表页改成“上方摘要固定，列表区域单独滚动”，保证值守时始终是一个屏幕，不会整页乱跑。</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h2>今晚额外补掉的风险</h2>
+          <ul>
+            <li>修正 Sandbox 恢复接口的请求体双重 JSON 编码，避免恢复时读不到 <code>snapshotKey</code>。</li>
+            <li>把用户禁用与会话回收放回同一事务里，避免“账号已禁用但会话还活着”的半成品状态。</li>
+            <li>去掉用户详情首次打开时的重复请求，避免慢网下出现假错误提示。</li>
+            <li>给技能管理和 OSAC 的“刷新”动作补上失败兜底，失败时能稳定回到统一报错链路。</li>
+            <li>补了管理后台连接器测试、用户状态事务测试、Sandbox 回归测试和固定视口后的前端类型检查 / 构建验证。</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="panel" style="margin-top: 20px;">
+        <h2>关键截图</h2>
+        <div class="gallery">
+          <figure>
+            <img src="../output/playwright/admin-user-management-first-screen-pass.png" alt="用户管理首屏" />
+            <figcaption>用户管理首屏改成更轻的摘要条、筛选栏和索引表，首屏信息顺序更接近 AWS 控制台。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-user-detail-overview-grouped-pass.png" alt="用户详情概览" />
+            <figcaption>用户详情概览把账号信息、登录情况和最近记录收成同一视线区域，不再分散在多个卡片里。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-conversation-detail-overview-refined.png" alt="对话详情概览" />
+            <figcaption>对话详情改成更紧凑的概览头 + 事实区结构，减少字段噪音，点开就能看见关键信息。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-sandbox-detail-overview-refined.png" alt="Sandbox 概览" />
+            <figcaption>Sandbox 概览统一为治理向布局，关键状态、标识、时间线和操作区之间的层次更清楚。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-skill-management-detail-resources-refined.png" alt="技能管理资源布局" />
+            <figcaption>技能管理二级菜单重排后，把资源、版本和编辑的切换关系收得更顺，少走弯路。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-agent-management-simplified.png" alt="智能体管理精简版" />
+            <figcaption>智能体管理砍掉重复 KPI 和装饰性信息，首屏只留总览、阶段和能力三段。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-audit-filter-refined.png" alt="审计日志筛选栏" />
+            <figcaption>审计日志筛选区缩成工具条式布局，首屏让位给真正需要先看的摘要和结果。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-theme-settings-github-dark.png" alt="主题设置" />
+            <figcaption>设置弹层新增主题和外观模式，GitHub / Nord / Rose Pine 三套主题统一走可读性校验后的配色。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-user-management-fixed-viewport-scroll.png" alt="用户管理固定首屏" />
+            <figcaption>列表页改成固定首屏，外层不滚，索引表自身滚动，顶部摘要和筛选始终留在视野里。</figcaption>
+          </figure>
+          <figure>
+            <img src="../output/playwright/admin-sandbox-runtime-fixed-viewport-scroll.png" alt="Sandbox 固定首屏" />
+            <figcaption>Sandbox 页面也同步改成固定首屏 + 内部滚动，值守时不会因为长列表把整页拖乱。</figcaption>
+          </figure>
+        </div>
+        <p class="footer">
+          本轮还额外保留了更多 Playwright 截图，统一放在 <code>output/playwright/</code>，便于后续继续对比。
+        </p>
+      </section>
+
+      <section class="grid" style="margin-top: 20px;">
+        <article class="panel">
+          <h2>验证结果</h2>
+          <ul>
+            <li><code>apps/admin_management</code>：<code>npm run type-check</code> 通过。</li>
+            <li><code>apps/admin_management</code>：<code>npm run build</code> 通过。</li>
+            <li><code>apps/admin_management</code>：<code>npx tsx --test tests/*.test.ts</code> 通过。</li>
+            <li><code>apps/api</code>：用户状态、Sandbox 路由、归档服务相关测试通过。</li>
+            <li><code>api</code> workspace：先构建 <code>@oneceo/shared</code> 后，<code>type-check</code> 与 <code>build</code> 通过。</li>
+            <li><code>git diff --check</code> 通过，没有残留冲突标记和空白错误。</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h2>提交说明</h2>
+          <p>
+            这次提交会把后台 UI 收口、用户管理状态修正、Sandbox 链路修补、主题设置收口、固定视口滚动规则、回归测试和今晚的汇报文档一起带上。
+            Playwright 调试缓存不会进仓库，只保留真正有交付意义的截图。
+          </p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

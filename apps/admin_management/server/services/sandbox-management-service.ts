@@ -700,16 +700,22 @@ export class SandboxManagementService {
         trafficAccessTokenPresent: Boolean(
           asText(asRecord(metadata.e2b).trafficAccessToken) || asText(metadata.trafficAccessToken)
         ),
-        workspaceRoot: asText(metadata.opencodeWorkspaceRoot),
-        stateRoot: asText(metadata.opencodeStateRoot),
+        workspaceRoot:
+          asText(metadata.opencodeWorkspaceRoot) ||
+          asText(metadata.altusWorkspaceRoot) ||
+          asText(metadata.workspaceRoot),
+        stateRoot:
+          asText(metadata.opencodeStateRoot) ||
+          asText(metadata.altusStateRoot) ||
+          asText(metadata.stateRoot),
       },
       archive: {
         archiveStatus: deriveArchiveStatus(metadata),
         archiveDirty: asBoolean(metadata.archiveDirty),
         pendingArchiveUpdate: asBoolean(metadata.pendingArchiveUpdate),
         archiveKey: asText(metadata.r2ArchiveKey),
-        snapshotKey: asText(metadata.snapshotKey),
-        metadataKey: asText(metadata.metadataKey),
+        snapshotKey: asText(metadata.r2ArchiveSnapshotKey) || asText(metadata.snapshotKey),
+        metadataKey: asText(metadata.r2ArchiveMetadataKey) || asText(metadata.metadataKey),
         archivePendingSince: asText(metadata.archivePendingSince),
         lastDirtyAt: asText(metadata.lastDirtyAt),
         lastDirtyReason: asText(metadata.lastDirtyReason),

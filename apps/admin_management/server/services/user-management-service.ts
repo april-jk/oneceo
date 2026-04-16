@@ -12,6 +12,8 @@ export class UserManagementService {
     hasConversation?: string;
     hasSandbox?: string;
     ownershipHealth?: string;
+    sortKey?: string;
+    sortDirection?: string;
   }) {
     return this.oneceoApi.listAppUsers(filters);
   }
@@ -22,9 +24,5 @@ export class UserManagementService {
 
   updateAppUserStatus(userId: string, status: 'active' | 'disabled') {
     return this.oneceoApi.updateAppUserStatus(userId, status);
-  }
-
-  revokeAppUserSessions(userId: string) {
-    return this.oneceoApi.revokeAppUserSessions(userId);
   }
 }

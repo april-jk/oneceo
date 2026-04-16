@@ -342,6 +342,73 @@ class UmamiAnalyticsService {
     };
   }
 
+  async updateWebsite(
+    websiteId: string,
+    input: {
+      name?: string;
+      domain: string;
+    }
+  ): Promise<UmamiWebsiteSummary> {
+    if (!this.isConfigured()) {
+      throw new Error('Umami 未配置完成');
+    }
+
+    const safeWebsiteId = asText(websiteId);
+    const normalizedDomain = normalizeDomain(input.domain);
+    if (!safeWebsiteId) {
+      throw new Error('缺少 websiteId');
+    }
+    if (!normalizedDomain) {
+      throw new Error('缺少有效站点域名');
+    }
+
+    const payload = await this.request<unknown>(`/api/websites/${encodeURIComponent(safeWebsiteId)}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: asText(input.name) || normalizedDomain,
+        domain: normalizedDomain,
+      }),
+    });
+    const record = asObject(unwrapPayload<unknown>(payload));
+    const id = asText(record.id) || safeWebsiteId;
+    if (!id) {
+      throw new Error('Umami website 更新失败');
+    }
+    return {
+      id,
+      name: asText(record.name) || asText(input.name) || normalizedDomain,
+      domain: normalizeDomain(asText(record.domain) || normalizedDomain) || normalizedDomain,
+    };
+  }
+
+  async ensureWebsiteBinding(input: {
+    websiteId?: string;
+    name: string;
+    domain: string;
+  }): Promise<UmamiWebsiteSummary> {
+    const safeWebsiteId = asText(input.websiteId);
+    if (safeWebsiteId) {
+      try {
+        return await this.updateWebsite(safeWebsiteId, {
+          name: input.name,
+          domain: input.domain,
+        });
+      } catch (error: any) {
+        const message = asText(error?.message).toLowerCase();
+        if (!message.includes('not found')) {
+          throw error;
+        }
+      }
+    }
+    return this.ensureWebsite({
+      name: input.name,
+      domain: input.domain,
+    });
+  }
+
   async deleteWebsite(websiteId: string): Promise<boolean> {
     if (!this.isConfigured()) {
       return false;

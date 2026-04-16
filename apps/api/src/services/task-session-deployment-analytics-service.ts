@@ -137,8 +137,10 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
     };
   }
 
-  const website = await umamiAnalyticsService.ensureWebsite({
-    name: existing?.websiteName || buildWebsiteName(input.sessionId, domain),
+  const websiteName = existing?.websiteName || buildWebsiteName(input.sessionId, domain);
+  const website = await umamiAnalyticsService.ensureWebsiteBinding({
+    websiteId: existing?.websiteId,
+    name: websiteName,
     domain,
   });
   const tag = asText(input.tag) || existing?.tag || 'production';

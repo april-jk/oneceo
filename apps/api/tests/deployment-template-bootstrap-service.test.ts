@@ -28,7 +28,9 @@ test('deployment template bootstrap injects analytics script into html entry onc
 
     const afterFirst = await readFile(join(clientDir, 'index.html'), 'utf-8');
     assert.match(afterFirst, /ONECEO_ANALYTICS:START/);
+    assert.match(afterFirst, /window\.__ONECEO_ANALYTICS__/);
     assert.match(afterFirst, /data-oneceo-analytics="runtime"/);
+    assert.match(afterFirst, /%VITE_ANALYTICS_HOST%/);
 
     const second = await ensureDeploymentTemplateBootstrap(workspace);
     assert.equal(second.errors.length, 0);

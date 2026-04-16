@@ -13,6 +13,8 @@ type AdminAppUserStatus = 'active' | 'disabled' | string;
 type AdminAppUserActivityFilter = 'all' | 'active_7d' | 'active_30d' | 'inactive_30d';
 type AdminAppUserBinaryFilter = 'all' | 'yes' | 'no';
 type AdminAppUserOwnershipHealth = 'healthy' | 'legacy_mapping' | 'anomaly';
+type AdminAppUserSortKey = 'user' | 'status' | 'last_activity' | 'sessions' | 'conversations' | 'sandboxes' | 'ownership';
+type AdminAppUserSortDirection = 'asc' | 'desc';
 
 type ListAppUsersInput = {
   limit?: number;
@@ -23,6 +25,8 @@ type ListAppUsersInput = {
   hasConversation?: AdminAppUserBinaryFilter;
   hasSandbox?: AdminAppUserBinaryFilter;
   ownershipHealth?: AdminAppUserOwnershipHealth | 'all';
+  sortKey?: AdminAppUserSortKey | string;
+  sortDirection?: AdminAppUserSortDirection | string;
 };
 
 type UserSessionRow = {
@@ -49,6 +53,32 @@ type UserAggregate = {
   lastLegacySeenAt: Date | null;
 };
 
+type SortableUserListItem = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  lastLoginAt: string | null;
+  sessionCount: number;
+  activeSessionCount: number;
+  conversationCount: number;
+  lastConversationAt: string | null;
+  sandboxCount: number;
+  lastSandboxAt: string | null;
+  legacyMappingCount: number;
+  lastActivityAt: string | null;
+  ownershipHealth: string;
+};
+
+type SessionValidityInput = Pick<UserSessionRow, 'expiresAt' | 'revokedAt'>;
+type SessionOnlineInput = SessionValidityInput & {
+  lastSeenAt: Date | string | null;
+};
+
+type UpdateExecutor = Pick<typeof db, 'update'>;
+
+export const APP_USER_ONLINE_IDLE_MS = 1000 * 60 * 15;
+
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -70,6 +100,13 @@ function asNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function compareText(left: string, right: string) {
+  return left.localeCompare(right, 'zh-CN', {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
 function safeDate(value: unknown): Date | null {
   if (value instanceof Date) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -77,6 +114,10 @@ function safeDate(value: unknown): Date | null {
     if (!Number.isNaN(parsed)) return new Date(parsed);
   }
   return null;
+}
+
+function sortTime(value: string | null | undefined) {
+  return safeDate(value)?.getTime() || 0;
 }
 
 function maxDate(values: Array<Date | null | undefined>) {
@@ -90,8 +131,95 @@ function maxDate(values: Array<Date | null | undefined>) {
   return winner;
 }
 
-function isActiveSession(session: Pick<UserSessionRow, 'expiresAt' | 'revokedAt'>, now = new Date()) {
+export function isActiveSession(session: SessionValidityInput, now = new Date()) {
   return !session.revokedAt && session.expiresAt.getTime() > now.getTime();
+}
+
+export function isOnlineSession(
+  session: SessionOnlineInput,
+  now = new Date(),
+  idleWindowMs = APP_USER_ONLINE_IDLE_MS
+) {
+  if (!isActiveSession(session, now)) return false;
+  const lastSeenAt = safeDate(session.lastSeenAt);
+  if (!lastSeenAt) return false;
+  return now.getTime() - lastSeenAt.getTime() <= idleWindowMs;
+}
+
+function normalizeSortKey(value: string): AdminAppUserSortKey {
+  if (value === 'user') return 'user';
+  if (value === 'status') return 'status';
+  if (value === 'sessions') return 'sessions';
+  if (value === 'conversations') return 'conversations';
+  if (value === 'sandboxes') return 'sandboxes';
+  if (value === 'ownership') return 'ownership';
+  return 'last_activity';
+}
+
+function normalizeSortDirection(value: string): AdminAppUserSortDirection {
+  return value === 'asc' ? 'asc' : 'desc';
+}
+
+function userStatusRank(value: string) {
+  if (value === 'active') return 0;
+  if (value === 'disabled') return 1;
+  return 2;
+}
+
+function ownershipHealthRank(value: string) {
+  if (value === 'healthy') return 0;
+  if (value === 'legacy_mapping') return 1;
+  if (value === 'anomaly') return 2;
+  return 3;
+}
+
+function compareAppUserListItem(
+  left: SortableUserListItem,
+  right: SortableUserListItem,
+  sortKey: AdminAppUserSortKey,
+  sortDirection: AdminAppUserSortDirection
+) {
+  let result = 0;
+
+  switch (sortKey) {
+    case 'user':
+      result = compareText(left.displayName || left.email || left.id, right.displayName || right.email || right.id);
+      if (result === 0) {
+        result = compareText(left.email || left.id, right.email || right.id);
+      }
+      break;
+    case 'status':
+      result = userStatusRank(left.status) - userStatusRank(right.status);
+      break;
+    case 'sessions':
+      result = left.activeSessionCount - right.activeSessionCount;
+      if (result === 0) result = left.sessionCount - right.sessionCount;
+      if (result === 0) result = sortTime(left.lastLoginAt) - sortTime(right.lastLoginAt);
+      break;
+    case 'conversations':
+      result = left.conversationCount - right.conversationCount;
+      if (result === 0) result = sortTime(left.lastConversationAt) - sortTime(right.lastConversationAt);
+      break;
+    case 'sandboxes':
+      result = left.sandboxCount - right.sandboxCount;
+      if (result === 0) result = sortTime(left.lastSandboxAt) - sortTime(right.lastSandboxAt);
+      break;
+    case 'ownership':
+      result = ownershipHealthRank(left.ownershipHealth) - ownershipHealthRank(right.ownershipHealth);
+      if (result === 0) result = left.legacyMappingCount - right.legacyMappingCount;
+      break;
+    case 'last_activity':
+    default:
+      result = sortTime(left.lastLoginAt) - sortTime(right.lastLoginAt);
+      if (result === 0) result = sortTime(left.lastActivityAt) - sortTime(right.lastActivityAt);
+      break;
+  }
+
+  if (result === 0) {
+    result = compareText(left.displayName || left.email || left.id, right.displayName || right.email || right.id);
+  }
+
+  return sortDirection === 'asc' ? result : -result;
 }
 
 function buildOwnershipHealth(input: {
@@ -152,6 +280,7 @@ function toPublicSession(row: UserSessionRow) {
     updatedAt: toIso(row.updatedAt),
     lastSeenAt: toIso(row.lastSeenAt),
     isActive: isActiveSession(row),
+    isOnline: isOnlineSession(row),
   };
 }
 
@@ -167,13 +296,14 @@ export class AdminAppUserService {
     const hasConversation = asText(input.hasConversation || 'all') as AdminAppUserBinaryFilter;
     const hasSandbox = asText(input.hasSandbox || 'all') as AdminAppUserBinaryFilter;
     const ownershipHealth = asText(input.ownershipHealth || 'all') as AdminAppUserOwnershipHealth | 'all';
+    const sortKey = normalizeSortKey(asText(input.sortKey || 'last_activity'));
+    const sortDirection = normalizeSortDirection(asText(input.sortDirection || 'desc'));
     const summary = await this.buildSummary();
 
     let query = db
       .select()
       .from(appUsers)
-      .orderBy(desc(appUsers.updatedAt), desc(appUsers.createdAt))
-      .limit(Math.min(Math.max(limit * 4, limit), 600));
+      .orderBy(desc(appUsers.updatedAt), desc(appUsers.createdAt));
 
     const conditions = [];
     if (normalizedQuery) {
@@ -247,8 +377,8 @@ export class AdminAppUserService {
         if (activity === 'inactive_30d' && lastActivityAt && lastActivityAt.getTime() >= active30dSince.getTime()) {
           return false;
         }
-        if (hasSession === 'yes' && item.sessionCount === 0) return false;
-        if (hasSession === 'no' && item.sessionCount > 0) return false;
+        if (hasSession === 'yes' && item.activeSessionCount === 0) return false;
+        if (hasSession === 'no' && item.activeSessionCount > 0) return false;
         if (hasConversation === 'yes' && item.conversationCount === 0) return false;
         if (hasConversation === 'no' && item.conversationCount > 0) return false;
         if (hasSandbox === 'yes' && item.sandboxCount === 0) return false;
@@ -256,6 +386,7 @@ export class AdminAppUserService {
         if (ownershipHealth !== 'all' && item.ownershipHealth !== ownershipHealth) return false;
         return true;
       })
+      .sort((left, right) => compareAppUserListItem(left, right, sortKey, sortDirection))
       .slice(0, limit);
 
     return {
@@ -269,6 +400,8 @@ export class AdminAppUserService {
         hasConversation,
         hasSandbox,
         ownershipHealth,
+        sortKey,
+        sortDirection,
       },
       items,
     };
@@ -419,23 +552,26 @@ export class AdminAppUserService {
   async updateUserStatus(userId: string, status: 'active' | 'disabled') {
     const normalizedUserId = asText(userId);
     const normalizedStatus = status === 'disabled' ? 'disabled' : 'active';
-    const [updatedUser] = await db
-      .update(appUsers)
-      .set({
-        status: normalizedStatus,
-        updatedAt: new Date(),
-      })
-      .where(eq(appUsers.id, normalizedUserId as any))
-      .returning();
+    const revokedSessionCount = await db.transaction(async (tx) => {
+      const [updatedUser] = await tx
+        .update(appUsers)
+        .set({
+          status: normalizedStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(appUsers.id, normalizedUserId as any))
+        .returning();
 
-    if (!updatedUser) {
-      throw new Error('用户不存在');
-    }
+      if (!updatedUser) {
+        throw new Error('用户不存在');
+      }
 
-    let revokedSessionCount = 0;
-    if (normalizedStatus === 'disabled') {
-      revokedSessionCount = await this.revokeUserSessionsInternal(normalizedUserId);
-    }
+      if (normalizedStatus !== 'disabled') {
+        return 0;
+      }
+
+      return this.revokeUserSessionsInternal(normalizedUserId, tx);
+    });
 
     const detail = await this.getUserDetail(normalizedUserId);
     return {
@@ -444,23 +580,9 @@ export class AdminAppUserService {
     };
   }
 
-  async revokeUserSessions(userId: string) {
-    const normalizedUserId = asText(userId);
-    const user = await appUserDAO.getById(normalizedUserId);
-    if (!user) {
-      throw new Error('用户不存在');
-    }
-    const revokedSessionCount = await this.revokeUserSessionsInternal(normalizedUserId);
-    const detail = await this.getUserDetail(normalizedUserId);
-    return {
-      ...detail,
-      revokedSessionCount,
-    };
-  }
-
-  private async revokeUserSessionsInternal(userId: string) {
+  private async revokeUserSessionsInternal(userId: string, executor: UpdateExecutor = db) {
     const now = new Date();
-    const revokedRows = await db
+    const revokedRows = await executor
       .update(appUserSessions)
       .set({
         revokedAt: now,
@@ -580,7 +702,7 @@ export class AdminAppUserService {
       const userId = String(row.userId);
       const aggregate = result.get(userId) || this.emptyAggregate();
       aggregate.sessionCount += 1;
-      if (isActiveSession(row, now)) {
+      if (isOnlineSession(row, now)) {
         aggregate.activeSessionCount += 1;
       }
       if (!aggregate.latestSession) {

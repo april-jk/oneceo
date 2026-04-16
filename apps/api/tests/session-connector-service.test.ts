@@ -11,6 +11,11 @@ const envBackup = {
   https_proxy: process.env.https_proxy,
   NO_PROXY: process.env.NO_PROXY,
   no_proxy: process.env.no_proxy,
+  NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
+  NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
+  NOTION_CONNECTOR_CLIENT_SECRET: process.env.NOTION_CONNECTOR_CLIENT_SECRET,
+  NOTION_CONNECTOR_REDIRECT_URI: process.env.NOTION_CONNECTOR_REDIRECT_URI,
+  FRONTEND_URL: process.env.FRONTEND_URL,
 };
 
 afterEach(() => {
@@ -23,7 +28,7 @@ afterEach(() => {
   }
 });
 
-function buildProfile(connectorKey: 'supabase' | 'vercel') {
+function buildProfile(connectorKey: 'supabase' | 'vercel' | 'notion') {
   return {
     profileId: `profile-${connectorKey}`,
     connectorKey,
@@ -70,4 +75,38 @@ test('buildProviderTransport keeps non-supabase remote transport unchanged', () 
 
   assert.equal(result.transport.type, 'remote_sse');
   assert.deepEqual(result.transport.env, {});
+});
+
+test('buildProviderTransport honors explicit notion remote transport', () => {
+  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
+  process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
+  process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
+  process.env.NOTION_CONNECTOR_REDIRECT_URI = '/api/connectors/notion/callback';
+  process.env.FRONTEND_URL = 'https://dev.oneceo.ai';
+
+  const serviceAny = sessionConnectorService as any;
+  const result = serviceAny.buildProviderTransport('notion', buildProfile('notion'), null);
+
+  assert.equal(result.transport.type, 'streamable_http');
+  assert.equal(result.transportName, 'streamable_http');
+  assert.equal(result.transport.url, 'https://mcp.notion.com/mcp');
+});
+
+test('buildAttachFailureRuntimePatch clears live runtime projection for failed attach states', () => {
+  const serviceAny = sessionConnectorService as any;
+  const patch = serviceAny.buildAttachFailureRuntimePatch({
+    runtimeStatus: 'failed',
+    runtimeEnvVersion: 3,
+    runtimeTransport: 'streamable_http',
+    lastError: 'provider attach failed',
+  });
+
+  assert.equal(patch.runtimeStatus, 'failed');
+  assert.equal(patch.runtimeProviderId, null);
+  assert.deepEqual(patch.runtimeAttachedToolsJson, []);
+  assert.equal(patch.runtimeEnvVersion, 3);
+  assert.equal(patch.runtimeTransport, 'streamable_http');
+  assert.equal(patch.recoveryQueuedAt, null);
+  assert.equal(patch.recoveryCompletedAt, null);
+  assert.equal(patch.lastError, 'provider attach failed');
 });

@@ -5,6 +5,7 @@ import {
   type ConnectorDefinition,
   type ConnectorKey,
   type ConnectorOauthProvider,
+  type RemoteMcpTransport,
 } from '../connectors/definitions';
 import {
   buildSupabaseBridgeEnvironment,
@@ -70,6 +71,7 @@ export type ConnectorRuntimeConfig =
       enabled: boolean;
       url: string;
       headers?: Record<string, string>;
+      transport: RemoteMcpTransport;
     };
 
 function asText(value: unknown): string {
@@ -399,6 +401,7 @@ export class ConnectorRegistry {
       enabled: true,
       url,
       headers,
+      transport: item.runtime.transport || 'remote_sse',
     };
   }
 

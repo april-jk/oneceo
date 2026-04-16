@@ -1,5 +1,7 @@
 import type { ConnectorDefinition, ConnectorOauthProvider } from './types';
 
+const NOTION_DEFAULT_MCP_REMOTE_URL = 'https://mcp.notion.com/sse';
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -64,15 +66,29 @@ export function resolveNotionOauthProvider(): ConnectorOauthProvider | undefined
 
 export function buildNotionDefinition(): ConnectorDefinition {
   const oauth = resolveNotionOauthProvider();
-  const remoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
   const redirectUriRaw = asText(process.env.NOTION_CONNECTOR_REDIRECT_URI);
+  const configuredRemoteUrl = asText(process.env.NOTION_MCP_REMOTE_URL);
   const oauthClientConfigured = Boolean(oauth);
   const redirectUriConfigured = Boolean(asText(oauth?.redirectUri));
   const oauthConfigured = oauthClientConfigured && redirectUriConfigured;
-  const hasRemoteUrl = Boolean(remoteUrl);
-  const available = hasRemoteUrl && oauthConfigured;
-  const availabilityReason = !hasRemoteUrl
-    ? '部署环境未配置 Notion MCP remote URL'
+  let remoteUrlValid = true;
+  let remoteAvailabilityReason: string | undefined;
+
+  try {
+    const parsed = new URL(configuredRemoteUrl || NOTION_DEFAULT_MCP_REMOTE_URL);
+    const normalizedPath = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (!normalizedPath.endsWith('/sse')) {
+      remoteUrlValid = false;
+      remoteAvailabilityReason = 'Notion MCP remote URL 必须配置为 SSE 端点（/sse），不能继续使用 /mcp';
+    }
+  } catch {
+    remoteUrlValid = false;
+    remoteAvailabilityReason = 'Notion MCP remote URL 非法，请检查 NOTION_MCP_REMOTE_URL';
+  }
+
+  const available = remoteUrlValid && oauthConfigured;
+  const availabilityReason = !remoteUrlValid
+    ? remoteAvailabilityReason
     : !oauthClientConfigured
       ? '部署环境未配置 Notion OAuth client'
       : !redirectUriRaw
@@ -102,9 +118,10 @@ export function buildNotionDefinition(): ConnectorDefinition {
     runtime: {
       type: 'remote',
       urlEnv: 'NOTION_MCP_REMOTE_URL',
+      urlDefault: NOTION_DEFAULT_MCP_REMOTE_URL,
       headersEnv: 'NOTION_MCP_REMOTE_HEADERS_JSON',
       headerTemplate: 'bearer-token',
-      transport: 'streamable_http',
+      transport: 'remote_sse',
     },
   };
 }

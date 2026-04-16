@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ensureDeploymentStartedAfterSourceSync } from '../src/services/direct-mode-deployment-capability-service';
+import { ensureDeploymentStartedAfterSourceSync } from '../src/services/task-session-deployment-runtime-service';
 
 test('ensureDeploymentStartedAfterSourceSync keeps source-sync deployment when railway already created one', async () => {
   let manualDeployCalled = false;

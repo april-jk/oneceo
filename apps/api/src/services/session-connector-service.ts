@@ -814,7 +814,6 @@ export class SessionConnectorService {
         connectorKey,
         providerId,
         transport: providerConfig.transportName,
-        bridgeMode: providerConfig.transportName,
         proxyEnvInjected: proxyKeys.length > 0,
         proxyEnvKeys: proxyKeys,
       });

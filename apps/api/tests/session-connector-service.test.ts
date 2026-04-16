@@ -78,7 +78,7 @@ test('buildProviderTransport keeps non-supabase remote transport unchanged', () 
 });
 
 test('buildProviderTransport honors explicit notion remote transport', () => {
-  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
+  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/sse';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
   process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
   process.env.NOTION_CONNECTOR_REDIRECT_URI = '/api/connectors/notion/callback';
@@ -87,9 +87,11 @@ test('buildProviderTransport honors explicit notion remote transport', () => {
   const serviceAny = sessionConnectorService as any;
   const result = serviceAny.buildProviderTransport('notion', buildProfile('notion'), null);
 
-  assert.equal(result.transport.type, 'streamable_http');
-  assert.equal(result.transportName, 'streamable_http');
-  assert.equal(result.transport.url, 'https://mcp.notion.com/mcp');
+  assert.equal(result.transport.type, 'remote_sse');
+  assert.equal(result.transportName, 'remote_sse');
+  assert.equal(result.transport.url, 'https://mcp.notion.com/sse');
+  assert.deepEqual(result.transport.env, {});
+  assert.equal(result.transport.headers.Authorization, 'Bearer notion-token');
 });
 
 test('buildAttachFailureRuntimePatch clears live runtime projection for failed attach states', () => {
@@ -97,7 +99,7 @@ test('buildAttachFailureRuntimePatch clears live runtime projection for failed a
   const patch = serviceAny.buildAttachFailureRuntimePatch({
     runtimeStatus: 'failed',
     runtimeEnvVersion: 3,
-    runtimeTransport: 'streamable_http',
+    runtimeTransport: 'remote_sse',
     lastError: 'provider attach failed',
   });
 
@@ -105,7 +107,7 @@ test('buildAttachFailureRuntimePatch clears live runtime projection for failed a
   assert.equal(patch.runtimeProviderId, null);
   assert.deepEqual(patch.runtimeAttachedToolsJson, []);
   assert.equal(patch.runtimeEnvVersion, 3);
-  assert.equal(patch.runtimeTransport, 'streamable_http');
+  assert.equal(patch.runtimeTransport, 'remote_sse');
   assert.equal(patch.recoveryQueuedAt, null);
   assert.equal(patch.recoveryCompletedAt, null);
   assert.equal(patch.lastError, 'provider attach failed');

@@ -121,7 +121,15 @@ test('connector registry materializes local and remote MCP configs', () => {
     account: buildAccount('slack', { accessToken: 'slack-token' }),
   });
   assert.equal(slackConfig.type, 'remote');
+  assert.equal(slackConfig.transport, 'remote_sse');
   assert.equal(slackConfig.headers?.Authorization, 'Bearer slack-token');
+
+  const notionConfig = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'notion',
+    account: buildAccount('notion', { accessToken: 'notion-token' }),
+  });
+  assert.equal(notionConfig.type, 'remote');
+  assert.equal(notionConfig.transport, 'streamable_http');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -162,6 +170,7 @@ test('connector registry falls back to official slack mcp url when remote url en
   });
   assert.equal(runtime.type, 'remote');
   assert.equal(new URL(runtime.url || '').origin, 'https://mcp.slack.com');
+  assert.equal(runtime.transport, 'remote_sse');
 });
 
 test('slack catalog is unavailable when oauth client is missing', () => {

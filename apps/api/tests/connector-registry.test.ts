@@ -37,7 +37,7 @@ beforeEach(() => {
   process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
   process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
   process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
-  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com';
+  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
   process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
   process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
@@ -129,7 +129,9 @@ test('connector registry materializes local and remote MCP configs', () => {
     account: buildAccount('notion', { accessToken: 'notion-token' }),
   });
   assert.equal(notionConfig.type, 'remote');
-  assert.equal(notionConfig.transport, 'streamable_http');
+  assert.equal(notionConfig.transport, 'remote_sse');
+  assert.equal(notionConfig.url, 'https://notion-mcp.example.com/sse');
+  assert.equal(notionConfig.headers?.Authorization, 'Bearer notion-token');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -193,6 +195,30 @@ test('notion catalog is unavailable when redirect path is set but frontend base 
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
   assert.match(String(notion?.availabilityReason || ''), /解析失败/);
+});
+
+test('notion catalog falls back to official sse endpoint when remote url env is missing', () => {
+  delete process.env.NOTION_MCP_REMOTE_URL;
+
+  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
+  assert.equal(notion?.available, true);
+  assert.equal(notion?.runtime.urlDefault, 'https://mcp.notion.com/sse');
+
+  const runtime = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'notion',
+    account: buildAccount('notion', { accessToken: 'notion-token' }),
+  });
+  assert.equal(runtime.type, 'remote');
+  assert.equal(runtime.transport, 'remote_sse');
+  assert.equal(runtime.url, 'https://mcp.notion.com/sse');
+});
+
+test('notion catalog is unavailable when remote url is not an sse endpoint', () => {
+  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
+
+  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
+  assert.equal(notion?.available, false);
+  assert.match(String(notion?.availabilityReason || ''), /SSE.*\/sse/);
 });
 
 test('connector registry falls back to official vercel mcp url when remote url env is missing', () => {

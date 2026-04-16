@@ -68,6 +68,9 @@ type AltusRunReplayDrawerProps = {
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
   onRequestStartDebugByMessage?: () => void;
+  onRequestDeployByMessage?: () => void;
+  onRequestRedeployByMessage?: () => void;
+  onRequestRollbackByMessage?: () => void;
   onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
 };
 
@@ -141,6 +144,9 @@ export default function AltusRunReplayDrawer({
   runtimeStarting,
   onEnsureRuntime,
   onRequestStartDebugByMessage,
+  onRequestDeployByMessage,
+  onRequestRedeployByMessage,
+  onRequestRollbackByMessage,
   onOpenPreviewTab,
 }: AltusRunReplayDrawerProps) {
   const normalizedFiles = useMemo(
@@ -268,6 +274,17 @@ export default function AltusRunReplayDrawer({
     setDeploymentAction(action);
     setDeploymentError(null);
     try {
+      const messageHandler =
+        action === "deploy"
+          ? onRequestDeployByMessage
+          : action === "redeploy"
+            ? onRequestRedeployByMessage
+            : onRequestRollbackByMessage;
+      if (messageHandler) {
+        messageHandler();
+        setDeploymentAction(null);
+        return;
+      }
       const result =
         action === "deploy"
           ? await deployTaskCreationSession(sessionId)

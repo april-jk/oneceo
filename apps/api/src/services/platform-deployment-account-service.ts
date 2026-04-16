@@ -564,6 +564,21 @@ async function connectServiceSource(
   }
 }
 
+export async function refreshManagedServiceSourceConnection(input: {
+  serviceId: string;
+  repoFullName: string;
+  branch: string;
+}) {
+  const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+  const serviceId = asText(input.serviceId);
+  const repoFullName = asText(input.repoFullName);
+  const branch = asText(input.branch) || 'main';
+  if (!serviceId || !repoFullName) {
+    throw new Error('刷新部署源码绑定失败：缺少 serviceId 或 repoFullName');
+  }
+  await connectServiceSource(adminToken, serviceId, repoFullName, branch);
+}
+
 async function configureServiceInstance(
   adminToken: string,
   environmentId: string,

@@ -22,6 +22,20 @@ import {
 } from './task-session-deliverable-service';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
+const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
+
+type DeploymentCompletionIntent = {
+  mode: 'none' | 'deploy' | 'redeploy' | 'rollback';
+  acceptedToolNames: string[];
+  requiresManagedSuccess: boolean;
+};
+
+type DeploymentCompletionEvidence = {
+  toolName: string;
+  status: string;
+  deploymentStatus: string;
+  summary: string;
+};
 
 type StreamedToolCallDelta = {
   index?: number;
@@ -282,6 +296,165 @@ export class AltusRunCoordinator {
       return reminder.join(' ');
     }
     return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
+  }
+
+  private resolveDeploymentCompletionIntent(userInput: string): DeploymentCompletionIntent {
+    const normalized = asText(userInput).toLowerCase();
+    if (!normalized) {
+      return {
+        mode: 'none',
+        acceptedToolNames: [],
+        requiresManagedSuccess: false,
+      };
+    }
+
+    const includesAny = (keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
+
+    if (
+      includesAny([
+        '回滚',
+        '回退部署',
+        '恢复上一个部署',
+        'rollback',
+        'revert deployment',
+      ])
+    ) {
+      return {
+        mode: 'rollback',
+        acceptedToolNames: ['rollback_application_deployment'],
+        requiresManagedSuccess: true,
+      };
+    }
+
+    if (
+      includesAny([
+        '重新部署',
+        '重部署',
+        '再部署',
+        '重新发布',
+        '再次发布',
+        'redeploy',
+      ])
+    ) {
+      return {
+        mode: 'redeploy',
+        acceptedToolNames: ['redeploy_application', 'deploy_application'],
+        requiresManagedSuccess: true,
+      };
+    }
+
+    if (
+      includesAny([
+        '部署',
+        '发布',
+        '上线',
+        'deploy',
+        'go live',
+      ])
+    ) {
+      return {
+        mode: 'deploy',
+        acceptedToolNames: ['deploy_application', 'redeploy_application'],
+        requiresManagedSuccess: true,
+      };
+    }
+
+    return {
+      mode: 'none',
+      acceptedToolNames: [],
+      requiresManagedSuccess: false,
+    };
+  }
+
+  private parseDeploymentCompletionEvidence(content: string): DeploymentCompletionEvidence | null {
+    const raw = asText(content);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        toolName: asText(parsed.toolName),
+        status: asText(parsed.status).toLowerCase(),
+        deploymentStatus: asText(parsed.deploymentStatus).toLowerCase(),
+        summary: asText(parsed.summary),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private buildDeploymentCompletionBlockedError(
+    intent: DeploymentCompletionIntent,
+    evidence: DeploymentCompletionEvidence | null
+  ) {
+    const lastTool = evidence?.toolName || 'none';
+    const lastStatus = evidence?.status || 'unknown';
+    const lastDeploymentStatus = evidence?.deploymentStatus || 'unknown';
+    const mode = intent.mode || 'deploy';
+    return [
+      DEPLOYMENT_COMPLETION_BLOCKED_PREFIX,
+      `current request is ${mode}`,
+      'managed deployment is not successful yet',
+      `last_tool=${lastTool}`,
+      `last_status=${lastStatus}`,
+      `last_deployment_status=${lastDeploymentStatus}`,
+      'do_not_treat_debug_open_page_or_local_server_as_deploy_success',
+      'repair_and_call_the_managed_deployment_tool_again',
+    ].join(' ');
+  }
+
+  private isDeploymentTool(toolName: string) {
+    return (
+      toolName === 'deploy_application' ||
+      toolName === 'redeploy_application' ||
+      toolName === 'rollback_application_deployment' ||
+      toolName === 'get_application_deployment_status'
+    );
+  }
+
+  private buildToolEventContent(
+    toolName: string,
+    status: 'started' | 'progress' | 'completed' | 'failed'
+  ) {
+    if (toolName === 'deploy_application') {
+      if (status === 'started' || status === 'progress') return '正在准备发布应用';
+      if (status === 'completed') return '发布工具已完成';
+      return '发布暂未完成';
+    }
+    if (toolName === 'redeploy_application') {
+      if (status === 'started' || status === 'progress') return '正在重新发布应用';
+      if (status === 'completed') return '重新发布工具已完成';
+      return '重新发布暂未完成';
+    }
+    if (toolName === 'rollback_application_deployment') {
+      if (status === 'started' || status === 'progress') return '正在回滚部署';
+      if (status === 'completed') return '回滚工具已完成';
+      return '回滚暂未完成';
+    }
+    if (toolName === 'get_application_deployment_status') {
+      if (status === 'started' || status === 'progress') return '正在查询部署状态';
+      if (status === 'completed') return '部署状态查询已完成';
+      return '部署状态查询暂未完成';
+    }
+    if (status === 'started') return `调用工具 ${toolName}`;
+    if (status === 'completed') return `工具 ${toolName} 已完成`;
+    if (status === 'failed') return `工具 ${toolName} 失败`;
+    return `正在准备工具 ${toolName}`;
+  }
+
+  private sanitizeToolEventError(toolName: string, errorMessage: string) {
+    if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
+      return '线上部署尚未完成，Altus 将继续修复并重试发布。';
+    }
+    if (!this.isDeploymentTool(toolName)) {
+      return errorMessage;
+    }
+    if (toolName === 'get_application_deployment_status') {
+      return '当前还无法获取部署状态，内部调试信息已记录。';
+    }
+    if (toolName === 'rollback_application_deployment') {
+      return '当前还无法回滚部署，内部调试信息已记录。';
+    }
+    return '发布暂未完成，内部调试信息已记录。';
   }
 
   private async requestClarification(state: AltusRunState, input: { question: string; options?: string[] }) {
@@ -635,6 +808,11 @@ export class AltusRunCoordinator {
     );
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
+    const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
+      state.input.userInput
+    );
+    let deploymentCompletionUnlocked = !deploymentCompletionIntent.requiresManagedSuccess;
+    let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;
 
     for (let round = 0; round < this.getMaxToolRounds(); round += 1) {
       if (signal.aborted) {
@@ -691,7 +869,7 @@ export class AltusRunCoordinator {
           const progressContent =
             toolName === 'write_file'
               ? `正在生成文件 ${writeFileProgress?.path || asText(parsedArguments.path) || '(待确认路径)'}（已生成 ${writeFileProgress?.generatedChars || 0} 字符）`
-              : `正在准备工具 ${toolName}`;
+              : this.buildToolEventContent(toolName, 'progress');
           await this.eventWriter.appendRunEvent(
             state.input.runId,
             state.input.sessionId,
@@ -756,7 +934,7 @@ export class AltusRunCoordinator {
           'tool_call_started',
           {
           toolName,
-          content: `调用工具 ${toolName}`,
+          content: this.buildToolEventContent(toolName, 'started'),
           arguments: args,
           toolCallId: toolCall.id,
           }
@@ -769,6 +947,20 @@ export class AltusRunCoordinator {
               question: result.question,
               options: result.options,
             });
+          }
+
+          if (
+            result.type === 'complete' &&
+            toolName === 'complete_task' &&
+            deploymentCompletionIntent.requiresManagedSuccess &&
+            !deploymentCompletionUnlocked
+          ) {
+            throw new Error(
+              this.buildDeploymentCompletionBlockedError(
+                deploymentCompletionIntent,
+                lastDeploymentEvidence
+              )
+            );
           }
 
           if (result.type === 'complete') {
@@ -834,7 +1026,7 @@ export class AltusRunCoordinator {
               'tool_call_completed',
               {
               toolName,
-              content: `工具 ${toolName} 已完成`,
+              content: this.buildToolEventContent(toolName, 'completed'),
               arguments: args,
               toolCallId: toolCall.id,
               outputPreview: truncate(
@@ -862,6 +1054,23 @@ export class AltusRunCoordinator {
             return { outcome: 'completed' as const, content: finalContent, deliverables };
           }
 
+          if (this.isDeploymentTool(toolName)) {
+            const evidence = this.parseDeploymentCompletionEvidence(result.content);
+            if (evidence) {
+              lastDeploymentEvidence = {
+                ...evidence,
+                toolName,
+              };
+              if (
+                deploymentCompletionIntent.requiresManagedSuccess &&
+                deploymentCompletionIntent.acceptedToolNames.includes(toolName) &&
+                evidence.status === 'success'
+              ) {
+                deploymentCompletionUnlocked = true;
+              }
+            }
+          }
+
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -875,7 +1084,7 @@ export class AltusRunCoordinator {
             'tool_call_completed',
             {
             toolName,
-            content: `工具 ${toolName} 已完成`,
+            content: this.buildToolEventContent(toolName, 'completed'),
             arguments: args,
             toolCallId: toolCall.id,
             outputPreview: truncate(result.content, 4000),
@@ -883,6 +1092,7 @@ export class AltusRunCoordinator {
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error || 'tool_failed');
+          const eventError = this.sanitizeToolEventError(toolName, message);
           await this.eventWriter.appendRunEvent(
             state.input.runId,
             state.input.sessionId,
@@ -890,10 +1100,10 @@ export class AltusRunCoordinator {
             'tool_call_failed',
             {
             toolName,
-            content: `工具 ${toolName} 失败`,
+            content: this.buildToolEventContent(toolName, 'failed'),
             arguments: args,
             toolCallId: toolCall.id,
-            error: message,
+            error: eventError,
             }
           );
           messages.push({

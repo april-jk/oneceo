@@ -129,6 +129,36 @@ async function fetchJson(url: string, init: RequestInit): Promise<Record<string,
   return payload;
 }
 
+function assertSlackOauthPayload(tokenPayload: Record<string, unknown>) {
+  if (tokenPayload.ok === false) {
+    throw new Error(asText(tokenPayload.error) || 'slack_oauth_failed');
+  }
+}
+
+function resolveSlackUserOauthSecret(tokenPayload: Record<string, unknown>): ConnectorAccountSecret {
+  const authedUser = pickObject(tokenPayload.authed_user);
+  const accessToken =
+    asText(authedUser.access_token) ||
+    (asText(tokenPayload.token_type) === SLACK_USER_TOKEN_TYPE ? asText(tokenPayload.access_token) : '');
+  const tokenType = asText(authedUser.token_type) || asText(tokenPayload.token_type) || undefined;
+  const refreshToken = asText(authedUser.refresh_token) || asText(tokenPayload.refresh_token) || undefined;
+  const scope = asText(authedUser.scope) || asText(tokenPayload.scope) || undefined;
+
+  if (!accessToken) {
+    throw new Error('Slack OAuth 未返回 user access token');
+  }
+  if (tokenType !== SLACK_USER_TOKEN_TYPE) {
+    throw new Error('Slack OAuth 未返回 user token');
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    tokenType,
+    scope,
+  };
+}
+
 function buildProfileView(
   row: {
     id: string;
@@ -475,6 +505,7 @@ type UserConnectorProfileRow = {
 const SLACK_USER_OAUTH_MODE = 'user_oauth';
 const SLACK_USER_TOKEN_TYPE = 'user';
 const SLACK_USER_TOKEN_REAUTH_MESSAGE = 'Slack connector 已切换为 User OAuth Token，请重新连接。';
+const SUPABASE_SECRET_REAUTH_MESSAGE = 'Supabase connector 授权已过期，请重新连接。';
 
 function mergeMetadata(
   current: Record<string, unknown> | null | undefined,
@@ -534,6 +565,13 @@ function shouldForceSlackUserOauthReconnect(row: UserConnectorProfileRow): boole
     asText(metadata.slackTokenType) === SLACK_USER_TOKEN_TYPE &&
     asText(secret?.tokenType) === SLACK_USER_TOKEN_TYPE
   );
+}
+
+function shouldForceSupabaseReconnect(row: UserConnectorProfileRow): boolean {
+  if (row.connectorKey !== 'supabase' || !row.secretCiphertext) {
+    return false;
+  }
+  return !decryptProfileSecret(row);
 }
 
 function buildSlackOauthState(input: {
@@ -639,6 +677,35 @@ export class UserConnectorService {
     };
   }
 
+  private async normalizeSupabaseProfileForRead(
+    userId: string,
+    row: UserConnectorProfileRow | null
+  ): Promise<{ row: UserConnectorProfileRow | null; mutated: boolean }> {
+    if (!row || !shouldForceSupabaseReconnect(row)) {
+      return { row, mutated: false };
+    }
+
+    const saved = await userConnectorProfileDAO.update(row.id, userId, {
+      authStatus: 'needs_auth',
+      secretCiphertext: null,
+      lastAuthAt: null,
+      lastError: SUPABASE_SECRET_REAUTH_MESSAGE,
+    } as any);
+
+    return {
+      row:
+        (saved as UserConnectorProfileRow | undefined) ||
+        ({
+          ...row,
+          authStatus: 'needs_auth',
+          secretCiphertext: null,
+          lastAuthAt: null,
+          lastError: SUPABASE_SECRET_REAUTH_MESSAGE,
+        } as UserConnectorProfileRow),
+      mutated: true,
+    };
+  }
+
   private async normalizeRowsForRead(
     userId: string,
     rows: UserConnectorProfileRow[]
@@ -650,9 +717,13 @@ export class UserConnectorService {
     const normalized: UserConnectorProfileRow[] = [];
     let mutated = false;
     for (const row of rows) {
-      const result = await this.normalizeSlackProfileForRead(userId, row);
-      normalized.push((result.row || row) as UserConnectorProfileRow);
-      mutated = mutated || result.mutated;
+      const slackNormalized = await this.normalizeSlackProfileForRead(userId, row);
+      const supabaseNormalized = await this.normalizeSupabaseProfileForRead(
+        userId,
+        (slackNormalized.row || row) as UserConnectorProfileRow
+      );
+      normalized.push((supabaseNormalized.row || slackNormalized.row || row) as UserConnectorProfileRow);
+      mutated = mutated || slackNormalized.mutated || supabaseNormalized.mutated;
     }
     if (mutated) {
       await this.invalidateMeCache(userId);
@@ -748,14 +819,18 @@ export class UserConnectorService {
 
   async getProfile(userId: string, profileId: string) {
     await connectorStorageBootstrap.ensureReady();
-    const normalized = await this.normalizeSlackProfileForRead(
+    const slackNormalized = await this.normalizeSlackProfileForRead(
       userId,
       (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
+    );
+    const normalized = await this.normalizeSupabaseProfileForRead(
+      userId,
+      (slackNormalized.row || null) as UserConnectorProfileRow | null
     );
     if (!normalized.row) {
       throw new Error('连接器 profile 不存在');
     }
-    if (normalized.mutated) {
+    if (slackNormalized.mutated || normalized.mutated) {
       await this.invalidateMeCache(userId);
     }
     return buildProfileView(normalized.row as any);
@@ -763,13 +838,17 @@ export class UserConnectorService {
 
   async getProfileMaterial(userId: string, profileId: string): Promise<ConnectorAccountMaterial | null> {
     await connectorStorageBootstrap.ensureReady();
-    const normalized = await this.normalizeSlackProfileForRead(
+    const slackNormalized = await this.normalizeSlackProfileForRead(
       userId,
       (await userConnectorProfileDAO.getByIdAndUser(profileId, userId)) as UserConnectorProfileRow | null
     );
+    const normalized = await this.normalizeSupabaseProfileForRead(
+      userId,
+      (slackNormalized.row || null) as UserConnectorProfileRow | null
+    );
     const row = normalized.row;
     if (!row) return null;
-    if (normalized.mutated) {
+    if (slackNormalized.mutated || normalized.mutated) {
       await this.invalidateMeCache(userId);
     }
     return {
@@ -1190,8 +1269,11 @@ export class UserConnectorService {
         headers,
         body: payload,
       });
-      const accessToken = asText(tokenPayload.access_token);
-      if (!accessToken) {
+      if (connectorKey === 'slack') {
+        assertSlackOauthPayload(tokenPayload);
+      }
+      let accessToken = asText(tokenPayload.access_token);
+      if (!accessToken && connectorKey !== 'slack') {
         throw new Error('OAuth 回调未返回 access_token');
       }
       let metadataJson = pickObject(profile.metadataJson);
@@ -1208,12 +1290,19 @@ export class UserConnectorService {
             ? buildNotionProfileName(displayName)
             : buildDefaultProfileName(connectorKey, catalogItem.name));
 
-      const secret: ConnectorAccountSecret = {
-        accessToken,
-        refreshToken: asText(tokenPayload.refresh_token) || undefined,
-        tokenType: asText(tokenPayload.token_type) || undefined,
-        scope: asText(tokenPayload.scope) || undefined,
-      };
+      const secret: ConnectorAccountSecret =
+        connectorKey === 'slack'
+          ? resolveSlackUserOauthSecret(tokenPayload)
+          : {
+              accessToken,
+              refreshToken: asText(tokenPayload.refresh_token) || undefined,
+              tokenType: asText(tokenPayload.token_type) || undefined,
+              scope: asText(tokenPayload.scope) || undefined,
+            };
+      accessToken = asText(secret.accessToken);
+      if (!accessToken) {
+        throw new Error('OAuth 回调未返回 access_token');
+      }
 
       let authStatus: ConnectorAuthStatus = 'authorized';
       let lastError: string | null = null;

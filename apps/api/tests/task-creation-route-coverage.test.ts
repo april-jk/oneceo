@@ -25,6 +25,7 @@ const originalGetIntentResult = sessionDaoAny.getIntentResult;
 const originalGetTaskDescription = sessionDaoAny.getTaskDescription;
 const originalGetExecutionPlan = sessionDaoAny.getExecutionPlan;
 const originalDeleteSession = sessionDaoAny.deleteSession;
+const originalGetFileSession = fileStoreAny.getSession;
 const originalDeleteFileSession = fileStoreAny.deleteSession;
 const originalAssertSessionOwnership = sessionConnectorAny.assertSessionOwnership;
 const originalListAvailableSkills = userSkillServiceAny.listAvailableSkills;
@@ -44,6 +45,7 @@ after(() => {
   sessionDaoAny.getTaskDescription = originalGetTaskDescription;
   sessionDaoAny.getExecutionPlan = originalGetExecutionPlan;
   sessionDaoAny.deleteSession = originalDeleteSession;
+  fileStoreAny.getSession = originalGetFileSession;
   fileStoreAny.deleteSession = originalDeleteFileSession;
   sessionConnectorAny.assertSessionOwnership = originalAssertSessionOwnership;
   userSkillServiceAny.listAvailableSkills = originalListAvailableSkills;
@@ -245,6 +247,44 @@ test('intent and delete routes work for the owner', async () => {
   }
 });
 
+test('session detail prefers completed lifecycle from db over stale memory state', async () => {
+  const server = await startServer();
+  sessionDaoAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    userId: 'owner-user',
+    status: 'completed',
+    stage: 'completed',
+    updatedAt: new Date('2026-04-16T03:14:54.664Z'),
+  });
+  fileStoreAny.getSession = async (sessionId: string) => ({
+    id: sessionId,
+    title: 'Demo session',
+    status: 'in_progress',
+    stage: 'collecting',
+    phase: 'analysis',
+    mode: 'altus',
+    driver: 'altus',
+    executor: 'altus',
+    runtime: {},
+    messages: [],
+    createdAt: '2026-04-16T03:13:00.000Z',
+    updatedAt: '2026-04-16T03:14:11.865Z',
+  });
+
+  try {
+    const response = await fetch(`${server.origin}/api/task-creation/sessions/session-stale-status`, {
+      headers: { 'x-test-user-id': 'owner-user' },
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.status, 'completed');
+    assert.equal(payload.data.stage, 'completed');
+  } finally {
+    await server.close();
+  }
+});
+
 test('session-ownership protected attachment, deliverable, and deployment routes reject foreign users', async () => {
   const server = await startServer();
   sessionConnectorAny.assertSessionOwnership = async () => {
@@ -261,6 +301,7 @@ test('session-ownership protected attachment, deliverable, and deployment routes
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deliverables/art-1/download' },
     { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment' },
+    { method: 'GET', path: '/api/task-creation/sessions/s-3/deployment/template' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/deploy' },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/redeploy', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },
     { method: 'POST', path: '/api/task-creation/sessions/s-3/deployment/rollback', body: JSON.stringify({ deploymentId: 'dep-1' }), headers: { 'content-type': 'application/json' } },

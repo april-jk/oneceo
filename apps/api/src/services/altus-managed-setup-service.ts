@@ -219,7 +219,12 @@ export class AltusManagedSetupService {
   async captureMcpToolSnapshot(sessionId: string) {
     const bindings = await taskSessionConnectorBindingDAO.listByTaskSessionId(sessionId).catch(() => []);
     const providers = bindings
-      .filter((item) => item.desiredState === 'attached' && asText(item.runtimeProviderId))
+      .filter(
+        (item) =>
+          item.desiredState === 'attached' &&
+          asText(item.runtimeStatus).toLowerCase() === 'connected' &&
+          asText(item.runtimeProviderId)
+      )
       .map((item) => ({
         connectorKey: item.connectorKey,
         providerId: asText(item.runtimeProviderId),
@@ -245,6 +250,7 @@ export class AltusManagedSetupService {
     const sessionMemory = await taskCreationFileMemoryStore.getSession(sessionId).catch(() => null);
     const orchestratorSessionId = asText(sessionMemory?.runtime?.orchestratorSessionId);
     if (orchestratorSessionId && shouldProbeLiveProviders) {
+      const expectedProviderIds = new Set(providers.map((item) => item.providerId));
       const live = await osacAgentService.listSessionMcpTools(orchestratorSessionId).catch(() => null);
       const liveProviders = Array.isArray(live?.providers)
         ? live.providers.map((item) => ({
@@ -259,6 +265,7 @@ export class AltusManagedSetupService {
               ? ((item as Record<string, unknown>).tools as unknown[])
               : [],
           }))
+            .filter((item) => expectedProviderIds.has(item.providerId))
         : [];
       if (liveProviders.length > 0) {
         const snapshot = await taskSessionRunDAO.createMcpToolSnapshot({

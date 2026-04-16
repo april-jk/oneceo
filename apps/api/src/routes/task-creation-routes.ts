@@ -33,25 +33,23 @@ import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-s
 import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-service';
 import { cloudflareTurnService } from '../services/cloudflare-turn-service';
 import {
-  getRailwayDeploymentPanel,
-  triggerRailwayRedeploy,
-  triggerRailwayRollback,
-  waitForRailwayDeploymentAfterSourceSync,
-  type RailwayDeploymentPanelData,
-} from '../services/railway-deployment-service';
-import {
   railwayDatabaseService,
   type RailwayDatabaseRowLocator,
 } from '../services/railway-database-service';
 import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
-import { publishTaskSessionWorkspaceToRepository } from '../services/task-creation-deployment-source-service';
+import { inspectTaskSessionDeploymentTemplate } from '../services/task-creation-deployment-source-service';
+import {
+  buildTaskSessionDeploymentResponse,
+  executeTaskSessionDeploymentAction,
+  getTaskSessionDeploymentErrorMessage,
+} from '../services/task-session-deployment-runtime-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
 import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
-import { sessionConnectorService } from '../services/session-connector-service';
+import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
 import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
@@ -543,7 +541,7 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   const dbStatus = asText(dbSession.status);
   const memoryStatus = asText(memorySession.status);
   const shouldPreferDbLifecycle =
-    (dbStatus === 'completed' || dbStatus === 'failed') && dbStatus !== memoryStatus;
+    (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user') && dbStatus !== memoryStatus;
 
   if (!shouldPreferDbLifecycle) {
     return memorySession;
@@ -552,9 +550,23 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   return {
     ...memorySession,
     status: dbSession.status,
-    stage: dbSession.stage,
+    stage: dbSession.stage || mapStageFromStatus(dbSession.status),
     updatedAt: dbSession.updatedAt || memorySession.updatedAt,
   };
+}
+
+async function mergeSessionLifecycleFromDbBestEffort(sessionId: string, memorySession: FileSessionRecord | null) {
+  if (!memorySession) return null;
+  try {
+    const dbSession = await taskCreationSessionDAO.getSession(sessionId);
+    return mergeSessionLifecycleFromDb(memorySession, dbSession);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_LIFECYCLE_MERGE_SKIPPED]', { sessionId, error });
+    return memorySession;
+  }
 }
 
 function normalizeLiveSessionStage(
@@ -890,6 +902,7 @@ async function hydrateFileSessionFromDb(sessionId: string) {
 
 async function resolveTaskSessionRecord(sessionId: string) {
   let session = await taskCreationFileMemoryStore.getSession(sessionId);
+  session = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
@@ -900,9 +913,10 @@ async function resolveTaskSessionRecord(sessionId: string) {
 async function resolveTaskSessionMeta(sessionId: string) {
   const session = await taskCreationFileMemoryStore.getSession(sessionId);
   if (session) {
+    const merged = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
     return reconcileRecoveredOpencodeCompletion({
-      ...session,
-      stage: normalizeLiveSessionStage(session),
+      ...merged,
+      stage: normalizeLiveSessionStage(merged),
       messages: [],
     });
   }
@@ -975,103 +989,6 @@ async function reconcileRecoveredOpencodeCompletion(
         updatedAt: new Date().toISOString(),
         },
   };
-}
-
-async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
-  const orchestratorSessionId = asText(session?.runtime?.orchestratorSessionId);
-  if (orchestratorSessionId) {
-    const byRuntime = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
-    if (byRuntime) {
-      return {
-        orchestratorSessionId,
-        environment: byRuntime,
-      };
-    }
-  }
-
-  const byTaskSession = session ? await findEnvironmentByTaskSessionId(session.id) : null;
-  if (byTaskSession) {
-    return {
-      orchestratorSessionId: byTaskSession.sessionId,
-      environment: byTaskSession,
-    };
-  }
-
-  return {
-    orchestratorSessionId: '',
-    environment: null,
-  };
-}
-
-async function buildRailwayDeploymentResponse(
-  userId: string,
-  session: FileSessionRecord | null,
-  selectedDeploymentId?: string
-) {
-  const account = await platformDeploymentAccountService.getUserAccount(userId);
-  if (!account) {
-    return {
-      configured: false,
-      canDeploy: true,
-      message: '首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。',
-      activeDeploymentPending: false,
-      domains: [],
-      deployments: [],
-      logs: [],
-      missing: [],
-    } satisfies RailwayDeploymentPanelData;
-  }
-  const { environment } = await resolveTaskSessionEnvironment(session);
-  const metadata = pickRecord(environment?.metadata);
-  return getRailwayDeploymentPanel(metadata, {
-    platformDeployment: {
-      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-      token: account.accessToken,
-      projectId: account.projectId,
-      projectName: account.projectName,
-      environmentId: account.environmentId,
-      environmentName: account.environmentName,
-      serviceId: account.serviceId,
-      serviceName: account.serviceName,
-    },
-    deploymentId: selectedDeploymentId,
-  });
-}
-
-async function persistRailwayDeploymentSelection(
-  orchestratorSessionId: string,
-  environmentMetadata: unknown,
-  payload: {
-    deploymentId?: string;
-    action: 'deploy' | 'redeploy' | 'rollback';
-  }
-) {
-  if (!orchestratorSessionId) return;
-  const metadata = pickRecord(environmentMetadata);
-  const railway = pickRecord(metadata.railway);
-  await setSandboxMetadata(orchestratorSessionId, {
-    railway: {
-      ...railway,
-      lastDeploymentId: payload.deploymentId || railway.lastDeploymentId || null,
-      lastAction: payload.action,
-      lastActionAt: new Date().toISOString(),
-    },
-  });
-}
-
-function getDeploymentErrorMessage(error: unknown) {
-  const message = asText((error as { message?: unknown })?.message);
-  if (!message) {
-    return '触发部署失败';
-  }
-  if (
-    message.includes('No GitHub installation found for repo') ||
-    message.includes('not found or is not accessible') ||
-    message.includes('unable to access')
-  ) {
-    return '平台部署供应链接入未完成，当前托管仓库尚未授权到部署服务';
-  }
-  return message;
 }
 
 type SessionListCache = {
@@ -4629,27 +4546,31 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     }
     const ownershipError = resolveOwnedTaskSessionError(error);
     const connectorOwnershipError = resolveSessionConnectorOwnershipError(error);
+    const attachError = resolveAttachConnectorError(error);
     const message = ownershipError?.message || connectorOwnershipError?.message || error?.message || '挂载连接器失败';
     writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_FAILED]', {
       taskSessionId: req.params.sessionId,
       connectorKey: req.params.connectorKey,
+      errorCode: attachError?.code || null,
       error: message,
     }, 'error');
     const normalized = String(message).toLowerCase();
-    const status =
-      ownershipError?.status === 403 || connectorOwnershipError?.status === 403
+    const status = attachError?.status
+      ? attachError.status
+      : ownershipError?.status === 403 || connectorOwnershipError?.status === 403
         ? 403
         : connectorOwnershipError?.status === 401
           ? 401
-        : normalized.includes('无权') || normalized.includes('登录')
-        ? 401
-        : normalized.includes('未授权') || normalized.includes('尚未完成授权')
-          ? 409
-          : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
-            ? 504
-          : 400;
+          : normalized.includes('无权') || normalized.includes('登录')
+            ? 401
+            : normalized.includes('未授权') || normalized.includes('尚未完成授权')
+              ? 409
+              : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
+                ? 504
+                : 400;
     return res.status(status).json({
       success: false,
+      errorCode: attachError?.code,
       error: getPublicErrorMessage(message),
     });
   }
@@ -5017,7 +4938,11 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
     }
 
     const deploymentId = asText(req.query.deploymentId);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, deploymentId || undefined);
+    const data = await buildTaskSessionDeploymentResponse({
+      userId: currentUser.userId,
+      session,
+      selectedDeploymentId: deploymentId || undefined,
+    });
     return res.json({
       success: true,
       data,
@@ -5029,6 +4954,95 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
     return res.status(authError?.status || ownershipError?.status || 500).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取部署信息失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/template
+ * 获取当前工作区的部署模板基线状态
+ */
+router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
+    const environment = orchestratorSessionId
+      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
+      : null;
+    const workspaceRoot =
+      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
+      resolveOpencodeWorkspacePath(sessionId);
+
+    const data = await inspectTaskSessionDeploymentTemplate({
+      orchestratorSessionId,
+      workspaceRoot,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取部署模板基线失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          error?.message ||
+          '获取部署模板基线失败，请稍后重试'
+      ),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/token/rotate
+ * 轮换当前会话绑定的 Railway Project Token
+ */
+router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    const data = await buildTaskSessionDeploymentResponse({
+      userId: currentUser.userId,
+      session,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('轮换部署凭证失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '轮换部署凭证失败，请稍后重试'
+      ),
     });
   }
 });
@@ -5064,48 +5078,18 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
         error: getPublicErrorMessage('未找到可部署的工作区，请先生成项目文件'),
       });
     }
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const deploymentRequestedAt = Date.now();
-    const platformDeployment = {
-      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-      token: account.accessToken,
-      projectId: account.projectId,
-      projectName: account.projectName,
-      environmentId: account.environmentId,
-      environmentName: account.environmentName,
-      serviceId: account.serviceId,
-      serviceName: account.serviceName,
-      repository: account.githubRepoFullName,
-    };
-    await publishTaskSessionWorkspaceToRepository({
-      orchestratorSessionId,
-      workspaceRoot,
-      repository: {
-        owner: account.githubRepoOwner || '',
-        name: account.githubRepoName || '',
-        fullName: account.githubRepoFullName || '',
-        htmlUrl: account.githubRepoUrl,
-        defaultBranch: account.githubDefaultBranch || 'main',
-      },
-      sessionId,
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'deploy',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      workspacePath: workspaceRoot,
+      resolvedOrchestratorSessionId: orchestratorSessionId,
+      resolvedEnvironment: environment,
     });
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await waitForRailwayDeploymentAfterSourceSync(
-      {
-        ...metadata,
-        platformDeployment,
-      },
-      {
-        since: deploymentRequestedAt,
-        timeoutMs: 120_000,
-        pollIntervalMs: 4_000,
-      }
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -5113,7 +5097,9 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
     console.error('触发部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error)),
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || getTaskSessionDeploymentErrorMessage(error)
+      ),
     });
   }
 });
@@ -5143,30 +5129,16 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       });
     }
 
-    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRedeploy(
-      {
-        ...metadata,
-        platformDeployment: {
-          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-          token: account.accessToken,
-          projectId: account.projectId,
-          projectName: account.projectName,
-          environmentId: account.environmentId,
-          environmentName: account.environmentName,
-          serviceId: account.serviceId,
-          serviceName: account.serviceName,
-        },
-      },
-      deploymentId
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'redeploy',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      deploymentId,
+    });
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -5174,7 +5146,12 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
     console.error('重新部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '重新部署失败'),
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          getTaskSessionDeploymentErrorMessage(error) ||
+          '重新部署失败'
+      ),
     });
   }
 });
@@ -5204,30 +5181,16 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
       });
     }
 
-    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRollback(
-      {
-        ...metadata,
-        platformDeployment: {
-          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-          token: account.accessToken,
-          projectId: account.projectId,
-          projectName: account.projectName,
-          environmentId: account.environmentId,
-          environmentName: account.environmentName,
-          serviceId: account.serviceId,
-          serviceName: account.serviceName,
-        },
-      },
-      deploymentId
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'rollback',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      deploymentId,
+    });
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -5235,7 +5198,12 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
     console.error('回滚部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '回滚部署失败'),
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          getTaskSessionDeploymentErrorMessage(error) ||
+          '回滚部署失败'
+      ),
     });
   }
 });
@@ -5257,7 +5225,10 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.getSummary(account);
     return res.json({
       success: true,
@@ -5301,7 +5272,10 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
 
     const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
     const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
     return res.json({
       success: true,
@@ -5344,7 +5318,10 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.insertRow(account, table, values);
     return res.json({
       success: true,
@@ -5388,7 +5365,10 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.updateRow(account, table, locator, values);
     return res.json({
       success: true,
@@ -5431,7 +5411,10 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.deleteRow(account, table, locator);
     return res.json({
       success: true,

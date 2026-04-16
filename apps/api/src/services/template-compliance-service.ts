@@ -143,6 +143,8 @@ function inferBuildOutputDir(packageJson: Record<string, unknown>): string {
 
 async function inferHealthcheckPath(sourceDir: string): Promise<string> {
   const candidates = [
+    join(sourceDir, 'server.ts'),
+    join(sourceDir, 'server.js'),
     join(sourceDir, 'server/index.ts'),
     join(sourceDir, 'server/index.js'),
     join(sourceDir, 'src/server/index.ts'),

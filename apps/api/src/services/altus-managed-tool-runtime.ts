@@ -9,6 +9,10 @@ import { connectorGuideService } from './connector-guide-service';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import {
+  altusManagedDeploymentToolService,
+  type AltusManagedDeploymentToolName,
+} from './altus-managed-deployment-tool-service';
+import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
@@ -78,6 +82,15 @@ function normalizeDebugTargetUrl(value: unknown) {
     throw new Error('debug_open_page_invalid_protocol:Only http:// or https:// is allowed');
   }
   return parsed.toString();
+}
+
+function isManagedDeploymentToolName(value: string): value is AltusManagedDeploymentToolName {
+  return (
+    value === 'deploy_application' ||
+    value === 'redeploy_application' ||
+    value === 'rollback_application_deployment' ||
+    value === 'get_application_deployment_status'
+  );
 }
 
 export class AltusManagedToolRuntime {
@@ -431,6 +444,20 @@ export class AltusManagedToolRuntime {
           cdpPort,
           output: stdout,
         }),
+      };
+    }
+
+    if (isManagedDeploymentToolName(toolName)) {
+      const result = await altusManagedDeploymentToolService.execute({
+        action: toolName,
+        sessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        workspaceRoot: this.input.workspaceRoot,
+        notes: asText(rawArgs.notes),
+      });
+      return {
+        type: 'result',
+        content: JSON.stringify(result),
       };
     }
 

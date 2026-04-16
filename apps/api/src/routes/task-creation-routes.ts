@@ -34,6 +34,7 @@ import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-s
 import { cloudflareTurnService } from '../services/cloudflare-turn-service';
 import {
   getRailwayDeploymentPanel,
+  triggerRailwayDeploy,
   triggerRailwayRedeploy,
   triggerRailwayRollback,
   waitForRailwayDeploymentAfterSourceSync,
@@ -45,7 +46,10 @@ import {
   railwayDatabaseService,
   type RailwayDatabaseRowLocator,
 } from '../services/railway-database-service';
-import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
+import {
+  platformDeploymentAccountService,
+  refreshManagedServiceSourceConnection,
+} from '../services/platform-deployment-account-service';
 import {
   inspectTaskSessionDeploymentTemplate,
   publishTaskSessionWorkspaceToRepository,
@@ -552,7 +556,7 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   const dbStatus = asText(dbSession.status);
   const memoryStatus = asText(memorySession.status);
   const shouldPreferDbLifecycle =
-    (dbStatus === 'completed' || dbStatus === 'failed') && dbStatus !== memoryStatus;
+    (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user') && dbStatus !== memoryStatus;
 
   if (!shouldPreferDbLifecycle) {
     return memorySession;
@@ -561,9 +565,23 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   return {
     ...memorySession,
     status: dbSession.status,
-    stage: dbSession.stage,
+    stage: dbSession.stage || mapStageFromStatus(dbSession.status),
     updatedAt: dbSession.updatedAt || memorySession.updatedAt,
   };
+}
+
+async function mergeSessionLifecycleFromDbBestEffort(sessionId: string, memorySession: FileSessionRecord | null) {
+  if (!memorySession) return null;
+  try {
+    const dbSession = await taskCreationSessionDAO.getSession(sessionId);
+    return mergeSessionLifecycleFromDb(memorySession, dbSession);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_LIFECYCLE_MERGE_SKIPPED]', { sessionId, error });
+    return memorySession;
+  }
 }
 
 function normalizeLiveSessionStage(
@@ -899,6 +917,7 @@ async function hydrateFileSessionFromDb(sessionId: string) {
 
 async function resolveTaskSessionRecord(sessionId: string) {
   let session = await taskCreationFileMemoryStore.getSession(sessionId);
+  session = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
@@ -909,9 +928,10 @@ async function resolveTaskSessionRecord(sessionId: string) {
 async function resolveTaskSessionMeta(sessionId: string) {
   const session = await taskCreationFileMemoryStore.getSession(sessionId);
   if (session) {
+    const merged = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
     return reconcileRecoveredOpencodeCompletion({
-      ...session,
-      stage: normalizeLiveSessionStage(session),
+      ...merged,
+      stage: normalizeLiveSessionStage(merged),
       messages: [],
     });
   }
@@ -5275,18 +5295,27 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
     await setSandboxMetadata(orchestratorSessionId, {
       deploymentTemplateBaseline: publishReport.baseline,
     });
+    await refreshManagedServiceSourceConnection({
+      serviceId: account.serviceId,
+      repoFullName: account.githubRepoFullName || '',
+      branch: account.githubDefaultBranch || 'main',
+    });
     const metadata = pickRecord(environment?.metadata);
-    const actionResult = await waitForRailwayDeploymentAfterSourceSync(
-      {
-        ...metadata,
-        platformDeployment,
-      },
+    const deploymentMetadata = {
+      ...metadata,
+      platformDeployment,
+    };
+    const syncedDeployment = await waitForRailwayDeploymentAfterSourceSync(
+      deploymentMetadata,
       {
         since: deploymentRequestedAt,
         timeoutMs: 120_000,
         pollIntervalMs: 4_000,
       }
     );
+    const actionResult = asText(syncedDeployment.deploymentId)
+      ? syncedDeployment
+      : await triggerRailwayDeploy(deploymentMetadata);
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
     const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     await waitForRailwayDeploymentPublicReachability({

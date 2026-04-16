@@ -20,6 +20,7 @@ import { connectorGuideService } from './connector-guide-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import type { OsacMessage } from '../clients/osac-client';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { isSameUserId } from '../utils/user-id';
 
 export type SessionConnectorConfig = {
   repositories?: string[];
@@ -170,18 +171,57 @@ function mapRuntimeStatus(value: unknown): ConnectorRuntimeStatus {
   return 'unknown';
 }
 
-type HandledProviderAttachError = Error & {
-  providerAttachHandled?: boolean;
+export type AttachConnectorErrorCode =
+  | 'profile_invalid'
+  | 'auth_incomplete'
+  | 'provider_register_failed'
+  | 'provider_attach_failed'
+  | 'provider_attach_live_missing';
+
+type AttachConnectorError = Error & {
+  attachConnectorErrorCode?: AttachConnectorErrorCode;
+  attachConnectorStatus?: number;
+  attachConnectorStateHandled?: boolean;
 };
 
-function createHandledProviderAttachError(message: string): HandledProviderAttachError {
-  const error = new Error(message) as HandledProviderAttachError;
-  error.providerAttachHandled = true;
+function isTimeoutAttachError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const normalized = message.toLowerCase();
+  return normalized.includes('osac 请求超时') || normalized.includes('request timeout');
+}
+
+function createAttachConnectorError(input: {
+  code: AttachConnectorErrorCode;
+  message: string;
+  status?: number;
+  stateHandled?: boolean;
+}): AttachConnectorError {
+  const error = new Error(input.message) as AttachConnectorError;
+  error.attachConnectorErrorCode = input.code;
+  error.attachConnectorStatus = input.status ?? 400;
+  error.attachConnectorStateHandled = input.stateHandled === true;
   return error;
 }
 
-function isHandledProviderAttachError(error: unknown): error is HandledProviderAttachError {
-  return error instanceof Error && (error as HandledProviderAttachError).providerAttachHandled === true;
+export function resolveAttachConnectorError(error: unknown): {
+  code: AttachConnectorErrorCode;
+  status: number;
+  message: string;
+  stateHandled: boolean;
+} | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const attachError = error as AttachConnectorError;
+  if (!attachError.attachConnectorErrorCode) {
+    return null;
+  }
+  return {
+    code: attachError.attachConnectorErrorCode,
+    status: attachError.attachConnectorStatus ?? 400,
+    message: attachError.message,
+    stateHandled: attachError.attachConnectorStateHandled === true,
+  };
 }
 
 function pickToolName(event: Record<string, unknown>): string {
@@ -254,6 +294,61 @@ function isOsacRequestTimeoutError(error: unknown): boolean {
 export class SessionConnectorService {
   private async invalidateConnectorProjection(taskSessionId: string) {
     await taskSessionRedisCacheService.invalidateConnectorProjectionBySessionId(taskSessionId).catch(() => null);
+  }
+
+  private buildAttachFailureRuntimePatch(input: {
+    runtimeStatus: 'failed' | 'pending_recover';
+    runtimeEnvVersion: number;
+    runtimeTransport: string;
+    lastError: string;
+  }) {
+    return {
+      runtimeStatus: input.runtimeStatus,
+      runtimeProviderId: null,
+      runtimeEnvVersion: input.runtimeEnvVersion,
+      runtimeTransport: input.runtimeTransport,
+      runtimeAttachedToolsJson: [],
+      runtimeLastStoppedAt: new Date(),
+      recoveryQueuedAt: input.runtimeStatus === 'pending_recover' ? new Date() : null,
+      recoveryStartedAt: null,
+      recoveryCompletedAt: null,
+      lastError: input.lastError,
+    };
+  }
+
+  private async recordAttachFailure(input: {
+    taskSessionId: string;
+    connectorKey: ConnectorKey;
+    bindingId: string;
+    providerId: string;
+    runtimeStatus: 'failed' | 'pending_recover';
+    runtimeEnvVersion: number;
+    runtimeTransport: string;
+    eventType: 'provider_register_failed' | 'provider_attach_failed' | 'provider_attach_live_missing';
+    errorMessage: string;
+    eventPayload?: Record<string, unknown>;
+  }) {
+    await taskSessionConnectorBindingDAO.updateRuntime(
+      input.taskSessionId,
+      input.connectorKey,
+      this.buildAttachFailureRuntimePatch({
+        runtimeStatus: input.runtimeStatus,
+        runtimeEnvVersion: input.runtimeEnvVersion,
+        runtimeTransport: input.runtimeTransport,
+        lastError: input.errorMessage,
+      })
+    );
+    await taskSessionRunDAO.appendConnectorRuntimeEvent({
+      sessionId: input.taskSessionId,
+      bindingId: input.bindingId,
+      providerId: input.providerId,
+      eventType: input.eventType,
+      payloadJson: {
+        transport: input.runtimeTransport,
+        error: input.errorMessage,
+        ...(input.eventPayload || {}),
+      },
+    });
   }
 
   private asPayloadRecord(message: OsacMessage | null | undefined): Record<string, unknown> {
@@ -359,12 +454,12 @@ export class SessionConnectorService {
     const proxyEnv = buildSupabaseProxyEnv(connectorKey);
     return {
       transport: {
-        type: 'remote_sse' as const,
+        type: runtimeConfig.transport,
         url: runtimeConfig.url,
         headers: runtimeConfig.headers || {},
         env: proxyEnv,
       },
-      transportName: 'remote_sse',
+      transportName: runtimeConfig.transport,
     };
   }
 
@@ -386,11 +481,14 @@ export class SessionConnectorService {
     if (!session) {
       throw new Error('会话不存在');
     }
-    if (session.userId && session.userId !== userId) {
+    if (session.userId && !isSameUserId(session.userId, userId)) {
       throw new Error('当前用户无权管理该会话连接器');
     }
     if (!session.userId) {
-      throw new Error('会话缺少归属用户，无法管理该会话连接器');
+      session = await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, userId);
+      if (!session?.userId) {
+        throw new Error('会话缺少归属用户，无法管理该会话连接器');
+      }
     }
     return session;
   }
@@ -658,7 +756,10 @@ export class SessionConnectorService {
     }
     const profileMaterial = await userConnectorService.getProfileMaterial(userId, profileId);
     if (!profileMaterial || profileMaterial.connectorKey !== connectorKey) {
-      throw new Error('连接器 profile 不存在或不属于当前连接器');
+      throw createAttachConnectorError({
+        code: 'profile_invalid',
+        message: '连接器 profile 不存在或不属于当前连接器',
+      });
     }
     const normalizedSessionConfig = normalizeSessionConfig(connectorKey, sessionConfig);
     if (connectorKey === 'github') {
@@ -689,7 +790,11 @@ export class SessionConnectorService {
         lastError: '连接器尚未完成授权或配置',
       });
       await connectorGuideService.recomputeSessionGuides(taskSessionId);
-      throw new Error('连接器尚未完成授权或配置');
+      throw createAttachConnectorError({
+        code: 'auth_incomplete',
+        message: '连接器尚未完成授权或配置',
+        status: 409,
+      });
     }
     const runtime = await this.resolveRuntimeContext(taskSessionId, orchestratorSessionId);
     const serverName = serverNameFor(connectorKey, taskSessionId);
@@ -709,7 +814,6 @@ export class SessionConnectorService {
         connectorKey,
         providerId,
         transport: providerConfig.transportName,
-        bridgeMode: providerConfig.transportName,
         proxyEnvInjected: proxyKeys.length > 0,
         proxyEnvKeys: proxyKeys,
       });
@@ -723,7 +827,7 @@ export class SessionConnectorService {
         runtimeStatus: 'pending_recover',
         orchestratorSessionId: asText(orchestratorSessionId) || null,
         serverName,
-        runtimeProviderId: providerId,
+        runtimeProviderId: null,
         runtimeEnvVersion,
         runtimeTransport: providerConfig.transportName,
         runtimeAttachedToolsJson: [],
@@ -781,33 +885,34 @@ export class SessionConnectorService {
       },
     });
 
-    try {
-      const retryCountRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRIES || 1);
-      const retryDelayRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRY_DELAY_MS || 1000);
-      const maxAttempts = 1 + (Number.isFinite(retryCountRaw) ? Math.max(0, Math.floor(retryCountRaw)) : 1);
-      const retryDelayMs = Number.isFinite(retryDelayRaw) ? Math.max(100, Math.floor(retryDelayRaw)) : 1000;
-      const requestRuntimeWithTimeoutRetry = async (input: {
-        stage: 'register_provider' | 'attach_provider_to_session';
-        message: OsacMessage;
-        match: (message: OsacMessage) => boolean;
-      }) => {
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-          const startedAt = Date.now();
-          try {
-            const reply = await this.requestRuntime(runtime, input.message, input.match);
-            writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_DONE]', {
-              taskSessionId,
-              connectorKey,
-              providerId,
-              stage: input.stage,
-              attempt,
-              durationMs: Date.now() - startedAt,
-            });
-            return reply;
-          } catch (error) {
-            const timeoutError = isOsacRequestTimeoutError(error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_FAILED]', {
+    const retryCountRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRIES || 1);
+    const retryDelayRaw = Number(process.env.CONNECTOR_ATTACH_TIMEOUT_RETRY_DELAY_MS || 1000);
+    const maxAttempts = 1 + (Number.isFinite(retryCountRaw) ? Math.max(0, Math.floor(retryCountRaw)) : 1);
+    const retryDelayMs = Number.isFinite(retryDelayRaw) ? Math.max(100, Math.floor(retryDelayRaw)) : 1000;
+    const requestRuntimeWithTimeoutRetry = async (input: {
+      stage: 'register_provider' | 'attach_provider_to_session';
+      message: OsacMessage;
+      match: (message: OsacMessage) => boolean;
+    }) => {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const startedAt = Date.now();
+        try {
+          const reply = await this.requestRuntime(runtime, input.message, input.match);
+          writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_DONE]', {
+            taskSessionId,
+            connectorKey,
+            providerId,
+            stage: input.stage,
+            attempt,
+            durationMs: Date.now() - startedAt,
+          });
+          return reply;
+        } catch (error) {
+          const timeoutError = isOsacRequestTimeoutError(error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          writeConnectorDebugLog(
+            '[CONNECTOR_ATTACH_OSAC_STAGE_FAILED]',
+            {
               taskSessionId,
               connectorKey,
               providerId,
@@ -816,9 +921,13 @@ export class SessionConnectorService {
               durationMs: Date.now() - startedAt,
               timeoutError,
               error: errorMessage,
-            }, timeoutError ? 'warn' : 'error');
-            if (timeoutError && attempt < maxAttempts) {
-              writeConnectorDebugLog('[CONNECTOR_ATTACH_OSAC_STAGE_RETRY]', {
+            },
+            timeoutError ? 'warn' : 'error'
+          );
+          if (timeoutError && attempt < maxAttempts) {
+            writeConnectorDebugLog(
+              '[CONNECTOR_ATTACH_OSAC_STAGE_RETRY]',
+              {
                 taskSessionId,
                 connectorKey,
                 providerId,
@@ -826,23 +935,26 @@ export class SessionConnectorService {
                 attempt,
                 nextAttempt: attempt + 1,
                 retryDelayMs,
-              }, 'warn');
-              await wait(retryDelayMs);
-              continue;
-            }
-            throw error;
+              },
+              'warn'
+            );
+            await wait(retryDelayMs);
+            continue;
           }
+          throw error;
         }
-        throw new Error('OSAC attach stage exhausted');
-      };
+      }
+      throw new Error('OSAC attach stage exhausted');
+    };
 
-      writeConnectorDebugLog('[CONNECTOR_ATTACH_REGISTER_PROVIDER]', {
-        taskSessionId,
-        connectorKey,
-        providerId,
-        runtimeSessionId: runtime.orchestratorSessionId,
-        transport: providerConfig.transportName,
-      });
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_REGISTER_PROVIDER]', {
+      taskSessionId,
+      connectorKey,
+      providerId,
+      runtimeSessionId: runtime.orchestratorSessionId,
+      transport: providerConfig.transportName,
+    });
+    try {
       await requestRuntimeWithTimeoutRetry({
         stage: 'register_provider',
         message: {
@@ -861,12 +973,34 @@ export class SessionConnectorService {
           return message.type === 'MCP_PROVIDER_STATUS' && asText(payload.providerId) === providerId;
         },
       });
-      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_REGISTERED]', {
+    } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : String(error);
+      await this.recordAttachFailure({
         taskSessionId,
         connectorKey,
+        bindingId: binding.id,
         providerId,
+        runtimeStatus: 'failed',
+        runtimeEnvVersion,
+        runtimeTransport: providerConfig.transportName,
+        eventType: 'provider_register_failed',
+        errorMessage: failureMessage,
       });
-      const attachReply = await requestRuntimeWithTimeoutRetry({
+      throw createAttachConnectorError({
+        code: 'provider_register_failed',
+        message: failureMessage,
+        status: isTimeoutAttachError(error) ? 504 : 400,
+        stateHandled: true,
+      });
+    }
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_REGISTERED]', {
+      taskSessionId,
+      connectorKey,
+      providerId,
+    });
+    let attachReply: OsacMessage;
+    try {
+      attachReply = await requestRuntimeWithTimeoutRetry({
         stage: 'attach_provider_to_session',
         message: {
           type: 'ATTACH_MCP_PROVIDER_TO_SESSION',
@@ -886,101 +1020,89 @@ export class SessionConnectorService {
           );
         },
       });
-      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_ATTACHED_REPLY]', {
+    } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : String(error);
+      await this.recordAttachFailure({
         taskSessionId,
         connectorKey,
-        providerId,
-        payload: this.asPayloadRecord(attachReply),
-      });
-      const attachPayload = this.asPayloadRecord(attachReply);
-      const attachStatus = asText(attachPayload.status) || 'unknown';
-      const mappedAttachStatus = mapRuntimeStatus(attachStatus);
-      const attachErrorMessage =
-        asText(attachPayload.errorMessage) ||
-        asText(attachPayload.error) ||
-        asText(attachPayload.message) ||
-        null;
-      if (mappedAttachStatus !== 'connected') {
-        const failureMessage = attachErrorMessage || `MCP provider attach failed: ${attachStatus}`;
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
-          runtimeStatus: 'failed',
-          runtimeProviderId: providerId,
-          runtimeEnvVersion,
-          runtimeTransport: providerConfig.transportName,
-          runtimeAttachedToolsJson: [],
-          recoveryQueuedAt: new Date(),
-          lastError: failureMessage,
-        });
-        await taskSessionRunDAO.appendConnectorRuntimeEvent({
-          sessionId: taskSessionId,
-          bindingId: binding.id,
-          providerId,
-          eventType: 'provider_attach_failed',
-          payloadJson: {
-            runtimeStatus: attachStatus,
-            error: failureMessage,
-          },
-        });
-        throw createHandledProviderAttachError(failureMessage);
-      }
-      const attachedProviders = this.normalizeSessionMcpProviders({
-        ...attachReply,
-        payload: {
-          ...attachPayload,
-          providers: [attachPayload],
-        },
-      } as OsacMessage);
-      const attached = attachedProviders.get(providerId);
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
-        runtimeAttachedToolsJson: attached?.tools || [],
-        runtimeStatus: mapRuntimeStatus(attached?.status || 'connected'),
-        recoveryQueuedAt: null,
-        recoveryStartedAt: new Date(),
-        recoveryCompletedAt: new Date(),
-        lastError: null,
-      });
-      await taskSessionRunDAO.appendConnectorRuntimeEvent({
-        sessionId: taskSessionId,
         bindingId: binding.id,
         providerId,
-        eventType: 'provider_attached',
-        payloadJson: {
-          runtimeStatus: attached?.status || 'connected',
-          tools: attached?.tools || [],
-        },
+        runtimeStatus: 'failed',
+        runtimeEnvVersion,
+        runtimeTransport: providerConfig.transportName,
+        eventType: 'provider_attach_failed',
+        errorMessage: failureMessage,
       });
-    } catch (error) {
-      const handledByAttachReply = isHandledProviderAttachError(error);
-      writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_FAILED]', {
+      throw createAttachConnectorError({
+        code: 'provider_attach_failed',
+        message: failureMessage,
+        status: isTimeoutAttachError(error) ? 504 : 400,
+        stateHandled: true,
+      });
+    }
+    writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_ATTACHED_REPLY]', {
+      taskSessionId,
+      connectorKey,
+      providerId,
+      payload: this.asPayloadRecord(attachReply),
+    });
+    const attachPayload = this.asPayloadRecord(attachReply);
+    const attachStatus = asText(attachPayload.status) || 'unknown';
+    const mappedAttachStatus = mapRuntimeStatus(attachStatus);
+    const attachErrorMessage =
+      asText(attachPayload.errorMessage) ||
+      asText(attachPayload.error) ||
+      asText(attachPayload.message) ||
+      null;
+    if (mappedAttachStatus !== 'connected') {
+      const failureMessage = attachErrorMessage || `MCP provider attach failed: ${attachStatus}`;
+      await this.recordAttachFailure({
         taskSessionId,
         connectorKey,
+        bindingId: binding.id,
         providerId,
-        runtimeSessionId: runtime.orchestratorSessionId,
-        transport: providerConfig.transportName,
-        handledByAttachReply,
-        error: error instanceof Error ? error.message : String(error),
-      }, 'error');
-      if (!handledByAttachReply) {
-        await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
-          runtimeStatus: 'failed',
-          runtimeProviderId: providerId,
-          runtimeEnvVersion,
-          runtimeTransport: providerConfig.transportName,
-          recoveryQueuedAt: new Date(),
-          lastError: error instanceof Error ? error.message : String(error),
-        });
-        await taskSessionRunDAO.appendConnectorRuntimeEvent({
-          sessionId: taskSessionId,
-          bindingId: binding.id,
-          providerId,
-          eventType: 'provider_attach_failed',
-          payloadJson: {
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-      throw error;
+        runtimeStatus: 'failed',
+        runtimeEnvVersion,
+        runtimeTransport: providerConfig.transportName,
+        eventType: 'provider_attach_failed',
+        errorMessage: failureMessage,
+        eventPayload: {
+          runtimeStatus: attachStatus,
+        },
+      });
+      throw createAttachConnectorError({
+        code: 'provider_attach_failed',
+        message: failureMessage,
+        stateHandled: true,
+      });
     }
+    const attachedProviders = this.normalizeSessionMcpProviders({
+      ...attachReply,
+      payload: {
+        ...attachPayload,
+        providers: [attachPayload],
+      },
+    } as OsacMessage);
+    const attached = attachedProviders.get(providerId);
+    await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
+      runtimeAttachedToolsJson: attached?.tools || [],
+      runtimeStatus: mapRuntimeStatus(attached?.status || 'connected'),
+      recoveryQueuedAt: null,
+      recoveryStartedAt: new Date(),
+      recoveryCompletedAt: new Date(),
+      lastError: null,
+    });
+    await taskSessionRunDAO.appendConnectorRuntimeEvent({
+      sessionId: taskSessionId,
+      bindingId: binding.id,
+      providerId,
+      eventType: 'provider_attached',
+      payloadJson: {
+        transport: providerConfig.transportName,
+        runtimeStatus: attached?.status || 'connected',
+        tools: attached?.tools || [],
+      },
+    });
 
     const live = await this.waitForRuntimeServer(runtime, providerId);
     if (!live) {
@@ -990,15 +1112,24 @@ export class SessionConnectorService {
         providerId,
         runtimeSessionId: runtime.orchestratorSessionId,
       }, 'error');
-      await taskSessionConnectorBindingDAO.updateRuntime(taskSessionId, connectorKey, {
-        runtimeStatus: 'failed',
-        runtimeProviderId: providerId,
+      const failureMessage = '运行时未保留已挂载的 MCP provider';
+      await this.recordAttachFailure({
+        taskSessionId,
+        connectorKey,
+        bindingId: binding.id,
+        providerId,
+        runtimeStatus: 'pending_recover',
         runtimeEnvVersion,
         runtimeTransport: providerConfig.transportName,
-        recoveryQueuedAt: new Date(),
-        lastError: '运行时未保留已挂载的 MCP provider',
+        eventType: 'provider_attach_live_missing',
+        errorMessage: failureMessage,
       });
-      throw new Error('运行时未保留已挂载的 MCP provider');
+      throw createAttachConnectorError({
+        code: 'provider_attach_live_missing',
+        message: failureMessage,
+        status: 409,
+        stateHandled: true,
+      });
     }
     writeConnectorDebugLog('[CONNECTOR_ATTACH_PROVIDER_LIVE]', {
       taskSessionId,

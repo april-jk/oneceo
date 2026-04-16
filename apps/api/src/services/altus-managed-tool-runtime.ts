@@ -1,10 +1,17 @@
 import path from 'node:path';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { tavilyConnector } from '../connectors/tavily-connector';
+import { ensureNekoDebug } from './sandbox-debug-service';
+import { cloudflareTurnService } from './cloudflare-turn-service';
 import { sandboxSkillSyncService } from './sandbox-skill-sync-service';
 import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
+import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import {
+  altusManagedDeploymentToolService,
+  type AltusManagedDeploymentToolName,
+} from './altus-managed-deployment-tool-service';
 import {
   asText,
   buildManagedMcpToolName,
@@ -59,6 +66,33 @@ function truncate(value: string, limit = 16000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
+function normalizeDebugTargetUrl(value: unknown) {
+  const raw = asText(value);
+  if (!raw) {
+    throw new Error('debug_open_page_missing_url');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`debug_open_page_invalid_url:Please provide a full URL like http://127.0.0.1:3000/folder1/`);
+  }
+  const protocol = parsed.protocol.toLowerCase();
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    throw new Error('debug_open_page_invalid_protocol:Only http:// or https:// is allowed');
+  }
+  return parsed.toString();
+}
+
+function isManagedDeploymentToolName(value: string): value is AltusManagedDeploymentToolName {
+  return (
+    value === 'deploy_application' ||
+    value === 'redeploy_application' ||
+    value === 'rollback_application_deployment' ||
+    value === 'get_application_deployment_status'
+  );
+}
+
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
@@ -66,10 +100,25 @@ export class AltusManagedToolRuntime {
   constructor(
     private readonly input: {
       sessionId: string;
+      userId: string;
       sandboxId: string;
       workspaceRoot: string;
       activeSkills: ManagedSkillContext[];
       mcpProviders: ManagedMcpProvider[];
+    },
+    private readonly sandboxActivityDeps: {
+      touchSandbox: typeof touchSandbox;
+      markSandboxDirty: typeof markSandboxDirty;
+    } = {
+      touchSandbox,
+      markSandboxDirty,
+    },
+    private readonly debugDeps: {
+      ensureNekoDebug: typeof ensureNekoDebug;
+      issueIceServersForUser: typeof cloudflareTurnService.issueIceServersForUser;
+    } = {
+      ensureNekoDebug,
+      issueIceServersForUser: (userId: string) => cloudflareTurnService.issueIceServersForUser(userId),
     }
   ) {}
 
@@ -206,8 +255,13 @@ export class AltusManagedToolRuntime {
     }));
   }
 
+  private async markWorkspaceDirty(reason: string) {
+    await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, reason).catch(() => null);
+  }
+
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
     if (toolName === 'load_connector_guide') {
       const connectorKey = asText(rawArgs.connectorKey).toLowerCase();
       if (!connectorKey) {
@@ -284,6 +338,7 @@ export class AltusManagedToolRuntime {
           })
         );
       }
+      await this.markWorkspaceDirty(`managed_mcp_tool:${mcpTool.toolName}`);
       return {
         type: 'result',
         content: JSON.stringify({
@@ -307,6 +362,7 @@ export class AltusManagedToolRuntime {
       const stdout = truncate(asText((result as any)?.stdout));
       const stderr = truncate(asText((result as any)?.stderr));
       const exitCode = Number((result as any)?.exitCode ?? -1);
+      await this.markWorkspaceDirty('managed_shell_execute');
       return {
         type: 'result',
         content: JSON.stringify({
@@ -315,6 +371,94 @@ export class AltusManagedToolRuntime {
           stdout,
           stderr,
         }),
+      };
+    }
+
+    if (toolName === 'debug_open_page') {
+      const targetUrl = normalizeDebugTargetUrl(rawArgs.url);
+      const ensureDebug = rawArgs.ensureDebug === undefined ? true : asBoolean(rawArgs.ensureDebug);
+      const cdpPort = asPositiveInt(process.env.NEKO_CDP_PORT, 9222, 65535);
+      let debugInfo: Awaited<ReturnType<typeof ensureNekoDebug>> | null = null;
+      if (ensureDebug) {
+        let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+        try {
+          dynamicIceServers = await this.debugDeps.issueIceServersForUser(this.input.userId);
+        } catch (error) {
+          console.warn('[MANAGED_DEBUG_TURN_ICE_GENERATE_FAILED]', {
+            sessionId: this.input.sessionId,
+            userId: this.input.userId,
+            error: error instanceof Error ? error.message : String(error || ''),
+          });
+        }
+        debugInfo = await this.debugDeps.ensureNekoDebug(this.input.sandboxId, {
+          requireTurn: true,
+          strictIceCheck: true,
+          ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
+        });
+        if (!debugInfo.ready || debugInfo.status === 'failed') {
+          const reason = asText((debugInfo as any)?.reasonCode) || 'debug_not_ready';
+          const message = asText(debugInfo.message) || 'debug_not_ready';
+          throw new Error(`debug_open_page_debug_not_ready:${reason}:${message}`);
+        }
+      }
+
+      const encodedUrl = encodeURIComponent(targetUrl);
+      const command = [
+        `cdp_port=${cdpPort}`,
+        `encoded_url=${shellEscape(encodedUrl)}`,
+        'endpoint="http://127.0.0.1:${cdp_port}/json/new?${encoded_url}"',
+        'if curl -fsS -X PUT "$endpoint"; then',
+        '  echo "\\n__OPENED_BY__=PUT"',
+        'elif curl -fsS "$endpoint"; then',
+        '  echo "\\n__OPENED_BY__=GET"',
+        'else',
+        '  echo "__ONECEO_DEBUG_OPEN_PAGE_FAILED__"',
+        '  exit 1',
+        'fi',
+      ].join('\n');
+
+      const result = await this.runShell(
+        command,
+        {
+          cwd: this.input.workspaceRoot,
+          timeoutMs: asPositiveInt(rawArgs.timeoutMs, 20000, 60000),
+        },
+        signal
+      );
+      const exitCode = Number((result as any)?.exitCode ?? -1);
+      const stdout = truncate(asText((result as any)?.stdout), 4000);
+      const stderr = truncate(asText((result as any)?.stderr), 2000);
+      if (exitCode !== 0 || stdout.includes('__ONECEO_DEBUG_OPEN_PAGE_FAILED__')) {
+        throw new Error(`debug_open_page_failed:${stderr || stdout || 'unknown error'}`);
+      }
+
+      await this.markWorkspaceDirty('managed_debug_open_page');
+      return {
+        type: 'result',
+        content: JSON.stringify({
+          targetUrl,
+          debugUrl: debugInfo?.url,
+          ready: debugInfo?.ready ?? false,
+          status: debugInfo?.status || 'unknown',
+          sandboxId: this.input.sandboxId,
+          cdpPort,
+          output: stdout,
+        }),
+      };
+    }
+
+    if (isManagedDeploymentToolName(toolName)) {
+      const result = await altusManagedDeploymentToolService.execute({
+        action: toolName,
+        sessionId: this.input.sessionId,
+        userId: this.input.userId,
+        sandboxId: this.input.sandboxId,
+        workspaceRoot: this.input.workspaceRoot,
+        notes: asText(rawArgs.notes),
+      });
+      return {
+        type: 'result',
+        content: JSON.stringify(result),
       };
     }
 
@@ -342,6 +486,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       await e2bConnector.writeFile(this.input.sandboxId, absolutePath, Buffer.from(content, 'utf-8'));
       this.ensureNotAborted(signal);
+      await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
         content: JSON.stringify({

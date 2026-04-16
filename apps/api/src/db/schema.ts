@@ -25,6 +25,26 @@ export const appUsers = pgTable(
   })
 );
 
+export const appUserLegacyIdMappings = pgTable(
+  'app_user_legacy_id_mappings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    appUserId: uuid('app_user_id')
+      .notNull()
+      .references(() => appUsers.id, { onDelete: 'cascade' }),
+    legacyUserId: text('legacy_user_id').notNull(),
+    source: text('source').notNull().default('request_header'),
+    firstSeenAt: timestamp('first_seen_at').notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    appUserLegacyUnique: uniqueIndex('idx_app_user_legacy_mappings_legacy_user_id').on(table.legacyUserId),
+    appUserIdIdx: index('idx_app_user_legacy_mappings_app_user_id').on(table.appUserId),
+  })
+);
+
 export const appUserSessions = pgTable(
   'app_user_sessions',
   {
@@ -1048,6 +1068,8 @@ export const connectorAuthRequests = pgTable(
 // 导出类型
 export type TaskCreationSession = typeof taskCreationSessions.$inferSelect;
 export type NewTaskCreationSession = typeof taskCreationSessions.$inferInsert;
+export type AppUserLegacyIdMapping = typeof appUserLegacyIdMappings.$inferSelect;
+export type NewAppUserLegacyIdMapping = typeof appUserLegacyIdMappings.$inferInsert;
 
 export type ConversationMessage = typeof conversationMessages.$inferSelect;
 export type NewConversationMessage = typeof conversationMessages.$inferInsert;

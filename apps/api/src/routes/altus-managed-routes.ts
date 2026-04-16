@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { currentUserResolver } from '../services/current-user-resolver';
+import { isSameUserId } from '../utils/user-id';
 import { altusManagedRunService } from '../services/altus-managed-run-service';
 import { altusManagedInputService } from '../services/altus-managed-input-service';
 import { getPublicErrorMessage } from '../utils/error-response';
@@ -44,20 +45,10 @@ function parseMetadata(value: unknown): Record<string, unknown> | undefined {
 
 function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
   const message = error instanceof Error ? error.message : String(error || '');
-  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+  if (message.includes('无法识别当前用户')) {
     return { status: 401, message };
   }
   return null;
-}
-
-function resolveManagedStreamUserId(req: express.Request) {
-  const resolved = currentUserResolver.resolve(req);
-  const queryUserId = asText(req.query.userId);
-  return {
-    authUserId: resolved?.userId || '',
-    queryUserId,
-    effectiveUserId: resolved?.userId || queryUserId,
-  };
 }
 
 function runManagedUploadMiddleware(req: express.Request, res: express.Response) {
@@ -173,6 +164,7 @@ router.get('/sessions/:sessionId/runs/latest', async (req, res) => {
 
 router.get('/runs/:runId/stream', async (req, res) => {
   try {
+    const currentUser = currentUserResolver.require(req);
     const runId = asText(req.params.runId);
     const run = await taskSessionRunDAO.getRun(runId);
     if (!run) {
@@ -183,20 +175,13 @@ router.get('/runs/:runId/stream', async (req, res) => {
     }
     const session = await taskCreationSessionDAO.getSession(run.sessionId);
     const sessionUserId = asText(session?.userId);
-    const { authUserId, queryUserId, effectiveUserId } = resolveManagedStreamUserId(req);
-    if (!sessionUserId || !effectiveUserId) {
+    if (!sessionUserId) {
       return res.status(401).json({
         success: false,
-        error: '无法识别当前用户，请先登录或提供 userId',
+        error: '当前 run 关联会话缺少用户归属',
       });
     }
-    if (authUserId && authUserId !== sessionUserId) {
-      return res.status(403).json({
-        success: false,
-        error: '当前用户无权订阅该 Altus managed run',
-      });
-    }
-    if (queryUserId && queryUserId !== sessionUserId) {
+    if (!isSameUserId(currentUser.userId, sessionUserId)) {
       return res.status(403).json({
         success: false,
         error: '当前用户无权订阅该 Altus managed run',
@@ -217,9 +202,10 @@ router.get('/runs/:runId/stream', async (req, res) => {
   } catch (error: any) {
     console.error('[ALTUS_MANAGED_STREAM_FAILED]', error);
     if (!res.headersSent) {
-      return res.status(500).json({
+      const authError = resolveCurrentUserError(error);
+      return res.status(authError?.status || 500).json({
         success: false,
-        error: getPublicErrorMessage(error?.message || 'Altus managed stream 失败'),
+        error: getPublicErrorMessage(authError?.message || error?.message || 'Altus managed stream 失败'),
       });
     }
   }

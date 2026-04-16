@@ -1,22 +1,21 @@
 import { connectorGuideDAO, taskSessionConnectorBindingDAO } from '../db/dao';
+import { connectorRegistry } from './connector-registry';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 
-const SUPPORTED_CONNECTOR_KEYS = ['github', 'supabase', 'vercel'] as const;
 const SUPPORTED_TRIGGER_MODES = ['on_attach', 'on_active_use', 'on_attach_and_active_use'] as const;
 const RESERVED_SKILL_PATTERNS = [/\bplatform[_ -]?skill\b/i, /\bsandbox[_ -]?skill[_ -]?sync\b/i];
 const MAX_MARKDOWN_LENGTH = 20_000;
 
-const BUILTIN_CONNECTOR_GUIDES: Record<
-  SupportedConnectorKey,
-  {
-    description: string;
-    triggerMode: ConnectorGuideTriggerMode;
-    serverInstructionsMarkdown: string;
-    guideReminderMarkdown: string;
-    blockingRulesMarkdown: string;
-    notes: string;
-  }
-> = {
+type BuiltinConnectorGuide = {
+  description: string;
+  triggerMode: ConnectorGuideTriggerMode;
+  serverInstructionsMarkdown: string;
+  guideReminderMarkdown: string;
+  blockingRulesMarkdown: string;
+  notes: string;
+};
+
+const BUILTIN_CONNECTOR_GUIDES: Record<string, BuiltinConnectorGuide> = {
   github: {
     description: 'GitHub connector prompt guide',
     triggerMode: 'on_attach',
@@ -72,9 +71,25 @@ const BUILTIN_CONNECTOR_GUIDES: Record<
     ].join('\n'),
     notes: 'Seeded from connector guide builtin v1.',
   },
+  notion: {
+    description: 'Notion connector prompt guide',
+    triggerMode: 'on_attach',
+    serverInstructionsMarkdown: [
+      'Treat Notion as a workspace-scoped knowledge connector and confirm the current workspace/page/database target before writes.',
+      'Prefer reading page structure, database schema, and access scope before create/update/archive operations.',
+      'When the user asks to organize or update Notion content, inspect the existing hierarchy first instead of assuming naming or parent page structure.',
+    ].join('\n'),
+    guideReminderMarkdown: [
+      'A Notion connector guide is active for this session.',
+      'Identify the target workspace/page/database first, then proceed with reads or writes against the confirmed scope.',
+    ].join('\n'),
+    blockingRulesMarkdown: [
+      'Do not create, move, archive, or overwrite Notion pages/databases until the target parent location is explicit.',
+      'If multiple workspaces or similarly named pages could match the user request, stop and ask instead of guessing.',
+    ].join('\n'),
+    notes: 'Seeded from connector guide builtin v1.',
+  },
 };
-
-export type SupportedConnectorKey = (typeof SUPPORTED_CONNECTOR_KEYS)[number];
 export type ConnectorGuideTriggerMode = (typeof SUPPORTED_TRIGGER_MODES)[number];
 
 type ConnectorGuideValidationResult = {
@@ -102,10 +117,6 @@ function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function isSupportedConnectorKey(value: string): value is SupportedConnectorKey {
-  return (SUPPORTED_CONNECTOR_KEYS as readonly string[]).includes(value);
-}
-
 function isSupportedTriggerMode(value: string): value is ConnectorGuideTriggerMode {
   return (SUPPORTED_TRIGGER_MODES as readonly string[]).includes(value);
 }
@@ -123,15 +134,36 @@ export class ConnectorGuideService {
     return Array.from(
       new Set(
         bindings
-          .filter((binding) => binding.desiredState === 'attached' && isSupportedConnectorKey(binding.connectorKey))
+          .filter(
+            (binding) =>
+              binding.desiredState === 'attached' && this.isKnownCatalogConnectorKey(binding.connectorKey)
+          )
           .map((binding) => binding.connectorKey)
       )
-    ) as SupportedConnectorKey[];
+    );
   }
 
-  private assertSupportedConnectorKey(connectorKey: string) {
-    if (!isSupportedConnectorKey(connectorKey)) {
-      throw new Error('首批仅支持 github、supabase、vercel 三个 connector guide');
+  private listCurrentCatalogItems() {
+    return connectorRegistry.listCatalog();
+  }
+
+  private listCreatableCatalogItems() {
+    return this.listCurrentCatalogItems().filter((item) => item.visibleInMenu && item.available);
+  }
+
+  private isKnownCatalogConnectorKey(connectorKey: string) {
+    return this.listCurrentCatalogItems().some((item) => item.key === connectorKey);
+  }
+
+  private assertCreatableConnectorKey(connectorKey: string) {
+    if (!this.listCreatableCatalogItems().some((item) => item.key === connectorKey)) {
+      throw new Error('当前仅支持为平台当前可用且可见的 connector 创建 guide policy');
+    }
+  }
+
+  private assertKnownConnectorKey(connectorKey: string) {
+    if (!this.isKnownCatalogConnectorKey(connectorKey)) {
+      throw new Error(`未知 connector guide: ${connectorKey}`);
     }
   }
 
@@ -151,6 +183,7 @@ export class ConnectorGuideService {
   }
 
   async listPolicies(filters?: { connectorKey?: string; status?: string; query?: string }) {
+    await this.ensureBuiltinPolicies();
     return connectorGuideDAO.listPolicies(filters);
   }
 
@@ -178,7 +211,7 @@ export class ConnectorGuideService {
   }) {
     const connectorKey = asText(input.connectorKey).toLowerCase();
     const triggerMode = asText(input.triggerMode);
-    this.assertSupportedConnectorKey(connectorKey);
+    this.assertCreatableConnectorKey(connectorKey);
     this.assertTriggerMode(triggerMode);
     const existing = await connectorGuideDAO.getPolicyByConnectorKey(connectorKey);
     if (existing) {
@@ -293,7 +326,7 @@ export class ConnectorGuideService {
     if (!policy || !revision) {
       throw new Error('connector guide policy 或 revision 不存在');
     }
-    this.assertSupportedConnectorKey(policy.connectorKey);
+    this.assertKnownConnectorKey(policy.connectorKey);
     this.assertTriggerMode(policy.triggerMode);
 
     const errors: string[] = [];
@@ -461,16 +494,17 @@ export class ConnectorGuideService {
   async ensureBuiltinPolicies() {
     const createdPolicies: string[] = [];
     const createdRevisions: string[] = [];
-    const touchedConnectorKeys = new Set<SupportedConnectorKey>();
+    const touchedConnectorKeys = new Set<string>();
 
-    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
+    for (const item of this.listCreatableCatalogItems()) {
+      const connectorKey = item.key;
       const builtin = BUILTIN_CONNECTOR_GUIDES[connectorKey];
       let policy = await connectorGuideDAO.getPolicyByConnectorKey(connectorKey);
       if (!policy) {
         policy = await connectorGuideDAO.createPolicy({
           connectorKey,
-          triggerMode: builtin.triggerMode,
-          description: builtin.description,
+          triggerMode: builtin?.triggerMode || 'on_attach',
+          description: builtin?.description || `${item.name} connector guide`,
           status: 'draft',
           publishedRevisionId: null,
           createdBy: 'system_builtin',
@@ -485,16 +519,18 @@ export class ConnectorGuideService {
           policyId: policy.id,
           versionNumber: 1,
           status: 'draft',
-          serverInstructionsMarkdown: builtin.serverInstructionsMarkdown,
-          guideReminderMarkdown: builtin.guideReminderMarkdown,
-          blockingRulesMarkdown: builtin.blockingRulesMarkdown,
-          notes: builtin.notes,
+          serverInstructionsMarkdown: builtin?.serverInstructionsMarkdown || '',
+          guideReminderMarkdown: builtin?.guideReminderMarkdown || '',
+          blockingRulesMarkdown: builtin?.blockingRulesMarkdown || '',
+          notes: builtin?.notes || '',
           createdBy: 'system_builtin',
           publishedAt: null,
         });
         createdRevisions.push(`${connectorKey}:1`);
-        await connectorGuideDAO.publishRevision(policy.id, revision.id);
         touchedConnectorKeys.add(connectorKey);
+        if (builtin) {
+          await connectorGuideDAO.publishRevision(policy.id, revision.id);
+        }
       }
     }
 
@@ -506,7 +542,9 @@ export class ConnectorGuideService {
   }
 
   async recomputeBuiltinPolicySessions() {
-    for (const connectorKey of SUPPORTED_CONNECTOR_KEYS) {
+    await this.ensureBuiltinPolicies();
+    const policies = await connectorGuideDAO.listPolicies();
+    for (const connectorKey of Array.from(new Set(policies.map((item) => asText(item.connectorKey)).filter(Boolean)))) {
       await this.recomputeSessionsForConnector(connectorKey);
     }
   }

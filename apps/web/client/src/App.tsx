@@ -47,6 +47,8 @@ function Router() {
       <Route path="/project/:id" component={withUserAuth(ProjectDetailWrapper)} />
       <Route path="/manager-node" component={withUserAuth(ManagerNode)} />
       <Route path="/manager-view" component={withUserAuth(ManagerView)} />
+      <Route path="/notion/callback" component={withUserAuth(Home)} />
+      <Route path="/slack/callback" component={withUserAuth(Home)} />
       <Route path="/new-task" component={withUserAuth(Home)} />
       <Route path="/session/:sessionId" component={withUserAuth(Home)} />
       <Route path="/ai-workspace" component={withUserAuth(AIWorkspace)} />

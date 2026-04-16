@@ -1058,6 +1058,7 @@ PY`;
     if (!input?.providerId || !input.toolName) {
       throw new Error('缺少 providerId 或 toolName');
     }
+    await touchSandbox(sessionId, 'sdk_call_session_mcp_tool');
     const reply = await osacConnectionManager.request(
       sessionId,
       {
@@ -1076,6 +1077,10 @@ PY`;
       throwExecutorError(reply);
     }
     const payload = asPayloadRecord(reply);
+    await touchSandbox(sessionId, 'sdk_call_session_mcp_tool_done');
+    if (payload.isError !== true) {
+      await markSandboxDirty(sessionId, `sdk_call_session_mcp_tool:${input.toolName}`);
+    }
     return {
       sessionId: asString(payload.sessionId) || sessionId,
       providerId: asString(payload.providerId) || input.providerId,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
 import connectorRoutes from '../src/routes/connector-routes';
+import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { userConnectorService } from '../src/services/user-connector-service';
 
 type TestServer = {
@@ -25,6 +26,7 @@ after(() => {
 async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
+  app.use(mockAuthContextMiddleware());
   app.use('/api/connectors', connectorRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -76,7 +78,7 @@ test('GET /api/connectors/me returns user-scoped catalog and profiles', async ()
   try {
     const response = await fetch(`${server.origin}/api/connectors/me`, {
       headers: {
-        'x-user-id': 'connector-user-1',
+        'x-test-user-id': 'connector-user-1',
       },
     });
     const payload = await response.json();
@@ -109,7 +111,7 @@ test('POST /api/connectors/:connectorKey/profiles creates profile under current 
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'connector-user-2',
+        'x-test-user-id': 'connector-user-2',
       },
       body: JSON.stringify({
         profileName: 'My GitHub',
@@ -146,7 +148,7 @@ test('POST /api/connectors/notion/oauth/start uses connector-level oauth entrypo
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'connector-user-3',
+        'x-test-user-id': 'connector-user-3',
       },
       body: JSON.stringify({
         redirectUri: 'https://example.com/callback',
@@ -186,7 +188,7 @@ test('POST /api/connectors/notion/oauth/callback returns callback result for cur
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'connector-user-4',
+        'x-test-user-id': 'connector-user-4',
       },
       body: JSON.stringify({
         state: 'state-2',
@@ -216,7 +218,7 @@ test('POST /api/connectors/notion/oauth/callback reports oauth errors', async ()
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-user-id': 'connector-user-5',
+        'x-test-user-id': 'connector-user-5',
       },
       body: JSON.stringify({
         state: 'expired-state',

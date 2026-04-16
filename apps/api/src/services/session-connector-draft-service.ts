@@ -7,6 +7,7 @@ import { sessionMcpRecoveryService } from './session-mcp-recovery-service';
 import { connectorGuideService } from './connector-guide-service';
 import { taskSessionRedisCacheService } from './task-session-redis-cache-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { isSameUserId } from '../utils/user-id';
 
 const CONNECTOR_DRAFT_TTL_SECONDS = 24 * 60 * 60;
 
@@ -162,8 +163,15 @@ export class SessionConnectorDraftService {
     if (!session) {
       throw new Error('会话不存在');
     }
-    if (!session.userId || asText(session.userId) !== userId) {
+    const sessionUserId = asText(session.userId);
+    if (sessionUserId && !isSameUserId(sessionUserId, userId)) {
       throw new Error('当前用户无权管理该会话连接器');
+    }
+    if (!sessionUserId) {
+      const rebound = await taskCreationSessionDAO.bindUserIfMissing(taskSessionId, userId);
+      if (!isSameUserId(rebound?.userId, userId)) {
+        throw new Error('当前用户无权管理该会话连接器');
+      }
     }
 
     const redisDraft = await this.getDraft(userId, draftId);

@@ -1,10 +1,16 @@
 import type {
+  AdminThemeKey,
+  AdminThemeSettings,
   AgentManagementOverview,
+  AppUserDetailResponse,
+  AppUserListResponse,
+  AuditDetailResponse,
   AuditResponse,
   ConversationSessionDetailResponse,
   ConversationSessionInfraResponse,
   ConversationSessionsResponse,
   ConnectorGuidePolicy,
+  ConnectorGuideCatalogSummary,
   ConnectorGuidePolicyDetail,
   ConnectorGuideRevision,
   ConnectorGuideValidationResult,
@@ -69,6 +75,7 @@ export type AdminUser = {
 
 const API_BASE_URL = (import.meta.env.VITE_ADMIN_MANAGEMENT_API_BASE_URL as string | undefined) ?? '';
 const API_TIMEOUT_MS = Number((import.meta.env.VITE_API_TIMEOUT_MS as string | undefined) ?? 12000);
+const OSAC_UPLOAD_TIMEOUT_MS = Number((import.meta.env.VITE_OSAC_UPLOAD_TIMEOUT_MS as string | undefined) ?? 300000);
 
 type RequestOptions = RequestInit & {
   timeoutMs?: number;
@@ -157,6 +164,13 @@ export const api = {
     request<{ ok: boolean }>('/api/admin/auth/logout', {
       method: 'POST',
       body: JSON.stringify({}),
+    }),
+
+  getAdminTheme: () => request<AdminThemeSettings>('/api/theme'),
+  updateAdminTheme: (themeKey: AdminThemeKey) =>
+    request<AdminThemeSettings>('/api/theme', {
+      method: 'PUT',
+      body: JSON.stringify({ themeKey }),
     }),
 
   getOverview: () => request<DashboardOverview>('/api/dashboard/overview'),
@@ -431,6 +445,7 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<ConnectorGuidePolicy[]>(`/api/connector-guides${suffix}`);
   },
+  getConnectorGuideCatalogSummary: () => request<ConnectorGuideCatalogSummary>('/api/connector-guides/catalog-summary'),
   getConnectorGuidePolicy: (policyId: string) =>
     request<ConnectorGuidePolicyDetail>(`/api/connector-guides/${encodeURIComponent(policyId)}`),
   createConnectorGuidePolicy: (payload: {
@@ -529,6 +544,8 @@ export const api = {
     request<OsacRelease>('/api/osac-releases', {
       method: 'POST',
       body: JSON.stringify(payload),
+      timeoutMs: OSAC_UPLOAD_TIMEOUT_MS,
+      abortMessage: '上传 OSAC release 超时，请稍后重试',
     }),
   validateOsacRelease: (releaseId: string) =>
     request<OsacRelease>(`/api/osac-releases/${encodeURIComponent(releaseId)}/validate`, {
@@ -568,6 +585,40 @@ export const api = {
   listHosts: () => request<HostListResponse>('/api/hosts'),
   listConversationSessions: (limit = 30) =>
     request<ConversationSessionsResponse>(`/api/conversations/sessions?limit=${limit}`),
+  listAppUsers: (query?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    activity?: string;
+    hasSession?: string;
+    hasConversation?: string;
+    hasSandbox?: string;
+    ownershipHealth?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (query?.limit !== undefined) params.set('limit', String(query.limit));
+    if (query?.query) params.set('query', query.query);
+    if (query?.status) params.set('status', query.status);
+    if (query?.activity) params.set('activity', query.activity);
+    if (query?.hasSession) params.set('hasSession', query.hasSession);
+    if (query?.hasConversation) params.set('hasConversation', query.hasConversation);
+    if (query?.hasSandbox) params.set('hasSandbox', query.hasSandbox);
+    if (query?.ownershipHealth) params.set('ownershipHealth', query.ownershipHealth);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<AppUserListResponse>(`/api/user-management/app-users${suffix}`);
+  },
+  getAppUserDetail: (userId: string) =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}`),
+  updateAppUserStatus: (userId: string, status: 'active' | 'disabled') =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    }),
+  revokeAppUserSessions: (userId: string) =>
+    request<AppUserDetailResponse>(`/api/user-management/app-users/${encodeURIComponent(userId)}/revoke-sessions`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
   getConversationSessionCore: (sessionId: string) =>
     request<ConversationSessionDetailResponse>(`/api/conversations/sessions/${encodeURIComponent(sessionId)}/core`, {
       timeoutMs: 10000,
@@ -735,5 +786,29 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  listAudit: (limit = 40) => request<AuditResponse>(`/api/audit?limit=${limit}`),
+  listAudit: (
+    query: {
+      query?: string;
+      operator?: string;
+      action?: string;
+      result?: string;
+      sessionId?: string;
+      targetVmId?: string;
+      from?: string;
+      to?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<AuditResponse>(`/api/audit${suffix}`);
+  },
+  getAuditDetail: (auditId: string) =>
+    request<AuditDetailResponse>(`/api/audit/${encodeURIComponent(auditId)}`),
 };

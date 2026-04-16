@@ -15,6 +15,12 @@ function toBoolean(value: string | undefined, fallback = false): boolean {
   return ['1', 'true', 'yes', 'on'].includes(normalized);
 }
 
+function asBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return toBoolean(value, fallback);
+  return fallback;
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object') return value as Record<string, unknown>;
   return {};
@@ -22,6 +28,22 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function escapeYamlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 async function resolveHostIp(host: string): Promise<string | null> {
@@ -58,9 +80,163 @@ async function waitForNeko(sandboxId: string, port: number, attempts = 8, delayM
   return false;
 }
 
+export type DebugReasonCode = 'missing_turn' | 'ice_failed';
+
+type NekoIceServer = {
+  urls: string[];
+  username?: string;
+  credential?: string;
+};
+
+const DEFAULT_ICE_SERVERS: NekoIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }];
+
+function findLastIndex(content: string, token: string): number {
+  return content.lastIndexOf(token);
+}
+
+/**
+ * Only mark failed when we can assert the latest ICE state reached `failed`
+ * and there is no subsequent `connected`.
+ *
+ * Rationale:
+ * - n.eko logs may contain transient warnings such as "Failed to ping without candidate pairs"
+ *   even when the same peer later reaches connected.
+ * - after browser tab closes, logs may include socket/read warnings that should not be treated as
+ *   persistent ICE failure for the debug runtime.
+ */
+export function detectIceFailureFromLog(logText: string): boolean {
+  const content = String(logText || '');
+  if (!content) return false;
+
+  const lastFailed = findLastIndex(content, 'ICE connection state changed: failed');
+  if (lastFailed < 0) return false;
+
+  const lastConnected = findLastIndex(content, 'ICE connection state changed: connected');
+  return lastConnected < lastFailed;
+}
+
+function parseIceServers(raw: string): NekoIceServer[] {
+  if (!raw) {
+    return DEFAULT_ICE_SERVERS;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('debug_ice_servers_invalid_json');
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('debug_ice_servers_invalid_shape');
+  }
+
+  const normalized: NekoIceServer[] = parsed.map((item) => {
+    const record = toRecord(item);
+    const urls = toStringArray(record.urls);
+    if (!urls.length) {
+      throw new Error('debug_ice_servers_invalid_urls');
+    }
+    const entry: NekoIceServer = { urls };
+    const username = asText(record.username);
+    const credential = asText(record.credential);
+    if (username) entry.username = username;
+    if (credential) entry.credential = credential;
+    return entry;
+  });
+
+  if (!normalized.length) {
+    throw new Error('debug_ice_servers_empty');
+  }
+
+  return normalized;
+}
+
+function hasTurnIceServer(iceServers: NekoIceServer[]): boolean {
+  return iceServers.some((server) =>
+    server.urls.some((url) => {
+      const normalized = url.trim().toLowerCase();
+      return normalized.startsWith('turn:') || normalized.startsWith('turns:');
+    })
+  );
+}
+
+export function __parseIceServersForTest(raw: string): Array<{ urls: string[]; username?: string; credential?: string }> {
+  return parseIceServers(raw);
+}
+
+export function __hasTurnIceServerForTest(
+  servers: Array<{ urls: string[]; username?: string; credential?: string }>
+): boolean {
+  return hasTurnIceServer(servers as NekoIceServer[]);
+}
+
+function renderIceServersYaml(iceServers: NekoIceServer[]): string {
+  return iceServers
+    .map((server) => {
+      const urls = server.urls.map((url) => `"${escapeYamlString(url)}"`).join(', ');
+      const usernameLine = server.username ? `\n      username: "${escapeYamlString(server.username)}"` : '';
+      const credentialLine = server.credential ? `\n      credential: "${escapeYamlString(server.credential)}"` : '';
+      return `    - urls: [${urls}]${usernameLine}${credentialLine}`;
+    })
+    .join('\n');
+}
+
+export async function probeNekoIceHealth(sandboxId: string): Promise<{ failed: boolean; logTail?: string }> {
+  try {
+    const result = await e2bConnector.runCommand(sandboxId, 'tail -n 200 /tmp/neko.log || true', {
+      timeoutMs: 20000,
+    });
+    const logTail = asText(result?.stdout);
+    return {
+      failed: detectIceFailureFromLog(logTail),
+      logTail,
+    };
+  } catch {
+    return { failed: false };
+  }
+}
+
+export async function collectNekoDebugDiagnostics(sandboxId: string): Promise<{
+  nekoConfig?: string;
+  nekoLogTail?: string;
+  listeningPorts?: string;
+}> {
+  try {
+    const result = await e2bConnector.runCommand(
+      sandboxId,
+      [
+        'echo "__CFG__"',
+        'sed -n "1,220p" /tmp/oneceo/neko.yml 2>/dev/null || true',
+        'echo "__LOG__"',
+        'tail -n 200 /tmp/neko.log 2>/dev/null || true',
+        'echo "__PORTS__"',
+        'ss -ltnup | grep -E "8081|8082|18080" || true',
+      ].join('\n'),
+      { timeoutMs: 30000 }
+    );
+    const stdout = String(result?.stdout || '');
+    const cfgIdx = stdout.indexOf('__CFG__');
+    const logIdx = stdout.indexOf('__LOG__');
+    const portsIdx = stdout.indexOf('__PORTS__');
+    const getSlice = (start: number, end: number) =>
+      start >= 0 && end >= 0 && end > start ? stdout.slice(start, end).trim() : '';
+    const nekoConfig = getSlice(cfgIdx + '__CFG__'.length, logIdx);
+    const nekoLogTail = getSlice(logIdx + '__LOG__'.length, portsIdx);
+    const listeningPorts = portsIdx >= 0 ? stdout.slice(portsIdx + '__PORTS__'.length).trim() : '';
+    return {
+      nekoConfig: nekoConfig || undefined,
+      nekoLogTail: nekoLogTail || undefined,
+      listeningPorts: listeningPorts || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 type EnsureDebugResult = {
   ready: boolean;
-  url: string;
+  url?: string;
   status: string;
   updatedAt: string;
   sandboxId: string;
@@ -70,33 +246,111 @@ type EnsureDebugResult = {
   screenWidth?: number;
   screenHeight?: number;
   message?: string;
+  reasonCode?: DebugReasonCode;
 };
 
-export async function ensureNekoDebug(orchestratorSessionId: string): Promise<EnsureDebugResult> {
+type EnsureDebugOptions = {
+  requireTurn?: boolean;
+  strictIceCheck?: boolean;
+  iceServers?: Array<{ urls: string[]; username?: string; credential?: string }>;
+};
+
+export async function ensureNekoDebug(
+  orchestratorSessionId: string,
+  options: EnsureDebugOptions = {}
+): Promise<EnsureDebugResult> {
   const screenWidth = toPositiveInt(process.env.NEKO_SCREEN_WIDTH, 1280);
   const screenHeight = toPositiveInt(process.env.NEKO_SCREEN_HEIGHT, 1008);
-  const configVersion = `neko-multiuser-epr-v2-${screenWidth}x${screenHeight}`;
   const nekoPort = toPositiveInt(process.env.NEKO_PORT, 8081);
   const cdpPort = toPositiveInt(process.env.NEKO_CDP_PORT, 9222);
   const display = process.env.NEKO_DISPLAY || ':0';
+  const requireTurn = options.requireTurn ?? toBoolean(process.env.NEKO_DEBUG_REQUIRE_TURN, false);
+  const strictIceCheck = options.strictIceCheck ?? requireTurn;
+  const inlineIceServers = Array.isArray(options.iceServers) ? options.iceServers : null;
+  const iceServersRaw = asText(process.env.NEKO_ICE_SERVERS_JSON);
+  const iceServers = inlineIceServers && inlineIceServers.length > 0 ? parseIceServers(JSON.stringify(inlineIceServers)) : parseIceServers(iceServersRaw);
+  const turnConfigured = hasTurnIceServer(iceServers);
   const webrtcEprRaw = asText(process.env.NEKO_WEBRTC_EPR);
-  const webrtcEprDisabled = ['0', 'off', 'false', 'disable', 'disabled'].includes(webrtcEprRaw.toLowerCase());
-  const webrtcEpr = webrtcEprDisabled ? '' : webrtcEprRaw || '51000-51100';
-  const forceMux = toBoolean(process.env.NEKO_WEBRTC_FORCE_MUX, false);
-  const tcpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_TCPMUX, 0);
+  const webrtcEprDisabled =
+    !webrtcEprRaw || ['0', 'off', 'false', 'disable', 'disabled'].includes(webrtcEprRaw.toLowerCase());
+  const webrtcEpr = webrtcEprDisabled ? '' : webrtcEprRaw;
+  const forceMux = toBoolean(process.env.NEKO_WEBRTC_FORCE_MUX, true);
+  const tcpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_TCPMUX, 8082);
   const udpMuxCandidate = toPositiveInt(process.env.NEKO_WEBRTC_UDPMUX, 0);
-  const tcpMuxPort = forceMux || !webrtcEpr ? tcpMuxCandidate : 0;
-  const udpMuxPort = forceMux || !webrtcEpr ? udpMuxCandidate : 0;
+  const useMux = forceMux || !webrtcEpr;
+  const tcpMuxPort = useMux ? tcpMuxCandidate : 0;
+  const udpMuxPort = useMux ? udpMuxCandidate : 0;
   const iceLite = toBoolean(process.env.NEKO_WEBRTC_ICELITE, false);
   const autoNat = toBoolean(process.env.NEKO_AUTO_NAT1TO1, false);
   const nat1to1Manual = asText(process.env.NEKO_NAT1TO1);
   const nekoUsername = asText(process.env.NEKO_USER_NAME) || 'oneceo';
   const nekoPassword = asText(process.env.NEKO_USER_PASSWORD) || 'oneceo';
   const nekoAdminPassword = asText(process.env.NEKO_ADMIN_PASSWORD) || nekoPassword;
+  const natConfigTag = nat1to1Manual ? `manual-${nat1to1Manual}` : autoNat ? 'auto' : 'none';
+  const iceTag = requireTurn ? (turnConfigured ? 'turn-on' : 'turn-off') : 'turn-optional';
+  const configVersion = [
+    'neko-multiuser-v4',
+    `${screenWidth}x${screenHeight}`,
+    `mode-${useMux ? 'mux' : 'epr'}`,
+    `tcp-${tcpMuxPort}`,
+    `udp-${udpMuxPort}`,
+    `epr-${webrtcEpr || 'off'}`,
+    `icelite-${iceLite ? 'on' : 'off'}`,
+    `nat-${natConfigTag}`,
+    iceTag,
+  ].join('-');
 
   const environment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   if (!environment) {
     throw new Error('sandbox environment not found');
+  }
+
+  const metadata = toRecord(environment.metadata);
+  const debugMeta = toRecord(metadata.debug);
+  const nekoMeta = toRecord(debugMeta.neko);
+  const previousBaseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
+
+  const updateMetadata = async (patch: Record<string, unknown>) => {
+    const nextMetadata = {
+      ...metadata,
+      debug: {
+        ...(metadata as any)?.debug,
+        neko: {
+          ...nekoMeta,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+    await sandboxExecutionEnvironmentDAO.updateMetadata(orchestratorSessionId, nextMetadata);
+  };
+
+  if (requireTurn && !turnConfigured) {
+    const failureMessage = '缺少 TURN 配置，无法建立远程调试媒体链路';
+    const diagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
+    await updateMetadata({
+      status: 'failed',
+      reasonCode: 'missing_turn',
+      message: failureMessage,
+      configVersion,
+      turnConfigured,
+      iceServers,
+      diagnostics,
+    });
+    return {
+      ready: false,
+      url: previousBaseUrl || undefined,
+      status: 'failed',
+      updatedAt: new Date().toISOString(),
+      sandboxId: orchestratorSessionId,
+      port: nekoPort,
+      display,
+      cdpPort,
+      screenWidth,
+      screenHeight,
+      reasonCode: 'missing_turn',
+      message: failureMessage,
+    };
   }
 
   let nat1To1: string | null = null;
@@ -107,16 +361,13 @@ export async function ensureNekoDebug(orchestratorSessionId: string): Promise<En
     const hostForNat = await e2bConnector.getSandboxHost(orchestratorSessionId, natPort);
     nat1To1 = await resolveHostIp(hostForNat);
   }
-  const nat1To1Yaml = nat1To1 ? `  nat1to1:\n    - \"${nat1To1}\"\n` : '';
-  const eprYaml = webrtcEpr ? `  epr: \"${webrtcEpr}\"\n` : '';
+  const nat1To1Yaml = nat1To1 ? `  nat1to1:\n    - "${nat1To1}"\n` : '';
+  const eprYaml = webrtcEpr ? `  epr: "${webrtcEpr}"\n` : '';
   const tcpMuxYaml = tcpMuxPort > 0 ? `  tcpmux: ${tcpMuxPort}\n` : '';
   const udpMuxYaml = udpMuxPort > 0 ? `  udpmux: ${udpMuxPort}\n` : '';
   const iceLiteYaml = iceLite ? '  icelite: true\n' : '';
+  const iceServersYaml = renderIceServersYaml(iceServers);
 
-  const metadata = toRecord(environment.metadata);
-  const debugMeta = toRecord(metadata.debug);
-  const nekoMeta = toRecord(debugMeta.neko);
-  const existingUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
   const startCommand = `
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -160,7 +411,7 @@ if [ -z "$CHROME_BIN" ]; then
 fi
 
 mkdir -p /tmp/oneceo
-cat <<EOF > "$NEKO_CONFIG"
+cat <<EOF_CFG > "$NEKO_CONFIG"
 server:
   bind: "0.0.0.0:${nekoPort}"
   static: "\${NEKO_STATIC}"
@@ -170,7 +421,7 @@ capture:
   video_bitrate: 3000
 webrtc:
   iceservers:
-    - urls: ["stun:stun.l.google.com:19302"]
+${iceServersYaml}
 ${iceLiteYaml}${tcpMuxYaml}${udpMuxYaml}${eprYaml}${nat1To1Yaml}session:
   merciful_reconnect: true
   implicit_hosting: true
@@ -186,7 +437,7 @@ member:
   multiuser:
     admin_password: "${nekoAdminPassword}"
     user_password: "${nekoPassword}"
-EOF
+EOF_CFG
 
 pkill -x Xvfb || true
 pkill -x chromium || true
@@ -244,123 +495,97 @@ fi
 nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
 `;
 
-  const setupCommand = startCommand;
+  const existingVersion = asText(nekoMeta.configVersion);
+  const existingPort = Number(nekoMeta.port);
+  const existingTcpMux = Number(nekoMeta.tcpMuxPort);
+  const existingUdpMux = Number(nekoMeta.udpMuxPort);
+  const existingNat = asText(nekoMeta.nat1To1);
+  const existingEpr = asText(nekoMeta.webrtcEpr);
+  const existingForceMux = asBoolean(nekoMeta.forceMux, false);
+  const existingIceLite = asBoolean(nekoMeta.iceLite, false);
+  const existingAutoNat = asBoolean(nekoMeta.autoNat, false);
+  const existingUser = asText(nekoMeta.username);
+  const existingPass = asText(nekoMeta.password);
+  const existingAdminPass = asText(nekoMeta.adminPassword);
+  const existingStatus = asText(nekoMeta.status).toLowerCase();
+  const shouldRefresh =
+    existingVersion !== configVersion ||
+    existingPort !== nekoPort ||
+    existingTcpMux !== tcpMuxPort ||
+    existingUdpMux !== udpMuxPort ||
+    existingNat !== (nat1To1 || '') ||
+    existingEpr !== (webrtcEpr || '') ||
+    existingForceMux !== forceMux ||
+    existingIceLite !== iceLite ||
+    existingAutoNat !== autoNat ||
+    existingUser !== nekoUsername ||
+    existingPass !== nekoPassword ||
+    existingAdminPass !== nekoAdminPassword ||
+    existingStatus === 'failed';
 
-  if (existingUrl) {
-    const existingStatus = asText(nekoMeta.status) || environment.status;
-    const existingVersion = asText(nekoMeta.configVersion);
-    const existingPort = Number(nekoMeta.port);
-    const existingUdpMux = Number(nekoMeta.udpMuxPort);
-    const existingNat = asText(nekoMeta.nat1To1);
-    const existingUser = asText(nekoMeta.username);
-    const existingPass = asText(nekoMeta.password);
-    const existingAdminPass = asText(nekoMeta.adminPassword);
-    const shouldRefresh =
-      existingVersion !== configVersion ||
-      existingPort !== nekoPort ||
-      existingUdpMux !== udpMuxPort ||
-      existingNat !== (nat1To1 || '') ||
-      existingUser !== nekoUsername ||
-      existingPass !== nekoPassword ||
-      existingAdminPass !== nekoAdminPassword;
-    let ready = await probeNeko(orchestratorSessionId, nekoPort);
-    if (!ready || shouldRefresh) {
-      const check = await e2bConnector.runCommand(
-        orchestratorSessionId,
-        `command -v neko >/dev/null 2>&1 && test -d /opt/neko/client/dist && echo "OK" || echo "MISSING"`,
-        { timeoutMs: 20000 }
-      );
-      const installed = (check?.stdout || '').trim() === 'OK';
-      if (installed) {
-        await e2bConnector.runCommand(orchestratorSessionId, startCommand, { timeoutMs: 2 * 60 * 1000 });
-      } else {
-        await e2bConnector.runCommand(orchestratorSessionId, setupCommand, { timeoutMs: 15 * 60 * 1000 });
-      }
-      ready = await waitForNeko(orchestratorSessionId, nekoPort);
-    }
-
-    const nextStatus = ready ? 'running' : existingStatus || 'starting';
-    const nextMessage = ready ? undefined : asText(nekoMeta.message) || '调试服务启动中，请稍后重试';
-    const baseUrl = `https://${await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort)}`;
-    const clientUrl = `${baseUrl}?pwd=${encodeURIComponent(nekoPassword)}&usr=${encodeURIComponent(nekoUsername)}`;
-    const nextMetadata = {
-      ...metadata,
-      debug: {
-        ...(metadata as any)?.debug,
-        neko: {
-          ...nekoMeta,
-          baseUrl,
-          clientUrl,
-          port: nekoPort,
-          display,
-          cdpPort,
-          screenWidth,
-          screenHeight,
-          tcpMuxPort,
-          udpMuxPort,
-          nat1To1: nat1To1 || '',
-          username: nekoUsername,
-          password: nekoPassword,
-          adminPassword: nekoAdminPassword,
-          configVersion,
-          status: nextStatus,
-          message: nextMessage,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    };
-    await sandboxExecutionEnvironmentDAO.updateMetadata(orchestratorSessionId, nextMetadata);
-
-    return {
-      ready,
-      url: clientUrl,
-      status: nextStatus,
-      updatedAt: new Date(environment.updatedAt as any).toISOString(),
-      sandboxId: orchestratorSessionId,
-      port: nekoPort,
-      display,
-      cdpPort,
-      screenWidth,
-      screenHeight,
-      message: nextMessage,
-    };
+  let ready = await probeNeko(orchestratorSessionId, nekoPort);
+  if (!ready || shouldRefresh) {
+    const check = await e2bConnector.runCommand(
+      orchestratorSessionId,
+      `command -v neko >/dev/null 2>&1 && test -d /opt/neko/client/dist && echo "OK" || echo "MISSING"`,
+      { timeoutMs: 20000 }
+    );
+    const installed = (check?.stdout || '').trim() === 'OK';
+    await e2bConnector.runCommand(orchestratorSessionId, startCommand, {
+      timeoutMs: installed ? 2 * 60 * 1000 : 15 * 60 * 1000,
+    });
+    ready = await waitForNeko(orchestratorSessionId, nekoPort);
   }
 
-  await e2bConnector.runCommand(orchestratorSessionId, setupCommand, { timeoutMs: 15 * 60 * 1000 });
+  let status = ready ? 'running' : 'starting';
+  let reasonCode: DebugReasonCode | undefined;
+  let message = ready ? undefined : asText(nekoMeta.message) || '调试服务启动中，请稍后重试';
+  let diagnostics: Awaited<ReturnType<typeof collectNekoDebugDiagnostics>> | undefined;
 
-  const ready = await waitForNeko(orchestratorSessionId, nekoPort);
+  if (strictIceCheck) {
+    const health = await probeNekoIceHealth(orchestratorSessionId);
+    if (health.failed) {
+      diagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
+      status = 'failed';
+      reasonCode = 'ice_failed';
+      message = '远程调试 ICE 连接失败，请检查 TURN 配置后重试';
+      ready = false;
+    }
+  }
 
   const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
   const baseUrl = `https://${host}`;
   const clientUrl = `${baseUrl}?pwd=${encodeURIComponent(nekoPassword)}&usr=${encodeURIComponent(nekoUsername)}`;
-  const status = ready ? 'running' : 'starting';
-  const message = ready ? undefined : '调试服务启动中，请稍后重试';
 
-  const nextMetadata = {
-    ...metadata,
-    debug: {
-      ...(metadata as any)?.debug,
-      neko: {
-        baseUrl,
-        clientUrl,
-        port: nekoPort,
-        display,
-        cdpPort,
-        tcpMuxPort,
-        udpMuxPort,
-        nat1To1: nat1To1 || '',
-        username: nekoUsername,
-        password: nekoPassword,
-        adminPassword: nekoAdminPassword,
-        configVersion,
-        status,
-        message,
-        updatedAt: new Date().toISOString(),
-      },
-    },
-  };
-
-  await sandboxExecutionEnvironmentDAO.updateMetadata(orchestratorSessionId, nextMetadata);
+  await updateMetadata({
+    baseUrl,
+    clientUrl,
+    port: nekoPort,
+    display,
+    cdpPort,
+    screenWidth,
+    screenHeight,
+    tcpMuxPort,
+    udpMuxPort,
+    nat1To1: nat1To1 || '',
+    webrtcMode: useMux ? 'mux' : 'epr',
+    webrtcEpr: webrtcEpr || '',
+    forceMux,
+    iceLite,
+    autoNat,
+    username: nekoUsername,
+    password: nekoPassword,
+    adminPassword: nekoAdminPassword,
+    configVersion,
+    turnConfigured,
+    requireTurn,
+    strictIceCheck,
+    iceServers,
+    diagnostics,
+    status,
+    reasonCode,
+    message,
+  });
 
   return {
     ready,
@@ -371,6 +596,9 @@ nohup neko serve --config "$NEKO_CONFIG" > /tmp/neko.log 2>&1 &
     port: nekoPort,
     display,
     cdpPort,
+    screenWidth,
+    screenHeight,
+    reasonCode,
     message,
   };
 }

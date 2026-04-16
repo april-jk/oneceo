@@ -374,6 +374,7 @@ export type AdminAppUserSessionSummary = {
   updatedAt: string | null;
   lastSeenAt: string | null;
   isActive: boolean;
+  isOnline: boolean;
 };
 
 export type AdminAppUserConversationSummary = {
@@ -449,6 +450,8 @@ export type AdminAppUserListResponse = {
     hasConversation: string;
     hasSandbox: string;
     ownershipHealth: string;
+    sortKey: string;
+    sortDirection: string;
   };
   items: AdminAppUserListItem[];
 };
@@ -649,6 +652,8 @@ export class OneceoApiConnector {
     hasConversation?: string;
     hasSandbox?: string;
     ownershipHealth?: string;
+    sortKey?: string;
+    sortDirection?: string;
   }) {
     const params = new URLSearchParams();
     if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
@@ -659,6 +664,8 @@ export class OneceoApiConnector {
     if (filters?.hasConversation) params.set('hasConversation', filters.hasConversation);
     if (filters?.hasSandbox) params.set('hasSandbox', filters.hasSandbox);
     if (filters?.ownershipHealth) params.set('ownershipHealth', filters.ownershipHealth);
+    if (filters?.sortKey) params.set('sortKey', filters.sortKey);
+    if (filters?.sortDirection) params.set('sortDirection', filters.sortDirection);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return this.request<AdminAppUserListResponse>(`/api/internal/admin/app-users${suffix}`);
   }
@@ -673,16 +680,6 @@ export class OneceoApiConnector {
       {
         method: 'POST',
         body: { status },
-      }
-    );
-  }
-
-  revokeAppUserSessions(userId: string) {
-    return this.request<AdminAppUserDetailResponse>(
-      `/api/internal/admin/app-users/${encodeURIComponent(userId)}/revoke-sessions`,
-      {
-        method: 'POST',
-        body: {},
       }
     );
   }
@@ -748,7 +745,7 @@ export class OneceoApiConnector {
       `/api/sandbox/environment/${encodeURIComponent(sessionId)}/restore`,
       {
         method: 'POST',
-        body: payload ? JSON.stringify(payload) : undefined,
+        body: payload,
       }
     );
   }

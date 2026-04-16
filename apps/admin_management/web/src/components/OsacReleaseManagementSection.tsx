@@ -208,6 +208,12 @@ export function OsacReleaseManagementSection({ onError }: Props) {
     });
   }, [loadDetail, onError, selectedReleaseId]);
 
+  const handleRefreshList = useCallback(() => {
+    void loadList().catch((error) => {
+      onError(error instanceof Error ? error.message : 'OSAC release 列表加载失败');
+    });
+  }, [loadList, onError]);
+
   const submitUpload = async () => {
     if (!uploadForm.version.trim()) {
       onError('version 不能为空');
@@ -281,7 +287,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
   };
 
   return (
-    <main className="content-stack osac-release-page">
+    <main className="content-stack viewport-lock-page osac-release-page">
       <section className="panel hero-panel fade-in osac-release-hero-panel">
         <div className="panel-header osac-release-hero-head">
           <div>
@@ -335,7 +341,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-            <button type="button" className="ghost-btn" onClick={() => void loadList()} disabled={busy}>
+            <button type="button" className="ghost-btn" onClick={handleRefreshList} disabled={busy}>
               刷新
             </button>
           </div>
@@ -490,7 +496,6 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               <div className="editor-header osac-release-detail-head">
                 <div>
                   <h3>版本详情</h3>
-                  <p className="cell-subtle">右侧只展示当前选中版本，操作不会和列表混在一起。</p>
                 </div>
                 {selectedRelease ? (
                   <span className={`status-pill osac-release-status-${selectedRelease.status}`}>
@@ -498,8 +503,9 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                   </span>
                 ) : null}
               </div>
-              {selectedRelease ? (
-                <>
+              <div className="osac-release-detail-body">
+                {selectedRelease ? (
+                  <>
                   <div className="osac-release-detail-summary">
                     <div>
                       <span>版本号</span>
@@ -580,10 +586,11 @@ export function OsacReleaseManagementSection({ onError }: Props) {
                       </button>
                     )}
                   </div>
-                </>
-              ) : (
-                <p className="empty osac-release-empty">请选择一个版本查看详情。</p>
-              )}
+                  </>
+                ) : (
+                  <p className="empty osac-release-empty">请选择一个版本查看详情。</p>
+                )}
+              </div>
             </article>
           </div>
         )}

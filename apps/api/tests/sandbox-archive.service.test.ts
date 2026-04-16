@@ -5,6 +5,7 @@ import {
   __resetSandboxArchiveServiceDepsForTest,
   __setSandboxArchiveServiceDepsForTest,
   archiveSandboxWorkspace,
+  listSandboxArchiveHistory,
   restoreWorkspaceIfArchived,
 } from '../src/services/sandbox-archive-service';
 
@@ -44,6 +45,10 @@ beforeEach(() => {
       getBySessionId: async (sessionId: string) => envMap.get(sessionId) || null,
     } as any,
     e2bConnector: {
+      getSandboxInfo: async (sessionId: string) => ({
+        sandboxId: sessionId,
+        metadata: {},
+      }),
       runCommand: async (sessionId: string, command: string) => {
         commandLog.push({ sessionId, command });
         return { stdout: '', output: '', exitCode: 0 };
@@ -153,7 +158,9 @@ test('skips archive upload when hash unchanged and archive already exists', asyn
   assert.equal(result.uploaded, false);
   assert.equal(result.snapshotKey, 'sessions/task-archive-2/snapshots/old-snapshot.tar.gz');
 
-  const nonMetadataUploads = uploadLog.filter((item) => !item.key.endsWith('/metadata.json'));
+  const nonMetadataUploads = uploadLog.filter(
+    (item) => !item.key.endsWith('/metadata.json') && !item.key.endsWith('.meta.json')
+  );
   assert.equal(nonMetadataUploads.length, 0);
 
   const env = envMap.get(sandboxId)?.metadata || {};
@@ -237,4 +244,80 @@ test('restores legacy v2 archive and migrates workspace .opencode into state roo
         item.command.includes('/state/task-archive-4')
     )
   );
+});
+
+test('archives with live sandbox metadata fallback when tracked metadata misses task roots', async () => {
+  const sandboxId = 'sandbox-archive-service-5';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {
+      pendingArchiveUpdate: true,
+    },
+  });
+
+  __setSandboxArchiveServiceDepsForTest({
+    e2bConnector: {
+      getSandboxInfo: async () => ({
+        sandboxId,
+        metadata: {
+          taskSessionId: 'task-archive-5',
+          workspaceRoot: '/workspace/task-archive-5',
+          stateRoot: '/state/task-archive-5',
+        },
+      }),
+      runCommand: async (sessionId: string, command: string) => {
+        commandLog.push({ sessionId, command });
+        return { stdout: '', output: '', exitCode: 0 };
+      },
+      readFile: async () => archivePayload,
+      writeFile: async (sessionId: string, path: string, data: Uint8Array | Buffer) => {
+        const size = data instanceof Buffer ? data.length : data.byteLength;
+        writeLog.push({ sessionId, path, size });
+      },
+    } as any,
+  });
+
+  const result = await archiveSandboxWorkspace(sandboxId, 'idle_timeout');
+  assert.equal(result.taskSessionId, 'task-archive-5');
+  assert.equal(result.workspaceRoot, '/workspace/task-archive-5');
+  assert.equal(result.stateRoot, '/state/task-archive-5');
+  assert.ok(uploadLog.some((item) => item.key === 'sessions/task-archive-5/workspace.tar.gz'));
+  assert.ok(uploadLog.some((item) => item.key.startsWith('sessions/task-archive-5/snapshots/')));
+});
+
+test('lists archive history with live sandbox metadata fallback when tracked metadata misses task session', async () => {
+  const sandboxId = 'sandbox-archive-service-6';
+  envMap.set(sandboxId, {
+    sessionId: sandboxId,
+    metadata: {},
+  });
+  r2Map.set(
+    'sessions/task-archive-6/snapshots/20260417010101-sandbox-archive-service-6.tar.gz',
+    Buffer.from('snapshot-content', 'utf8')
+  );
+
+  __setSandboxArchiveServiceDepsForTest({
+    e2bConnector: {
+      getSandboxInfo: async () => ({
+        sandboxId,
+        metadata: {
+          taskSessionId: 'task-archive-6',
+        },
+      }),
+      runCommand: async (sessionId: string, command: string) => {
+        commandLog.push({ sessionId, command });
+        return { stdout: '', output: '', exitCode: 0 };
+      },
+      readFile: async () => archivePayload,
+      writeFile: async (sessionId: string, path: string, data: Uint8Array | Buffer) => {
+        const size = data instanceof Buffer ? data.length : data.byteLength;
+        writeLog.push({ sessionId, path, size });
+      },
+    } as any,
+    listR2Keys: async (prefix: string) => Array.from(r2Map.keys()).filter((key) => key.startsWith(prefix)),
+  });
+
+  const history = await listSandboxArchiveHistory(sandboxId);
+  assert.equal(history.length, 1);
+  assert.equal(history[0]?.snapshotKey, 'sessions/task-archive-6/snapshots/20260417010101-sandbox-archive-service-6.tar.gz');
 });

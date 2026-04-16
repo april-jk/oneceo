@@ -17,10 +17,7 @@ import {
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  deployTaskCreationSession,
   getTaskCreationDeploymentInfo,
-  redeployTaskCreationSession,
-  rollbackTaskCreationSessionDeployment,
   type TaskCreationDeploymentInfo,
 } from "@/lib/task-creation-client";
 import { cn } from "@/lib/utils";
@@ -285,22 +282,7 @@ export default function AltusRunReplayDrawer({
         setDeploymentAction(null);
         return;
       }
-      const result =
-        action === "deploy"
-          ? await deployTaskCreationSession(sessionId)
-          : action === "redeploy"
-            ? await redeployTaskCreationSession(
-                sessionId,
-                selectedDeploymentId || "",
-              )
-            : await rollbackTaskCreationSessionDeployment(
-                sessionId,
-                selectedDeploymentId || "",
-              );
-      setDeploymentInfo(result);
-      setSelectedDeploymentId(
-        result?.deploymentId || selectedDeploymentId || null,
-      );
+      setDeploymentError("当前页面未绑定部署消息入口，请回到会话页触发部署。");
     } catch (error) {
       setDeploymentError(error instanceof Error ? error.message : "部署操作失败");
     } finally {

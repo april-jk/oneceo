@@ -57,7 +57,6 @@ import {
 import { Streamdown } from "streamdown";
 import {
   deleteTaskCreationDatabaseRow,
-  deployTaskCreationSession,
   getTaskCreationDatabaseInfo,
   getTaskCreationDatabaseRows,
   getTaskCreationDeploymentInfo,
@@ -68,8 +67,6 @@ import {
   insertTaskCreationDatabaseRow,
   rotateTaskCreationDeploymentToken,
   startTaskCreationRuntime,
-  redeployTaskCreationSession,
-  rollbackTaskCreationSessionDeployment,
   updateTaskCreationDatabaseRow,
   getWorkspaceFile,
   getWorkspaceDirectory,
@@ -1029,23 +1026,7 @@ export default function OpencodePreviewPanel({
         setDeploymentAction(null);
         return;
       }
-      const result =
-        action === "deploy"
-          ? await deployTaskCreationSession(sessionId)
-          : action === "redeploy"
-            ? await redeployTaskCreationSession(
-                sessionId,
-                selectedDeploymentId || "",
-              )
-            : await rollbackTaskCreationSessionDeployment(
-                sessionId,
-                selectedDeploymentId || "",
-              );
-      setDeploymentInfo(result);
-      void refreshDeploymentTemplateBaseline();
-      setSelectedDeploymentId(
-        result?.deploymentId || selectedDeploymentId || null,
-      );
+      setDeploymentError("当前页面未绑定部署消息入口，请从会话页触发部署。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "部署操作失败";
       setDeploymentError(message);

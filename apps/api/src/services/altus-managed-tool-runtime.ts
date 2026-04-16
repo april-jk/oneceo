@@ -451,6 +451,7 @@ export class AltusManagedToolRuntime {
       const result = await altusManagedDeploymentToolService.execute({
         action: toolName,
         sessionId: this.input.sessionId,
+        userId: this.input.userId,
         sandboxId: this.input.sandboxId,
         workspaceRoot: this.input.workspaceRoot,
         notes: asText(rawArgs.notes),

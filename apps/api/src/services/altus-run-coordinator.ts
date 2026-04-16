@@ -37,6 +37,17 @@ type DeploymentCompletionEvidence = {
   summary: string;
 };
 
+type DeploymentToolViewProjection = {
+  userView: {
+    summary: string;
+    preview: string;
+    detail: string;
+  };
+  internalView?: {
+    detail: string;
+  };
+};
+
 type StreamedToolCallDelta = {
   index?: number;
   id?: string;
@@ -409,6 +420,84 @@ export class AltusRunCoordinator {
       toolName === 'rollback_application_deployment' ||
       toolName === 'get_application_deployment_status'
     );
+  }
+
+  private buildDeploymentToolViewProjection(
+    toolName: string,
+    rawResultContent: string
+  ): DeploymentToolViewProjection | null {
+    const raw = asText(rawResultContent);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const repair = parsed.repair && typeof parsed.repair === 'object' ? (parsed.repair as Record<string, unknown>) : {};
+      const debug = parsed.debug && typeof parsed.debug === 'object' ? (parsed.debug as Record<string, unknown>) : {};
+      const summary = asText(parsed.summary);
+      const status = asText(parsed.status);
+      const phase = asText(parsed.phase);
+      const deploymentStatus = asText(parsed.deploymentStatus);
+      const url = asText(parsed.url);
+      const deploymentId = asText(parsed.deploymentId);
+      const repairCategory = asText(repair.category);
+      const repairChecks = Array.isArray(repair.checks)
+        ? repair.checks.map((item) => asText(item)).filter(Boolean)
+        : [];
+      const suggestedActions = Array.isArray(repair.suggestedActions)
+        ? repair.suggestedActions.map((item) => asText(item)).filter(Boolean)
+        : [];
+      const baselineErrors = Array.isArray(debug.baselineErrors)
+        ? debug.baselineErrors.map((item) => asText(item)).filter(Boolean)
+        : [];
+
+      const publicLines: string[] = [];
+      if (summary) publicLines.push(summary);
+      if (status === 'retryable_repair_required') {
+        publicLines.push('Altus 正在按平台部署基线自动修复后重试。');
+      } else if (deploymentStatus) {
+        publicLines.push(`当前状态：${deploymentStatus}`);
+      }
+      if (url) {
+        publicLines.push(`访问地址：${url}`);
+      }
+      const publicDetail = publicLines.filter(Boolean).join('\n');
+      const publicPreview = url
+        ? `访问地址 ${url}`
+        : status === 'retryable_repair_required'
+          ? '已识别到发布配置问题，Altus 正在自动修复后重试。'
+          : summary || this.buildToolEventContent(toolName, 'completed');
+
+      const internalLines: string[] = [];
+      internalLines.push(`工具: ${toolName}`);
+      if (phase) internalLines.push(`phase: ${phase}`);
+      if (status) internalLines.push(`status: ${status}`);
+      if (deploymentStatus) internalLines.push(`deploymentStatus: ${deploymentStatus}`);
+      if (url) internalLines.push(`url: ${url}`);
+      if (deploymentId) internalLines.push(`deploymentId: ${deploymentId}`);
+      if (repairCategory) internalLines.push(`repairCategory: ${repairCategory}`);
+      if (repairChecks.length > 0) internalLines.push(`repairChecks: ${repairChecks.join(', ')}`);
+      if (suggestedActions.length > 0) internalLines.push(`suggestedActions: ${suggestedActions.join(' | ')}`);
+      if (asText(debug.rawError)) internalLines.push(`rawError: ${asText(debug.rawError)}`);
+      if (asText(debug.baselineStatus)) internalLines.push(`baselineStatus: ${asText(debug.baselineStatus)}`);
+      if (baselineErrors.length > 0) internalLines.push(`baselineErrors: ${baselineErrors.join(' | ')}`);
+      if (asText(debug.latestStatus)) internalLines.push(`latestStatus: ${asText(debug.latestStatus)}`);
+      if (asText(debug.latestUrl)) internalLines.push(`latestUrl: ${asText(debug.latestUrl)}`);
+
+      return {
+        userView: {
+          summary: summary || this.buildToolEventContent(toolName, 'completed'),
+          preview: publicPreview,
+          detail: publicDetail || (summary || this.buildToolEventContent(toolName, 'completed')),
+        },
+        internalView:
+          internalLines.length > 0
+            ? {
+                detail: internalLines.join('\n'),
+              }
+            : undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private buildToolEventContent(
@@ -1088,6 +1177,9 @@ export class AltusRunCoordinator {
             arguments: args,
             toolCallId: toolCall.id,
             outputPreview: truncate(result.content, 4000),
+            ...(this.isDeploymentTool(toolName)
+              ? this.buildDeploymentToolViewProjection(toolName, result.content) || {}
+              : {}),
             }
           );
         } catch (error) {
@@ -1104,6 +1196,18 @@ export class AltusRunCoordinator {
             arguments: args,
             toolCallId: toolCall.id,
             error: eventError,
+            ...(this.isDeploymentTool(toolName)
+              ? {
+                  userView: {
+                    summary: eventError,
+                    preview: eventError,
+                    detail: eventError,
+                  },
+                  internalView: {
+                    detail: [`工具: ${toolName}`, `rawError: ${message}`].join('\n'),
+                  },
+                }
+              : {}),
             }
           );
           messages.push({

@@ -99,7 +99,7 @@
 ### 7.1 API
 1. apps/api/src/connectors/definitions/notion.ts
 - 将 Notion 产品主路径定义为 OAuth。
-- 保留 remote MCP 模式，默认 endpoint 对齐官方：https://mcp.notion.com/mcp
+- 保留 remote MCP 模式，默认 endpoint 对齐当前采用方案：https://mcp.notion.com/sse
 - configFields 移除用户手填 token 的主文案，改为 OAuth 引导文案。
 
 2. apps/api/src/services/user-connector-service.ts
@@ -135,7 +135,7 @@
 - NOTION_CONNECTOR_CLIENT_ID
 - NOTION_CONNECTOR_CLIENT_SECRET
 - NOTION_CONNECTOR_SCOPES
-- NOTION_MCP_REMOTE_URL（默认建议 https://mcp.notion.com/mcp）
+- NOTION_MCP_REMOTE_URL（默认建议 https://mcp.notion.com/sse；具体以 `notion_mcp_sse_transport_fix_doc_[20260416-2007已采用].md` 为准）
 - NOTION_CONNECTOR_SECRET_KEY（用于 token 加密）
 
 ### 8.2 安全约束

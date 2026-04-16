@@ -27,6 +27,10 @@ import {
   partitionPendingAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
+import {
+  buildTaskSessionDeploymentPrompt,
+  type TaskSessionDeploymentPromptAction,
+} from "@/lib/task-session-deployment-prompts";
 import { toast } from "sonner";
 
 interface TaskCreationChatProps {
@@ -80,6 +84,9 @@ export default function TaskCreationChat({
 }: TaskCreationChatProps) {
   const [userAnswer, setUserAnswer] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTab, setPreviewTab] = useState<
+    "files" | "changes" | "debug" | "deployment"
+  >("files");
   const hasSentInitialInputRef = useRef(false);
 
   const {
@@ -177,6 +184,16 @@ export default function TaskCreationChat({
       answerQuestion(userAnswer);
       setUserAnswer("");
     }
+  };
+
+  const submitDeploymentPrompt = async (
+    action: TaskSessionDeploymentPromptAction,
+  ) => {
+    setPreviewTab("deployment");
+    setPreviewOpen(true);
+    await sendChatInput(buildTaskSessionDeploymentPrompt(action), {
+      sessionId: sessionId || undefined,
+    });
   };
 
   const showStopButton = isProcessing && !currentQuestion && !userAnswer.trim();
@@ -318,7 +335,18 @@ export default function TaskCreationChat({
             messages={messages}
             sessionId={sessionId}
             open={previewOpen}
+            activeTab={previewTab}
+            onTabChange={setPreviewTab}
             onToggle={() => setPreviewOpen(false)}
+            onRequestDeployByMessage={() => {
+              void submitDeploymentPrompt("deploy");
+            }}
+            onRequestRedeployByMessage={() => {
+              void submitDeploymentPrompt("redeploy");
+            }}
+            onRequestRollbackByMessage={() => {
+              void submitDeploymentPrompt("rollback");
+            }}
             className="h-full min-h-0"
           />
         </div>

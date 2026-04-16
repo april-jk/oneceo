@@ -87,6 +87,20 @@ test('managed prompt instructs direct multimodal image analysis instead of OCR-f
   assert.match(prompt, /do not ask the user to describe an uploaded image/i);
 });
 
+test('managed prompt requires deployment tools and auto-repair loop for publish requests', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-deploy-test',
+    sessionTitle: 'deploy contract',
+    workspaceRoot: '/workspace/session-deploy-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
+  assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+  assert.match(prompt, /returns `status=retryable_repair_required`, do not stop/i);
+  assert.match(prompt, /keep deployment debug details internal/i);
+});
+
 test('managed prompt builds minimal skill catalog index without full body', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {
@@ -138,4 +152,57 @@ test('managed prompt shows active skill resource summary alongside full body', (
   assert.match(prompt, /# Active skills/);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt labels attached connectors by runtime status instead of treating all attached connectors as callable', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-connector-status-test',
+    sessionTitle: 'connector runtime prompt',
+    workspaceRoot: '/workspace/session-connector-status-test',
+    connectors: [
+      {
+        connectorKey: 'notion',
+        name: 'Notion',
+        icon: 'notion',
+        authMode: 'oauth',
+        available: true,
+        globalAuthStatus: 'authorized',
+        attached: true,
+        desiredState: 'attached',
+        runtimeStatus: 'pending_recover',
+        usageStatus: 'idle',
+        attachedProfileName: 'workspace-a',
+      },
+      {
+        connectorKey: 'github',
+        name: 'GitHub',
+        icon: 'github',
+        authMode: 'oauth',
+        available: true,
+        globalAuthStatus: 'authorized',
+        attached: true,
+        desiredState: 'attached',
+        runtimeStatus: 'connected',
+        usageStatus: 'idle',
+        attachedProfileName: 'repo-scope',
+      },
+      {
+        connectorKey: 'slack',
+        name: 'Slack',
+        icon: 'slack',
+        authMode: 'oauth',
+        available: true,
+        globalAuthStatus: 'authorized',
+        attached: true,
+        desiredState: 'attached',
+        runtimeStatus: 'failed',
+        usageStatus: 'idle',
+        attachedProfileName: 'team-a',
+      },
+    ],
+  });
+
+  assert.match(prompt, /notion \| runtime_status=pending_recover \| tool_access=blocked_until_runtime_recovers/i);
+  assert.match(prompt, /github \| runtime_status=connected \| tool_access=available/i);
+  assert.match(prompt, /slack \| runtime_status=failed \| tool_access=blocked_attach_failed/i);
 });

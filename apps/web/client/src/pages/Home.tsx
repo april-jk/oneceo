@@ -6180,6 +6180,18 @@ function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string
   return toRecord(outputPreviewRaw);
 }
 
+function readManagedToolViewProjection(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const userView = toRecord(metadata.userView);
+  const internalView = toRecord(metadata.internalView);
+  return {
+    userSummary: asText(userView.summary),
+    userPreview: asText(userView.preview),
+    userDetail: asText(userView.detail),
+    internalDetail: asText(internalView.detail),
+  };
+}
+
 function collectManagedReplayArtifactPaths(
   toolName: string,
   metadataRaw: unknown,
@@ -6307,6 +6319,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
               : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
+        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       });
     } else {
@@ -6323,6 +6336,7 @@ function buildManagedReplayData(messages: AgentMessage[]) {
                 : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
+        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       };
     }
@@ -6456,6 +6470,7 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const args = toRecord(metadata.arguments);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
   if (toolName === "shell_execute") {
     return asText(args.command) || "执行 shell 命令";
   }
@@ -6483,6 +6498,9 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     return asText(args.question) || "请求用户澄清";
   }
   if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userSummary) {
+      return projectedView.userSummary;
+    }
     if (deploymentOutput.status === "retryable_repair_required") {
       return "正在修复发布配置";
     }
@@ -6513,10 +6531,11 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
 
   if (error) {
     if (isManagedDeploymentTool(toolName)) {
-      return "发布暂未完成，内部调试信息已记录。";
+      return projectedView.userPreview || "发布暂未完成，内部调试信息已记录。";
     }
     return error;
   }
@@ -6548,6 +6567,9 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   }
 
   if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userPreview) {
+      return projectedView.userPreview;
+    }
     if (deploymentOutput.status === "retryable_repair_required") {
       return "已识别到发布配置问题，Altus 正在自动修复后重试。";
     }
@@ -6570,6 +6592,12 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   return asText(metadata.outputPreview) || asText(metadata.content);
 }
 
+function formatManagedToolInternalDetail(toolName: string, metadataRaw: unknown) {
+  if (!isManagedDeploymentTool(toolName)) return "";
+  const projectedView = readManagedToolViewProjection(metadataRaw);
+  return projectedView.internalDetail;
+}
+
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
@@ -6577,6 +6605,7 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
+  const projectedView = readManagedToolViewProjection(metadata);
   const lines: string[] = [];
   const pushLine = (label: string, value: unknown) => {
     const text = asText(value);
@@ -6610,6 +6639,9 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine("搜索范围", args.path || output.path);
     pushLine("结果预览", output.output);
   } else if (isManagedDeploymentTool(toolName)) {
+    if (projectedView.userDetail) {
+      return projectedView.userDetail;
+    }
     pushLine("阶段", deploymentOutput.phase || (error ? "failed" : "running"));
     pushLine("状态", deploymentOutput.status || deploymentOutput.deploymentStatus);
     pushLine("摘要", deploymentOutput.summary);

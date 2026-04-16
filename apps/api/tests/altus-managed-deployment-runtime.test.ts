@@ -9,14 +9,18 @@ afterEach(() => {
 });
 
 test('managed tool runtime routes deploy_application through deployment tool service', async () => {
-  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async () => ({
-    action: 'deploy_application',
-    phase: 'completed',
-    status: 'success',
-    summary: '发布完成，状态 SUCCESS，地址 demo.oneceo.app',
-    deploymentStatus: 'SUCCESS',
-    url: 'https://demo.oneceo.app',
-  }));
+  let receivedUserId = '';
+  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async (input: any) => {
+    receivedUserId = input.userId;
+    return {
+      action: 'deploy_application',
+      phase: 'completed',
+      status: 'success',
+      summary: '发布完成，状态 SUCCESS，地址 demo.oneceo.app',
+      deploymentStatus: 'SUCCESS',
+      url: 'https://demo.oneceo.app',
+    };
+  });
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
@@ -32,6 +36,7 @@ test('managed tool runtime routes deploy_application through deployment tool ser
   });
 
   assert.equal(executeMock.mock.callCount(), 1);
+  assert.equal(receivedUserId, 'user-1');
   assert.equal(result.type, 'result');
   const payload = JSON.parse(result.content);
   assert.equal(payload.action, 'deploy_application');

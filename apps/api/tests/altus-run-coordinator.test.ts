@@ -523,6 +523,21 @@ test('execute blocks deployment completion until managed deployment succeeds', a
     .filter((entry) => entry.eventType === 'tool_call_completed')
     .map((entry) => entry.payload.toolName);
   assert.deepEqual(completedToolNames, ['deploy_application', 'complete_task']);
+
+  const deployCompleted = eventCalls.find(
+    (entry) =>
+      entry.eventType === 'tool_call_completed' &&
+      entry.payload.toolName === 'deploy_application'
+  );
+  assert.ok(deployCompleted);
+  assert.deepEqual(deployCompleted?.payload.userView, {
+    summary: '发布完成',
+    preview: '访问地址 https://example.up.railway.app',
+    detail: '发布完成\n当前状态：SUCCESS\n访问地址：https://example.up.railway.app',
+  });
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /工具: deploy_application/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /deploymentStatus: SUCCESS/);
+  assert.match(String(deployCompleted?.payload.internalView?.detail || ''), /url: https:\/\/example\.up\.railway\.app/);
 });
 
 test('execute emits deliverables_ready before final assistant message when complete_task returns attachments', async () => {

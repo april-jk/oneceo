@@ -2,6 +2,7 @@ import { taskCreationFileMemoryStore, type FileSessionRecord } from '../agents/t
 import { sandboxExecutionEnvironmentDAO, taskCreationSessionDAO } from '../db/dao';
 import {
   getRailwayDeploymentPanel,
+  triggerRailwayDeploy,
   triggerRailwayRedeploy,
   triggerRailwayRollback,
   waitForRailwayDeploymentAfterSourceSync,
@@ -11,7 +12,10 @@ import {
   type RailwayDeploymentPanelData,
 } from './railway-deployment-service';
 import { publishTaskSessionWorkspaceToRepository } from './task-creation-deployment-source-service';
-import { platformDeploymentAccountService } from './platform-deployment-account-service';
+import {
+  platformDeploymentAccountService,
+  refreshManagedServiceSourceConnection,
+} from './platform-deployment-account-service';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata } from './sandbox-activity-service';
 import {
@@ -276,6 +280,17 @@ async function prepareSessionAnalyticsBindingSafely(input: {
   }
 }
 
+export async function ensureDeploymentStartedAfterSourceSync(input: {
+  waitForSourceSync: () => Promise<RailwayDeploymentActionResult>;
+  triggerDeploy: () => Promise<RailwayDeploymentActionResult>;
+}): Promise<RailwayDeploymentActionResult> {
+  const syncedDeployment = await input.waitForSourceSync();
+  if (asText(syncedDeployment.deploymentId)) {
+    return syncedDeployment;
+  }
+  return input.triggerDeploy();
+}
+
 export async function executeDirectModeDeploymentCapability(
   capabilityId: DirectModeCapabilityId,
   input: DirectModeCapabilityExecutionInput
@@ -333,6 +348,11 @@ export async function executeDirectModeDeploymentCapability(
     await setSandboxMetadata(orchestratorSessionId, {
       deploymentTemplateBaseline: publishReport.baseline,
     });
+    await refreshManagedServiceSourceConnection({
+      serviceId: account.serviceId,
+      repoFullName: account.githubRepoFullName || '',
+      branch: account.githubDefaultBranch || 'main',
+    });
 
     const platformDeployment = {
       adminToken: process.env.RAILWAY_ADMIN_TOKEN,
@@ -346,17 +366,19 @@ export async function executeDirectModeDeploymentCapability(
       repository: account.githubRepoFullName,
     };
 
-    const actionResult = await waitForRailwayDeploymentAfterSourceSync(
-      {
-        ...environmentMetadata,
-        platformDeployment,
-      },
-      {
-        since: deploymentRequestedAt,
-        timeoutMs: 120_000,
-        pollIntervalMs: 4_000,
-      }
-    );
+    const deploymentMetadata = {
+      ...environmentMetadata,
+      platformDeployment,
+    };
+    const actionResult = await ensureDeploymentStartedAfterSourceSync({
+      waitForSourceSync: () =>
+        waitForRailwayDeploymentAfterSourceSync(deploymentMetadata, {
+          since: deploymentRequestedAt,
+          timeoutMs: 120_000,
+          pollIntervalMs: 4_000,
+        }),
+      triggerDeploy: () => triggerRailwayDeploy(deploymentMetadata),
+    });
     await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
     const panel = await buildRailwayDeploymentResponse(userId, session, actionResult.deploymentId);
     await waitForRailwayDeploymentPublicReachability({

@@ -545,6 +545,9 @@ export default function AltusRunReplayDrawer({
             <DeploymentPreview
               sessionId={sessionId}
               info={deploymentInfo}
+              templateBaseline={null}
+              templateBaselineLoading={false}
+              templateBaselineError={null}
               loading={deploymentLoading}
               error={deploymentError}
               actionLoading={deploymentAction}
@@ -557,6 +560,8 @@ export default function AltusRunReplayDrawer({
               onDeploy={() => void runDeploymentAction("deploy")}
               onRedeploy={() => void runDeploymentAction("redeploy")}
               onRollback={() => void runDeploymentAction("rollback")}
+              tokenRotationLoading={false}
+              onRotateDeploymentToken={() => undefined}
             />
           )}
         </div>

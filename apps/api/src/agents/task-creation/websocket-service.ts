@@ -417,6 +417,80 @@ export class TaskCreationWebSocketService {
     }
   }
 
+  private buildPersistedAgentMessageMetadata(message: WebSocketMessage, fallbackSeq: number) {
+    const timestamp = Date.now();
+    return {
+      ...(message.metadata || {}),
+      timestamp,
+      sessionEventSeq:
+        typeof (message.metadata as any)?.sessionEventSeq === 'number'
+          ? (message.metadata as any).sessionEventSeq
+          : fallbackSeq,
+      messageKey:
+        asText((message.metadata as any)?.messageKey) ||
+        `runtime:${asText((message.metadata as any)?.runtimeGeneration) || 'na'}:${fallbackSeq}:${message.type}`,
+      stage: message.stage,
+      phase: (message as any).phase,
+      tone: message.tone,
+      agent: message.agent,
+      options: message.options,
+      plan: message.plan,
+    } as Record<string, unknown>;
+  }
+
+  private async persistAgentMessage(
+    sessionId: string,
+    message: WebSocketMessage,
+    options?: { fallbackSeq?: number }
+  ) {
+    const content = message.content || message.message || message.question || '';
+    if (!content) return;
+    const fallbackSeq = options?.fallbackSeq || Date.now() * 1000;
+    const metadata = this.buildPersistedAgentMessageMetadata(message, fallbackSeq);
+    if (message.type === 'status_update') {
+      const phaseValue =
+        (message as any).phase ||
+        (message.metadata && (message.metadata as any).phase);
+      await taskCreationFileMemoryStore.updateSessionState(sessionId, {
+        stage: message.stage as any,
+        phase: phaseValue as any,
+      });
+    }
+    await taskCreationFileMemoryStore.addMessage(
+      sessionId,
+      'agent',
+      message.type,
+      content,
+      metadata
+    );
+    try {
+      await taskCreationSessionDAO.addMessage({
+        id: randomUUID(),
+        sessionId,
+        role: 'agent',
+        messageType: message.type as any,
+        content,
+        metadata,
+      });
+    } catch (error) {
+      console.warn('[DIRECT_CAPABILITY_MESSAGE_DB_FAILED]', {
+        sessionId,
+        messageType: message.type,
+        error,
+      });
+    }
+  }
+
+  private async persistAndSendAgentMessage(
+    clientId: string,
+    sessionId: string,
+    message: WebSocketMessage,
+    options?: { fallbackSeq?: number }
+  ) {
+    await this.persistAgentMessage(sessionId, { ...message, sessionId }, options);
+    this.sendToClient(clientId, { ...message, sessionId }, { skipPersistence: true });
+  }
+
   /**
    * 向用户提问并等待回复
    */
@@ -901,10 +975,11 @@ export class TaskCreationWebSocketService {
       });
       if (entryDecision.action === 'platform_capability') {
         const capabilityLabel = directModeEntryService.getCapabilityDisplayName(entryDecision);
-        this.sendToClient(clientId, {
+        const directCapabilityStartedMessage: WebSocketMessage = {
           type: 'status_update' as any,
           sessionId: taskSessionId,
           content: `已识别为${capabilityLabel}请求，正在调用平台服务...`,
+          stage: 'executing' as any,
           tone: 'system' as any,
           metadata: {
             directModeIntercepted: true,
@@ -913,7 +988,12 @@ export class TaskCreationWebSocketService {
             interceptSource: entryDecision.source,
             executionMode: 'direct_platform_capability',
           },
+        };
+        await taskCreationFileMemoryStore.updateSessionState(taskSessionId, {
+          status: 'in_progress',
+          stage: 'executing',
         });
+        await this.persistAndSendAgentMessage(clientId, taskSessionId, directCapabilityStartedMessage);
 
         try {
           const capabilityResult = await directModeEntryService.execute(entryDecision, {
@@ -933,7 +1013,7 @@ export class TaskCreationWebSocketService {
             console.warn('[DIRECT_CAPABILITY_STATUS_DB_COMPLETE_FAILED]', error);
           }
 
-          this.sendToClient(clientId, {
+          await this.persistAndSendAgentMessage(clientId, taskSessionId, {
             type: 'agent_message' as any,
             agent: 'system',
             sessionId: taskSessionId,
@@ -949,7 +1029,7 @@ export class TaskCreationWebSocketService {
             },
           });
 
-          this.sendToClient(clientId, {
+          await this.persistAndSendAgentMessage(clientId, taskSessionId, {
             type: 'status_update' as any,
             sessionId: taskSessionId,
             content: `${capabilityLabel}已完成`,
@@ -974,7 +1054,7 @@ export class TaskCreationWebSocketService {
           } catch (dbError) {
             console.warn('[DIRECT_CAPABILITY_STATUS_DB_FAILED_FAILED]', dbError);
           }
-          this.sendToClient(clientId, {
+          await this.persistAndSendAgentMessage(clientId, taskSessionId, {
             type: 'status_update' as any,
             sessionId: taskSessionId,
             content: errorMessage,

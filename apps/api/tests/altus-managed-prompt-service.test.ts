@@ -87,6 +87,20 @@ test('managed prompt instructs direct multimodal image analysis instead of OCR-f
   assert.match(prompt, /do not ask the user to describe an uploaded image/i);
 });
 
+test('managed prompt requires deployment tools and auto-repair loop for publish requests', () => {
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-deploy-test',
+    sessionTitle: 'deploy contract',
+    workspaceRoot: '/workspace/session-deploy-test',
+    connectors: [],
+  });
+
+  assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
+  assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
+  assert.match(prompt, /returns `status=retryable_repair_required`, do not stop/i);
+  assert.match(prompt, /keep deployment debug details internal/i);
+});
+
 test('managed prompt builds minimal skill catalog index without full body', () => {
   const prompt = altusManagedPromptService.buildSkillCatalogPrompt([
     {

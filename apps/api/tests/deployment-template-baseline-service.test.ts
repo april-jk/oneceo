@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { ensureDeploymentTemplateBootstrap } from '../src/services/deployment-template-bootstrap-service';
 import { ensureTemplateCompliance } from '../src/services/template-compliance-service';
-import { buildDeploymentTemplateBaseline } from '../src/services/task-creation-deployment-source-service';
+import {
+  buildDeploymentTemplateBaseline,
+  normalizeDeploymentSourceDirectoryForPublish,
+} from '../src/services/task-creation-deployment-source-service';
 
 test('deployment template baseline marks manifest generation and platform analytics injection', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-test-'));
@@ -123,6 +126,42 @@ test('deployment template baseline highlights missing railway database dependenc
       baseline.errors.join(' | '),
       /database=railway_postgres，但项目未检测到 pg \/ drizzle-orm 依赖/
     );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization promotes single nested static app into deployable root baseline', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-static-test-'));
+  try {
+    const nestedAppDir = join(workspace, '2048-game');
+    await mkdir(nestedAppDir, { recursive: true });
+    await writeFile(join(workspace, 'server.log'), 'placeholder', 'utf-8');
+    await writeFile(
+      join(nestedAppDir, 'index.html'),
+      '<!doctype html><html><body><div class="game">2048</div></body></html>',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      bootstrap,
+      compliance,
+    });
+
+    assert.equal(normalization.promotedNestedApp, true);
+    assert.equal(normalization.injectedStaticBaseline, true);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.start.command, 'node server.js');
+    assert.equal(compliance.manifest.healthcheck.path, '/api/system/health');
+    assert.equal(compliance.checks.buildCommandDetected, true);
+    assert.equal(compliance.checks.startCommandDetected, true);
+    assert.equal(compliance.checks.analyticsEntryDetected, true);
+    assert.equal(compliance.checks.healthcheckRouteDetected, true);
+    assert.equal(baseline.status, 'ready');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

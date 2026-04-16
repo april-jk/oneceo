@@ -88,7 +88,6 @@ import {
 import { useIsMobile } from "@/hooks/useMobile";
 import { buildPreviewItems, extractDiffPayload } from "@/lib/opencode-preview";
 import {
-  deployTaskCreationSession,
   getWorkspaceRawFileUrl,
   listTaskCreationSkills,
   uploadTaskCreationAttachment,
@@ -1461,28 +1460,34 @@ export default function Home() {
     setPreviewOpen(true);
   };
 
-  const deployFromArtifactCard = async (_path: string) => {
+  const submitDeploymentPrompt = async (
+    action: "deploy" | "redeploy" | "rollback" | "status",
+  ) => {
     if (!sessionId) {
       toast.error("缺少会话信息");
       return;
     }
+    const prompt =
+      action === "deploy"
+        ? "帮我部署当前项目"
+        : action === "redeploy"
+          ? "帮我重新部署当前项目"
+          : action === "rollback"
+            ? "请回滚到上一个可用部署版本"
+            : "帮我查看当前部署状态";
 
+    setPreviewWorkspacePath(null);
+    setPreviewTab("deployment");
+    setPreviewOpen(true);
+    await submitPrompt(prompt);
+  };
+
+  const deployFromArtifactCard = async (_path: string) => {
     try {
-      const result = await deployTaskCreationSession(sessionId);
-      setPreviewWorkspacePath(null);
-      setPreviewTab("deployment");
-      setPreviewOpen(true);
-
-      const deploymentUrl = result?.latestStaticUrl || result?.latestUrl || "";
-      if (deploymentUrl) {
-        toast.success(
-          `已触发部署：${deploymentUrl.replace(/^https?:\/\//, "")}`,
-        );
-      } else {
-        toast.success("已触发部署");
-      }
+      await submitDeploymentPrompt("deploy");
+      toast.success("已提交发布请求");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "触发部署失败");
+      toast.error(error instanceof Error ? error.message : "触发发布失败");
       throw error;
     }
   };
@@ -1608,6 +1613,15 @@ export default function Home() {
         onRequestStartDebugByMessage={() => {
           void submitPrompt("启动网站调试功能");
         }}
+        onRequestDeployByMessage={() => {
+          void submitDeploymentPrompt("deploy");
+        }}
+        onRequestRedeployByMessage={() => {
+          void submitDeploymentPrompt("redeploy");
+        }}
+        onRequestRollbackByMessage={() => {
+          void submitDeploymentPrompt("rollback");
+        }}
         selectedWorkspacePath={previewWorkspacePath}
         className="h-full min-h-0 w-full"
       />
@@ -1629,7 +1643,7 @@ export default function Home() {
           <div className="flex min-w-0 items-center gap-2">
             {runtime.orchestratorSessionId && runtime.ready ? (
               <span className="truncate text-xs text-muted-foreground">
-                运行中 · {runtime.orchestratorSessionId}
+                执行环境 · {runtime.orchestratorSessionId}
               </span>
             ) : null}
             <Button
@@ -2223,6 +2237,15 @@ export default function Home() {
           onEnsureRuntime={runtime.ensure}
           onRequestStartDebugByMessage={() => {
             void submitPrompt("启动网站调试功能");
+          }}
+          onRequestDeployByMessage={() => {
+            void submitDeploymentPrompt("deploy");
+          }}
+          onRequestRedeployByMessage={() => {
+            void submitDeploymentPrompt("redeploy");
+          }}
+          onRequestRollbackByMessage={() => {
+            void submitDeploymentPrompt("rollback");
           }}
           onOpenPreviewTab={(tab) => {
             setPreviewOpen(true);
@@ -6330,6 +6353,31 @@ function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previ
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
+function isManagedDeploymentTool(toolName: string) {
+  return (
+    toolName === "deploy_application" ||
+    toolName === "redeploy_application" ||
+    toolName === "rollback_application_deployment" ||
+    toolName === "get_application_deployment_status"
+  );
+}
+
+function readManagedDeploymentToolOutput(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const repair = toRecord(output.repair);
+  return {
+    action: asText(output.action),
+    phase: asText(output.phase),
+    status: asText(output.status),
+    summary: asText(output.summary),
+    deploymentStatus: asText(output.deploymentStatus),
+    url: asText(output.url),
+    deploymentId: asText(output.deploymentId),
+    repairCategory: asText(repair.category),
+  };
+}
+
 function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
   if (toolName !== "write_file") return "";
   const metadata = toRecord(metadataRaw);
@@ -6352,6 +6400,14 @@ function getManagedToolDisplayName(toolName: string) {
       return "代码搜索";
     case "ask_user":
       return "请求澄清";
+    case "deploy_application":
+      return "发布应用";
+    case "redeploy_application":
+      return "重新发布";
+    case "rollback_application_deployment":
+      return "回滚部署";
+    case "get_application_deployment_status":
+      return "查询部署状态";
     case "complete_task":
       return "完成任务";
     default:
@@ -6403,6 +6459,7 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
   if (toolName === "shell_execute") {
     return asText(args.command) || "执行 shell 命令";
   }
@@ -6429,6 +6486,24 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   if (toolName === "ask_user") {
     return asText(args.question) || "请求用户澄清";
   }
+  if (isManagedDeploymentTool(toolName)) {
+    if (deploymentOutput.status === "retryable_repair_required") {
+      return "正在修复发布配置";
+    }
+    if (deploymentOutput.summary) {
+      return deploymentOutput.summary;
+    }
+    if (toolName === "deploy_application") {
+      return "准备发布应用";
+    }
+    if (toolName === "redeploy_application") {
+      return "准备重新发布";
+    }
+    if (toolName === "rollback_application_deployment") {
+      return "准备回滚部署";
+    }
+    return "查询部署状态";
+  }
   if (toolName === "complete_task") {
     return asText(args.summary) || "输出最终完成总结";
   }
@@ -6441,8 +6516,14 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
 
-  if (error) return error;
+  if (error) {
+    if (isManagedDeploymentTool(toolName)) {
+      return "发布暂未完成，内部调试信息已记录。";
+    }
+    return error;
+  }
 
   if (toolName === "shell_execute") {
     const stdout = asText(output.stdout);
@@ -6470,6 +6551,22 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
     return asText(output.output) || asText(args.query) || "已返回搜索结果";
   }
 
+  if (isManagedDeploymentTool(toolName)) {
+    if (deploymentOutput.status === "retryable_repair_required") {
+      return "已识别到发布配置问题，Altus 正在自动修复后重试。";
+    }
+    if (deploymentOutput.url) {
+      return `访问地址 ${deploymentOutput.url}`;
+    }
+    if (deploymentOutput.summary) {
+      return deploymentOutput.summary;
+    }
+    if (toolName === "get_application_deployment_status") {
+      return "已返回当前部署状态。";
+    }
+    return "平台正在处理当前部署请求。";
+  }
+
   if (toolName === "complete_task") {
     return asText(args.summary) || "任务已完成";
   }
@@ -6483,6 +6580,7 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
+  const deploymentOutput = readManagedDeploymentToolOutput(metadata);
   const lines: string[] = [];
   const pushLine = (label: string, value: unknown) => {
     const text = asText(value);
@@ -6515,6 +6613,17 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine("搜索词", args.query);
     pushLine("搜索范围", args.path || output.path);
     pushLine("结果预览", output.output);
+  } else if (isManagedDeploymentTool(toolName)) {
+    pushLine("阶段", deploymentOutput.phase || (error ? "failed" : "running"));
+    pushLine("状态", deploymentOutput.status || deploymentOutput.deploymentStatus);
+    pushLine("摘要", deploymentOutput.summary);
+    pushLine("访问地址", deploymentOutput.url);
+    pushLine("部署 ID", deploymentOutput.deploymentId);
+    if (deploymentOutput.status === "retryable_repair_required") {
+      pushLine("处理", "Altus 正在按平台部署基线自动修复后重试");
+    } else if (error || deploymentOutput.status === "fatal_error") {
+      pushLine("处理", "内部调试信息已记录，主界面不展示底层供应商错误");
+    }
   } else if (toolName === "ask_user") {
     pushLine("问题", args.question);
     if (Array.isArray(args.options)) {
@@ -6538,7 +6647,7 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   }
 
   if (error) {
-    pushLine("失败原因", error);
+    pushLine("失败原因", isManagedDeploymentTool(toolName) ? "发布暂未完成" : error);
   }
 
   if (lines.length === 1) {

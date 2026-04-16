@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -29,6 +29,141 @@ const EXPORT_EXCLUDES = [
   '.idea',
   '.vscode',
 ];
+
+const STATIC_TEMPLATE_PACKAGE_JSON = {
+  name: 'oneceo-static-web-app',
+  private: true,
+  version: '1.0.0',
+  scripts: {
+    build: 'node -e "console.log(\'oneceo static app ready\')"',
+    start: 'node server.js',
+  },
+};
+
+const STATIC_TEMPLATE_SERVER_SOURCE = `const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+
+const port = Number(process.env.PORT || 8080);
+const rootDir = __dirname;
+const indexPath = path.join(rootDir, 'index.html');
+const mimeTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.gif': 'image/gif',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp'
+};
+const analyticsPlaceholders = ['VITE_ANALYTICS_ENABLED', 'VITE_ANALYTICS_HOST', 'VITE_ANALYTICS_ENDPOINT', 'VITE_ANALYTICS_WEBSITE_ID', 'VITE_ANALYTICS_TAG', 'VITE_PUBLIC_DOMAIN'];
+
+function getMimeType(filePath) {
+  return mimeTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function applyRuntimeEnv(template) {
+  return analyticsPlaceholders.reduce((html, key) => {
+    const value = String(process.env[key] || '');
+    return html.replaceAll('%' + key + '%', value);
+  }, template);
+}
+
+function sendJson(res, statusCode, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+function resolveStaticPath(requestPath) {
+  const normalizedPath = requestPath === '/' ? '/index.html' : requestPath;
+  const safePath = path.normalize(normalizedPath).replace(/^(\.\.[/\\\\])+/, '');
+  const targetPath = path.join(rootDir, safePath);
+  if (!targetPath.startsWith(rootDir)) {
+    return null;
+  }
+  return targetPath;
+}
+
+const server = http.createServer((req, res) => {
+  const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
+  if (requestUrl.pathname === '/api/system/health' || requestUrl.pathname === '/health') {
+    return sendJson(res, 200, { ok: true, service: 'oneceo-static-server' });
+  }
+
+  const targetPath = resolveStaticPath(requestUrl.pathname);
+  if (!targetPath) {
+    return sendJson(res, 400, { ok: false, error: 'invalid_path' });
+  }
+
+  try {
+    const stats = fs.statSync(targetPath);
+    if (stats.isDirectory()) {
+      const nestedIndex = path.join(targetPath, 'index.html');
+      if (!fs.existsSync(nestedIndex)) {
+        return sendJson(res, 404, { ok: false, error: 'not_found' });
+      }
+      const html = applyRuntimeEnv(fs.readFileSync(nestedIndex, 'utf8'));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    if (targetPath === indexPath) {
+      const html = applyRuntimeEnv(fs.readFileSync(indexPath, 'utf8'));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': getMimeType(targetPath) });
+    fs.createReadStream(targetPath).pipe(res);
+  } catch {
+    sendJson(res, 404, { ok: false, error: 'not_found' });
+  }
+});
+
+server.listen(port, '0.0.0.0', () => {
+  console.log('[oneceo-static-server] listening on port ' + port);
+});
+`;
+
+const STATIC_TEMPLATE_MANIFEST: OneCeoDeploymentManifest = {
+  templateVersion: '1.0.0',
+  appType: 'web_app',
+  stack: 'static_node_http_api_dbless',
+  build: {
+    command: 'npm run build',
+    outputDir: '.',
+  },
+  start: {
+    command: 'node server.js',
+    portEnv: 'PORT',
+  },
+  healthcheck: {
+    path: '/api/system/health',
+  },
+  features: {
+    analytics: true,
+    userTracking: true,
+    database: false,
+    auth: false,
+    objectStorage: false,
+  },
+  runtime: {
+    framework: 'static',
+    transport: 'http',
+  },
+};
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -135,6 +270,110 @@ async function extractArchive(archivePath: string, outputDir: string) {
   }
 }
 
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyDirectoryEntriesToRoot(sourceDir: string, nestedDir: string) {
+  const entries = await readdir(nestedDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (EXPORT_EXCLUDES.includes(entry.name) || entry.name.startsWith('.')) {
+      continue;
+    }
+    const sourcePath = join(nestedDir, entry.name);
+    const targetPath = join(sourceDir, entry.name);
+    if (await exists(targetPath)) {
+      continue;
+    }
+    await cp(sourcePath, targetPath, { recursive: true, force: false });
+  }
+}
+
+async function findSingleNestedAppDirectory(sourceDir: string): Promise<string | null> {
+  const rootHasDeploymentEntry =
+    (await exists(join(sourceDir, 'package.json'))) ||
+    (await exists(join(sourceDir, 'index.html'))) ||
+    (await exists(join(sourceDir, 'client/index.html'))) ||
+    (await exists(join(sourceDir, 'public/index.html')));
+  if (rootHasDeploymentEntry) {
+    return null;
+  }
+
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+  const candidateDirs = entries.filter(
+    (entry) =>
+      entry.isDirectory() &&
+      !EXPORT_EXCLUDES.includes(entry.name) &&
+      !entry.name.startsWith('.')
+  );
+  if (candidateDirs.length !== 1) {
+    return null;
+  }
+
+  const nestedDir = join(sourceDir, candidateDirs[0].name);
+  const hasNestedAppEntry =
+    (await exists(join(nestedDir, 'index.html'))) ||
+    (await exists(join(nestedDir, 'package.json'))) ||
+    (await exists(join(nestedDir, 'client/index.html'))) ||
+    (await exists(join(nestedDir, 'public/index.html')));
+  return hasNestedAppEntry ? nestedDir : null;
+}
+
+async function ensureStaticRootDeploymentFiles(sourceDir: string) {
+  const rootIndexPath = join(sourceDir, 'index.html');
+  if (!(await exists(rootIndexPath))) {
+    return false;
+  }
+
+  const packageJsonPath = join(sourceDir, 'package.json');
+  if (!(await exists(packageJsonPath))) {
+    await writeFile(
+      packageJsonPath,
+      `${JSON.stringify(STATIC_TEMPLATE_PACKAGE_JSON, null, 2)}\n`,
+      'utf-8'
+    );
+  }
+
+  const serverPath = join(sourceDir, 'server.js');
+  if (!(await exists(serverPath))) {
+    await writeFile(serverPath, STATIC_TEMPLATE_SERVER_SOURCE, 'utf-8');
+  }
+
+  const manifestPath = join(sourceDir, 'oneceo.manifest.json');
+  if (!(await exists(manifestPath))) {
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(STATIC_TEMPLATE_MANIFEST, null, 2)}\n`,
+      'utf-8'
+    );
+  }
+
+  return true;
+}
+
+export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: string): Promise<{
+  promotedNestedApp: boolean;
+  injectedStaticBaseline: boolean;
+}> {
+  const nestedDir = await findSingleNestedAppDirectory(sourceDir);
+  let promotedNestedApp = false;
+  if (nestedDir) {
+    await copyDirectoryEntriesToRoot(sourceDir, nestedDir);
+    promotedNestedApp = true;
+  }
+
+  const injectedStaticBaseline = await ensureStaticRootDeploymentFiles(sourceDir);
+  return {
+    promotedNestedApp,
+    injectedStaticBaseline,
+  };
+}
+
 async function exportWorkspaceToLocalDirectory(
   orchestratorSessionId: string,
   workspaceRoot: string
@@ -177,6 +416,7 @@ export async function publishTaskSessionWorkspaceToRepository(input: {
 }): Promise<DeploymentWorkspacePublishReport> {
   const sourceDir = await exportWorkspaceToLocalDirectory(input.orchestratorSessionId, input.workspaceRoot);
   try {
+    await normalizeDeploymentSourceDirectoryForPublish(sourceDir);
     const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
     if (bootstrap.warnings.length > 0) {
       console.warn('[DEPLOYMENT_TEMPLATE_BOOTSTRAP_WARNINGS]', {
@@ -235,6 +475,7 @@ export async function inspectTaskSessionDeploymentTemplate(input: {
     normalizedWorkspaceRoot
   );
   try {
+    await normalizeDeploymentSourceDirectoryForPublish(sourceDir);
     const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
     try {
       const compliance = await ensureTemplateCompliance(sourceDir);

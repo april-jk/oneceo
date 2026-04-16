@@ -113,6 +113,9 @@ interface OpencodePreviewPanelProps {
   runtimeStarting?: boolean;
   onEnsureRuntime?: () => Promise<void>;
   onRequestStartDebugByMessage?: () => void;
+  onRequestDeployByMessage?: () => void;
+  onRequestRedeployByMessage?: () => void;
+  onRequestRollbackByMessage?: () => void;
   className?: string;
   selectedWorkspacePath?: string | null;
 }
@@ -733,6 +736,9 @@ export default function OpencodePreviewPanel({
   runtimeStarting,
   onEnsureRuntime,
   onRequestStartDebugByMessage,
+  onRequestDeployByMessage,
+  onRequestRedeployByMessage,
+  onRequestRollbackByMessage,
   className,
   selectedWorkspacePath,
 }: OpencodePreviewPanelProps) {
@@ -1011,6 +1017,18 @@ export default function OpencodePreviewPanel({
     setDeploymentAction(action);
     setDeploymentError(null);
     try {
+      const messageHandler =
+        action === "deploy"
+          ? onRequestDeployByMessage
+          : action === "redeploy"
+            ? onRequestRedeployByMessage
+            : onRequestRollbackByMessage;
+      if (messageHandler) {
+        messageHandler();
+        void refreshDeploymentTemplateBaseline();
+        setDeploymentAction(null);
+        return;
+      }
       const result =
         action === "deploy"
           ? await deployTaskCreationSession(sessionId)

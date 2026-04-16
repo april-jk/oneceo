@@ -22,6 +22,14 @@ function toIso(value: unknown): string {
   return new Date().toISOString();
 }
 
+function mapAdminStageFromStatus(status: unknown) {
+  const normalized = typeof status === 'string' ? status.trim() : '';
+  if (normalized === 'completed') return 'completed';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'waiting_user') return 'clarifying';
+  return null;
+}
+
 function buildAdminSessionSummary(input: {
   dbSession: Awaited<ReturnType<typeof taskCreationSessionDAO.getSession>> | null;
   memorySession?: FileSessionRecord | null;
@@ -30,19 +38,25 @@ function buildAdminSessionSummary(input: {
   const memory = input.memorySession || null;
   const dbSession = input.dbSession;
   const id = memory?.id || dbSession?.id || '';
+  const dbStatus = typeof dbSession?.status === 'string' ? dbSession.status.trim() : '';
+  const memoryStatus = typeof memory?.status === 'string' ? memory.status.trim() : '';
+  const preferDbLifecycle =
+    Boolean(dbStatus) &&
+    dbStatus !== memoryStatus &&
+    (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user');
   return {
     id,
     userId: dbSession?.userId || null,
     title: memory?.title || `会话 ${id.slice(-6) || '-'}`,
-    status: memory?.status || dbSession?.status || 'in_progress',
-    stage: memory?.stage,
+    status: (preferDbLifecycle ? dbSession?.status : memory?.status) || dbSession?.status || 'in_progress',
+    stage: (preferDbLifecycle ? mapAdminStageFromStatus(dbSession?.status) : memory?.stage) || mapAdminStageFromStatus(dbSession?.status),
     phase: memory?.phase,
     runtime: memory?.runtime,
     pendingQuestion: memory?.pendingQuestion,
     pendingOptions: memory?.pendingOptions || [],
     user: input.user || null,
     createdAt: toIso(memory?.createdAt || dbSession?.createdAt),
-    updatedAt: toIso(memory?.updatedAt || dbSession?.updatedAt),
+    updatedAt: toIso((preferDbLifecycle ? dbSession?.updatedAt : memory?.updatedAt) || dbSession?.updatedAt),
   };
 }
 

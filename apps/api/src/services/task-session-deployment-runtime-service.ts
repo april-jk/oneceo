@@ -67,7 +67,8 @@ export async function resolveTaskSessionEnvironment(input: {
   const explicitOrchestratorSessionId = asText(input.orchestratorSessionId);
   if (explicitOrchestratorSessionId) {
     const explicitEnvironment =
-      input.environment || (await sandboxExecutionEnvironmentDAO.getBySessionId(explicitOrchestratorSessionId));
+      (await sandboxExecutionEnvironmentDAO.getBySessionId(explicitOrchestratorSessionId)) ||
+      input.environment;
     if (explicitEnvironment) {
       return {
         orchestratorSessionId: explicitOrchestratorSessionId,
@@ -170,6 +171,22 @@ async function prepareSessionAnalyticsBindingSafely(input: {
       error,
     });
   }
+}
+
+async function finalizeSessionAnalyticsBinding(input: {
+  sessionId: string;
+  orchestratorSessionId: string;
+  environmentMetadata: unknown;
+  account: Awaited<ReturnType<typeof platformDeploymentAccountService.ensureUserAccount>>;
+  panel: RailwayDeploymentPanelData;
+}) {
+  await prepareSessionAnalyticsBindingSafely({
+    sessionId: input.sessionId,
+    orchestratorSessionId: input.orchestratorSessionId,
+    environmentMetadata: input.environmentMetadata,
+    account: input.account,
+    panel: input.panel,
+  });
 }
 
 async function persistRailwayDeploymentSelection(
@@ -383,15 +400,27 @@ export async function executeTaskSessionDeploymentAction(
       userId: input.userId,
       session: input.session,
       selectedDeploymentId: actionResult.deploymentId,
-      resolvedEnvironment: environment,
       resolvedOrchestratorSessionId: orchestratorSessionId,
     });
     await waitForRailwayDeploymentPublicReachability({
       baseUrl: panel.latestStaticUrl || panel.latestUrl,
       healthPath: '/api/system/health',
     });
-    return {
+    await finalizeSessionAnalyticsBinding({
+      sessionId: input.taskSessionId,
+      orchestratorSessionId,
+      environmentMetadata,
+      account,
       panel,
+    });
+    const refreshedPanel = await buildTaskSessionDeploymentResponse({
+      userId: input.userId,
+      session: input.session,
+      selectedDeploymentId: actionResult.deploymentId,
+      resolvedOrchestratorSessionId: orchestratorSessionId,
+    });
+    return {
+      panel: refreshedPanel,
       actionResult,
       publishReport,
       baseline: publishReport.baseline,
@@ -430,15 +459,27 @@ export async function executeTaskSessionDeploymentAction(
     userId: input.userId,
     session: input.session,
     selectedDeploymentId: actionResult.deploymentId,
-    resolvedEnvironment: environment,
     resolvedOrchestratorSessionId: orchestratorSessionId,
   });
   await waitForRailwayDeploymentPublicReachability({
     baseUrl: panel.latestStaticUrl || panel.latestUrl,
     healthPath: '/api/system/health',
   });
-  return {
+  await finalizeSessionAnalyticsBinding({
+    sessionId: input.taskSessionId,
+    orchestratorSessionId,
+    environmentMetadata,
+    account,
     panel,
+  });
+  const refreshedPanel = await buildTaskSessionDeploymentResponse({
+    userId: input.userId,
+    session: input.session,
+    selectedDeploymentId: actionResult.deploymentId,
+    resolvedOrchestratorSessionId: orchestratorSessionId,
+  });
+  return {
+    panel: refreshedPanel,
     actionResult,
     targetDeploymentId,
   };

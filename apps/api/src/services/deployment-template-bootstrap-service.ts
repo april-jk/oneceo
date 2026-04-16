@@ -41,13 +41,31 @@ async function findHtmlEntryPath(sourceDir: string): Promise<string | null> {
 function buildAnalyticsBootstrapSnippet() {
   return `${ANALYTICS_BOOTSTRAP_MARKER_START}
 <script>
+window.__ONECEO_ANALYTICS__ = Object.freeze({
+  enabled: '%VITE_ANALYTICS_ENABLED%',
+  host: '%VITE_ANALYTICS_HOST%',
+  endpoint: '%VITE_ANALYTICS_ENDPOINT%',
+  websiteId: '%VITE_ANALYTICS_WEBSITE_ID%',
+  tag: '%VITE_ANALYTICS_TAG%',
+  publicDomain: '%VITE_PUBLIC_DOMAIN%'
+});
 (function () {
-  var enabled = String('%VITE_ANALYTICS_ENABLED%' || 'true').trim().toLowerCase();
+  var config = window.__ONECEO_ANALYTICS__ || {};
+  var unresolvedPattern = /^%VITE_[A-Z0-9_]+%$/;
+  var readValue = function (value) {
+    return typeof value === 'string' ? value.trim() : '';
+  };
+  var isResolved = function (value) {
+    return Boolean(value) && !unresolvedPattern.test(value);
+  };
+  var enabled = readValue(config.enabled).toLowerCase();
+  if (!enabled || unresolvedPattern.test(enabled)) enabled = 'true';
   if (['0', 'false', 'no', 'off'].indexOf(enabled) >= 0) return;
-  var endpoint = String('%VITE_ANALYTICS_HOST%' || '%VITE_ANALYTICS_ENDPOINT%' || '').trim().replace(/\\/+$/, '');
-  var websiteId = String('%VITE_ANALYTICS_WEBSITE_ID%' || '').trim();
-  var tag = String('%VITE_ANALYTICS_TAG%' || '').trim();
-  if (!endpoint || !websiteId) return;
+  var endpoint = readValue(config.host) || readValue(config.endpoint);
+  var websiteId = readValue(config.websiteId);
+  var tag = readValue(config.tag);
+  if (!isResolved(endpoint) || !isResolved(websiteId)) return;
+  endpoint = endpoint.replace(/\\/+$/, '');
   if (window.location.protocol === 'https:' && endpoint.indexOf('https://') !== 0) return;
   if (document.querySelector('script[data-oneceo-analytics=\"runtime\"]')) return;
   var script = document.createElement('script');

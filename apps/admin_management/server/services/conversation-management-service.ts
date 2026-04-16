@@ -1045,6 +1045,7 @@ export class ConversationManagementService {
       title: item.title,
       status: item.status,
       stage: item.stage,
+      executor: item.runtime?.executor || (item.runtime?.opencodeSessionId ? 'opencode' : null),
       pendingQuestion: item.pendingQuestion,
       pendingOptions: item.pendingOptions,
       createdAt: item.createdAt,

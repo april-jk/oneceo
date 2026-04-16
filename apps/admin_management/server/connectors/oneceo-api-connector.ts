@@ -21,6 +21,7 @@ export type TaskCreationSession = {
   runtime?: {
     orchestratorSessionId?: string;
     opencodeSessionId?: string;
+    executor?: string | null;
     updatedAt?: string;
   };
   pendingQuestion?: string;
@@ -363,6 +364,125 @@ export type AdminOsacReleaseDetail = {
   currentPublishedVersion: string | null;
 };
 
+export type AdminAppUserSessionSummary = {
+  id: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastSeenAt: string | null;
+  isActive: boolean;
+};
+
+export type AdminAppUserConversationSummary = {
+  id: string;
+  userId?: string | null;
+  title: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  completedAt: string | null;
+};
+
+export type AdminAppUserSandboxSummary = {
+  sandboxId: string;
+  sessionId: string;
+  taskSessionId: string;
+  orchestratorSessionId?: string | null;
+  vmName?: string | null;
+  baseImage?: string | null;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  closedAt: string | null;
+};
+
+export type AdminAppUserLegacyMapping = {
+  id: string;
+  legacyUserId: string;
+  source: string;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type AdminAppUserListItem = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastLoginAt: string | null;
+  latestSession: AdminAppUserSessionSummary | null;
+  sessionCount: number;
+  activeSessionCount: number;
+  conversationCount: number;
+  lastConversationAt: string | null;
+  sandboxCount: number;
+  lastSandboxAt: string | null;
+  legacyMappingCount: number;
+  lastLegacySeenAt: string | null;
+  lastActivityAt: string | null;
+  ownershipHealth: 'healthy' | 'legacy_mapping' | 'anomaly' | string;
+  ownershipReason: string;
+};
+
+export type AdminAppUserListResponse = {
+  summary: {
+    totalUsers: number;
+    activeUsers7d: number;
+    disabledUsers: number;
+    ownershipAlertUsers: number;
+    generatedAt: string;
+  };
+  filters: {
+    limit: number;
+    query: string | null;
+    status: string;
+    activity: string;
+    hasSession: string;
+    hasConversation: string;
+    hasSandbox: string;
+    ownershipHealth: string;
+  };
+  items: AdminAppUserListItem[];
+};
+
+export type AdminAppUserDetailResponse = {
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+    createdAt: string | null;
+    updatedAt: string | null;
+    lastLoginAt: string | null;
+  } | null;
+  stats: {
+    sessionCount: number;
+    activeSessionCount: number;
+    conversationCount: number;
+    sandboxCount: number;
+    legacyMappingCount: number;
+    lastActivityAt: string | null;
+    lastConversationAt: string | null;
+    lastSandboxAt: string | null;
+    lastLegacySeenAt: string | null;
+    ownershipHealth: 'healthy' | 'legacy_mapping' | 'anomaly' | string;
+    ownershipReason: string;
+  };
+  recentSessions: AdminAppUserSessionSummary[];
+  recentConversations: AdminAppUserConversationSummary[];
+  recentSandboxes: AdminAppUserSandboxSummary[];
+  legacyMappings: AdminAppUserLegacyMapping[];
+  revokedSessionCount?: number;
+};
+
 export type InternalAdminLoginResult = {
   sessionToken: string;
   adminUser: {
@@ -518,6 +638,53 @@ export class OneceoApiConnector {
 
   listTaskCreationSessions(limit = 20) {
     return this.request<TaskCreationSession[]>(`/api/internal/task-creation/admin/sessions?limit=${limit}`);
+  }
+
+  listAppUsers(filters?: {
+    limit?: number;
+    query?: string;
+    status?: string;
+    activity?: string;
+    hasSession?: string;
+    hasConversation?: string;
+    hasSandbox?: string;
+    ownershipHealth?: string;
+  }) {
+    const params = new URLSearchParams();
+    if (filters?.limit !== undefined) params.set('limit', String(filters.limit));
+    if (filters?.query) params.set('query', filters.query);
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.activity) params.set('activity', filters.activity);
+    if (filters?.hasSession) params.set('hasSession', filters.hasSession);
+    if (filters?.hasConversation) params.set('hasConversation', filters.hasConversation);
+    if (filters?.hasSandbox) params.set('hasSandbox', filters.hasSandbox);
+    if (filters?.ownershipHealth) params.set('ownershipHealth', filters.ownershipHealth);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request<AdminAppUserListResponse>(`/api/internal/admin/app-users${suffix}`);
+  }
+
+  getAppUserDetail(userId: string) {
+    return this.request<AdminAppUserDetailResponse>(`/api/internal/admin/app-users/${encodeURIComponent(userId)}`);
+  }
+
+  updateAppUserStatus(userId: string, status: 'active' | 'disabled') {
+    return this.request<AdminAppUserDetailResponse>(
+      `/api/internal/admin/app-users/${encodeURIComponent(userId)}/status`,
+      {
+        method: 'POST',
+        body: { status },
+      }
+    );
+  }
+
+  revokeAppUserSessions(userId: string) {
+    return this.request<AdminAppUserDetailResponse>(
+      `/api/internal/admin/app-users/${encodeURIComponent(userId)}/revoke-sessions`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
   }
 
   getTaskCreationSession(sessionId: string) {

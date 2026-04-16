@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>2026-04-15 app_user 用户管理工作报告</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f141b;
+      --panel: rgba(22, 29, 39, 0.92);
+      --panel-soft: rgba(32, 41, 53, 0.88);
+      --text: #edf2f7;
+      --muted: #9fb0c3;
+      --line: rgba(148, 163, 184, 0.18);
+      --accent: #7cc6ff;
+      --accent-soft: rgba(124, 198, 255, 0.16);
+      --ok: #73d9a8;
+      --warn: #f5c46b;
+      --shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(124, 198, 255, 0.16), transparent 32%),
+        linear-gradient(180deg, #0d1319 0%, #121922 45%, #0f141b 100%);
+      line-height: 1.6;
+    }
+
+    main {
+      width: min(1160px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    section {
+      margin-bottom: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero {
+      padding: 28px;
+      background:
+        linear-gradient(135deg, rgba(124, 198, 255, 0.14), rgba(115, 217, 168, 0.08)),
+        var(--panel);
+    }
+
+    h1, h2, h3, p {
+      margin-top: 0;
+    }
+
+    h1 {
+      font-size: 32px;
+      line-height: 1.18;
+      margin-bottom: 12px;
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+
+    h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    .meta {
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .content {
+      padding: 24px 28px 28px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .stat {
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 24px;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+
+    .chips {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .chip {
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    code {
+      font-family: "Fira Code", "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      background: rgba(148, 163, 184, 0.12);
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 18px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .panel p:last-child,
+    .panel ul:last-child {
+      margin-bottom: 0;
+    }
+
+    .flag {
+      color: var(--ok);
+      font-weight: 600;
+    }
+
+    .warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+
+    figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(10, 14, 19, 0.72);
+    }
+
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #10161e;
+    }
+
+    figcaption {
+      padding: 12px 14px 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .shot-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100% - 24px, 1160px);
+        padding-top: 24px;
+      }
+
+      .stats,
+      .grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .hero,
+      .content {
+        padding: 18px;
+      }
+
+      .stats,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <div class="hero">
+        <p class="meta">2026-04-15 10:10 · Asia/Shanghai</p>
+        <h1>管理后台 app_user 用户管理工作报告</h1>
+        <p class="meta">范围：`apps/api`、`apps/admin_management`、UIUX 文档、Playwright 联调截图。</p>
+        <div class="chips">
+          <span class="chip">只做 app_user</span>
+          <span class="chip">新增一级导航</span>
+          <span class="chip">用户归属链路打通</span>
+          <span class="chip">支持禁用与强制下线</span>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <strong>4</strong>
+            新增 API / BFF / UI 能力链路
+          </div>
+          <div class="stat">
+            <strong>5</strong>
+            API 路由测试全部通过
+          </div>
+          <div class="stat">
+            <strong>2</strong>
+            Playwright 实测截图归档
+          </div>
+          <div class="stat">
+            <strong>1</strong>
+            真实联调问题已定位并修复
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="content">
+        <h2>今晚做了什么</h2>
+        <div class="grid">
+          <div class="panel">
+            <h3>后端链路</h3>
+            <ul>
+              <li>新增 `admin-app-user-service`，收口 `app_user` 列表、详情、活跃度、最近登录会话、对话和 Sandbox 数据。</li>
+              <li>新增内部管理接口：列表、详情、启用/禁用、强制下线。</li>
+              <li>补上 `sandbox_execution_environments.metadata.taskSessionId` 与任务会话的精确关联。</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>后台工作台</h3>
+            <ul>
+              <li>新增“用户管理”一级导航，与对话管理、Sandbox 同级。</li>
+              <li>页面包含摘要卡片、筛选栏、用户列表和右侧详情抽屉。</li>
+              <li>详情抽屉按概览、登录会话、对话、Sandbox、归属映射分组展示。</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>治理动作</h3>
+            <ul>
+              <li>支持禁用/启用用户。</li>
+              <li>支持强制撤销未过期登录会话。</li>
+              <li>列表筛选支持状态、活跃度、是否有会话、是否有对话、是否有 Sandbox、归属健康度。</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>文档与留痕</h3>
+            <ul>
+              <li>设计文档已更新为 <span class="flag">[20260415-0943已采用]</span>。</li>
+              <li>补充自动工作汇报、递归过程记录与 HTML 报告。</li>
+              <li>截图已归档到 `agent自动工作汇报/assets/`。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="content">
+        <h2>这轮联调里修掉的真实问题</h2>
+        <div class="panel">
+          <p>Playwright 打开“用户管理”后，详情链路一开始会触发数据库错误。原因是 `sandbox_execution_environments.metadata ->> 'taskSessionId'` 返回的是文本，而 `task_creation_sessions.id` 是 UUID，直接比较会失败。</p>
+          <p>修正方式是把 `task_creation_sessions.id` 显式转成 `text` 再比较。修复后，真实后台已能正常看到用户 `thweki` 的会话数、对话数和 Sandbox 数。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="content">
+        <h2>验证结果</h2>
+        <div class="grid">
+          <div class="panel">
+            <h3>通过项</h3>
+            <ul>
+              <li><code>apps/api npm exec -- tsx --test tests/internal-admin-app-user-routes.test.ts</code></li>
+              <li><code>apps/admin_management npm run type-check</code></li>
+              <li><code>apps/admin_management npm run build</code></li>
+              <li>Playwright 登录后台并打开“用户管理”页面完成实测。</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>说明项</h3>
+            <p><span class="warn">已知环境问题：</span> `apps/api npm run type-check` 仍被仓库当前的 workspace 依赖解析问题拦住，报 `@oneceo/shared` 无法解析。这不是本轮新增逻辑的回归。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="content shot-grid">
+        <h2>截图</h2>
+        <figure>
+          <img src="./assets/user_management_20260415_list.png" alt="用户管理列表页" />
+          <figcaption>用户管理列表页：顶部摘要、组合筛选与用户列表已经落到同一套后台视觉体系里。</figcaption>
+        </figure>
+        <figure>
+          <img src="./assets/user_management_20260415_detail.png" alt="用户管理详情抽屉" />
+          <figcaption>用户详情抽屉：可直接查看会话、对话、Sandbox 与归属映射，并执行禁用或强制下线操作。</figcaption>
+        </figure>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

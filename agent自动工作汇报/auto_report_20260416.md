@@ -32,3 +32,14 @@
 - 计划如何解决：
   - 先提交双 team 修复，再重新发布 API，并对真实会话触发重部署验证 website 已迁回 deployment team
   - 后续再决定是否批量清理 platform team 中历史遗留的部署 website
+
+- 做了什么：
+  - 清理了 `OneCEO Platform` 中误挂的 12 个历史 deployment website / smoke website
+  - 回读确认 `OneCEO Platform` 现在只剩 `OneCEO Main` 与 `OneCEO Dev`
+  - 回读确认 `OneCEO Deployment` 现在保留当前真实站点 `ff56e40e-94e3-4053-a4d8-092e92173a47`
+- 遇到什么：
+  - 被误挂到 platform team 的旧 website 中有少量历史 pageviews/visits，说明此前确实发生过错误归属
+  - Umami 不支持把既有 website 无损转移到另一个 team，只能通过重建正确 website 后删除旧项来纠偏
+- 计划如何解决：
+  - 后续若需要保留历史统计归档，再单独做导出与审计，不再让错误组织继续留在生产实例
+  - 现阶段以“组织边界正确、当前活跃站点正确、平台主站纯净”为收口标准

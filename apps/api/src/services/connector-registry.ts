@@ -5,6 +5,7 @@ import {
   type ConnectorDefinition,
   type ConnectorKey,
   type ConnectorOauthProvider,
+  type RemoteMcpTransport,
 } from '../connectors/definitions';
 import {
   buildSupabaseBridgeEnvironment,
@@ -70,6 +71,7 @@ export type ConnectorRuntimeConfig =
       enabled: boolean;
       url: string;
       headers?: Record<string, string>;
+      transport: RemoteMcpTransport;
     };
 
 function asText(value: unknown): string {
@@ -290,6 +292,12 @@ function buildRemoteUrl(
       url.searchParams.set('teamId', teamId);
     }
   }
+  if (input.connectorKey === 'notion') {
+    const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
+    if (!normalizedPath.endsWith('/sse')) {
+      throw new Error('Notion MCP remote URL 必须配置为 SSE 端点（/sse）');
+    }
+  }
   return url.toString();
 }
 
@@ -399,6 +407,7 @@ export class ConnectorRegistry {
       enabled: true,
       url,
       headers,
+      transport: item.runtime.transport || 'remote_sse',
     };
   }
 

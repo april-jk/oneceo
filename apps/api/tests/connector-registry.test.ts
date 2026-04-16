@@ -12,6 +12,7 @@ const envBackup = {
   SLACK_MCP_REMOTE_HEADERS_JSON: process.env.SLACK_MCP_REMOTE_HEADERS_JSON,
   SLACK_CONNECTOR_CLIENT_ID: process.env.SLACK_CONNECTOR_CLIENT_ID,
   SLACK_CONNECTOR_CLIENT_SECRET: process.env.SLACK_CONNECTOR_CLIENT_SECRET,
+  SLACK_CONNECTOR_REDIRECT_URI: process.env.SLACK_CONNECTOR_REDIRECT_URI,
   NOTION_MCP_REMOTE_URL: process.env.NOTION_MCP_REMOTE_URL,
   NOTION_MCP_REMOTE_HEADERS_JSON: process.env.NOTION_MCP_REMOTE_HEADERS_JSON,
   NOTION_CONNECTOR_CLIENT_ID: process.env.NOTION_CONNECTOR_CLIENT_ID,
@@ -35,7 +36,8 @@ beforeEach(() => {
   process.env.SLACK_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.SLACK_CONNECTOR_CLIENT_ID = 'slack-client';
   process.env.SLACK_CONNECTOR_CLIENT_SECRET = 'slack-secret';
-  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com';
+  process.env.SLACK_CONNECTOR_REDIRECT_URI = '/slack/callback';
+  process.env.NOTION_MCP_REMOTE_URL = 'https://notion-mcp.example.com/sse';
   process.env.NOTION_MCP_REMOTE_HEADERS_JSON = '{"Authorization":"Bearer ${token}"}';
   process.env.NOTION_CONNECTOR_CLIENT_ID = 'notion-client';
   process.env.NOTION_CONNECTOR_CLIENT_SECRET = 'notion-secret';
@@ -77,11 +79,17 @@ function buildAccount(
 test('connector registry exposes built-in connectors with availability metadata', () => {
   const catalog = connectorRegistry.listCatalog();
   const notionProvider = connectorRegistry.getOauthProvider('notion');
+  const slack = catalog.find((item) => item.key === 'slack');
+  const notion = catalog.find((item) => item.key === 'notion');
   assert.equal(catalog.length, 7);
   assert.equal(connectorRegistry.listVisibleCatalog().length, 6);
   assert.equal(catalog.find((item) => item.key === 'github')?.oauth?.supported, true);
-  assert.equal(catalog.find((item) => item.key === 'slack')?.available, true);
-  assert.equal(catalog.find((item) => item.key === 'notion')?.available, true);
+  assert.equal(slack?.available, true);
+  assert.equal(slack?.authMode, 'oauth');
+  assert.deepEqual(slack?.configFields, []);
+  assert.equal(notion?.available, true);
+  assert.equal(notion?.authMode, 'oauth');
+  assert.deepEqual(notion?.configFields, []);
   assert.equal(notionProvider?.redirectUri, 'https://dev.oneceo.ai/notion/callback');
   assert.equal(catalog.find((item) => item.key === 'vercel')?.available, true);
   assert.equal(catalog.find((item) => item.key === 'vercel')?.oauth?.supported, true);
@@ -113,7 +121,17 @@ test('connector registry materializes local and remote MCP configs', () => {
     account: buildAccount('slack', { accessToken: 'slack-token' }),
   });
   assert.equal(slackConfig.type, 'remote');
+  assert.equal(slackConfig.transport, 'remote_sse');
   assert.equal(slackConfig.headers?.Authorization, 'Bearer slack-token');
+
+  const notionConfig = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'notion',
+    account: buildAccount('notion', { accessToken: 'notion-token' }),
+  });
+  assert.equal(notionConfig.type, 'remote');
+  assert.equal(notionConfig.transport, 'remote_sse');
+  assert.equal(notionConfig.url, 'https://notion-mcp.example.com/sse');
+  assert.equal(notionConfig.headers?.Authorization, 'Bearer notion-token');
 
   const vercelConfig = connectorRegistry.materializeRuntimeConfig({
     connectorKey: 'vercel',
@@ -141,14 +159,27 @@ test('connector registry materializes local and remote MCP configs', () => {
   assert.equal(supabaseConfig.environment?.NO_PROXY, 'localhost,127.0.0.1');
 });
 
-test('connector registry fails fast when remote adapter is unavailable', () => {
+test('connector registry falls back to official slack mcp url when remote url env is missing', () => {
   delete process.env.SLACK_MCP_REMOTE_URL;
-  assert.throws(() => {
-    connectorRegistry.materializeRuntimeConfig({
-      connectorKey: 'slack',
-      account: buildAccount('slack', { accessToken: 'slack-token' }),
-    });
-  }, /remote url/i);
+  const catalog = connectorRegistry.listCatalog();
+  const slack = catalog.find((item) => item.key === 'slack');
+  assert.equal(slack?.available, true);
+  assert.equal(slack?.runtime.urlDefault, 'https://mcp.slack.com/mcp');
+
+  const runtime = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'slack',
+    account: buildAccount('slack', { accessToken: 'slack-token' }),
+  });
+  assert.equal(runtime.type, 'remote');
+  assert.equal(new URL(runtime.url || '').origin, 'https://mcp.slack.com');
+  assert.equal(runtime.transport, 'remote_sse');
+});
+
+test('slack catalog is unavailable when oauth client is missing', () => {
+  delete process.env.SLACK_CONNECTOR_CLIENT_ID;
+  const slack = connectorRegistry.listCatalog().find((item) => item.key === 'slack');
+  assert.equal(slack?.available, false);
+  assert.match(String(slack?.availabilityReason || ''), /Slack OAuth client/i);
 });
 
 test('notion catalog is unavailable when fixed redirect uri is missing', () => {
@@ -164,6 +195,30 @@ test('notion catalog is unavailable when redirect path is set but frontend base 
   const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
   assert.equal(notion?.available, false);
   assert.match(String(notion?.availabilityReason || ''), /解析失败/);
+});
+
+test('notion catalog falls back to official sse endpoint when remote url env is missing', () => {
+  delete process.env.NOTION_MCP_REMOTE_URL;
+
+  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
+  assert.equal(notion?.available, true);
+  assert.equal(notion?.runtime.urlDefault, 'https://mcp.notion.com/sse');
+
+  const runtime = connectorRegistry.materializeRuntimeConfig({
+    connectorKey: 'notion',
+    account: buildAccount('notion', { accessToken: 'notion-token' }),
+  });
+  assert.equal(runtime.type, 'remote');
+  assert.equal(runtime.transport, 'remote_sse');
+  assert.equal(runtime.url, 'https://mcp.notion.com/sse');
+});
+
+test('notion catalog is unavailable when remote url is not an sse endpoint', () => {
+  process.env.NOTION_MCP_REMOTE_URL = 'https://mcp.notion.com/mcp';
+
+  const notion = connectorRegistry.listCatalog().find((item) => item.key === 'notion');
+  assert.equal(notion?.available, false);
+  assert.match(String(notion?.availabilityReason || ''), /SSE.*\/sse/);
 });
 
 test('connector registry falls back to official vercel mcp url when remote url env is missing', () => {

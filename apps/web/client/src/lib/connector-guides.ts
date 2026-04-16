@@ -21,7 +21,7 @@ export const POSTGRES_DSN_TEMPLATE =
 export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   github: {
     intro:
-      "连接器在 sandbox 外完成配置，进入 sandbox 后只消费已保存的授权。GitHub 默认推荐一键 OAuth，平台会自动生成默认 profile；只有在你明确需要 PAT 时再打开高级配置。",
+      "GitHub 连接器在 sandbox 外完成授权。优先使用 GitHub OAuth；平台会自动创建默认 profile，并在回调后把授权结果应用到当前会话。",
     quickLinks: [
       {
         label: "GitHub Token Page",
@@ -35,74 +35,77 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
       },
     ],
     steps: [
-      "在 sandbox 外打开 GitHub token 页面，优先创建 fine-grained PAT 或直接走 OAuth。",
-      "给目标仓库和需要的 API 权限授权，通常至少需要仓库读取权限。",
-      "复制新生成的 token；GitHub 只会完整展示一次。",
+      "在 GitHub 授权页确认当前账号、组织和仓库授权范围。",
+      "若 GitHub App 已授权，可能会直接回跳 oneceo，这是 GitHub 的正常行为。",
+      "如需扩大仓库范围或更新权限，请在 GitHub 侧完成授权或安装更新后再重新连接。",
     ],
     tips: [
-      "如果仓库在组织下并启用了 SSO，token 创建后可能还需要额外授权。",
-      "手动保存 token 时会加密存储；留空不会覆盖当前 secret，sandbox 内部会自动复用。",
-      "当前版本的仓库访问范围由 GitHub OAuth 或 PAT 的权限决定，不在 oneceo 内重复配置仓库白名单。",
+      "组织仓库若启用了 SSO，完成授权后可能还需要额外在 GitHub 侧确认。",
+      "本地清除授权只会移除 oneceo 中保存的授权状态，不会自动撤销 GitHub 侧的远端授权。",
     ],
   },
   slack: {
     intro:
-      "Slack 连接器在 sandbox 外完成授权，sandbox 内只复用已保存的用户授权。当前默认使用 Slack User OAuth Token，执行主体就是你本人，不是 oneceo bot。",
+      "Slack 连接器只保留 OAuth 授权路径。当前链路获取的是 Slack User OAuth 授权。",
     quickLinks: [
       {
         label: "Slack Your Apps",
         href: "https://api.slack.com/apps/",
-        description: "创建或打开现有 Slack App",
+        description: "查看当前 Slack App 与 OAuth 配置",
       },
       {
-        label: "Slack Token Types",
-        href: "https://api.slack.com/concepts/token-types",
-        description: "确认当前链路应使用 user token",
+        label: "Slack OAuth Docs",
+        href: "https://docs.slack.dev/authentication/installing-with-oauth/",
+        description: "了解 User OAuth 安装与授权方式",
+      },
+      {
+        label: "Slack MCP Docs",
+        href: "https://docs.slack.dev/ai/slack-mcp-server/",
+        description: "查看 Slack MCP 的能力和权限要求",
       },
     ],
     steps: [
-      "进入 Your Apps，创建或选择一个 Slack App。",
-      "在 OAuth & Permissions 中配置 user scopes，并完成面向用户本人的授权。",
-      "完成 OAuth 后，平台会保存 Slack user token；如果手动填写，也应使用 user token。",
+      "点击连接后，在 Slack 授权页确认你要使用的 workspace 和账号。",
+      "完成授权并返回 oneceo，系统会自动保存默认 profile，并在需要时挂载到当前会话。",
+      "如果读取不到频道或消息，先检查该 Slack 用户本身是否拥有对应访问权限。",
     ],
     tips: [
-      "这条 MCP 链路使用的是用户权限边界，能看到和能操作的内容以你本人在 Slack 里的真实权限为准。",
-      "如果能力不生效，先检查 user scopes 是否完整，以及当前授权用户是否本来就有目标频道或消息的访问权限。",
+      "如果切换了 workspace、账号或 scopes，需要重新连接，不能继续沿用旧授权。",
     ],
   },
   notion: {
     intro:
-      "Notion 连接器在 sandbox 外配置，sandbox 内直接复用已保存的授权。优先使用 Notion OAuth；如果你已经创建了 integration，也可以直接粘贴 integration secret。",
+      "Notion 连接器只保留 OAuth 授权路径。完成 OAuth 后，真正可访问的内容范围仍取决于目标 page 或 database 是否已经共享给对应 integration。",
     quickLinks: [
       {
         label: "My Integrations",
         href: "https://www.notion.so/my-integrations",
-        description: "创建或管理 Notion integration",
-      },
-      {
-        label: "Notion Integration Guide",
-        href: "https://developers.notion.com/docs/create-a-notion-integration",
-        description: "查看 integration 创建和授权说明",
+        description: "查看 Notion integration 与工作区绑定",
       },
       {
         label: "Notion Authorization",
         href: "https://developers.notion.com/guides/get-started/authorization",
-        description: "查看 OAuth 和页面授权方式",
+        description: "查看 Notion OAuth 授权说明",
+      },
+      {
+        label: "Notion MCP Docs",
+        href: "https://developers.notion.com/docs/mcp",
+        description: "查看 Notion MCP 能力与接入方式",
       },
     ],
     steps: [
-      "打开 My integrations，新建或进入已有 integration。",
-      "在 integration 配置页复制 Internal Integration Secret 或 access token。",
-      "回到 Notion 页面，把目标 page/database 通过 Add connections 分享给该 integration。",
+      "点击连接并完成 Notion OAuth 授权，确认当前使用的是正确的 workspace。",
+      "回到 Notion，把目标 page 或 database 通过 Add connections 共享给对应 integration。",
+      "返回 oneceo 再使用 Notion MCP；如当前在会话中授权，系统会自动把连接结果挂载到该会话。",
     ],
     tips: [
-      "没有把页面或数据库共享给 integration 时，连接成功后仍会因为权限不足而读不到内容。",
-      "留空 secret 字段会保留当前已保存的凭据，sandbox 内会继续使用旧配置。",
+      "连接成功不等于内容已可访问；未共享页面时，授权成功后仍会读不到内容。",
+      "如果切换 workspace、integration 权限或共享范围，请重新连接并重新检查页面共享关系。",
     ],
   },
   supabase: {
     intro:
-      "Supabase 是独立连接器，不替换 postgres。请在 sandbox 外配置好 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
+      "Supabase 是独立连接器，不替代 postgres。请在 sandbox 外配置 access token，平台会在 sandbox 内通过本地桥接挂载 MCP。",
     quickLinks: [
       {
         label: "Supabase Access Tokens",
@@ -142,7 +145,7 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   vercel: {
     intro:
-      "Vercel 连接器现在直接使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前部署还没配置 OAuth，也可以先手动填写 Personal Access Token。",
+      "Vercel 连接器使用官方 MCP 地址 https://mcp.vercel.com。优先使用 Vercel OAuth；如果当前环境尚未配置 OAuth，再使用 Personal Access Token 作为过渡。",
     quickLinks: [
       {
         label: "Vercel Tokens",
@@ -152,13 +155,13 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
       {
         label: "Vercel MCP Docs",
         href: "https://vercel.com/docs/agent-resources/vercel-mcp",
-        description: "查看官方 MCP 功能与授权方式",
+        description: "查看官方 MCP 能力与授权方式",
       },
     ],
     steps: [
       "如果部署已配置 Vercel OAuth，优先点击连接并完成官方授权。",
-      "如果当前环境还未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
-      "保存后，sandbox 会直接通过官方 MCP 地址复用该授权。",
+      "如果当前环境尚未配置 OAuth，就在 Vercel 账号设置中创建 Personal Access Token。",
+      "保存后，sandbox 会通过官方 MCP 地址复用该授权。",
     ],
     tips: [
       "Team ID 仍然是可选项，用于限定团队上下文。",
@@ -167,7 +170,7 @@ export const CONNECTOR_GUIDES: Record<ConnectorKey, ConnectorGuide> = {
   },
   postgres: {
     intro:
-      "Postgres 连接器已暂时弃用，不会出现在阶段一连接器菜单中；这里仅保留兼容说明，避免旧数据渲染失败。",
+      "Postgres 连接器已暂时弃用，不会出现在阶段一连接器菜单中；这里只保留兼容说明，避免旧数据渲染失败。",
     quickLinks: [
       {
         label: "PostgreSQL DSN Docs",

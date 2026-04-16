@@ -21,3 +21,14 @@
 - 计划如何解决：
   - 继续把最终域名绑定收敛到部署成功后的单一回写点，避免首次部署和重部署行为分叉
   - 后续观察 Umami 聚合指标更新延迟，必要时再补平台侧的最近一次上报时间展示
+
+- 做了什么：
+  - 将 Umami 组织模型从单 team 拆成双 team：`OneCEO Platform` 与 `OneCEO Deployment`
+  - 在 `analytics.oneceo.ai` 上实际创建 `OneCEO Deployment`，并确认 `oneceo-analytics` 已加入且角色为 `team-manager`
+  - 调整后端绑定逻辑，部署站点今后只认 deployment team，并在老 metadata 仍指向 platform team 时自动纠偏
+- 遇到什么：
+  - 老会话 metadata 中保存的 `websiteId` 仍然指向旧的 platform team，如果只改环境变量会继续复用脏绑定
+  - Railway 这次发布失败点不在构建，而在未提交代码导致的 snapshot 生成失败
+- 计划如何解决：
+  - 先提交双 team 修复，再重新发布 API，并对真实会话触发重部署验证 website 已迁回 deployment team
+  - 后续再决定是否批量清理 platform team 中历史遗留的部署 website

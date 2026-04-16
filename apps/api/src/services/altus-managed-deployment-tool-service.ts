@@ -1,15 +1,11 @@
+import { inspectTaskSessionDeploymentTemplate, type DeploymentTemplateBaselineData } from './task-creation-deployment-source-service';
 import {
-  executeDirectModeDeploymentCapability,
-  getDirectModeDeploymentErrorMessage,
-} from './direct-mode-deployment-capability-service';
-import type {
-  DirectModeCapabilityExecutionInput,
-  DirectModeCapabilityExecutionResult,
-} from './direct-mode-capability-types';
-import {
-  inspectTaskSessionDeploymentTemplate,
-  type DeploymentTemplateBaselineData,
-} from './task-creation-deployment-source-service';
+  buildTaskSessionDeploymentResponse,
+  executeTaskSessionDeploymentAction,
+  getTaskSessionDeploymentErrorMessage,
+  resolveTaskSessionRecord,
+} from './task-session-deployment-runtime-service';
+import type { RailwayDeploymentPanelData } from './railway-deployment-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -33,7 +29,6 @@ type AltusManagedDeploymentToolRepair = {
 
 type AltusManagedDeploymentDebug = {
   rawError?: string;
-  capabilityId?: string;
   latestStatus?: string;
   latestUrl?: string;
   deploymentId?: string;
@@ -56,13 +51,6 @@ export type AltusManagedDeploymentToolResult = {
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function pickRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
 }
 
 function compactUrl(value: unknown): string {
@@ -167,26 +155,25 @@ function buildFatalResult(
   };
 }
 
-function buildSuccessResult(
-  action: AltusManagedDeploymentToolName,
-  capabilityResult: DirectModeCapabilityExecutionResult
-): AltusManagedDeploymentToolResult {
-  const metadata = pickRecord(capabilityResult.metadata);
-  const deploymentStatus = asText(metadata.latestStatus);
-  const url = asText(metadata.latestUrl);
-  const deploymentId = asText(metadata.deploymentId);
+function buildSuccessResult(input: {
+  action: AltusManagedDeploymentToolName;
+  panel: RailwayDeploymentPanelData;
+  fallbackSummary?: string;
+}): AltusManagedDeploymentToolResult {
+  const deploymentStatus = asText(input.panel.latestStatus);
+  const url = asText(input.panel.latestStaticUrl || input.panel.latestUrl);
+  const deploymentId = asText(input.panel.deploymentId);
 
-  if (action === 'get_application_deployment_status') {
+  if (input.action === 'get_application_deployment_status') {
     return {
-      action,
+      action: input.action,
       phase: 'completed',
       status: 'success',
-      summary: capabilityResult.message,
+      summary: input.fallbackSummary || input.panel.message || '已获取当前部署状态。',
       deploymentStatus: deploymentStatus || undefined,
       url: url || undefined,
       deploymentId: deploymentId || undefined,
       debug: {
-        capabilityId: capabilityResult.capabilityId,
         latestStatus: deploymentStatus || undefined,
         latestUrl: url || undefined,
         deploymentId: deploymentId || undefined,
@@ -195,9 +182,9 @@ function buildSuccessResult(
   }
 
   const summaryParts: string[] = [];
-  if (action === 'rollback_application_deployment') {
+  if (input.action === 'rollback_application_deployment') {
     summaryParts.push('回滚完成');
-  } else if (action === 'redeploy_application') {
+  } else if (input.action === 'redeploy_application') {
     summaryParts.push('重新发布完成');
   } else {
     summaryParts.push('发布完成');
@@ -210,15 +197,14 @@ function buildSuccessResult(
   }
 
   return {
-    action,
+    action: input.action,
     phase: 'completed',
     status: 'success',
-    summary: summaryParts.join('，') || capabilityResult.message,
+    summary: summaryParts.join('，') || input.fallbackSummary || input.panel.message || '部署完成',
     deploymentStatus: deploymentStatus || undefined,
     url: url || undefined,
     deploymentId: deploymentId || undefined,
     debug: {
-      capabilityId: capabilityResult.capabilityId,
       latestStatus: deploymentStatus || undefined,
       latestUrl: url || undefined,
       deploymentId: deploymentId || undefined,
@@ -226,16 +212,32 @@ function buildSuccessResult(
   };
 }
 
+type ManagedDeploymentAction = 'deploy' | 'redeploy' | 'rollback';
+
+function mapToolActionToRuntimeAction(action: AltusManagedDeploymentToolName): ManagedDeploymentAction {
+  if (action === 'rollback_application_deployment') {
+    return 'rollback';
+  }
+  if (action === 'redeploy_application') {
+    return 'redeploy';
+  }
+  return 'deploy';
+}
+
 export class AltusManagedDeploymentToolService {
   constructor(
     private readonly deps: {
       inspectBaseline: typeof inspectTaskSessionDeploymentTemplate;
-      executeCapability: typeof executeDirectModeDeploymentCapability;
-      getErrorMessage: typeof getDirectModeDeploymentErrorMessage;
+      resolveSession: typeof resolveTaskSessionRecord;
+      buildDeploymentResponse: typeof buildTaskSessionDeploymentResponse;
+      executeDeploymentAction: typeof executeTaskSessionDeploymentAction;
+      getErrorMessage: typeof getTaskSessionDeploymentErrorMessage;
     } = {
       inspectBaseline: inspectTaskSessionDeploymentTemplate,
-      executeCapability: executeDirectModeDeploymentCapability,
-      getErrorMessage: getDirectModeDeploymentErrorMessage,
+      resolveSession: resolveTaskSessionRecord,
+      buildDeploymentResponse: buildTaskSessionDeploymentResponse,
+      executeDeploymentAction: executeTaskSessionDeploymentAction,
+      getErrorMessage: getTaskSessionDeploymentErrorMessage,
     }
   ) {}
 
@@ -249,71 +251,71 @@ export class AltusManagedDeploymentToolService {
     });
   }
 
-  private async runCapability(
-    capabilityId: DirectModeCapabilityExecutionResult['capabilityId'],
-    input: DirectModeCapabilityExecutionInput
-  ) {
-    return this.deps.executeCapability(capabilityId, input);
-  }
-
   async execute(input: {
     action: AltusManagedDeploymentToolName;
     sessionId: string;
+    userId: string;
     sandboxId: string;
     workspaceRoot: string;
     notes?: string;
   }): Promise<AltusManagedDeploymentToolResult> {
-    const capabilityInput: DirectModeCapabilityExecutionInput = {
-      taskSessionId: input.sessionId,
-      content: asText(input.notes) || input.action,
-      orchestratorSessionId: input.sandboxId,
-      workspacePath: input.workspaceRoot,
-    };
+    const session = await this.deps.resolveSession(input.sessionId);
+    if (!session) {
+      return buildFatalResult(input.action, '当前会话不存在，暂时无法执行部署。');
+    }
 
     if (input.action === 'get_application_deployment_status') {
       try {
-        const result = await this.runCapability('get_session_deployment_status', capabilityInput);
-        return buildSuccessResult(input.action, result);
+        const panel = await this.deps.buildDeploymentResponse({
+          userId: input.userId,
+          session,
+          resolvedOrchestratorSessionId: input.sandboxId,
+        });
+        return buildSuccessResult({
+          action: input.action,
+          panel,
+          fallbackSummary: panel.message || '已获取当前部署状态。',
+        });
       } catch (error) {
         return buildFatalResult(input.action, '当前还无法获取部署状态。', {
           debug: {
             rawError: this.deps.getErrorMessage(error),
-            capabilityId: 'get_session_deployment_status',
           },
         });
       }
     }
 
-    if (input.action === 'rollback_application_deployment') {
-      try {
-        const result = await this.runCapability('rollback_session_deployment', capabilityInput);
-        return buildSuccessResult(input.action, result);
-      } catch (error) {
-        return buildFatalResult(input.action, '当前还无法回滚部署，内部调试信息已记录。', {
-          debug: {
-            rawError: this.deps.getErrorMessage(error),
-            capabilityId: 'rollback_session_deployment',
-          },
-        });
+    if (input.action !== 'rollback_application_deployment') {
+      const baseline = await this.inspectBaseline({
+        sandboxId: input.sandboxId,
+        workspaceRoot: input.workspaceRoot,
+      });
+      if (baseline.status !== 'ready') {
+        return buildRepairResult(input.action, baseline);
       }
-    }
-
-    const baseline = await this.inspectBaseline({
-      sandboxId: input.sandboxId,
-      workspaceRoot: input.workspaceRoot,
-    });
-    if (baseline.status !== 'ready') {
-      return buildRepairResult(input.action, baseline);
     }
 
     try {
-      const result = await this.runCapability('deploy_session_website', capabilityInput);
-      return buildSuccessResult(input.action, result);
+      const result = await this.deps.executeDeploymentAction({
+        action: mapToolActionToRuntimeAction(input.action),
+        taskSessionId: input.sessionId,
+        userId: input.userId,
+        session,
+        workspacePath: input.workspaceRoot,
+        resolvedOrchestratorSessionId: input.sandboxId,
+      });
+      return buildSuccessResult({
+        action: input.action,
+        panel: result.panel,
+      });
     } catch (error) {
-      const latestBaseline = await this.inspectBaseline({
-        sandboxId: input.sandboxId,
-        workspaceRoot: input.workspaceRoot,
-      }).catch(() => null);
+      const latestBaseline =
+        input.action === 'rollback_application_deployment'
+          ? null
+          : await this.inspectBaseline({
+              sandboxId: input.sandboxId,
+              workspaceRoot: input.workspaceRoot,
+            }).catch(() => null);
       const rawError = this.deps.getErrorMessage(error);
       if (latestBaseline && latestBaseline.status !== 'ready') {
         return buildRepairResult(input.action, latestBaseline, rawError);
@@ -322,12 +324,13 @@ export class AltusManagedDeploymentToolService {
         input.action,
         input.action === 'redeploy_application'
           ? '重新发布暂未完成，内部调试信息已记录。'
-          : '发布暂未完成，内部调试信息已记录。',
+          : input.action === 'rollback_application_deployment'
+            ? '当前还无法回滚部署，内部调试信息已记录。'
+            : '发布暂未完成，内部调试信息已记录。',
         {
           baseline: latestBaseline || undefined,
           debug: {
             rawError,
-            capabilityId: 'deploy_session_website',
             baselineStatus: latestBaseline?.status,
             baselineErrors: latestBaseline?.errors,
           },

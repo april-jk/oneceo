@@ -48,8 +48,15 @@ test('deploy_application returns repair_required when baseline is not ready', as
       },
       errors: ['缺少 package.json scripts.build'],
     }),
-    executeCapability: async () => {
-      throw new Error('should_not_execute_capability');
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
+      throw new Error('should_not_execute_action');
     },
     getErrorMessage: (error) => String((error as Error)?.message || error),
   });
@@ -57,6 +64,7 @@ test('deploy_application returns repair_required when baseline is not ready', as
   const result = await service.execute({
     action: 'deploy_application',
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
   });
@@ -70,21 +78,30 @@ test('deploy_application returns repair_required when baseline is not ready', as
   ]);
 });
 
-test('redeploy_application republishes current workspace through deploy capability', async () => {
-  let capabilityId = '';
+test('redeploy_application republishes current workspace through deployment runtime action', async () => {
+  let runtimeAction = '';
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),
-    executeCapability: async (nextCapabilityId) => {
-      capabilityId = nextCapabilityId;
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async (input) => {
+      runtimeAction = input.action;
       return {
-        capabilityId: nextCapabilityId,
-        message: '已触发网站部署。当前部署状态：SUCCESS；访问地址：demo.oneceo.app',
-        metadata: {
+        panel: {
           latestStatus: 'SUCCESS',
           latestUrl: 'https://demo.oneceo.app',
           deploymentId: 'dep_123',
         },
-      };
+        actionResult: {
+          action: 'redeploy',
+          deploymentId: 'dep_123',
+        },
+      } as any;
     },
     getErrorMessage: (error) => String((error as Error)?.message || error),
   });
@@ -92,11 +109,12 @@ test('redeploy_application republishes current workspace through deploy capabili
   const result = await service.execute({
     action: 'redeploy_application',
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
   });
 
-  assert.equal(capabilityId, 'deploy_session_website');
+  assert.equal(runtimeAction, 'redeploy');
   assert.equal(result.status, 'success');
   assert.equal(result.summary, '重新发布完成，状态 SUCCESS，地址 demo.oneceo.app');
   assert.equal(result.url, 'https://demo.oneceo.app');
@@ -105,21 +123,26 @@ test('redeploy_application republishes current workspace through deploy capabili
 test('get_application_deployment_status returns structured success payload', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),
-    executeCapability: async (capabilityId) => ({
-      capabilityId,
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => ({
+      latestStatus: 'SUCCESS',
+      latestUrl: 'https://demo.oneceo.app',
+      deploymentId: 'dep_123',
       message: '当前部署状态：SUCCESS；访问地址：demo.oneceo.app',
-      metadata: {
-        latestStatus: 'SUCCESS',
-        latestUrl: 'https://demo.oneceo.app',
-        deploymentId: 'dep_123',
-      },
-    }),
+    } as any),
+    executeDeploymentAction: async () => {
+      throw new Error('should_not_execute_action');
+    },
     getErrorMessage: (error) => String((error as Error)?.message || error),
   });
 
   const result = await service.execute({
     action: 'get_application_deployment_status',
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
   });
@@ -133,7 +156,14 @@ test('get_application_deployment_status returns structured success payload', asy
 test('deploy_application returns fatal_error when provider error remains after ready baseline', async () => {
   const service = new AltusManagedDeploymentToolService({
     inspectBaseline: async () => createReadyBaseline(),
-    executeCapability: async () => {
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async () => {
       throw new Error('平台部署供应链接入未完成');
     },
     getErrorMessage: (error) => String((error as Error)?.message || error),
@@ -142,6 +172,7 @@ test('deploy_application returns fatal_error when provider error remains after r
   const result = await service.execute({
     action: 'deploy_application',
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
   });
@@ -150,4 +181,45 @@ test('deploy_application returns fatal_error when provider error remains after r
   assert.equal(result.phase, 'failed');
   assert.match(result.summary, /发布暂未完成/);
   assert.match(result.debug?.rawError || '', /平台部署供应链接入未完成/);
+});
+
+test('rollback_application_deployment routes through rollback runtime action', async () => {
+  let runtimeAction = '';
+  const service = new AltusManagedDeploymentToolService({
+    inspectBaseline: async () => createReadyBaseline(),
+    resolveSession: async () => ({
+      id: 'session-1',
+      messages: [],
+    } as any),
+    buildDeploymentResponse: async () => {
+      throw new Error('should_not_build_response');
+    },
+    executeDeploymentAction: async (input) => {
+      runtimeAction = input.action;
+      return {
+        panel: {
+          latestStatus: 'SUCCESS',
+          latestUrl: 'https://demo.oneceo.app',
+          deploymentId: 'dep_123',
+        },
+        actionResult: {
+          action: 'rollback',
+          deploymentId: 'dep_123',
+        },
+      } as any;
+    },
+    getErrorMessage: (error) => String((error as Error)?.message || error),
+  });
+
+  const result = await service.execute({
+    action: 'rollback_application_deployment',
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+  });
+
+  assert.equal(runtimeAction, 'rollback');
+  assert.equal(result.status, 'success');
+  assert.match(result.summary, /回滚完成/);
 });

@@ -19,6 +19,7 @@ test('prepareTaskSessionAnalyticsBinding reuses existing website id and rewrites
   umamiAnalyticsService.getTrackerHost = () => 'https://analytics.oneceo.ai';
   umamiAnalyticsService.ensureWebsiteBinding = async (input) => {
     calls.push({
+      scope: input.scope,
       websiteId: input.websiteId,
       name: input.name,
       domain: input.domain,
@@ -59,6 +60,7 @@ test('prepareTaskSessionAnalyticsBinding reuses existing website id and rewrites
     assert.equal(panel?.status, 'ready');
     assert.deepEqual(calls, [
       {
+        scope: 'deployment',
         websiteId: 'website_existing',
         name: 'Existing site',
         domain: 'new.example.com',

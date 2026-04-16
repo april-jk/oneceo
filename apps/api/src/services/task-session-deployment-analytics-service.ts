@@ -113,7 +113,7 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
   domain?: string;
   tag?: string;
 }): Promise<DeploymentAnalyticsPanelData | null> {
-  if (!umamiAnalyticsService.isConfigured()) {
+  if (!umamiAnalyticsService.isConfigured('deployment')) {
     return {
       provider: 'umami',
       configured: false,
@@ -139,6 +139,7 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
 
   const websiteName = existing?.websiteName || buildWebsiteName(input.sessionId, domain);
   const website = await umamiAnalyticsService.ensureWebsiteBinding({
+    scope: 'deployment',
     websiteId: existing?.websiteId,
     name: websiteName,
     domain,
@@ -194,7 +195,7 @@ export async function buildTaskSessionAnalyticsPanel(
   const metadata = pickRecord(environmentMetadata);
   const existing = pickAnalyticsMetadata(metadata.analytics);
 
-  if (!umamiAnalyticsService.isEnabled()) {
+  if (!umamiAnalyticsService.isEnabled('deployment')) {
     if (!existing) {
       return {
         provider: 'umami',
@@ -223,9 +224,9 @@ export async function buildTaskSessionAnalyticsPanel(
   if (!existing?.websiteId) {
     return {
       provider: 'umami',
-      configured: umamiAnalyticsService.isConfigured(),
+      configured: umamiAnalyticsService.isConfigured('deployment'),
       enabled: false,
-      status: umamiAnalyticsService.isConfigured() ? 'pending' : 'unconfigured',
+      status: umamiAnalyticsService.isConfigured('deployment') ? 'pending' : 'unconfigured',
       host: existing?.host || umamiAnalyticsService.getTrackerHost(),
       domain: existing?.domain,
       tag: existing?.tag,

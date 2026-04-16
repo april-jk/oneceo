@@ -75,8 +75,48 @@ function flattenErrorMessages(error: unknown): string[] {
   return messages;
 }
 
+function flattenErrorCodes(error: unknown): string[] {
+  const codes: string[] = [];
+  let current: any = error;
+  const visited = new Set<unknown>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    const code = asText(current?.code);
+    if (code) {
+      codes.push(code.toUpperCase());
+    }
+    const errno = asText(current?.errno);
+    if (errno) {
+      codes.push(errno.toUpperCase());
+    }
+    current = current?.cause;
+  }
+  return codes;
+}
+
 function isTransientDatabaseError(error: unknown): boolean {
   const messages = flattenErrorMessages(error).join(' | ').toLowerCase();
+  const codes = new Set(flattenErrorCodes(error));
+
+  if (
+    codes.has('ECONNRESET') ||
+    codes.has('ECONNREFUSED') ||
+    codes.has('ETIMEDOUT') ||
+    codes.has('EPIPE') ||
+    codes.has('57P01') ||
+    codes.has('57P02') ||
+    codes.has('57P03') ||
+    codes.has('53300') ||
+    codes.has('08000') ||
+    codes.has('08001') ||
+    codes.has('08003') ||
+    codes.has('08004') ||
+    codes.has('08006') ||
+    codes.has('08P01')
+  ) {
+    return true;
+  }
+
   if (!messages) return false;
   return (
     messages.includes('drizzlequeryerror') ||
@@ -85,8 +125,25 @@ function isTransientDatabaseError(error: unknown): boolean {
     messages.includes('timeout exceeded when trying to connect') ||
     messages.includes('terminating connection due to administrator command') ||
     messages.includes('too many clients already') ||
-    messages.includes('remaining connection slots are reserved')
+    messages.includes('remaining connection slots are reserved') ||
+    messages.includes('read econnreset') ||
+    messages.includes('connect econnrefused') ||
+    messages.includes('socket hang up') ||
+    messages.includes('connection timeout') ||
+    messages.includes('failed to connect')
   );
+}
+
+function logSandboxActivityError(
+  operation: string,
+  sessionId: string,
+  error: unknown
+): void {
+  if (isTransientDatabaseError(error)) {
+    console.warn(`[SANDBOX_ACTIVITY] ${operation} skipped due to transient db error`, sessionId, error);
+    return;
+  }
+  console.error(`[SANDBOX_ACTIVITY] ${operation} skipped due to unexpected error`, sessionId, error);
 }
 
 function toPositiveMs(value: unknown): number | null {
@@ -111,11 +168,7 @@ export async function touchSandbox(
       ...(options?.extra || {}),
     });
   } catch (error) {
-    if (isTransientDatabaseError(error)) {
-      console.warn('[SANDBOX_ACTIVITY] touch skipped due to transient db error', sessionId, error);
-      return;
-    }
-    throw error;
+    logSandboxActivityError('touch', sessionId, error);
   }
 }
 
@@ -124,11 +177,7 @@ export async function setSandboxMetadata(sessionId: string, patch: Record<string
   try {
     await updateMetadata(sessionId, patch);
   } catch (error) {
-    if (isTransientDatabaseError(error)) {
-      console.warn('[SANDBOX_ACTIVITY] metadata update skipped due to transient db error', sessionId, error);
-      return;
-    }
-    throw error;
+    logSandboxActivityError('metadata update', sessionId, error);
   }
 }
 
@@ -183,11 +232,7 @@ export async function markSandboxDirty(sessionId: string, reason: string): Promi
     await sandboxExecutionEnvironmentDAO.updateMetadata(sessionId, next);
     dirtySessions.add(sessionId);
   } catch (error) {
-    if (isTransientDatabaseError(error)) {
-      console.warn('[SANDBOX_ACTIVITY] dirty mark skipped due to transient db error', sessionId, error);
-      return;
-    }
-    throw error;
+    logSandboxActivityError('dirty mark', sessionId, error);
   }
 }
 
@@ -207,11 +252,7 @@ export async function clearSandboxDirty(
       ...(patch || {}),
     });
   } catch (error) {
-    if (isTransientDatabaseError(error)) {
-      console.warn('[SANDBOX_ACTIVITY] clear dirty skipped due to transient db error', sessionId, error);
-      return;
-    }
-    throw error;
+    logSandboxActivityError('clear dirty', sessionId, error);
   }
 }
 

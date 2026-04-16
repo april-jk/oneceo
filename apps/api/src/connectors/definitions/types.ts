@@ -11,6 +11,8 @@ export type ConnectorCategory = 'app' | 'custom_api' | 'custom_mcp';
 
 export type ConnectorAuthMode = 'oauth' | 'token' | 'dsn' | 'none';
 
+export type RemoteMcpTransport = 'remote_sse' | 'streamable_http';
+
 export type ConnectorConfigField = {
   key: string;
   label: string;
@@ -25,6 +27,7 @@ export type ConnectorOauthProvider = {
   provider: 'github' | 'slack' | 'notion' | 'supabase' | 'figma' | 'vercel';
   clientId: string;
   clientSecret: string;
+  redirectUri?: string;
   authorizationUrl: string;
   tokenUrl: string;
   pkceMethod?: 'S256';
@@ -62,5 +65,6 @@ export type ConnectorDefinition = {
     urlDefault?: string;
     headersEnv?: string;
     headerTemplate?: 'bearer-token' | 'supabase' | 'figma' | 'none';
+    transport?: RemoteMcpTransport;
   };
 };

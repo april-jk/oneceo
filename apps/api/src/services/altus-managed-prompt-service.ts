@@ -157,6 +157,20 @@ function formatCodeList(values: readonly string[]): string {
   return values.map((value) => `\`${value}\``).join(', ');
 }
 
+function describeConnectorToolAccess(runtimeStatus: string): string {
+  switch (runtimeStatus) {
+    case 'connected':
+      return 'available';
+    case 'pending_recover':
+    case 'recovering':
+      return 'blocked_until_runtime_recovers';
+    case 'failed':
+      return 'blocked_attach_failed';
+    default:
+      return 'blocked_runtime_not_connected';
+  }
+}
+
 function formatConnectors(connectors: SessionConnectorStatus[]): string {
   const attached = connectors.filter((item) => item.attached);
   if (attached.length === 0) {
@@ -165,7 +179,12 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
 
   return attached
     .map((item) => {
-      const parts: string[] = [item.connectorKey];
+      const runtimeStatus = asText(item.runtimeStatus) || 'unknown';
+      const parts: string[] = [
+        item.connectorKey,
+        `runtime_status=${runtimeStatus}`,
+        `tool_access=${describeConnectorToolAccess(runtimeStatus)}`,
+      ];
       const profile = asText(item.attachedProfileName || item.selectedProfileName);
       if (profile) {
         parts.push(`profile=${profile}`);
@@ -244,6 +263,9 @@ export class AltusManagedPromptService {
       '- For complex tasks, re-check the todo after each major tool result and update your next step accordingly instead of improvising a large unverified jump.',
       '- When running shell commands, explain only the essential outcome in your final reply.',
       '- If a command fails, inspect the real error and adjust instead of guessing.',
+      '- If the user asks to 启动网站调试功能, open a debug page, or load a website in the debug view, use debug_open_page instead of free-form command text.',
+      '- For website debug tasks, if the target service is not running yet, start it first with shell_execute, then call debug_open_page with the final http/https URL.',
+      '- Do not replace debug_open_page with ad-hoc docker-compose/install shell flows when the request is about opening a website in the debug browser.',
       '- When the current user message includes an uploaded image, analyze the image directly from the multimodal message input first.',
       '- For image understanding requests, do not start with shell file probes, OCR libraries, Pillow, or other local image-processing tools unless the user explicitly asks for OCR/extraction or the model cannot access the image input.',
       '- Do not ask the user to describe an uploaded image when the image is already attached and available in the current multimodal context, unless the image input is actually unavailable.',
@@ -262,6 +284,28 @@ export class AltusManagedPromptService {
       '- For XLSX tasks that depend on public data, benchmark data, current indicators, or external learning/resource links, use web_search and web_extract first, then organize the verified results into the workbook.',
       '- When you use external sources for a PPT, DOCX, or XLSX deliverable, preserve source URLs in an appendix slide, reference section, source sheet, notes area, or verification notes.',
       '- Do not rerun the same failing shell command unchanged. If a script fails, inspect the exact error, change the script or dependency once, then rerun.',
+      '',
+      '# OneCEO web app contract',
+      '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
+      '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
+      '- For deployable web app tasks, you must ensure a root `oneceo.manifest.json` exists before you finish.',
+      '- The manifest must include: `templateVersion`, `appType`, `stack`, `build.command`, `build.outputDir`, `start.command`, `start.portEnv`, `healthcheck.path`, `features`, and `runtime`.',
+      '- For deployable web app tasks, default `appType` to `web_app`, `templateVersion` to `1.0.0`, and `start.portEnv` to `PORT`.',
+      '- Prefer a Vite-based frontend and a simple Node/Express-compatible server boundary unless the existing workspace already dictates another web stack.',
+      '- If the app uses database persistence, default to Railway Postgres with `pg` or `drizzle-orm`; do not introduce MySQL by default.',
+      '- Do not invent a separate analytics vendor choice inside generated app code. The platform injects analytics through `VITE_ANALYTICS_ENABLED`, `VITE_ANALYTICS_HOST`, `VITE_ANALYTICS_WEBSITE_ID`, `VITE_ANALYTICS_TAG`, and `VITE_PUBLIC_DOMAIN`.',
+      '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Prefer reading `VITE_ANALYTICS_HOST` and `VITE_ANALYTICS_WEBSITE_ID` over hard-coded tracker values.',
+      '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
+      '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
+      '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
+      '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
+      '- Use `redeploy_application` when the user wants the latest code changes published again.',
+      '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
+      '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
+      '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, do not stop. Inspect the workspace, repair the deployment baseline with file/code tools, then call the deployment tool again.',
+      '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
+      '- For deploy/redeploy/rollback requests, do not call `complete_task` until the matching managed deployment tool returns `status=success`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
+      '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
       '',
       '# PPT workflow',
       `- For PPT tasks, choose exactly one contentArchetype from ${formatCodeList(PPT_CONTENT_ARCHETYPES)} before drafting slides.`,
@@ -310,7 +354,7 @@ export class AltusManagedPromptService {
       '- If a PPT task lacks enough information for meaningful visuals after one focused retrieval attempt, ask one precise question instead of silently downgrading to an all-text deck.',
       '',
       '# Completion rules',
-      '- Use complete_task with a concise summary and optional verification points once the task is actually complete.',
+      '- Use complete_task once the task is actually complete. The `summary` must be a user-facing final answer with enough detail to stand alone (use structured bullets when helpful), not a one-line placeholder.',
       '- For downloadable deliverables, complete_task.attachments is part of the completion contract, not an optional note.',
       '- complete_task.attachments must be a real JSON array of attachment objects. Never wrap the attachments array as a string.',
       '- If the requested final file already exists and one verification command confirmed it, your next action should usually be complete_task with attachments.',

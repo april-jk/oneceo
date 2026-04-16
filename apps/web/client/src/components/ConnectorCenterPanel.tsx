@@ -73,6 +73,8 @@ type ConnectorCenterTab = ConnectorCategory;
 type ConnectorFormValues = Record<string, string>;
 
 const NEW_PROFILE_ID = "__new__";
+export const NOTION_FIXED_CALLBACK_PATH = "/notion/callback";
+export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
@@ -84,6 +86,13 @@ const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; label: string }> = [
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveBrowserOrigin() {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "http://localhost";
 }
 
 export function normalizeEditableProfileId(profileId: string | null | undefined) {
@@ -134,9 +143,13 @@ function buildConnectorRedirectUri(
   search: string,
   connectorKey: ConnectorKey,
   profileId?: string | null,
-  targetSessionId?: string | null
+  targetSessionId?: string | null,
+  options?: {
+    callbackPath?: string;
+  }
 ) {
-  const url = new URL(location, window.location.origin);
+  const callbackPath = asText(options?.callbackPath) || location;
+  const url = new URL(callbackPath, resolveBrowserOrigin());
   const params = new URLSearchParams(search);
   [
     "code",
@@ -162,8 +175,39 @@ function buildConnectorRedirectUri(
   return url.toString();
 }
 
-function cleanupConnectorQuery(location: string, search: string) {
-  const url = new URL(location, window.location.origin);
+function isFixedConnectorCallbackPath(pathname: string) {
+  return pathname === NOTION_FIXED_CALLBACK_PATH || pathname === SLACK_FIXED_CALLBACK_PATH;
+}
+
+export function resolveConnectorOauthCallbackContext(location: string, params: URLSearchParams) {
+  const currentPath = new URL(location, resolveBrowserOrigin()).pathname;
+  const hasOauthCallbackParams = Boolean(params.get("code")) && Boolean(params.get("state"));
+  const fixedPathConnector =
+    currentPath === NOTION_FIXED_CALLBACK_PATH
+      ? "notion"
+      : currentPath === SLACK_FIXED_CALLBACK_PATH
+        ? "slack"
+        : null;
+  const connector =
+    (params.get("connector") as ConnectorKey | null) ||
+    (hasOauthCallbackParams ? fixedPathConnector : null);
+  const hasConnectorOAuthFlag = params.get("connector_oauth") === "1";
+  return {
+    connector,
+    currentPath,
+    isFixedCallback: Boolean(fixedPathConnector && hasOauthCallbackParams),
+    shouldHandle: hasConnectorOAuthFlag || Boolean(fixedPathConnector && hasOauthCallbackParams),
+  };
+}
+
+export function cleanupConnectorQuery(
+  location: string,
+  search: string,
+  options?: {
+    targetSessionId?: string | null;
+  }
+) {
+  const url = new URL(location, resolveBrowserOrigin());
   const params = new URLSearchParams(search);
   [
     "code",
@@ -176,7 +220,14 @@ function cleanupConnectorQuery(location: string, search: string) {
     "settingsTab",
   ].forEach((key) => params.delete(key));
   url.search = params.toString();
-  return `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}`;
+  const sessionId = asText(options?.targetSessionId);
+  const nextPath =
+    isFixedConnectorCallbackPath(url.pathname)
+      ? sessionId
+        ? `/session/${encodeURIComponent(sessionId)}`
+        : "/home"
+      : url.pathname;
+  return `${nextPath}${url.search ? `?${url.searchParams.toString()}` : ""}`;
 }
 
 function getFieldValue(
@@ -288,7 +339,11 @@ function isGithubConnector(item: ConnectorCatalogItem | null | undefined) {
 }
 
 export function shouldUseConnectorLevelOauth(connectorKey: ConnectorKey | null | undefined) {
-  return connectorKey === "notion";
+  return connectorKey === "notion" || connectorKey === "slack";
+}
+
+export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null | undefined) {
+  return connectorKey === "github" || shouldUseConnectorLevelOauth(connectorKey);
 }
 
 function getGithubAppReauthHint() {
@@ -299,7 +354,7 @@ export function ConnectorCenterPanel({
   targetSessionId,
   highlightedConnector,
 }: ConnectorCenterPanelProps) {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);
   const callbackHandled = useRef(false);
@@ -390,10 +445,11 @@ export function ConnectorCenterPanel({
   useEffect(() => {
     const code = params.get("code");
     const state = params.get("state");
-    const connector = params.get("connector") as ConnectorKey | null;
+    const callbackContext = resolveConnectorOauthCallbackContext(location, params);
+    const connector = callbackContext.connector;
     const profileId = params.get("profileId");
     const useConnectorLevelOauth = shouldUseConnectorLevelOauth(connector);
-    if (params.get("connector_oauth") !== "1") return;
+    if (!callbackContext.shouldHandle) return;
     if (!code || !state || !connector) return;
     if (!useConnectorLevelOauth && !profileId) return;
     if (callbackHandled.current) return;
@@ -416,7 +472,16 @@ export function ConnectorCenterPanel({
           search,
           connector,
           profileId,
-          effectiveTargetSessionId
+          effectiveTargetSessionId,
+          connector === "notion"
+            ? {
+                callbackPath: NOTION_FIXED_CALLBACK_PATH,
+              }
+            : connector === "slack"
+              ? {
+                  callbackPath: SLACK_FIXED_CALLBACK_PATH,
+                }
+            : undefined
         );
         let completedProfileId = profileId || null;
         let attachTarget: string | null | undefined = effectiveTargetSessionId;
@@ -458,7 +523,11 @@ export function ConnectorCenterPanel({
           }
         }
 
-        window.history.replaceState(null, "", cleanupConnectorQuery(location, search));
+        setLocation(
+          cleanupConnectorQuery(location, search, {
+            targetSessionId: attachTarget || null,
+          })
+        );
         
         // OAuth回调完成后，优先选中刚授权的 Profile
         setSelectedProfileIds((prev) => ({
@@ -487,7 +556,7 @@ export function ConnectorCenterPanel({
         setActionKey(null);
       }
     })();
-  }, [effectiveTargetSessionId, location, params, search]);
+  }, [effectiveTargetSessionId, location, params, search, setLocation]);
 
   const profilesByConnector = useMemo(() => groupProfilesByConnector(profiles), [profiles]);
 
@@ -701,13 +770,21 @@ export function ConnectorCenterPanel({
     if (connectorLevelOauth) {
       setActionKey(`oauth:${detailItem.key}`);
       try {
-        const redirectUri = buildConnectorRedirectUri(
-          location,
-          search,
-          detailItem.key,
-          null,
-          effectiveTargetSessionId
-        );
+        const redirectUri =
+          detailItem.key === "slack"
+            ? new URL(SLACK_FIXED_CALLBACK_PATH, resolveBrowserOrigin()).toString()
+            : buildConnectorRedirectUri(
+                location,
+                search,
+                detailItem.key,
+                null,
+                effectiveTargetSessionId,
+                detailItem.key === "notion"
+                  ? {
+                      callbackPath: NOTION_FIXED_CALLBACK_PATH,
+                    }
+                  : undefined
+              );
         const { authUrl } = await startConnectorOauth(detailItem.key, {
           redirectUri,
           returnToSessionId: effectiveTargetSessionId || undefined,
@@ -941,12 +1018,12 @@ export function ConnectorCenterPanel({
     const Icon = resolveConnectorIcon(detailItem.icon);
     const guide = CONNECTOR_GUIDES[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
-    const notionConnector = shouldUseConnectorLevelOauth(detailItem.key);
+    const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
+    const unifiedOauthCard = shouldUseUnifiedConnectorCard(detailItem.key);
     const statusText = connectorStatusText({
       available: detailItem.available,
       authStatus: selectedDetailProfile?.authStatus,
     });
-    const profileCount = detailConnectorProfiles.length;
     const busy = Boolean(actionKey);
     const actionBusy =
       actionKey === `save:${detailItem.key}` || actionKey === `oauth:${detailItem.key}`;
@@ -1317,7 +1394,80 @@ export function ConnectorCenterPanel({
                 ) : null}
                 
                 {/* 仅在非 GitHub 连接器时显示复杂的 Profile 配置区 */}
-                {detailItem.key !== "github" && detailItem.key !== "supabase" ? (
+                {unifiedOauthCard && !githubConnector && selectedDetailProfile?.lastError ? (
+                  <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="leading-relaxed">{selectedDetailProfile.lastError}</span>
+                  </div>
+                ) : null}
+
+                {unifiedOauthCard && !githubConnector && !detailItem.available && detailItem.availabilityReason ? (
+                  <div className="flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="leading-relaxed">{detailItem.availabilityReason}</span>
+                  </div>
+                ) : null}
+
+                {unifiedOauthCard && !githubConnector && guide ? (
+                  <div className="space-y-4 rounded-3xl border border-border/70 bg-muted/20 p-5">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <ShieldCheck className="h-4 w-4 text-foreground/70" />
+                        {detailItem.name} 使用指南
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">{guide.intro}</p>
+                    </div>
+
+                    {guide.steps?.length ? (
+                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-sm font-medium text-foreground">连接步骤</p>
+                        <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
+                          {guide.steps.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+
+                    {guide.tips?.length ? (
+                      <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
+                        <p className="text-sm font-medium text-foreground">使用提示</p>
+                        <div className="space-y-2">
+                          {guide.tips.map((tip) => (
+                            <p key={tip} className="text-sm leading-6 text-muted-foreground">
+                              {tip}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {guide.quickLinks?.length ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium text-muted-foreground">相关文档</p>
+                        <div className="grid gap-2">
+                          {guide.quickLinks.map((link) => (
+                            <a
+                              key={link.href}
+                              href={link.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background px-3 py-2 text-sm text-foreground hover:bg-muted/40"
+                            >
+                              <div className="min-w-0">
+                                <div>{link.label}</div>
+                                <div className="text-xs text-muted-foreground">{link.description}</div>
+                              </div>
+                              <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {!unifiedOauthCard && detailItem.key !== "supabase" ? (
                   <>
                     <div className="space-y-2">
                       <Label className="text-base font-medium text-foreground">Profile 配置</Label>
@@ -1520,8 +1670,8 @@ export function ConnectorCenterPanel({
                           ) : (
                             <ArrowUpRight className="mr-2 h-4 w-4" />
                           )}
-                          {notionConnector
-                            ? selectedDetailProfile?.authStatus === "authorized"
+                          {connectorLevelOauth
+                            ? detailItem.key === "notion"
                               ? "重新连接 Notion"
                               : "连接 Notion"
                             : selectedDetailProfile?.authStatus === "authorized"

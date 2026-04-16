@@ -1,4 +1,4 @@
-import { requestRailwayGraphql } from './railway-graphql-client';
+import { requestRailwayGraphql, type RailwayAuthKind } from './railway-graphql-client';
 
 const DEPLOYMENT_TRANSIENT_STATUSES = new Set([
   'BUILDING',
@@ -37,6 +37,43 @@ export type RailwayDeploymentListItem = {
   staticUrl?: string;
 };
 
+export type DeploymentAnalyticsPanelData = {
+  provider: 'umami';
+  configured: boolean;
+  enabled: boolean;
+  status: 'ready' | 'pending' | 'unconfigured' | 'error';
+  host?: string;
+  websiteId?: string;
+  websiteName?: string;
+  domain?: string;
+  tag?: string;
+  pageviews?: number;
+  visits?: number;
+  visitors?: number;
+  events?: number;
+  activeVisitors?: number;
+  updatedAt?: string;
+  message?: string;
+  error?: string;
+};
+
+export type DeploymentResourceBindingData = {
+  projectKey: string;
+  isolationMode: 'session' | 'default';
+  projectModel: 'per_user';
+  environmentModel: 'per_session';
+  tokenKind: 'project';
+  tokenScope: 'railway_project_environment';
+  tokenManagedBy: 'oneceo_platform';
+  tokenId?: string;
+  tokenRotatedAt?: string;
+  repositoryOwner?: string;
+  repositoryName?: string;
+  repositoryFullName?: string;
+  repositoryUrl?: string;
+  repositoryBranch?: string;
+};
+
 export type RailwayDeploymentPanelData = {
   configured: boolean;
   canDeploy: boolean;
@@ -56,6 +93,8 @@ export type RailwayDeploymentPanelData = {
   deployments: RailwayDeploymentListItem[];
   logs: RailwayDeploymentLogEntry[];
   missing: string[];
+  analytics?: DeploymentAnalyticsPanelData;
+  resourceBinding?: DeploymentResourceBindingData;
 };
 
 export type RailwayDeploymentActionResult = {
@@ -65,6 +104,7 @@ export type RailwayDeploymentActionResult = {
 
 type RailwayBinding = {
   token: string;
+  tokenKind: RailwayAuthKind;
   projectId: string;
   environmentId: string;
   serviceId: string;
@@ -121,19 +161,24 @@ function resolveBinding(metadata: Record<string, unknown>): {
 } {
   const platformDeployment = pickRecord(metadata.platformDeployment);
   const railway = pickRecord(metadata.railway);
-  const token = firstText(
-    platformDeployment.adminToken,
+  const projectToken = firstText(
+    platformDeployment.projectToken,
     platformDeployment.token,
     platformDeployment.accessToken,
     railway.projectToken,
     railway.token,
-    railway.apiToken,
     metadata.railwayProjectToken,
+    process.env.RAILWAY_PROJECT_TOKEN
+  );
+  const bearerToken = firstText(
+    platformDeployment.adminToken,
+    railway.apiToken,
     metadata.railwayToken,
-    process.env.RAILWAY_PROJECT_TOKEN,
     process.env.RAILWAY_API_TOKEN,
     process.env.RAILWAY_ADMIN_TOKEN
   );
+  const token = projectToken || bearerToken;
+  const tokenKind: RailwayAuthKind = projectToken ? 'project' : 'bearer';
   const projectId = firstText(
     platformDeployment.projectId,
     railway.projectId,
@@ -165,6 +210,7 @@ function resolveBinding(metadata: Record<string, unknown>): {
   return {
     binding: {
       token,
+      tokenKind,
       projectId,
       environmentId,
       serviceId,
@@ -188,11 +234,19 @@ function resolveBinding(metadata: Record<string, unknown>): {
 
 async function executeRailwayGraphql<T>(
   token: string,
+  tokenKind: RailwayAuthKind,
   query: string,
   variables?: Record<string, unknown>
 ): Promise<T> {
   try {
-    return await requestRailwayGraphql<T>(token, query, variables);
+    return await requestRailwayGraphql<T>(
+      {
+        token,
+        kind: tokenKind,
+      },
+      query,
+      variables
+    );
   } catch (error: any) {
     throw new Error(firstText(error?.message) || '部署服务请求失败');
   }
@@ -205,9 +259,10 @@ async function loadProjectSummary(binding: RailwayBinding) {
       name?: string;
       environments?: { edges?: Array<{ node?: { id?: string; name?: string } }> };
       services?: { edges?: Array<{ node?: { id?: string; name?: string } }> };
-    } | null;
+  } | null;
   }>(
     binding.token,
+    binding.tokenKind,
     `
       query RailwayProjectSummary($id: String!) {
         project(id: $id) {
@@ -252,6 +307,7 @@ async function loadDeployments(binding: RailwayBinding) {
     } | null;
   }>(
     binding.token,
+    binding.tokenKind,
     `
       query RailwayDeployments($input: DeploymentListInput!, $first: Int) {
         deployments(input: $input, first: $first) {
@@ -278,7 +334,11 @@ async function loadDeployments(binding: RailwayBinding) {
   );
 }
 
-async function loadDeploymentDetail(token: string, deploymentId: string) {
+async function loadDeploymentDetail(
+  token: string,
+  tokenKind: RailwayAuthKind,
+  deploymentId: string
+) {
   return executeRailwayGraphql<{
     deployment?: {
       id?: string;
@@ -289,6 +349,7 @@ async function loadDeploymentDetail(token: string, deploymentId: string) {
     } | null;
   }>(
     token,
+    tokenKind,
     `
       query RailwayDeploymentDetail($deploymentId: String!) {
         deployment(id: $deploymentId) {
@@ -304,7 +365,12 @@ async function loadDeploymentDetail(token: string, deploymentId: string) {
   );
 }
 
-async function loadDeploymentLogs(token: string, deploymentId: string, limit: number) {
+async function loadDeploymentLogs(
+  token: string,
+  tokenKind: RailwayAuthKind,
+  deploymentId: string,
+  limit: number
+) {
   return executeRailwayGraphql<{
     deploymentLogs?: Array<{
       timestamp?: string;
@@ -313,6 +379,7 @@ async function loadDeploymentLogs(token: string, deploymentId: string, limit: nu
     }>;
   }>(
     token,
+    tokenKind,
     `
       query RailwayDeploymentLogs($deploymentId: String!, $limit: Int) {
         deploymentLogs(deploymentId: $deploymentId, limit: $limit) {
@@ -335,6 +402,7 @@ async function loadDomains(binding: RailwayBinding) {
     } | null;
   }>(
     binding.token,
+    binding.tokenKind,
     `
       query RailwayDomains($projectId: String!, $serviceId: String!, $environmentId: String!) {
         domains(projectId: $projectId, serviceId: $serviceId, environmentId: $environmentId) {
@@ -469,8 +537,13 @@ export async function getRailwayDeploymentPanel(
 
   if (selectedDeploymentId) {
     const [detailResult, logsResult] = await Promise.all([
-      loadDeploymentDetail(binding.token, selectedDeploymentId),
-      loadDeploymentLogs(binding.token, selectedDeploymentId, Math.max(20, options?.logLimit || 80)),
+      loadDeploymentDetail(binding.token, binding.tokenKind, selectedDeploymentId),
+      loadDeploymentLogs(
+        binding.token,
+        binding.tokenKind,
+        selectedDeploymentId,
+        Math.max(20, options?.logLimit || 80)
+      ),
     ]);
     detail = detailResult.deployment || null;
     logs =
@@ -547,6 +620,80 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildPublicProbeUrls(baseUrl: string, healthPath?: string): string[] {
+  const normalizedBase = toPublicUrl(baseUrl)?.replace(/\/+$/, '');
+  if (!normalizedBase) {
+    return [];
+  }
+
+  const candidates = [
+    healthPath,
+    '/api/system/health',
+    '/health',
+    '/',
+  ]
+    .map((path) => {
+      const normalizedPath = asText(path);
+      if (!normalizedPath || normalizedPath === '/') {
+        return `${normalizedBase}/`;
+      }
+      return `${normalizedBase}${normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`}`;
+    })
+    .filter(Boolean);
+
+  return [...new Set(candidates)];
+}
+
+async function probePublicUrl(url: string): Promise<number> {
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+    });
+    return response.status;
+  } catch {
+    return 0;
+  }
+}
+
+export async function waitForRailwayDeploymentPublicReachability(
+  input: {
+    baseUrl?: string;
+    healthPath?: string;
+  },
+  options?: {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }
+): Promise<{ url: string; status: number }> {
+  const probeUrls = buildPublicProbeUrls(asText(input.baseUrl), input.healthPath);
+  if (probeUrls.length === 0) {
+    throw new Error('部署已完成，但未返回公网访问地址');
+  }
+
+  const timeoutMs = Math.max(5_000, options?.timeoutMs || 90_000);
+  const pollIntervalMs = Math.max(1_000, options?.pollIntervalMs || 5_000);
+  const deadline = Date.now() + timeoutMs;
+  let lastStatuses: Array<{ url: string; status: number }> = [];
+
+  while (Date.now() < deadline) {
+    lastStatuses = [];
+    for (const url of probeUrls) {
+      const status = await probePublicUrl(url);
+      lastStatuses.push({ url, status });
+      if (status >= 200 && status < 400) {
+        return { url, status };
+      }
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  const summary = lastStatuses
+    .map((item) => `${item.url} -> ${item.status || 'unreachable'}`)
+    .join(', ');
+  throw new Error(`部署已完成，但公网地址尚未就绪: ${summary || 'no probe results'}`);
+}
+
 export async function waitForRailwayDeploymentAfterSourceSync(
   metadataRaw: Record<string, unknown>,
   options?: {
@@ -600,6 +747,7 @@ export async function triggerRailwayDeploy(
   const { binding } = requireBindingForAction(metadataRaw);
   const result = await executeRailwayGraphql<{ serviceInstanceDeployV2?: string | null }>(
     binding.token,
+    binding.tokenKind,
     `
       mutation RailwayDeployService($serviceId: String!, $environmentId: String!) {
         serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
@@ -628,6 +776,7 @@ export async function triggerRailwayRedeploy(
   }
   const result = await executeRailwayGraphql<{ deploymentRedeploy?: string | null }>(
     binding.token,
+    binding.tokenKind,
     `
       mutation RailwayRedeploy($id: String!) {
         deploymentRedeploy(id: $id)
@@ -653,6 +802,7 @@ export async function triggerRailwayRollback(
   }
   const result = await executeRailwayGraphql<{ deploymentRollback?: string | null }>(
     binding.token,
+    binding.tokenKind,
     `
       mutation RailwayRollback($id: String!) {
         deploymentRollback(id: $id)

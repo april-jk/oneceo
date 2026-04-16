@@ -8,8 +8,21 @@ function mountAnalyticsScript() {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return;
   }
-  const endpoint = String(import.meta.env.VITE_ANALYTICS_ENDPOINT || "").trim().replace(/\/+$/, "");
+  const enabled = String(import.meta.env.VITE_ANALYTICS_ENABLED || "true")
+    .trim()
+    .toLowerCase();
+  if (["0", "false", "no", "off"].includes(enabled)) {
+    return;
+  }
+  const endpoint = String(
+    import.meta.env.VITE_ANALYTICS_HOST ||
+      import.meta.env.VITE_ANALYTICS_ENDPOINT ||
+      "",
+  )
+    .trim()
+    .replace(/\/+$/, "");
   const websiteId = String(import.meta.env.VITE_ANALYTICS_WEBSITE_ID || "").trim();
+  const tag = String(import.meta.env.VITE_ANALYTICS_TAG || "").trim();
   if (!endpoint || !websiteId) {
     return;
   }
@@ -19,9 +32,13 @@ function mountAnalyticsScript() {
   }
   const script = document.createElement("script");
   script.defer = true;
-  script.src = `${endpoint}/umami`;
+  script.src = `${endpoint}/script.js`;
   script.setAttribute("data-website-id", websiteId);
+  script.setAttribute("data-host-url", endpoint);
   script.setAttribute("data-origin", "runtime-inject");
+  if (tag) {
+    script.setAttribute("data-tag", tag);
+  }
   document.body.appendChild(script);
 }
 

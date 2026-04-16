@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
+import { e2bConnector } from '../src/connectors/e2b-connector';
 import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { connectorGuideService } from '../src/services/connector-guide-service';
@@ -24,6 +25,7 @@ test('load_skill_resource only allows active selected platform skills and return
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [
@@ -64,6 +66,7 @@ test('load_skill_resource only allows active selected platform skills and return
 test('load_skill_resource rejects inactive or non-selected skills', async () => {
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -99,6 +102,7 @@ test('load_connector_guide returns the active connector guide and unlocks later 
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -151,6 +155,7 @@ test('mcp tool call is blocked until active connector guide is loaded', async ()
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-1',
+    userId: 'user-1',
     sandboxId: 'sandbox-1',
     workspaceRoot: '/workspace/session-1',
     activeSkills: [],
@@ -197,6 +202,7 @@ test('vercel mcp tool call is blocked until active vercel connector guide is loa
 
   const runtime = new AltusManagedToolRuntime({
     sessionId: 'session-vercel',
+    userId: 'user-1',
     sandboxId: 'sandbox-vercel',
     workspaceRoot: '/workspace/session-vercel',
     activeSkills: [],
@@ -229,4 +235,201 @@ test('vercel mcp tool call is blocked until active vercel connector guide is loa
   assert.equal(toolResult.type, 'result');
   assert.equal(mcpMock.mock.callCount(), 1);
   assert.ok(guideMock.mock.callCount() >= 3);
+});
+
+test('write_file marks sandbox dirty so archive job can persist latest workspace snapshot', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  mock.method(e2bConnector, 'writeFile', async () => undefined);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('write_file', {
+    path: 'snake-game/index.html',
+    content: '<!doctype html><title>snake</title>',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_write_file']);
+});
+
+test('shell_execute marks sandbox dirty after command execution', async () => {
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: 'ok',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    }
+  );
+
+  const result = await runtime.execute('shell_execute', {
+    command: 'echo ok',
+    cwd: '.',
+  });
+
+  assert.equal(result.type, 'result');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_shell_execute']);
+});
+
+test('debug_open_page rejects non-http protocols', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'file:///tmp/index.html',
+    }),
+    /debug_open_page_invalid_protocol/
+  );
+});
+
+test('debug_open_page ensures debug and opens URL via CDP', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: true,
+        url: 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+        sandboxId: 'sandbox-1',
+        port: 8081,
+        display: ':0',
+        cdpPort: 9222,
+      }) as any
+  );
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '{"id":"page-1","url":"http://127.0.0.1:3000/folder1/"}\n__OPENED_BY__=PUT',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  const result = await runtime.execute('debug_open_page', {
+    url: 'http://127.0.0.1:3000/folder1/',
+  });
+
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.targetUrl, 'http://127.0.0.1:3000/folder1/');
+  assert.equal(payload.debugUrl, 'https://8081-sandbox-1.e2b.app?pwd=oneceo&usr=oneceo');
+  assert.equal(payload.ready, true);
+  assert.equal(payload.status, 'running');
+  assert.equal(payload.sandboxId, 'sandbox-1');
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 1);
+  assert.deepEqual(markSandboxDirtyMock.mock.calls[0]?.arguments, ['sandbox-1', 'managed_debug_open_page']);
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+});
+
+test('debug_open_page fails fast when debug runtime reports failed status', async () => {
+  const ensureDebugMock = mock.fn(
+    async () =>
+      ({
+        ready: false,
+        status: 'failed',
+        reasonCode: 'ice_failed',
+        message: '远程调试 ICE 连接失败，请检查 TURN 配置后重试',
+        sandboxId: 'sandbox-1',
+      }) as any
+  );
+  const runCommandMock = mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  const touchSandboxMock = mock.fn(async () => undefined);
+  const markSandboxDirtyMock = mock.fn(async () => undefined);
+
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [],
+      mcpProviders: [],
+    },
+    {
+      touchSandbox: touchSandboxMock as any,
+      markSandboxDirty: markSandboxDirtyMock as any,
+    },
+    {
+      ensureNekoDebug: ensureDebugMock as any,
+      issueIceServersForUser: mock.fn(async () => null) as any,
+    },
+  );
+
+  await assert.rejects(
+    runtime.execute('debug_open_page', {
+      url: 'http://127.0.0.1:3000/folder1/',
+    }),
+    /debug_open_page_debug_not_ready:ice_failed/
+  );
+
+  assert.equal(ensureDebugMock.mock.callCount(), 1);
+  assert.equal(runCommandMock.mock.callCount(), 0);
+  assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
 });

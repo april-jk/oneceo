@@ -18,6 +18,8 @@ build/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.develop
+.env.product
 
 # Logs
 logs/
@@ -75,3 +77,4 @@ referance/
 使用方式文档-交付v1.1.3.md
 test/
 .codex
+.omx/

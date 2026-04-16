@@ -7,6 +7,7 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import {
+  appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
   taskSessionRunDAO,
@@ -25,33 +26,33 @@ import { osacAgentService } from '../services/osac-agent-service';
 import { opencodeRemoteService } from '../services/opencode-remote-service';
 import { opencodeEventStreamService } from '../services/opencode-event-stream-service';
 import { sandboxAgentProvisionService } from '../services/sandbox-agent-provision-service';
+import { sandboxEnvironmentService } from '../services/sandbox-environment-service';
 import { hasRenderableAssistantReply } from '../utils/opencode-history-recovery';
 import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { setSandboxMetadata, touchSandbox } from '../services/sandbox-activity-service';
-import { ensureNekoDebug } from '../services/sandbox-debug-service';
-import {
-  getRailwayDeploymentPanel,
-  triggerRailwayRedeploy,
-  triggerRailwayRollback,
-  waitForRailwayDeploymentAfterSourceSync,
-  type RailwayDeploymentPanelData,
-} from '../services/railway-deployment-service';
+import { ensureNekoDebug, probeNekoIceHealth } from '../services/sandbox-debug-service';
+import { cloudflareTurnService } from '../services/cloudflare-turn-service';
 import {
   railwayDatabaseService,
   type RailwayDatabaseRowLocator,
 } from '../services/railway-database-service';
 import { platformDeploymentAccountService } from '../services/platform-deployment-account-service';
-import { publishTaskSessionWorkspaceToRepository } from '../services/task-creation-deployment-source-service';
+import { inspectTaskSessionDeploymentTemplate } from '../services/task-creation-deployment-source-service';
+import {
+  buildTaskSessionDeploymentResponse,
+  executeTaskSessionDeploymentAction,
+  getTaskSessionDeploymentErrorMessage,
+} from '../services/task-session-deployment-runtime-service';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { currentUserResolver } from '../services/current-user-resolver';
 import { codexRuntimeConfigService } from '../services/codex-runtime-config-service';
 import { codexRemoteService } from '../services/codex-remote-service';
 import { restoreWorkspaceIfArchived } from '../services/sandbox-archive-service';
 import { CONNECTOR_KEYS, type ConnectorKey } from '../services/connector-registry';
-import { sessionConnectorService } from '../services/session-connector-service';
+import { resolveAttachConnectorError, sessionConnectorService } from '../services/session-connector-service';
 import { sessionConnectorDraftService } from '../services/session-connector-draft-service';
 import { connectorGuideService } from '../services/connector-guide-service';
-import { taskSessionRedisCacheService } from '../services/task-session-redis-cache-service';
+import { taskSessionCacheFacade } from '../services/task-session-cache-facade';
 import {
   inferFilenameFromResponse,
   resolveRemoteAttachmentTarget,
@@ -66,6 +67,7 @@ import { downloadFromR2 } from '../services/r2-client';
 import { taskSessionDeliverableService } from '../services/task-session-deliverable-service';
 import { platformSkillService } from '../services/platform-skill-service';
 import { userSkillService } from '../services/user-skill-service';
+import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
 const TASK_ATTACHMENT_DIR = '.attachments';
@@ -355,21 +357,104 @@ function resolveTenantKey(currentUser: { tenantKey: string }): string {
 
 function resolveCurrentUserError(error: unknown): { status: number; message: string } | null {
   const message = error instanceof Error ? error.message : String(error || '');
-  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+  if (message.includes('无法识别当前用户')) {
     return { status: 401, message };
   }
   return null;
 }
 
-async function requireOwnedTaskSession(sessionId: string, userId: string) {
-  const session = await taskCreationSessionDAO.getSession(sessionId);
+function resolveLegacyUserIdHint(req: express.Request, currentUserId: string): string {
+  const candidate = asText(req.header('X-Legacy-User-Id') || req.header('X-User-Id') || req.query.legacyUserId);
+  if (!candidate) return '';
+  if (isSameUserId(candidate, currentUserId)) return '';
+  if (!isLegacyClientUserId(candidate)) return '';
+  return candidate;
+}
+
+async function upsertLegacyUserMapping(appUserId: string, legacyUserIdHint: string) {
+  if (!legacyUserIdHint) return;
+  try {
+    await appUserLegacyIdMappingDAO.upsert({
+      appUserId,
+      legacyUserId: legacyUserIdHint,
+      source: 'request_header',
+    });
+  } catch (error) {
+    console.warn('[TASK_SESSION_LEGACY_MAPPING_UPSERT_FAILED]', {
+      appUserId,
+      legacyUserId: legacyUserIdHint,
+      error,
+    });
+  }
+}
+
+async function collectLegacyUserIdsForMigration(appUserId: string, legacyUserIdHint: string): Promise<string[]> {
+  const values = new Set<string>();
+  if (legacyUserIdHint) values.add(legacyUserIdHint);
+  try {
+    const mapped = await appUserLegacyIdMappingDAO.listLegacyIdsByAppUserId(appUserId, 200);
+    for (const legacyUserId of mapped) {
+      if (legacyUserId) values.add(legacyUserId);
+    }
+  } catch (error) {
+    console.warn('[TASK_SESSION_LEGACY_MAPPING_LIST_FAILED]', {
+      appUserId,
+      error,
+    });
+  }
+  return [...values];
+}
+
+async function requireOwnedTaskSession(sessionId: string, userId: string, legacyUserIdHint?: string) {
+  const normalizedUserId = normalizeUserId(userId);
+  let session = await taskCreationSessionDAO.getSession(sessionId);
   if (!session) {
     throw new Error('会话不存在');
   }
   if (!session.userId) {
-    throw new Error('会话缺少归属用户，禁止继续访问');
+    const rebound = await taskCreationSessionDAO.bindUserIfMissing(sessionId, normalizedUserId);
+    if (!rebound?.userId) {
+      throw new Error('会话缺少归属用户，禁止继续访问');
+    }
+    session = rebound;
   }
-  if (session.userId !== userId) {
+  const normalizedSessionUserId = normalizeUserId(session.userId);
+  if (!isSameUserId(normalizedSessionUserId, normalizedUserId) && legacyUserIdHint) {
+    const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
+      sessionId,
+      normalizedUserId,
+      legacyUserIdHint
+    );
+    if (adopted?.userId) {
+      session = adopted;
+    }
+  }
+  if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
+    const legacyOwner = normalizeUserId(session.userId);
+    if (isLegacyClientUserId(legacyOwner)) {
+      try {
+        const mappedAppUserId = await appUserLegacyIdMappingDAO.resolveAppUserIdByLegacyUserId(legacyOwner);
+        if (isSameUserId(mappedAppUserId, normalizedUserId)) {
+          const adopted = await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
+            sessionId,
+            normalizedUserId,
+            legacyOwner
+          );
+          if (adopted?.userId) {
+            session = adopted;
+          }
+        }
+      } catch (error) {
+        console.warn('[TASK_SESSION_REQUIRE_OWNED_LEGACY_RESOLVE_FAILED]', {
+          sessionId,
+          userId: normalizedUserId,
+          legacyOwner,
+          error,
+        });
+      }
+    }
+  }
+  if (!isSameUserId(normalizeUserId(session.userId), normalizedUserId)) {
     throw new Error('当前用户无权访问该会话');
   }
   return session;
@@ -397,7 +482,7 @@ function resolveSessionConnectorOwnershipError(error: unknown): { status: number
   ) {
     return { status: 403, message };
   }
-  if (message.includes('无法识别当前用户') || message.includes('X-User-Id')) {
+  if (message.includes('无法识别当前用户')) {
     return { status: 401, message };
   }
   return null;
@@ -456,7 +541,7 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   const dbStatus = asText(dbSession.status);
   const memoryStatus = asText(memorySession.status);
   const shouldPreferDbLifecycle =
-    (dbStatus === 'completed' || dbStatus === 'failed') && dbStatus !== memoryStatus;
+    (dbStatus === 'completed' || dbStatus === 'failed' || dbStatus === 'waiting_user') && dbStatus !== memoryStatus;
 
   if (!shouldPreferDbLifecycle) {
     return memorySession;
@@ -465,9 +550,23 @@ function mergeSessionLifecycleFromDb(memorySession: any, dbSession: any) {
   return {
     ...memorySession,
     status: dbSession.status,
-    stage: dbSession.stage,
+    stage: dbSession.stage || mapStageFromStatus(dbSession.status),
     updatedAt: dbSession.updatedAt || memorySession.updatedAt,
   };
+}
+
+async function mergeSessionLifecycleFromDbBestEffort(sessionId: string, memorySession: FileSessionRecord | null) {
+  if (!memorySession) return null;
+  try {
+    const dbSession = await taskCreationSessionDAO.getSession(sessionId);
+    return mergeSessionLifecycleFromDb(memorySession, dbSession);
+  } catch (error) {
+    if (!isTransientDatabaseError(error)) {
+      throw error;
+    }
+    console.warn('[TASK_SESSION_LIFECYCLE_MERGE_SKIPPED]', { sessionId, error });
+    return memorySession;
+  }
 }
 
 function normalizeLiveSessionStage(
@@ -535,7 +634,7 @@ async function reconcileTaskSessionDuplicateEnvironments(
     const isE2b = String(metadata.sandboxProvider || '').toLowerCase() === 'e2b';
     if (isE2b) {
       try {
-        await e2bConnector.killSandbox(env.sessionId);
+        await sandboxEnvironmentService.closeEnvironment(env.sessionId);
       } catch (error) {
         if (!isSandboxNotFoundError(error)) {
           console.warn('[TASK_RUNTIME_DUPLICATE_KILL_FAILED]', {
@@ -547,12 +646,11 @@ async function reconcileTaskSessionDuplicateEnvironments(
         }
       }
     }
-    await sandboxExecutionEnvironmentDAO.updateMetadata(env.sessionId, {
-      ...metadata,
+    await setSandboxMetadata(env.sessionId, {
       dedupeReplacedAt: new Date().toISOString(),
       dedupeReason: 'task_runtime_rebound',
       dedupeReplacementSandboxId: activeOrchestratorSessionId,
-    }).catch(() => null);
+    });
     await sandboxExecutionEnvironmentDAO.updateStatus(env.sessionId, 'closed', env.vmName || null).catch(() => null);
   }
 }
@@ -804,6 +902,7 @@ async function hydrateFileSessionFromDb(sessionId: string) {
 
 async function resolveTaskSessionRecord(sessionId: string) {
   let session = await taskCreationFileMemoryStore.getSession(sessionId);
+  session = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
   if (!session) {
     session = await hydrateFileSessionFromDb(sessionId);
   }
@@ -814,9 +913,10 @@ async function resolveTaskSessionRecord(sessionId: string) {
 async function resolveTaskSessionMeta(sessionId: string) {
   const session = await taskCreationFileMemoryStore.getSession(sessionId);
   if (session) {
+    const merged = await mergeSessionLifecycleFromDbBestEffort(sessionId, session);
     return reconcileRecoveredOpencodeCompletion({
-      ...session,
-      stage: normalizeLiveSessionStage(session),
+      ...merged,
+      stage: normalizeLiveSessionStage(merged),
       messages: [],
     });
   }
@@ -891,103 +991,6 @@ async function reconcileRecoveredOpencodeCompletion(
   };
 }
 
-async function resolveTaskSessionEnvironment(session: FileSessionRecord | null) {
-  const orchestratorSessionId = asText(session?.runtime?.orchestratorSessionId);
-  if (orchestratorSessionId) {
-    const byRuntime = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
-    if (byRuntime) {
-      return {
-        orchestratorSessionId,
-        environment: byRuntime,
-      };
-    }
-  }
-
-  const byTaskSession = session ? await findEnvironmentByTaskSessionId(session.id) : null;
-  if (byTaskSession) {
-    return {
-      orchestratorSessionId: byTaskSession.sessionId,
-      environment: byTaskSession,
-    };
-  }
-
-  return {
-    orchestratorSessionId: '',
-    environment: null,
-  };
-}
-
-async function buildRailwayDeploymentResponse(
-  userId: string,
-  session: FileSessionRecord | null,
-  selectedDeploymentId?: string
-) {
-  const account = await platformDeploymentAccountService.getUserAccount(userId);
-  if (!account) {
-    return {
-      configured: false,
-      canDeploy: true,
-      message: '首次部署时将自动准备托管仓库与部署资源，并发布当前工作区内容。',
-      activeDeploymentPending: false,
-      domains: [],
-      deployments: [],
-      logs: [],
-      missing: [],
-    } satisfies RailwayDeploymentPanelData;
-  }
-  const { environment } = await resolveTaskSessionEnvironment(session);
-  const metadata = pickRecord(environment?.metadata);
-  return getRailwayDeploymentPanel(metadata, {
-    platformDeployment: {
-      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-      token: account.accessToken,
-      projectId: account.projectId,
-      projectName: account.projectName,
-      environmentId: account.environmentId,
-      environmentName: account.environmentName,
-      serviceId: account.serviceId,
-      serviceName: account.serviceName,
-    },
-    deploymentId: selectedDeploymentId,
-  });
-}
-
-async function persistRailwayDeploymentSelection(
-  orchestratorSessionId: string,
-  environmentMetadata: unknown,
-  payload: {
-    deploymentId?: string;
-    action: 'deploy' | 'redeploy' | 'rollback';
-  }
-) {
-  if (!orchestratorSessionId) return;
-  const metadata = pickRecord(environmentMetadata);
-  const railway = pickRecord(metadata.railway);
-  await setSandboxMetadata(orchestratorSessionId, {
-    railway: {
-      ...railway,
-      lastDeploymentId: payload.deploymentId || railway.lastDeploymentId || null,
-      lastAction: payload.action,
-      lastActionAt: new Date().toISOString(),
-    },
-  });
-}
-
-function getDeploymentErrorMessage(error: unknown) {
-  const message = asText((error as { message?: unknown })?.message);
-  if (!message) {
-    return '触发部署失败';
-  }
-  if (
-    message.includes('No GitHub installation found for repo') ||
-    message.includes('not found or is not accessible') ||
-    message.includes('unable to access')
-  ) {
-    return '平台部署供应链接入未完成，当前托管仓库尚未授权到部署服务';
-  }
-  return message;
-}
-
 type SessionListCache = {
   fetchedAt: number;
   limit: number;
@@ -995,6 +998,30 @@ type SessionListCache = {
 };
 
 const sessionListCacheByUser = new Map<string, SessionListCache>();
+const sessionListEmptyLogAtByUser = new Map<string, number>();
+
+function logSessionListEmpty(input: {
+  userId: string;
+  source: 'db_summary' | 'memory_reconcile';
+  ownedDbCount: number;
+  memoryCount: number;
+  refresh: boolean;
+}) {
+  const now = Date.now();
+  const lastLoggedAt = sessionListEmptyLogAtByUser.get(input.userId) || 0;
+  if (now - lastLoggedAt < 30000) {
+    return;
+  }
+  sessionListEmptyLogAtByUser.set(input.userId, now);
+  console.warn('[TASK_SESSION_LIST_EMPTY]', {
+    userId: input.userId,
+    source: input.source,
+    ownedDbCount: input.ownedDbCount,
+    memoryCount: input.memoryCount,
+    refresh: input.refresh,
+    loggedAt: new Date(now).toISOString(),
+  });
+}
 
 function mapStageFromStatus(status: string | null | undefined) {
   if (status === 'completed') return 'completed';
@@ -1208,7 +1235,7 @@ export async function ensureTaskSessionRuntime(sessionId: string) {
   });
   await syncTaskSessionSandboxBinding(sessionId, provision.sessionId, workspaceRoot);
   await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
-  await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
+  await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
   await touchSandbox(provision.sessionId, 'runtime_start_new');
   await reconcileTaskSessionDuplicateEnvironments(sessionId, provision.sessionId);
 
@@ -1275,7 +1302,15 @@ type OpencodeFileContent = {
   mimeType?: string;
 };
 
-type WorkspacePreviewType = 'text' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+type WorkspacePreviewType =
+  | 'text'
+  | 'markdown'
+  | 'html'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'binary';
 
 async function listOpencodeDirectory(
   orchestratorSessionId: string,
@@ -1491,13 +1526,19 @@ async function buildWorkspaceTreeFromSandbox(input: {
   };
 }
 
-function normalizeHistoricalPath(value: unknown): string {
-  const normalized = normalizeWorkspacePath(typeof value === 'string' ? value : '');
+function normalizeHistoricalPath(value: unknown, workspaceRoot: string): string {
+  const normalized = resolveWorkspaceRelativeRequestPath(
+    typeof value === 'string' ? value : '',
+    workspaceRoot
+  );
   if (!normalized || normalized === '.') return '';
   return normalized;
 }
 
-function buildHistoricalWorkspaceItems(messages: Array<{ metadata?: unknown }>): Array<{ path: string; type: 'file' | 'dir' }> {
+function buildHistoricalWorkspaceItems(
+  messages: Array<{ metadata?: unknown }>,
+  workspaceRoot: string
+): Array<{ path: string; type: 'file' | 'dir' }> {
   const filePaths = new Set<string>();
   const dirPaths = new Set<string>();
 
@@ -1508,17 +1549,17 @@ function buildHistoricalWorkspaceItems(messages: Array<{ metadata?: unknown }>):
     const candidates: string[] = [];
     const rawFilePaths = Array.isArray(metadata.filePaths) ? metadata.filePaths : [];
     for (const raw of rawFilePaths) {
-      const path = normalizeHistoricalPath(raw);
+      const path = normalizeHistoricalPath(raw, workspaceRoot);
       if (path) candidates.push(path);
     }
     const rawFileChanges = Array.isArray(metadata.fileChanges) ? metadata.fileChanges : [];
     for (const raw of rawFileChanges) {
       if (!raw || typeof raw !== 'object') continue;
-      const path = normalizeHistoricalPath((raw as Record<string, unknown>).path);
+      const path = normalizeHistoricalPath((raw as Record<string, unknown>).path, workspaceRoot);
       if (path) candidates.push(path);
     }
     for (const key of ['path', 'targetPath']) {
-      const path = normalizeHistoricalPath(metadata[key]);
+      const path = normalizeHistoricalPath(metadata[key], workspaceRoot);
       if (path) candidates.push(path);
     }
 
@@ -1559,11 +1600,17 @@ async function buildWorkspaceFallbackFromMessageHistory(input: {
   limit: number;
 }): Promise<WorkspaceDirectoryCachePayload | null> {
   const recent = await taskCreationSessionDAO.getRecentMessages(input.sessionId, 50);
-  const recentItems = buildHistoricalWorkspaceItems(recent as Array<{ metadata?: unknown }>);
+  const recentItems = buildHistoricalWorkspaceItems(
+    recent as Array<{ metadata?: unknown }>,
+    input.workspaceRoot
+  );
   const allItems =
     recentItems.length > 0
       ? recentItems
-      : buildHistoricalWorkspaceItems((await taskCreationSessionDAO.getMessages(input.sessionId)) as Array<{ metadata?: unknown }>);
+      : buildHistoricalWorkspaceItems(
+          (await taskCreationSessionDAO.getMessages(input.sessionId)) as Array<{ metadata?: unknown }>,
+          input.workspaceRoot
+        );
   if (allItems.length === 0) {
     return null;
   }
@@ -1594,6 +1641,57 @@ async function buildWorkspaceFallbackFromMessageHistory(input: {
 
 function normalizeWorkspacePath(input: string): string {
   return input.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function normalizeWorkspaceRootPath(input: string): string {
+  return String(input || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function resolveWorkspaceRelativeRequestPath(
+  input: string,
+  workspaceRoot: string,
+  options?: { allowWorkspaceRoot?: boolean }
+): string | null {
+  const raw = String(input || '').trim().replace(/\\/g, '/');
+  if (!raw) return null;
+  const allowWorkspaceRoot = Boolean(options?.allowWorkspaceRoot);
+  const normalizedRoot = normalizeWorkspaceRootPath(workspaceRoot);
+  const rootWithoutLeadingSlash = normalizedRoot.replace(/^\/+/, '');
+  const parentRootWithoutLeadingSlash = rootWithoutLeadingSlash.includes('/')
+    ? rootWithoutLeadingSlash.slice(0, rootWithoutLeadingSlash.lastIndexOf('/'))
+    : '';
+
+  let candidate = raw;
+  if (candidate.startsWith('/') || candidate.startsWith('\\')) {
+    if (!normalizedRoot) return null;
+    if (candidate === normalizedRoot) {
+      candidate = '';
+    } else if (candidate.startsWith(`${normalizedRoot}/`)) {
+      candidate = candidate.slice(normalizedRoot.length + 1);
+    } else {
+      return null;
+    }
+  } else if (rootWithoutLeadingSlash) {
+    if (candidate === rootWithoutLeadingSlash) {
+      candidate = '';
+    } else if (candidate.startsWith(`${rootWithoutLeadingSlash}/`)) {
+      candidate = candidate.slice(rootWithoutLeadingSlash.length + 1);
+    } else if (
+      parentRootWithoutLeadingSlash &&
+      candidate.startsWith(`${parentRootWithoutLeadingSlash}/`)
+    ) {
+      return null;
+    }
+  }
+
+  const normalized = normalizeWorkspacePath(candidate.replace(/^\.\/+/, ''));
+  if (!normalized) {
+    return allowWorkspaceRoot ? '' : null;
+  }
+  if (isUnsafePath(normalized)) {
+    return null;
+  }
+  return normalized;
 }
 
 function shellEscape(value: string): string {
@@ -2522,6 +2620,228 @@ function isSandboxNotFoundError(error: unknown): boolean {
   );
 }
 
+function isWorkspaceFileNotFoundError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  const name = error instanceof Error ? String(error.name || '').toLowerCase() : '';
+  return (
+    name === 'notfounderror' ||
+    normalized.includes("does not exist") ||
+    normalized.includes('no such file') ||
+    normalized.includes('enoent') ||
+    normalized.includes('file not found')
+  );
+}
+
+function resolveRuntimeRestoreSourceKey(runtime: unknown): string {
+  const record = (runtime || {}) as Record<string, unknown>;
+  return (
+    asText(record.codexRestoreSourceKey) ||
+    asText(record.r2RestoreSourceKey) ||
+    asText(record.r2ArchiveKey) ||
+    ''
+  );
+}
+
+async function tryRestoreWorkspaceForPreviewRead(
+  sessionId: string,
+  orchestratorSessionId: string,
+  session: FileSessionRecord | null,
+): Promise<boolean> {
+  if (!isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) return false;
+  const restoreSourceKey = resolveRuntimeRestoreSourceKey(session?.runtime);
+  if (!restoreSourceKey) return false;
+  try {
+    const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
+    if (restored) {
+      await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
+      await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
+      return true;
+    }
+    return false;
+  } catch (restoreError) {
+    console.warn('[WORKSPACE_RAW_RESTORE_ON_MISSING_FAILED]', {
+      sessionId,
+      orchestratorSessionId,
+      error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+    });
+    return false;
+  }
+}
+
+function resolvePathBasename(filePath: string): string {
+  const normalized = String(filePath || '').replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts.length > 0 ? String(parts[parts.length - 1] || '') : '';
+}
+
+function resolvePathExt(filePath: string): string {
+  const base = resolvePathBasename(filePath);
+  const index = base.lastIndexOf('.');
+  return index > 0 ? base.slice(index + 1).toLowerCase() : '';
+}
+
+function decodeCachedWorkspaceFileBytes(payload: Record<string, unknown> | null | undefined): Buffer | null {
+  const data = payload || null;
+  if (!data) return null;
+  if (Boolean(data.truncated)) return null;
+  if (typeof data.content !== 'string') return null;
+  const encoding = asText(data.encoding).toLowerCase();
+  const isBinary = Boolean(data.isBinary) || encoding === 'base64';
+  if (!isBinary) {
+    return Buffer.from(data.content, 'utf8');
+  }
+  const base64 = String(data.content || '').trim();
+  if (!base64) return Buffer.alloc(0);
+  try {
+    return Buffer.from(base64, 'base64');
+  } catch {
+    return null;
+  }
+}
+
+async function writeWorkspaceFileToSandbox(
+  orchestratorSessionId: string,
+  workspaceRoot: string,
+  normalizedPath: string,
+  bytes: Buffer,
+): Promise<void> {
+  const slash = normalizedPath.lastIndexOf('/');
+  if (slash > 0) {
+    const dirPath = normalizedPath.slice(0, slash);
+    const absoluteDir = resolveWorkspaceAbsolutePath(workspaceRoot, dirPath);
+    await e2bConnector.runCommand(
+      orchestratorSessionId,
+      `mkdir -p ${shellEscape(absoluteDir)}`,
+      {
+        timeoutMs: 10000,
+      },
+    );
+  }
+  const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
+  await e2bConnector.writeFile(orchestratorSessionId, absolutePath, bytes);
+}
+
+async function tryRebuildWorkspaceFileFromCache(input: {
+  sessionId: string;
+  tenantKey: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  if (!input.tenantKey) return false;
+  try {
+    const dbCached = await taskSessionWorkspaceCacheDAO.get({
+      sessionId: input.sessionId,
+      tenantKey: input.tenantKey,
+      cacheType: 'file',
+      cacheKey: input.normalizedPath,
+    });
+    const dbBytes = decodeCachedWorkspaceFileBytes(pickRecord(dbCached?.data));
+    if (dbBytes) {
+      await writeWorkspaceFileToSandbox(
+        input.orchestratorSessionId,
+        input.workspaceRoot,
+        input.normalizedPath,
+        dbBytes,
+      );
+      return true;
+    }
+
+    const stale = await taskCreationCacheStore.getWorkspaceFile(
+      input.tenantKey,
+      input.sessionId,
+      input.normalizedPath,
+      { allowStale: true },
+    );
+    const staleBytes = decodeCachedWorkspaceFileBytes(
+      stale && stale.data && typeof stale.data === 'object'
+        ? (stale.data as Record<string, unknown>)
+        : null,
+    );
+    if (staleBytes) {
+      await writeWorkspaceFileToSandbox(
+        input.orchestratorSessionId,
+        input.workspaceRoot,
+        input.normalizedPath,
+        staleBytes,
+      );
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.warn('[WORKSPACE_RAW_REBUILD_FROM_CACHE_FAILED]', {
+      sessionId: input.sessionId,
+      path: input.normalizedPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function tryRebuildWorkspaceFileFromDeliverables(input: {
+  sessionId: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  try {
+    const deliverables = await taskSessionDeliverableService.listSessionDeliverables(input.sessionId);
+    if (!deliverables.length) return false;
+    const normalizedTarget = normalizeWorkspacePath(input.normalizedPath);
+    const targetBasename = resolvePathBasename(input.normalizedPath);
+    const targetExt = resolvePathExt(input.normalizedPath);
+    const candidate =
+      deliverables.find((item) => normalizeWorkspacePath(item.path) === normalizedTarget) ||
+      deliverables.find((item) => {
+        const base = resolvePathBasename(item.path);
+        if (!base || base !== targetBasename) return false;
+        if (!targetExt) return true;
+        return resolvePathExt(item.path) === targetExt;
+      }) ||
+      null;
+    if (!candidate) return false;
+    const artifact = await taskSessionDeliverableService.getSessionDeliverable(
+      input.sessionId,
+      candidate.id,
+    );
+    if (!artifact?.storageKey) return false;
+    const bytes = await downloadFromR2(artifact.storageKey);
+    await writeWorkspaceFileToSandbox(
+      input.orchestratorSessionId,
+      input.workspaceRoot,
+      input.normalizedPath,
+      bytes,
+    );
+    return true;
+  } catch (error) {
+    console.warn('[WORKSPACE_RAW_REBUILD_FROM_DELIVERABLE_FAILED]', {
+      sessionId: input.sessionId,
+      path: input.normalizedPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+async function tryRebuildWorkspaceFileForPreview(input: {
+  sessionId: string;
+  tenantKey: string;
+  normalizedPath: string;
+  workspaceRoot: string;
+  orchestratorSessionId: string;
+}): Promise<boolean> {
+  const cacheRebuilt = await tryRebuildWorkspaceFileFromCache(input);
+  if (cacheRebuilt) return true;
+  return tryRebuildWorkspaceFileFromDeliverables({
+    sessionId: input.sessionId,
+    normalizedPath: input.normalizedPath,
+    workspaceRoot: input.workspaceRoot,
+    orchestratorSessionId: input.orchestratorSessionId,
+  });
+}
+
 async function resolveRuntimeStatus(orchestratorSessionId?: string | null) {
   const sessionId = asText(orchestratorSessionId);
   if (!sessionId) return null;
@@ -2679,6 +2999,9 @@ function detectPreviewType(filePath: string, mimeType: string, isBinary: boolean
     }
     if (mimeType === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx') {
       return 'markdown';
+    }
+    if (mimeType === 'text/html' || ext === 'html' || ext === 'htm') {
+      return 'html';
     }
     return 'text';
   }
@@ -2891,6 +3214,8 @@ function updateSseClientCursor(key: string, cursor: number) {
 router.post('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
+    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
+    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const requestedSessionId = asText(req.body?.sessionId);
     const requestedTitle = asText(req.body?.title);
     const requestedMode = asText(req.body?.mode);
@@ -2989,6 +3314,23 @@ router.post('/sessions', async (req, res) => {
           userId: currentUser.userId,
           status: 'in_progress',
         });
+      } else {
+        const normalizedExistingUserId = normalizeUserId(existingDbSession.userId);
+        if (normalizedExistingUserId && !isSameUserId(normalizedExistingUserId, currentUser.userId)) {
+          if (legacyUserIdHint && isSameUserId(normalizedExistingUserId, legacyUserIdHint)) {
+            await taskCreationSessionDAO.adoptSessionFromLegacyUserId(
+              session.id,
+              currentUser.userId,
+              legacyUserIdHint
+            );
+          } else {
+            return res.status(403).json({
+              success: false,
+              error: '当前用户无权访问该会话',
+            });
+          }
+        }
+        await taskCreationSessionDAO.bindUserIfMissing(session.id, currentUser.userId);
       }
       if (isNewSession) {
         await taskCreationSessionDAO.addMessage({
@@ -3035,6 +3377,8 @@ router.post('/sessions', async (req, res) => {
 router.get('/sessions', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
+    const legacyUserIdHint = resolveLegacyUserIdHint(req, currentUser.userId);
+    await upsertLegacyUserMapping(currentUser.userId, legacyUserIdHint);
     const rawLimit = (req.query.limit as string | undefined)?.trim();
     let limit = 200;
     if (rawLimit === 'all') {
@@ -3052,7 +3396,35 @@ router.get('/sessions', async (req, res) => {
       60000
     );
     const now = Date.now();
-    const ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
+    let ownedDbSessions = await taskCreationSessionDAO.getRecentSessions(limit, currentUser.userId);
+    if (ownedDbSessions.length === 0) {
+      try {
+        const legacyUserIds = await collectLegacyUserIdsForMigration(currentUser.userId, legacyUserIdHint);
+        if (legacyUserIds.length > 0) {
+          for (const legacyUserId of legacyUserIds) {
+            const reboundLegacy = await taskCreationSessionDAO.rebindSessionsFromLegacyUserId(
+              currentUser.userId,
+              legacyUserId,
+              limit
+            );
+            if (reboundLegacy.length > 0) {
+              ownedDbSessions = reboundLegacy;
+              console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_USER]', {
+                userId: currentUser.userId,
+                legacyUserId,
+                reboundCount: reboundLegacy.length,
+              });
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[TASK_SESSION_LIST_REBOUND_LEGACY_FAILED]', {
+          userId: currentUser.userId,
+          error,
+        });
+      }
+    }
     const ownedSessionIds = new Set(ownedDbSessions.map((item) => String(item.id)));
 
     const rawSessions = await taskCreationFileMemoryStore.listSessions(limit);
@@ -3085,6 +3457,15 @@ router.get('/sessions', async (req, res) => {
 
     if (sessions.length === 0) {
       const summaries = await buildSessionSummaryFromDb(limit, currentUser.userId);
+      if (summaries.length === 0) {
+        logSessionListEmpty({
+          userId: currentUser.userId,
+          source: 'db_summary',
+          ownedDbCount: ownedDbSessions.length,
+          memoryCount: rawSessions.length,
+          refresh,
+        });
+      }
       sessionListCacheByUser.set(currentUser.userId, {
         fetchedAt: now,
         limit,
@@ -3113,6 +3494,15 @@ router.get('/sessions', async (req, res) => {
       limit,
       data: sessions,
     });
+    if (sessions.length === 0) {
+      logSessionListEmpty({
+        userId: currentUser.userId,
+        source: 'memory_reconcile',
+        ownedDbCount: ownedDbSessions.length,
+        memoryCount: rawSessions.length,
+        refresh,
+      });
+    }
 
     return res.json({
       success: true,
@@ -3183,7 +3573,7 @@ router.post('/sessions/:sessionId/title/resolve', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const input = normalizeSessionTitleText(req.body?.message);
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
@@ -3256,7 +3646,7 @@ router.post('/sessions/:sessionId/title/rename', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3313,7 +3703,7 @@ router.post('/sessions/:sessionId/favorite', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await resolveTaskSessionRecord(sessionId);
     if (!session) {
       return res.status(404).json({
@@ -3362,7 +3752,7 @@ router.get('/sessions/:sessionId', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const sessionData = await resolveTaskSessionMeta(sessionId);
 
     if (!sessionData) {
@@ -3423,14 +3813,14 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await resolveTaskSessionMeta(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
     const shouldPreferOpencodeNativeHistory =
       asText(session?.mode) === 'sandbox' &&
       (asText(session?.executor) === 'opencode' || asText(session?.runtime?.opencodeSessionId));
     if (!shouldPreferOpencodeNativeHistory) {
-      const redisCachedPage = await taskSessionRedisCacheService.getRecentMessagesPage({
+      const redisCachedPage = await taskSessionCacheFacade.getRecentMessagesPage({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -3491,7 +3881,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
         hasOlderHistory: mayHaveOlderHistory,
         source: 'resolved_recent',
       };
-      await taskSessionRedisCacheService.setRecentMessagesPage({
+      await taskSessionCacheFacade.setRecentMessagesPage({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -3516,9 +3906,9 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
     const responsePayload = {
       ...page,
       hasOlderHistory: mayHaveOlderHistory,
-      source: 'recent_cache',
+      source: taskSessionCacheFacade.isRedisEnabled() ? 'recent_cache' : 'recent_db_no_redis',
     };
-    await taskSessionRedisCacheService.setRecentMessagesPage({
+    await taskSessionCacheFacade.setRecentMessagesPage({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -3563,7 +3953,7 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await resolveTaskSessionMeta(sessionId);
     const beforeCursor = asTimelineCursor(req.query.before);
     const limit = clampNumber(Number(req.query.limit) || 50, 1, 200);
@@ -3575,7 +3965,7 @@ router.get('/sessions/:sessionId/messages/history', async (req, res) => {
         : fullTimeline;
     const pageMessages = olderMessages.slice(Math.max(olderMessages.length - limit, 0));
     const page = buildTimelinePage(pageMessages);
-    await taskSessionRedisCacheService.setHistoryCursor({
+    await taskSessionCacheFacade.setHistoryCursor({
       sessionId,
       userId: currentUser.userId,
       tenantKey: resolveTenantKey(currentUser),
@@ -3627,7 +4017,7 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await resolveTaskSessionMeta(sessionId);
     const messages = await resolveRenderableTimelineMessages(sessionId, session);
 
@@ -4156,27 +4546,31 @@ router.post('/sessions/:sessionId/connectors/:connectorKey/attach', async (req, 
     }
     const ownershipError = resolveOwnedTaskSessionError(error);
     const connectorOwnershipError = resolveSessionConnectorOwnershipError(error);
+    const attachError = resolveAttachConnectorError(error);
     const message = ownershipError?.message || connectorOwnershipError?.message || error?.message || '挂载连接器失败';
     writeConnectorDebugLog('[CONNECTOR_ATTACH_ROUTE_FAILED]', {
       taskSessionId: req.params.sessionId,
       connectorKey: req.params.connectorKey,
+      errorCode: attachError?.code || null,
       error: message,
     }, 'error');
     const normalized = String(message).toLowerCase();
-    const status =
-      ownershipError?.status === 403 || connectorOwnershipError?.status === 403
+    const status = attachError?.status
+      ? attachError.status
+      : ownershipError?.status === 403 || connectorOwnershipError?.status === 403
         ? 403
         : connectorOwnershipError?.status === 401
           ? 401
-        : normalized.includes('无权') || normalized.includes('登录') || normalized.includes('x-user-id')
-        ? 401
-        : normalized.includes('未授权') || normalized.includes('尚未完成授权')
-          ? 409
-          : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
-            ? 504
-          : 400;
+          : normalized.includes('无权') || normalized.includes('登录')
+            ? 401
+            : normalized.includes('未授权') || normalized.includes('尚未完成授权')
+              ? 409
+              : normalized.includes('osac 请求超时') || normalized.includes('request timeout')
+                ? 504
+                : 400;
     return res.status(status).json({
       success: false,
+      errorCode: attachError?.code,
       error: getPublicErrorMessage(message),
     });
   }
@@ -4338,7 +4732,8 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    const tenantKey = resolveTenantKey(currentUser);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -4371,7 +4766,30 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
     const nekoMeta = pickRecord(debugMeta.neko);
     const baseUrl = asText(nekoMeta.baseUrl) || asText(nekoMeta.url);
     const clientUrl = asText(nekoMeta.clientUrl);
-    const status = asText(nekoMeta.status) || environment.status;
+    let status = asText(nekoMeta.status) || environment.status;
+    let reasonCode = asText(nekoMeta.reasonCode) || undefined;
+    let message = baseUrl ? asText(nekoMeta.message) || undefined : '调试服务未配置或未启动';
+    if (status === 'running' || status === 'ready') {
+      const health = await probeNekoIceHealth(orchestratorSessionId);
+      if (health.failed) {
+        status = 'failed';
+        reasonCode = 'ice_failed';
+        message = '远程调试 ICE 连接失败，请检查 TURN 配置后重试';
+        await sandboxExecutionEnvironmentDAO.updateMetadata(orchestratorSessionId, {
+          ...metadata,
+          debug: {
+            ...(metadata as any)?.debug,
+            neko: {
+              ...nekoMeta,
+              status,
+              reasonCode,
+              message,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
+    }
     const ready = Boolean(baseUrl) && (status === 'running' || status === 'ready') && environment.status === 'ready';
 
     return res.json({
@@ -4382,7 +4800,8 @@ router.get('/sessions/:sessionId/debug', async (req, res) => {
         status: status || environment.status,
         updatedAt: toIso(environment.updatedAt as any),
         sandboxId: orchestratorSessionId,
-        message: baseUrl ? asText(nekoMeta.message) || undefined : '调试服务未配置或未启动',
+        reasonCode,
+        message,
       },
     });
   } catch (error: any) {
@@ -4416,7 +4835,8 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    const tenantKey = resolveTenantKey(currentUser);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     let session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       session = await hydrateFileSessionFromDb(sessionId);
@@ -4450,13 +4870,28 @@ router.post('/sessions/:sessionId/debug/start', async (req, res) => {
       });
     }
 
-    const result = await ensureNekoDebug(orchestratorSessionId);
+    let dynamicIceServers: Array<{ urls: string[]; username?: string; credential?: string }> | null = null;
+    try {
+      dynamicIceServers = await cloudflareTurnService.issueIceServersForUser(currentUser.userId);
+    } catch (error) {
+      console.warn('[TURN_ICE_GENERATE_FAILED]', {
+        userId: currentUser.userId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error || ''),
+      });
+    }
+    const result = await ensureNekoDebug(orchestratorSessionId, {
+      requireTurn: true,
+      strictIceCheck: true,
+      ...(dynamicIceServers ? { iceServers: dynamicIceServers } : {}),
+    });
     return res.json({
       success: true,
       data: {
         ready: result.ready,
         url: result.url,
         status: result.status,
+        reasonCode: result.reasonCode,
         updatedAt: result.updatedAt,
         sandboxId: result.sandboxId,
         message: result.message,
@@ -4503,7 +4938,11 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
     }
 
     const deploymentId = asText(req.query.deploymentId);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, deploymentId || undefined);
+    const data = await buildTaskSessionDeploymentResponse({
+      userId: currentUser.userId,
+      session,
+      selectedDeploymentId: deploymentId || undefined,
+    });
     return res.json({
       success: true,
       data,
@@ -4515,6 +4954,95 @@ router.get('/sessions/:sessionId/deployment', async (req, res) => {
     return res.status(authError?.status || ownershipError?.status || 500).json({
       success: false,
       error: getPublicErrorMessage(authError?.message || ownershipError?.message || error?.message || '获取部署信息失败，请稍后重试'),
+    });
+  }
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/deployment/template
+ * 获取当前工作区的部署模板基线状态
+ */
+router.get('/sessions/:sessionId/deployment/template', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    const runtime = await ensureTaskSessionRuntime(sessionId);
+    const orchestratorSessionId = asText(runtime.orchestratorSessionId);
+    const environment = orchestratorSessionId
+      ? await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId)
+      : null;
+    const workspaceRoot =
+      asText((pickRecord(environment?.metadata) as any).opencodeWorkspaceRoot) ||
+      resolveOpencodeWorkspacePath(sessionId);
+
+    const data = await inspectTaskSessionDeploymentTemplate({
+      orchestratorSessionId,
+      workspaceRoot,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('获取部署模板基线失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          error?.message ||
+          '获取部署模板基线失败，请稍后重试'
+      ),
+    });
+  }
+});
+
+/**
+ * POST /api/task-creation/sessions/:sessionId/deployment/token/rotate
+ * 轮换当前会话绑定的 Railway Project Token
+ */
+router.post('/sessions/:sessionId/deployment/token/rotate', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const currentUser = currentUserResolver.require(req);
+    await sessionConnectorService.assertSessionOwnership(sessionId, currentUser.userId);
+    const session = await resolveTaskSessionRecord(sessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: getPublicErrorMessage('会话不存在'),
+      });
+    }
+
+    await platformDeploymentAccountService.rotateProjectToken(currentUser.userId, sessionId);
+    const data = await buildTaskSessionDeploymentResponse({
+      userId: currentUser.userId,
+      session,
+    });
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    const ownershipError = resolveSessionConnectorOwnershipError(error);
+    console.error('轮换部署凭证失败:', error);
+    return res.status(authError?.status || ownershipError?.status || 400).json({
+      success: false,
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || error?.message || '轮换部署凭证失败，请稍后重试'
+      ),
     });
   }
 });
@@ -4550,48 +5078,18 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
         error: getPublicErrorMessage('未找到可部署的工作区，请先生成项目文件'),
       });
     }
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const deploymentRequestedAt = Date.now();
-    const platformDeployment = {
-      adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-      token: account.accessToken,
-      projectId: account.projectId,
-      projectName: account.projectName,
-      environmentId: account.environmentId,
-      environmentName: account.environmentName,
-      serviceId: account.serviceId,
-      serviceName: account.serviceName,
-      repository: account.githubRepoFullName,
-    };
-    await publishTaskSessionWorkspaceToRepository({
-      orchestratorSessionId,
-      workspaceRoot,
-      repository: {
-        owner: account.githubRepoOwner || '',
-        name: account.githubRepoName || '',
-        fullName: account.githubRepoFullName || '',
-        htmlUrl: account.githubRepoUrl,
-        defaultBranch: account.githubDefaultBranch || 'main',
-      },
-      sessionId,
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'deploy',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      workspacePath: workspaceRoot,
+      resolvedOrchestratorSessionId: orchestratorSessionId,
+      resolvedEnvironment: environment,
     });
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await waitForRailwayDeploymentAfterSourceSync(
-      {
-        ...metadata,
-        platformDeployment,
-      },
-      {
-        since: deploymentRequestedAt,
-        timeoutMs: 120_000,
-        pollIntervalMs: 4_000,
-      }
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -4599,7 +5097,9 @@ router.post('/sessions/:sessionId/deployment/deploy', async (req, res) => {
     console.error('触发部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error)),
+      error: getPublicErrorMessage(
+        authError?.message || ownershipError?.message || getTaskSessionDeploymentErrorMessage(error)
+      ),
     });
   }
 });
@@ -4629,30 +5129,16 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
       });
     }
 
-    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRedeploy(
-      {
-        ...metadata,
-        platformDeployment: {
-          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-          token: account.accessToken,
-          projectId: account.projectId,
-          projectName: account.projectName,
-          environmentId: account.environmentId,
-          environmentName: account.environmentName,
-          serviceId: account.serviceId,
-          serviceName: account.serviceName,
-        },
-      },
-      deploymentId
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'redeploy',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      deploymentId,
+    });
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -4660,7 +5146,12 @@ router.post('/sessions/:sessionId/deployment/redeploy', async (req, res) => {
     console.error('重新部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '重新部署失败'),
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          getTaskSessionDeploymentErrorMessage(error) ||
+          '重新部署失败'
+      ),
     });
   }
 });
@@ -4690,30 +5181,16 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
       });
     }
 
-    const { orchestratorSessionId, environment } = await resolveTaskSessionEnvironment(session);
-    const account = await platformDeploymentAccountService.ensureUserAccount(currentUser.userId);
-    const metadata = pickRecord(environment?.metadata);
-    const actionResult = await triggerRailwayRollback(
-      {
-        ...metadata,
-        platformDeployment: {
-          adminToken: process.env.RAILWAY_ADMIN_TOKEN,
-          token: account.accessToken,
-          projectId: account.projectId,
-          projectName: account.projectName,
-          environmentId: account.environmentId,
-          environmentName: account.environmentName,
-          serviceId: account.serviceId,
-          serviceName: account.serviceName,
-        },
-      },
-      deploymentId
-    );
-    await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
-    const data = await buildRailwayDeploymentResponse(currentUser.userId, session, actionResult.deploymentId);
+    const result = await executeTaskSessionDeploymentAction({
+      action: 'rollback',
+      taskSessionId: sessionId,
+      userId: currentUser.userId,
+      session,
+      deploymentId,
+    });
     return res.json({
       success: true,
-      data,
+      data: result.panel,
     });
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
@@ -4721,7 +5198,12 @@ router.post('/sessions/:sessionId/deployment/rollback', async (req, res) => {
     console.error('回滚部署失败:', error);
     return res.status(authError?.status || ownershipError?.status || 400).json({
       success: false,
-      error: getPublicErrorMessage(authError?.message || ownershipError?.message || getDeploymentErrorMessage(error) || '回滚部署失败'),
+      error: getPublicErrorMessage(
+        authError?.message ||
+          ownershipError?.message ||
+          getTaskSessionDeploymentErrorMessage(error) ||
+          '回滚部署失败'
+      ),
     });
   }
 });
@@ -4743,7 +5225,10 @@ router.get('/sessions/:sessionId/deployment/database', async (req, res) => {
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.getSummary(account);
     return res.json({
       success: true,
@@ -4787,7 +5272,10 @@ router.get('/sessions/:sessionId/deployment/database/rows', async (req, res) => 
 
     const page = clampNumber(Number(req.query.page || 1), 1, 10_000);
     const pageSize = clampNumber(Number(req.query.pageSize || 50), 10, 200);
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.getRows(account, table, page, pageSize);
     return res.json({
       success: true,
@@ -4830,7 +5318,10 @@ router.post('/sessions/:sessionId/deployment/database/rows', async (req, res) =>
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.insertRow(account, table, values);
     return res.json({
       success: true,
@@ -4874,7 +5365,10 @@ router.patch('/sessions/:sessionId/deployment/database/rows', async (req, res) =
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.updateRow(account, table, locator, values);
     return res.json({
       success: true,
@@ -4917,7 +5411,10 @@ router.delete('/sessions/:sessionId/deployment/database/rows', async (req, res) 
       });
     }
 
-    const account = await platformDeploymentAccountService.ensureDatabaseResources(currentUser.userId);
+    const account = await platformDeploymentAccountService.ensureProjectDatabaseResources(
+      currentUser.userId,
+      sessionId
+    );
     const data = await railwayDatabaseService.deleteRow(account, table, locator);
     return res.json({
       success: true,
@@ -4942,17 +5439,23 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const tenantKey = resolveTenantKey(currentUser);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const rawPath = String(req.query.path || '').trim();
-    if (rawPath && isUnsafePath(rawPath)) {
+    const resolvedDirPath = rawPath
+      ? resolveWorkspaceRelativeRequestPath(rawPath, workspaceRoot, {
+          allowWorkspaceRoot: true,
+        })
+      : '';
+    if (rawPath && resolvedDirPath === null) {
       return res.status(400).json({
         success: false,
         error: getPublicErrorMessage('非法路径'),
       });
     }
-    const dirPath = normalizeWorkspacePath(rawPath);
+    const dirPath = resolvedDirPath || '';
     const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
     const rawCursor = Number(req.query.cursor || 0);
     const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
@@ -4968,7 +5471,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     });
     const redisCachedPage = !parseRefreshFlag(req.query.refresh)
       ? asWorkspaceDirectoryCachePayload(
-          await taskSessionRedisCacheService.getWorkspaceDir({
+          await taskSessionCacheFacade.getWorkspaceDir({
             sessionId,
             userId: currentUser.userId,
             tenantKey,
@@ -5026,7 +5529,6 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       });
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const listWorkspaceNodes = async () =>
       isE2bWorkspaceExecutor(workspaceExecutor)
         ? await listSandboxDirectory(orchestratorSessionId, workspaceRoot, dirPath)
@@ -5042,7 +5544,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
           const restored = await restoreWorkspaceIfArchived(orchestratorSessionId);
           if (restored) {
             await taskCreationCacheStore.invalidateWorkspaceBySession(sessionId);
-            await taskSessionRedisCacheService.invalidateWorkspaceBySessionId(sessionId);
+            await taskSessionCacheFacade.invalidateWorkspaceBySessionId(sessionId);
             nodes = await listWorkspaceNodes();
           }
         } catch (restoreError) {
@@ -5125,7 +5627,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     }
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
-      await taskSessionRedisCacheService.setWorkspaceDir({
+      await taskSessionCacheFacade.setWorkspaceDir({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5166,7 +5668,13 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     const rawPath = String(req.query.path || '').trim();
-    const dirPath = normalizeWorkspacePath(rawPath);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const resolvedDirPath = rawPath
+      ? resolveWorkspaceRelativeRequestPath(rawPath, workspaceRoot, {
+          allowWorkspaceRoot: true,
+        })
+      : '';
+    const dirPath = resolvedDirPath === null ? normalizeWorkspacePath(rawPath) : resolvedDirPath;
     const limit = clampNumber(Number(req.query.limit || 200), 50, 1000);
     const rawCursor = Number(req.query.cursor || 0);
     const cursor = Number.isFinite(rawCursor) && rawCursor > 0 ? Math.floor(rawCursor) : 0;
@@ -5174,7 +5682,7 @@ router.get('/sessions/:sessionId/workspace/dir', async (req, res) => {
       String(req.query.includeIgnored ?? '1').trim().toLowerCase()
     );
     if (tenantKey && isE2bWorkspaceExecutor(workspaceExecutor)) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceDir({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceDir({
         sessionId,
         userId: currentUser?.userId || tenantKey,
         tenantKey,
@@ -5238,13 +5746,13 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceTree({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5349,7 +5857,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       60000
     );
     await taskCreationCacheStore.setWorkspaceTree(tenantKey, sessionId, parsed, ttlMs);
-    await taskSessionRedisCacheService.setWorkspaceTree({
+    await taskSessionCacheFacade.setWorkspaceTree({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -5371,6 +5879,13 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
     const ownershipError = resolveOwnedTaskSessionError(error);
     if (ownershipError) {
       return res.status(ownershipError.status).json({
@@ -5383,7 +5898,7 @@ router.get('/sessions/:sessionId/workspace/tree', async (req, res) => {
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (tenantKey && currentUser) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceTree({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceTree({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5445,22 +5960,22 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   try {
     const currentUser = currentUserResolver.require(req);
     const { sessionId } = req.params;
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
-    const relativePath = String(req.query.path || '').trim();
-    if (isUnsafePath(relativePath)) {
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
+    const rawRequestPath = String(req.query.path || '').trim();
+    const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath = resolveWorkspaceRelativeRequestPath(rawRequestPath, workspaceRoot);
+    if (!normalizedPath) {
       return res.status(400).json({
         success: false,
         error: getPublicErrorMessage('非法路径'),
       });
     }
-    const normalizedPath = relativePath.replace(/\\/g, '/');
-
-    const session = await taskCreationFileMemoryStore.getSession(sessionId);
     const refresh = parseRefreshFlag(req.query.refresh);
     const tenantKey = resolveTenantKey(currentUser);
     const workspaceExecutor = resolveWorkspaceExecutor(session);
     if (!refresh) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceFile({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
@@ -5535,7 +6050,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       });
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
     const maxBytes = clampNumber(Number(req.query.maxBytes || 200000), 20000, 500000);
     const maxBinaryBytes = clampNumber(
       Number(req.query.maxBinaryBytes || 2 * 1024 * 1024),
@@ -5647,7 +6161,7 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       300000
     );
     await taskCreationCacheStore.setWorkspaceFile(tenantKey, sessionId, normalizedPath, parsed, ttlMs);
-    await taskSessionRedisCacheService.setWorkspaceFile({
+    await taskSessionCacheFacade.setWorkspaceFile({
       sessionId,
       userId: currentUser.userId,
       tenantKey,
@@ -5671,6 +6185,13 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       cache: { hit: false },
     });
   } catch (error: any) {
+    const authError = resolveCurrentUserError(error);
+    if (authError) {
+      return res.status(authError.status).json({
+        success: false,
+        error: getPublicErrorMessage(authError.message),
+      });
+    }
     const ownershipError = resolveOwnedTaskSessionError(error);
     if (ownershipError) {
       return res.status(ownershipError.status).json({
@@ -5682,12 +6203,16 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
     const tenantKey = currentUser ? resolveTenantKey(currentUser) : '';
     const { sessionId } = req.params;
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath =
+      resolveWorkspaceRelativeRequestPath(String(req.query.path || '').trim(), workspaceRoot) ||
+      normalizeWorkspacePath(String(req.query.path || '').trim());
     if (tenantKey && currentUser) {
-      const redisCached = await taskSessionRedisCacheService.getWorkspaceFile({
+      const redisCached = await taskSessionCacheFacade.getWorkspaceFile({
         sessionId,
         userId: currentUser.userId,
         tenantKey,
-        path: String(req.query.path || '').trim().replace(/\\/g, '/'),
+        path: normalizedPath,
       });
       if (redisCached) {
         return res.json({
@@ -5702,7 +6227,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
       if (orchestratorSessionId) {
         await markSandboxClosed(orchestratorSessionId);
       }
-      const normalizedPath = String(req.query.path || '').trim().replace(/\\/g, '/');
       if (tenantKey && isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
         const dbCached = await taskSessionWorkspaceCacheDAO.get({
           sessionId,
@@ -5723,8 +6247,6 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
         error: getPublicErrorMessage('执行环境已关闭，请重新启动'),
       });
     }
-    const relativePath = String(req.query.path || '').trim();
-    const normalizedPath = relativePath.replace(/\\/g, '/');
     if (isE2bWorkspaceExecutor(resolveWorkspaceExecutor(session))) {
       const dbCached = await taskSessionWorkspaceCacheDAO.get({
         sessionId,
@@ -5758,21 +6280,23 @@ router.get('/sessions/:sessionId/workspace/file', async (req, res) => {
   }
 });
 
-/**
- * GET /api/task-creation/sessions/:sessionId/workspace/raw/*
- * 以原始内容返回会话工作区内的单个文件，供 iframe 预览和新标签页打开使用
- */
-router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+async function handleWorkspaceRawRequest(
+  req: express.Request,
+  res: express.Response,
+  options?: { headOnly?: boolean }
+) {
+  const headOnly = options?.headOnly === true;
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    const tenantKey = resolveTenantKey(currentUser);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
     const wildcardPath = String((req.params as Record<string, string | undefined>)['0'] || '').trim();
-    if (!wildcardPath || isUnsafePath(wildcardPath)) {
+    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
+    const normalizedPath = resolveWorkspaceRelativeRequestPath(wildcardPath, workspaceRoot);
+    if (!normalizedPath) {
       return res.status(400).type('text/plain; charset=utf-8').send('非法路径');
     }
-
-    const normalizedPath = wildcardPath.replace(/\\/g, '/');
     const session = await taskCreationFileMemoryStore.getSession(sessionId);
     if (!session) {
       return res.status(404).type('text/plain; charset=utf-8').send('会话不存在');
@@ -5789,27 +6313,69 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境未启动，无法读取文件');
     }
 
-    const workspaceRoot = resolveOpencodeWorkspacePath(sessionId);
-    let buffer: Buffer;
-    let mimeType: string;
+    let buffer: Buffer | null = null;
+    let mimeType = resolveMimeType(normalizedPath);
 
     if (isE2bWorkspaceExecutor(workspaceExecutor)) {
       const absolutePath = resolveWorkspaceAbsolutePath(workspaceRoot, normalizedPath);
-      buffer = Buffer.from(await e2bConnector.readFile(orchestratorSessionId, absolutePath));
-      mimeType = resolveMimeType(normalizedPath);
+      let rawContent: Uint8Array | null = null;
+      try {
+        rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+      } catch (readError) {
+        if (!isWorkspaceFileNotFoundError(readError)) {
+          throw readError;
+        }
+        let rebuilt = false;
+        const restored = await tryRestoreWorkspaceForPreviewRead(
+          sessionId,
+          orchestratorSessionId,
+          session,
+        );
+        if (restored) {
+          try {
+            rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+            rebuilt = true;
+          } catch (afterRestoreError) {
+            if (!isWorkspaceFileNotFoundError(afterRestoreError)) {
+              throw afterRestoreError;
+            }
+          }
+        }
+        if (!rebuilt) {
+          const recovered = await tryRebuildWorkspaceFileForPreview({
+            sessionId,
+            tenantKey,
+            normalizedPath,
+            workspaceRoot,
+            orchestratorSessionId,
+          });
+          if (!recovered) {
+            throw readError;
+          }
+          rawContent = await e2bConnector.readFile(orchestratorSessionId, absolutePath);
+        }
+      }
+      if (!rawContent) {
+        throw new Error('workspace_raw_content_unavailable');
+      }
+      if (!headOnly) {
+        buffer = Buffer.from(rawContent);
+      }
     } else {
       await ensureOpencodeServer(orchestratorSessionId, workspaceRoot);
       const content = await readOpencodeFile(orchestratorSessionId, workspaceRoot, normalizedPath);
-      const isBinary = content.type !== 'text' || content.encoding === 'base64';
       mimeType = resolveMimeType(normalizedPath, content.mimeType);
-      if (isBinary) {
-        const encoded =
-          content.encoding === 'base64'
-            ? String(content.content || '').trim()
-            : Buffer.from(String(content.content || ''), 'utf8').toString('base64');
-        buffer = Buffer.from(encoded, 'base64');
-      } else {
-        buffer = Buffer.from(String(content.content || ''), 'utf8');
+      if (!headOnly) {
+        const isBinary = content.type !== 'text' || content.encoding === 'base64';
+        if (isBinary) {
+          const encoded =
+            content.encoding === 'base64'
+              ? String(content.content || '').trim()
+              : Buffer.from(String(content.content || ''), 'utf8').toString('base64');
+          buffer = Buffer.from(encoded, 'base64');
+        } else {
+          buffer = Buffer.from(String(content.content || ''), 'utf8');
+        }
       }
     }
 
@@ -5820,7 +6386,10 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       'Content-Type',
       isTextLikeMimeType(mimeType) ? `${mimeType}; charset=utf-8` : mimeType
     );
-    return res.status(200).send(buffer);
+    if (headOnly) {
+      return res.status(200).end();
+    }
+    return res.status(200).send(buffer || Buffer.alloc(0));
   } catch (error: any) {
     const authError = resolveCurrentUserError(error);
     if (authError) {
@@ -5842,9 +6411,28 @@ router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
       }
       return res.status(409).type('text/plain; charset=utf-8').send('执行环境已关闭，请重新启动');
     }
+    if (isWorkspaceFileNotFoundError(error)) {
+      return res.status(409).type('text/plain; charset=utf-8').send('预览暂不可用，请重新加载预览');
+    }
     console.error('获取工作区原始文件失败:', error);
     return res.status(500).type('text/plain; charset=utf-8').send('获取工作区原始文件失败，请稍后重试');
   }
+}
+
+/**
+ * HEAD /api/task-creation/sessions/:sessionId/workspace/raw/*
+ * 预检查文件原始预览是否可用（不返回正文）
+ */
+router.head('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+  return handleWorkspaceRawRequest(req, res, { headOnly: true });
+});
+
+/**
+ * GET /api/task-creation/sessions/:sessionId/workspace/raw/*
+ * 以原始内容返回会话工作区内的单个文件，供 iframe 预览和新标签页打开使用
+ */
+router.get('/sessions/:sessionId/workspace/raw/*', async (req, res) => {
+  return handleWorkspaceRawRequest(req, res, { headOnly: false });
 });
 
 /**
@@ -5860,7 +6448,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
   let currentUser: ReturnType<typeof currentUserResolver.require> | null = null;
   try {
     currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
   } catch (error) {
     const authError = resolveCurrentUserError(error);
     if (authError) {
@@ -6040,7 +6628,7 @@ router.get('/sessions/:sessionId/opencode/events', async (req, res) => {
 
   if (replayCursor) {
     try {
-      const redisHistory = await taskSessionRedisCacheService.listSessionEvents({
+      const redisHistory = await taskSessionCacheFacade.listSessionEvents({
         sessionId,
         userId: currentUser?.userId || '',
         tenantKey: currentUser ? resolveTenantKey(currentUser) : '',
@@ -6330,7 +6918,7 @@ router.get('/sessions/:sessionId/intent', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
 
     const intentResult = await taskCreationSessionDAO.getIntentResult(sessionId);
 
@@ -6379,7 +6967,7 @@ router.get('/sessions/:sessionId/task-description', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
 
     const taskDescription = await taskCreationSessionDAO.getTaskDescription(sessionId);
 
@@ -6428,7 +7016,7 @@ router.get('/sessions/:sessionId/execution-plan', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
 
     const executionPlan = await taskCreationSessionDAO.getExecutionPlan(sessionId);
 
@@ -6477,7 +7065,7 @@ router.delete('/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const currentUser = currentUserResolver.require(req);
-    await requireOwnedTaskSession(sessionId, currentUser.userId);
+    await requireOwnedTaskSession(sessionId, currentUser.userId, resolveLegacyUserIdHint(req, currentUser.userId));
 
     await taskCreationSessionDAO.deleteSession(sessionId);
     await taskCreationFileMemoryStore.deleteSession(sessionId);

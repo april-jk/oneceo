@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
-import { taskCreationSessionDAO } from '../src/db/dao';
+import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
+import { taskSessionConnectorBindingDAO } from '../src/db/dao/task-session-connector-binding.dao';
 import { managedImageObjectService } from '../src/services/managed-image-object-service';
 import { AltusManagedSetupService } from '../src/services/altus-managed-setup-service';
+import { sandboxAgentProvisionService } from '../src/services/sandbox-agent-provision-service';
+import { sessionMcpRecoveryService } from '../src/services/session-mcp-recovery-service';
 
 afterEach(() => {
   mock.reset();
@@ -84,4 +87,71 @@ test('buildConversationMessages converts image attachments into multimodal user 
   assert.match(String(parts[0]?.text), /看看这个图讲了什么/);
   assert.equal(parts[1]?.type, 'image_url');
   assert.equal(parts[1]?.image_url?.url, 'https://images.example.com/signed/screenshot.png?token=abc');
+});
+
+test('ensureSandbox provisions through sandboxAgentProvisionService to enforce paused-sandbox recovery gate', async () => {
+  const provisionMock = mock.method(sandboxAgentProvisionService, 'provisionWithLock', async () => ({
+    sessionId: 'sandbox-new',
+    allocationSource: 'reused_session',
+  }) as any);
+  const upsertMock = mock.method(taskSessionRunDAO, 'upsertSandboxBinding', async () => ({} as any));
+  const recoverMock = mock.method(sessionMcpRecoveryService, 'ensureSessionRecovered', async () => undefined as any);
+
+  const service = new AltusManagedSetupService();
+  const result = await service.ensureSandbox('session-1', 'Demo session');
+
+  assert.equal(provisionMock.mock.callCount(), 1);
+  const provisionInput = provisionMock.mock.calls[0]?.arguments[0] as Record<string, unknown>;
+  assert.equal(provisionInput.executor, 'altus');
+  assert.equal((provisionInput.metadata as Record<string, unknown>)?.taskSessionId, 'session-1');
+  assert.equal((provisionInput.metadata as Record<string, unknown>)?.sandboxExecutor, 'altus');
+  assert.equal(upsertMock.mock.callCount(), 1);
+  assert.equal(result.sandboxId, 'sandbox-new');
+  assert.equal(result.reused, true);
+  assert.equal(recoverMock.mock.callCount(), 1);
+});
+
+test('captureMcpToolSnapshot only exposes connected bindings with live provider ids', async () => {
+  mock.method(taskSessionConnectorBindingDAO, 'listByTaskSessionId', async () => [
+    {
+      connectorKey: 'github',
+      desiredState: 'attached',
+      runtimeStatus: 'connected',
+      runtimeProviderId: 'provider-connected',
+      runtimeTransport: 'remote_sse',
+      runtimeEnvVersion: 1,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-connected', toolName: 'github_list_repos' }],
+    },
+    {
+      connectorKey: 'notion',
+      desiredState: 'attached',
+      runtimeStatus: 'failed',
+      runtimeProviderId: 'provider-failed',
+      runtimeTransport: 'remote_sse',
+      runtimeEnvVersion: 2,
+      runtimeAttachedToolsJson: [{ providerId: 'provider-failed', toolName: 'notion_list_pages' }],
+    },
+    {
+      connectorKey: 'slack',
+      desiredState: 'attached',
+      runtimeStatus: 'pending_recover',
+      runtimeProviderId: 'provider-pending',
+      runtimeTransport: 'remote_sse',
+      runtimeEnvVersion: 3,
+      runtimeAttachedToolsJson: [],
+    },
+  ] as any);
+  const snapshotMock = mock.method(taskSessionRunDAO, 'createMcpToolSnapshot', async (input: any) => ({
+    id: 'snapshot-1',
+    snapshotJson: input.snapshotJson,
+  }));
+
+  const service = new AltusManagedSetupService();
+  const result = await service.captureMcpToolSnapshot('session-1');
+
+  assert.equal(snapshotMock.mock.callCount(), 1);
+  assert.equal(result.providers.length, 1);
+  assert.equal(result.providers[0]?.providerId, 'provider-connected');
+  assert.match(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /github_list_repos/);
+  assert.doesNotMatch(JSON.stringify(snapshotMock.mock.calls[0]?.arguments[0]), /notion_list_pages/);
 });

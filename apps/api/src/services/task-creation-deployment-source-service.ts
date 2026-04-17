@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { access, cp, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import {
 } from './platform-managed-github-repo-service';
 import {
   ensureDeploymentTemplateBootstrap,
+  type DeploymentTemplateAnalyticsConfig,
   type DeploymentTemplateBootstrapReport,
 } from './deployment-template-bootstrap-service';
 import {
@@ -279,6 +280,33 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+async function readTextIfExists(path: string): Promise<string> {
+  if (!(await exists(path))) {
+    return '';
+  }
+  return readFile(path, 'utf-8');
+}
+
+async function ensureRailwayConfigFile(sourceDir: string, manifest: OneCeoDeploymentManifest) {
+  const railwayJsonPath = join(sourceDir, 'railway.json');
+  const railwayTomlPath = join(sourceDir, 'railway.toml');
+  if ((await exists(railwayJsonPath)) || (await exists(railwayTomlPath))) {
+    return false;
+  }
+  const payload = {
+    '$schema': 'https://railway.com/railway.schema.json',
+    deploy: {
+      startCommand: manifest.start.command,
+      healthcheckPath: manifest.healthcheck.path,
+    },
+    build: {
+      buildCommand: manifest.build.command || null,
+    },
+  };
+  await writeFile(railwayJsonPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
+  return true;
+}
+
 async function copyDirectoryEntriesToRoot(sourceDir: string, nestedDir: string) {
   const entries = await readdir(nestedDir, { withFileTypes: true });
   for (const entry of entries) {
@@ -299,7 +327,15 @@ async function findSingleNestedAppDirectory(sourceDir: string): Promise<string |
     (await exists(join(sourceDir, 'package.json'))) ||
     (await exists(join(sourceDir, 'index.html'))) ||
     (await exists(join(sourceDir, 'client/index.html'))) ||
-    (await exists(join(sourceDir, 'public/index.html')));
+    (await exists(join(sourceDir, 'public/index.html'))) ||
+    (await exists(join(sourceDir, 'server.js'))) ||
+    (await exists(join(sourceDir, 'index.js'))) ||
+    (await exists(join(sourceDir, 'app.js'))) ||
+    (await exists(join(sourceDir, 'requirements.txt'))) ||
+    (await exists(join(sourceDir, 'pyproject.toml'))) ||
+    (await exists(join(sourceDir, 'main.py'))) ||
+    (await exists(join(sourceDir, 'app.py'))) ||
+    (await exists(join(sourceDir, 'server.py')));
   if (rootHasDeploymentEntry) {
     return null;
   }
@@ -320,7 +356,15 @@ async function findSingleNestedAppDirectory(sourceDir: string): Promise<string |
     (await exists(join(nestedDir, 'index.html'))) ||
     (await exists(join(nestedDir, 'package.json'))) ||
     (await exists(join(nestedDir, 'client/index.html'))) ||
-    (await exists(join(nestedDir, 'public/index.html')));
+    (await exists(join(nestedDir, 'public/index.html'))) ||
+    (await exists(join(nestedDir, 'server.js'))) ||
+    (await exists(join(nestedDir, 'index.js'))) ||
+    (await exists(join(nestedDir, 'app.js'))) ||
+    (await exists(join(nestedDir, 'requirements.txt'))) ||
+    (await exists(join(nestedDir, 'pyproject.toml'))) ||
+    (await exists(join(nestedDir, 'main.py'))) ||
+    (await exists(join(nestedDir, 'app.py'))) ||
+    (await exists(join(nestedDir, 'server.py')));
   return hasNestedAppEntry ? nestedDir : null;
 }
 
@@ -353,12 +397,173 @@ async function ensureStaticRootDeploymentFiles(sourceDir: string) {
     );
   }
 
+  await ensureRailwayConfigFile(sourceDir, STATIC_TEMPLATE_MANIFEST);
+
+  return true;
+}
+
+async function ensureNodeScriptDeploymentFiles(sourceDir: string) {
+  if (await exists(join(sourceDir, 'package.json'))) {
+    return false;
+  }
+  const entryCandidates = ['server.js', 'index.js', 'app.js'];
+  const entryName = (
+    await Promise.all(entryCandidates.map(async (item) => ((await exists(join(sourceDir, item))) ? item : '')))
+  ).find(Boolean);
+  if (!entryName) {
+    return false;
+  }
+
+  const packageJson = {
+    name: 'oneceo-node-script-app',
+    private: true,
+    version: '1.0.0',
+    scripts: {
+      build: 'node -e "console.log(\'oneceo node app ready\')"',
+      start: `node ${entryName}`,
+    },
+  };
+  const manifest: OneCeoDeploymentManifest = {
+    templateVersion: '1.0.0',
+    appType: 'web_app',
+    stack: 'node_script_http_api_dbless',
+    build: {
+      command: 'npm run build',
+      outputDir: '.',
+    },
+    start: {
+      command: `node ${entryName}`,
+      portEnv: 'PORT',
+    },
+    healthcheck: {
+      path: '/health',
+    },
+    features: {
+      analytics: true,
+      userTracking: true,
+      database: false,
+      auth: false,
+      objectStorage: false,
+    },
+    runtime: {
+      framework: 'node_script',
+      transport: 'http',
+    },
+  };
+
+  await writeFile(join(sourceDir, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`, 'utf-8');
+  if (!(await exists(join(sourceDir, 'oneceo.manifest.json')))) {
+    await writeFile(
+      join(sourceDir, 'oneceo.manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf-8'
+    );
+  }
+  await ensureRailwayConfigFile(sourceDir, manifest);
+  return true;
+}
+
+function detectPythonStartCommand(input: {
+  fileName: string;
+  source: string;
+}): { command: string; framework: string } {
+  const moduleName = input.fileName.replace(/\.py$/i, '');
+  const source = input.source;
+  if (source.includes('FastAPI(') && /\bapp\s*=/.test(source)) {
+    return {
+      command: `uvicorn ${moduleName}:app --host 0.0.0.0 --port $PORT`,
+      framework: 'fastapi',
+    };
+  }
+  if (source.includes('Flask(') && /\bapp\s*=/.test(source)) {
+    return {
+      command: `gunicorn ${moduleName}:app --bind 0.0.0.0:$PORT`,
+      framework: 'flask',
+    };
+  }
+  return {
+    command: `python ${input.fileName}`,
+    framework: 'python',
+  };
+}
+
+async function ensurePythonRootDeploymentFiles(sourceDir: string) {
+  if (await exists(join(sourceDir, 'package.json'))) {
+    return false;
+  }
+  const pythonSignal =
+    (await exists(join(sourceDir, 'requirements.txt'))) ||
+    (await exists(join(sourceDir, 'pyproject.toml'))) ||
+    (await exists(join(sourceDir, 'main.py'))) ||
+    (await exists(join(sourceDir, 'app.py'))) ||
+    (await exists(join(sourceDir, 'server.py')));
+  if (!pythonSignal) {
+    return false;
+  }
+
+  const entryCandidates = ['main.py', 'app.py', 'server.py'];
+  let selectedEntry = '';
+  let selectedSource = '';
+  for (const candidate of entryCandidates) {
+    const candidatePath = join(sourceDir, candidate);
+    if (!(await exists(candidatePath))) continue;
+    selectedEntry = candidate;
+    selectedSource = await readTextIfExists(candidatePath);
+    break;
+  }
+  if (!selectedEntry) {
+    return false;
+  }
+
+  const detected = detectPythonStartCommand({
+    fileName: selectedEntry,
+    source: selectedSource,
+  });
+  const manifest: OneCeoDeploymentManifest = {
+    templateVersion: '1.0.0',
+    appType: 'web_app',
+    stack: `python_${detected.framework}_http_api_dbless`,
+    build: {
+      command: 'echo "oneceo python app ready"',
+      outputDir: '.',
+    },
+    start: {
+      command: detected.command,
+      portEnv: 'PORT',
+    },
+    healthcheck: {
+      path: '/health',
+    },
+    features: {
+      analytics: true,
+      userTracking: true,
+      database: false,
+      auth: false,
+      objectStorage: false,
+    },
+    runtime: {
+      framework: detected.framework,
+      transport: 'http',
+    },
+  };
+
+  if (!(await exists(join(sourceDir, 'oneceo.manifest.json')))) {
+    await writeFile(
+      join(sourceDir, 'oneceo.manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf-8'
+    );
+  }
+  await ensureRailwayConfigFile(sourceDir, manifest);
+
   return true;
 }
 
 export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: string): Promise<{
   promotedNestedApp: boolean;
   injectedStaticBaseline: boolean;
+  injectedNodeScriptBaseline: boolean;
+  injectedPythonBaseline: boolean;
 }> {
   const nestedDir = await findSingleNestedAppDirectory(sourceDir);
   let promotedNestedApp = false;
@@ -368,9 +573,27 @@ export async function normalizeDeploymentSourceDirectoryForPublish(sourceDir: st
   }
 
   const injectedStaticBaseline = await ensureStaticRootDeploymentFiles(sourceDir);
+  const injectedNodeScriptBaseline = injectedStaticBaseline
+    ? false
+    : await ensureNodeScriptDeploymentFiles(sourceDir);
+  const injectedPythonBaseline =
+    injectedStaticBaseline || injectedNodeScriptBaseline
+      ? false
+      : await ensurePythonRootDeploymentFiles(sourceDir);
+  const manifestPath = join(sourceDir, 'oneceo.manifest.json');
+  if (await exists(manifestPath)) {
+    try {
+      const manifest = JSON.parse(await readTextIfExists(manifestPath)) as OneCeoDeploymentManifest;
+      await ensureRailwayConfigFile(sourceDir, manifest);
+    } catch {
+      // manifest 校验交给模板合规阶段处理，这里只做最佳努力生成 Railway config
+    }
+  }
   return {
     promotedNestedApp,
     injectedStaticBaseline,
+    injectedNodeScriptBaseline,
+    injectedPythonBaseline,
   };
 }
 
@@ -413,11 +636,14 @@ export async function publishTaskSessionWorkspaceToRepository(input: {
   workspaceRoot: string;
   repository: ManagedDeploymentRepository;
   sessionId: string;
+  analyticsConfig?: DeploymentTemplateAnalyticsConfig;
 }): Promise<DeploymentWorkspacePublishReport> {
   const sourceDir = await exportWorkspaceToLocalDirectory(input.orchestratorSessionId, input.workspaceRoot);
   try {
     await normalizeDeploymentSourceDirectoryForPublish(sourceDir);
-    const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir, {
+      analyticsConfig: input.analyticsConfig,
+    });
     if (bootstrap.warnings.length > 0) {
       console.warn('[DEPLOYMENT_TEMPLATE_BOOTSTRAP_WARNINGS]', {
         sessionId: input.sessionId,
@@ -429,6 +655,7 @@ export async function publishTaskSessionWorkspaceToRepository(input: {
       throw new Error(`部署模板注入失败：${bootstrap.errors.join('；')}`);
     }
     const compliance = await ensureTemplateCompliance(sourceDir);
+    await ensureRailwayConfigFile(sourceDir, compliance.manifest);
     if (compliance.warnings.length > 0) {
       console.warn('[DEPLOYMENT_TEMPLATE_COMPLIANCE_WARNINGS]', {
         sessionId: input.sessionId,
@@ -479,6 +706,7 @@ export async function inspectTaskSessionDeploymentTemplate(input: {
     const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir);
     try {
       const compliance = await ensureTemplateCompliance(sourceDir);
+      await ensureRailwayConfigFile(sourceDir, compliance.manifest);
       return buildDeploymentTemplateBaseline({
         workspaceDetected: true,
         bootstrap,

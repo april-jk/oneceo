@@ -14,12 +14,12 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Home, LogOut, ShieldCheck, UserRoundPlus } from "lucide-react";
+import { Home, LogIn, LogOut, ShieldCheck, UserRoundPlus } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function UserMenu() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user, status, logout } = useAuth();
 
   const handleLogout = async () => {
@@ -28,6 +28,9 @@ export default function UserMenu() {
   };
 
   const initials = (user?.displayName || user?.email || "U").slice(0, 1).toUpperCase();
+  const redirectTarget = location || "/home";
+  const loginHref = `/login?redirect=${encodeURIComponent(redirectTarget)}`;
+  const registerHref = `/register?redirect=${encodeURIComponent(redirectTarget)}`;
 
   return (
     <DropdownMenu>
@@ -66,7 +69,7 @@ export default function UserMenu() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-accent/50 p-3">
+          <div className="rounded-lg border border-border bg-accent/50 p-3">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
               <span className="text-sm font-medium text-foreground">
@@ -82,28 +85,38 @@ export default function UserMenu() {
         </div>
 
         <div className="p-1">
-          <DropdownMenuItem
-            onClick={() => setLocation("/home")}
-            className="cursor-pointer py-2.5 px-3 rounded-lg"
-          >
-            <Home className="w-4 h-4 mr-2 text-muted-foreground" />
-            <span className="text-sm">Home</span>
-          </DropdownMenuItem>
           {status === "authenticated" ? (
-            <DropdownMenuItem
-              onClick={() => void handleLogout()}
-              className="cursor-pointer rounded-lg px-3 py-2.5"
-            >
-              <LogOut className="mr-2 h-4 w-4 text-muted-foreground" />
-              <span className="text-sm">退出登录</span>
-            </DropdownMenuItem>
+            <>
+              <DropdownMenuItem
+                onClick={() => setLocation("/home")}
+                className="cursor-pointer rounded-lg px-3 py-2.5"
+              >
+                <Home className="mr-2 h-4 w-4 text-muted-foreground" />
+                <span className="text-sm">进入工作区</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => void handleLogout()}
+                className="cursor-pointer rounded-lg px-3 py-2.5"
+              >
+                <LogOut className="mr-2 h-4 w-4 text-muted-foreground" />
+                <span className="text-sm">退出登录</span>
+              </DropdownMenuItem>
+            </>
           ) : (
-            <DropdownMenuItem asChild className="cursor-pointer rounded-lg px-3 py-2.5">
-              <Link href="/register">
-                <UserRoundPlus className="mr-2 h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">注册账号</span>
-              </Link>
-            </DropdownMenuItem>
+            <>
+              <DropdownMenuItem asChild className="cursor-pointer rounded-lg px-3 py-2.5">
+                <Link href={loginHref}>
+                  <LogIn className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm">登录</span>
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild className="cursor-pointer rounded-lg px-3 py-2.5">
+                <Link href={registerHref}>
+                  <UserRoundPlus className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm">注册账号</span>
+                </Link>
+              </DropdownMenuItem>
+            </>
           )}
         </div>
       </DropdownMenuContent>

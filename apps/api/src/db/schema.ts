@@ -68,6 +68,25 @@ export const appUserSessions = pgTable(
   })
 );
 
+export const appUserEmailVerifications = pgTable(
+  'app_user_email_verifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull(),
+    purpose: text('purpose').notNull().default('register'),
+    codeHash: text('code_hash').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    consumedAt: timestamp('consumed_at'),
+    lastSentAt: timestamp('last_sent_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    emailPurposeUnique: uniqueIndex('idx_app_user_email_verifications_email_purpose').on(table.email, table.purpose),
+    expiresAtIdx: index('idx_app_user_email_verifications_expires_at').on(table.expiresAt),
+  })
+);
+
 export const adminUsers = pgTable(
   'admin_users',
   {

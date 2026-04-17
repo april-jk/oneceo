@@ -17,6 +17,11 @@ type AuthPayload = {
   user?: AppAuthUser;
 };
 
+type RegisterCodePayload = {
+  cooldownSeconds?: number;
+  expiresInSeconds?: number;
+};
+
 function resolveErrorMessage(payload: AuthEnvelope<unknown> | null, fallback: string) {
   if (typeof payload?.error === "string" && payload.error.trim()) {
     return payload.error.trim();
@@ -83,6 +88,7 @@ export async function registerAppUser(input: {
   email: string;
   password: string;
   displayName: string;
+  verificationCode: string;
 }): Promise<AppAuthUser> {
   const result = await requestAuth<AuthPayload>("/api/auth/register", {
     method: "POST",
@@ -92,6 +98,15 @@ export async function registerAppUser(input: {
     throw new Error("注册返回缺少用户信息");
   }
   return result.user;
+}
+
+export async function sendRegisterVerificationCode(input: {
+  email: string;
+}): Promise<RegisterCodePayload> {
+  return await requestAuth<RegisterCodePayload>("/api/auth/register/send-code", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function logoutAppUser(): Promise<void> {

@@ -31,6 +31,7 @@ import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
+import { readAltusMode } from "@/lib/altus-settings";
 import { toast } from "sonner";
 
 interface TaskCreationChatProps {
@@ -66,15 +67,6 @@ function getMessageSkills(message: AgentMessage): TaskCreationPlatformSkill[] {
       typeof (item as TaskCreationPlatformSkill).name === "string"
     );
   });
-}
-
-function readAltusMode(): "sandbox" | "managed" {
-  if (typeof window === "undefined") return "sandbox";
-  try {
-    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
-  } catch {
-    return "sandbox";
-  }
 }
 
 export default function TaskCreationChat({

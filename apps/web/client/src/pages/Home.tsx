@@ -117,6 +117,7 @@ import {
 } from "@/lib/task-session-deployment-prompts";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
+import { readAltusMode } from "@/lib/altus-settings";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -162,15 +163,6 @@ function escapeMessageKeySelector(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/["\\]/g, "\\$&");
-}
-
-function readAltusMode(): "sandbox" | "managed" {
-  if (typeof window === "undefined") return "sandbox";
-  try {
-    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
-  } catch {
-    return "sandbox";
-  }
 }
 
 function readPersistedScrollAnchor(

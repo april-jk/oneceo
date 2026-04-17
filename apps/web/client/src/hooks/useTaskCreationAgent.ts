@@ -37,6 +37,7 @@ import {
   getSessionConnectorDraftState,
   listSessionConnectorDraftEntries,
 } from '@/lib/session-connector-draft';
+import { ALTUS_MODE_STORAGE_KEY, readAltusMode } from '@/lib/altus-settings';
 
 export interface AgentMessage {
   id?: string;
@@ -408,24 +409,9 @@ const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指�
 // - sandbox: 直通 sandbox 执行器（OpenCode/ClaudeCode/Codex 等）
 // - managed: Altus 三层智能体编排
 // 注意：直通模式不应触发 Altus 编排与澄清逻辑，避免误走流程。
-const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
 const EXECUTOR_STORAGE_KEY = 'altus_executor';
 const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 const SSE_CLIENT_ID_STORAGE_KEY = 'task_creation_sse_client_id';
-
-function readAltusMode(): 'sandbox' | 'managed' {
-  if (typeof window === 'undefined') return 'sandbox';
-  try {
-    const stored = window.localStorage.getItem(ALTUS_MODE_STORAGE_KEY);
-    if (stored === 'managed' || stored === 'sandbox') {
-      return stored;
-    }
-    window.localStorage.setItem(ALTUS_MODE_STORAGE_KEY, 'sandbox');
-  } catch {
-    // ignore storage failures
-  }
-  return 'sandbox';
-}
 
 function readExecutor(): 'opencode' | 'claudecode' | 'codex' {
   if (typeof window === 'undefined') return 'opencode';

@@ -11,6 +11,15 @@ export type DeploymentTemplateBootstrapReport = {
   errors: string[];
 };
 
+export type DeploymentTemplateAnalyticsConfig = {
+  enabled?: boolean;
+  host?: string;
+  endpoint?: string;
+  websiteId?: string;
+  tag?: string;
+  publicDomain?: string;
+};
+
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -29,6 +38,8 @@ async function findHtmlEntryPath(sourceDir: string): Promise<string | null> {
     join(sourceDir, 'client/index.html'),
     join(sourceDir, 'index.html'),
     join(sourceDir, 'public/index.html'),
+    join(sourceDir, 'templates/index.html'),
+    join(sourceDir, 'app/templates/index.html'),
   ];
   for (const candidate of candidates) {
     if (await exists(candidate)) {
@@ -38,33 +49,32 @@ async function findHtmlEntryPath(sourceDir: string): Promise<string | null> {
   return null;
 }
 
-function buildAnalyticsBootstrapSnippet() {
+function buildAnalyticsBootstrapSnippet(config?: DeploymentTemplateAnalyticsConfig) {
+  const runtimeConfig = {
+    enabled: config?.enabled !== false && Boolean(asText(config?.host || config?.endpoint) && asText(config?.websiteId)),
+    host: asText(config?.host),
+    endpoint: asText(config?.endpoint || config?.host),
+    websiteId: asText(config?.websiteId),
+    tag: asText(config?.tag),
+    publicDomain: asText(config?.publicDomain),
+  };
   return `${ANALYTICS_BOOTSTRAP_MARKER_START}
 <script>
-window.__ONECEO_ANALYTICS__ = Object.freeze({
-  enabled: '%VITE_ANALYTICS_ENABLED%',
-  host: '%VITE_ANALYTICS_HOST%',
-  endpoint: '%VITE_ANALYTICS_ENDPOINT%',
-  websiteId: '%VITE_ANALYTICS_WEBSITE_ID%',
-  tag: '%VITE_ANALYTICS_TAG%',
-  publicDomain: '%VITE_PUBLIC_DOMAIN%'
-});
+window.__ONECEO_ANALYTICS__ = Object.freeze(${JSON.stringify(runtimeConfig)});
 (function () {
   var config = window.__ONECEO_ANALYTICS__ || {};
-  var unresolvedPattern = /^%VITE_[A-Z0-9_]+%$/;
   var readValue = function (value) {
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
     return typeof value === 'string' ? value.trim() : '';
   };
-  var isResolved = function (value) {
-    return Boolean(value) && !unresolvedPattern.test(value);
-  };
   var enabled = readValue(config.enabled).toLowerCase();
-  if (!enabled || unresolvedPattern.test(enabled)) enabled = 'true';
+  if (!enabled) enabled = 'false';
   if (['0', 'false', 'no', 'off'].indexOf(enabled) >= 0) return;
   var endpoint = readValue(config.host) || readValue(config.endpoint);
   var websiteId = readValue(config.websiteId);
   var tag = readValue(config.tag);
-  if (!isResolved(endpoint) || !isResolved(websiteId)) return;
+  var domain = readValue(config.publicDomain);
+  if (!endpoint || !websiteId) return;
   endpoint = endpoint.replace(/\\/+$/, '');
   if (window.location.protocol === 'https:' && endpoint.indexOf('https://') !== 0) return;
   if (document.querySelector('script[data-oneceo-analytics=\"runtime\"]')) return;
@@ -75,6 +85,7 @@ window.__ONECEO_ANALYTICS__ = Object.freeze({
   script.setAttribute('data-host-url', endpoint);
   script.setAttribute('data-oneceo-analytics', 'runtime');
   if (tag) script.setAttribute('data-tag', tag);
+  if (domain) script.setAttribute('data-domains', domain);
   document.body.appendChild(script);
 })();
 </script>
@@ -100,7 +111,10 @@ function injectBeforeBodyClose(html: string, snippet: string): string | null {
 }
 
 export async function ensureDeploymentTemplateBootstrap(
-  sourceDir: string
+  sourceDir: string,
+  options?: {
+    analyticsConfig?: DeploymentTemplateAnalyticsConfig;
+  }
 ): Promise<DeploymentTemplateBootstrapReport> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -115,7 +129,10 @@ export async function ensureDeploymentTemplateBootstrap(
   }
 
   const html = await readFile(htmlEntryPath, 'utf-8');
-  const nextHtml = injectBeforeBodyClose(html, buildAnalyticsBootstrapSnippet());
+  const nextHtml = injectBeforeBodyClose(
+    html,
+    buildAnalyticsBootstrapSnippet(options?.analyticsConfig)
+  );
   if (!nextHtml) {
     errors.push(`HTML 入口 ${asText(htmlEntryPath)} 内容异常，无法注入 analytics bootstrap`);
     return {

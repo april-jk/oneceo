@@ -5,7 +5,10 @@ import {
   getTaskSessionDeploymentErrorMessage,
   resolveTaskSessionRecord,
 } from './task-session-deployment-runtime-service';
-import type { RailwayDeploymentPanelData } from './railway-deployment-service';
+import {
+  classifyRailwayDeploymentError,
+  type RailwayDeploymentPanelData,
+} from './railway-deployment-service';
 
 export const ALTUS_MANAGED_DEPLOYMENT_TOOL_NAMES = [
   'deploy_application',
@@ -19,7 +22,8 @@ export type AltusManagedDeploymentToolName = (typeof ALTUS_MANAGED_DEPLOYMENT_TO
 type RepairCategory =
   | 'workspace_missing'
   | 'template_compliance'
-  | 'deployment_configuration';
+  | 'deployment_configuration'
+  | 'resource_binding';
 
 type AltusManagedDeploymentToolRepair = {
   category: RepairCategory;
@@ -137,6 +141,34 @@ function buildRepairResult(
       rawError: asText(rawError) || undefined,
       baselineStatus: baseline.status,
       baselineErrors: baseline.errors,
+    },
+  };
+}
+
+function buildResourceBindingRepairResult(
+  action: AltusManagedDeploymentToolName,
+  rawError: string,
+  baseline?: DeploymentTemplateBaselineData | null
+): AltusManagedDeploymentToolResult {
+  const classified = classifyRailwayDeploymentError(rawError);
+  return {
+    action,
+    phase: 'repair_required',
+    status: 'retryable_repair_required',
+    summary: classified.userMessage,
+    repair: {
+      category: 'resource_binding',
+      checks: [classified.code],
+      suggestedActions: [
+        '优先修复 Railway 部署资源绑定，不要继续修改工作区模板或本地启动脚本',
+        '修复完成后直接再次调用部署工具，重新校验部署状态',
+      ],
+    },
+    baseline: baseline || undefined,
+    debug: {
+      rawError,
+      baselineStatus: baseline?.status,
+      baselineErrors: baseline?.errors,
     },
   };
 }
@@ -317,6 +349,10 @@ export class AltusManagedDeploymentToolService {
               workspaceRoot: input.workspaceRoot,
             }).catch(() => null);
       const rawError = this.deps.getErrorMessage(error);
+      const classified = classifyRailwayDeploymentError(rawError);
+      if (classified.bindingState === 'repair_required') {
+        return buildResourceBindingRepairResult(input.action, rawError, latestBaseline);
+      }
       if (latestBaseline && latestBaseline.status !== 'ready') {
         return buildRepairResult(input.action, latestBaseline, rawError);
       }

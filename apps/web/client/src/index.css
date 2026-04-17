@@ -156,6 +156,44 @@
   animation: shimmer 1.6s linear infinite;
 }
 
+@keyframes homepage-marquee {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(calc(-25% - (var(--homepage-marquee-gap) / 4)), 0, 0);
+  }
+}
+
+.homepage-marquee-mask {
+  mask-image: linear-gradient(to right, transparent 0, black 6%, black 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 6%, black 94%, transparent 100%);
+}
+
+.homepage-marquee-track {
+  --homepage-marquee-gap: 0.75rem;
+  display: flex;
+  width: max-content;
+  gap: var(--homepage-marquee-gap);
+  animation: homepage-marquee 30s linear infinite;
+  will-change: transform;
+}
+
+.homepage-marquee-track[data-direction="right"] {
+  animation-direction: reverse;
+}
+
+.homepage-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .homepage-marquee-track {
+    animation: none;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 @layer components {
   /**
    * Custom container utility that centers content and adds responsive padding.

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -154,6 +154,8 @@ test('deployment source normalization promotes single nested static app into dep
 
     assert.equal(normalization.promotedNestedApp, true);
     assert.equal(normalization.injectedStaticBaseline, true);
+    assert.equal(normalization.injectedNodeScriptBaseline, false);
+    assert.equal(normalization.injectedPythonBaseline, false);
     assert.equal(compliance.ok, true);
     assert.equal(compliance.manifest.start.command, 'node server.js');
     assert.equal(compliance.manifest.healthcheck.path, '/api/system/health');
@@ -162,6 +164,77 @@ test('deployment source normalization promotes single nested static app into dep
     assert.equal(compliance.checks.analyticsEntryDetected, true);
     assert.equal(compliance.checks.healthcheckRouteDetected, true);
     assert.equal(baseline.status, 'ready');
+    const railwayConfig = await readFile(join(workspace, 'railway.json'), 'utf-8');
+    assert.match(railwayConfig, /"startCommand": "node server\.js"/);
+    assert.match(railwayConfig, /"healthcheckPath": "\/api\/system\/health"/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization builds node script baseline without package.json', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-node-script-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'server.js'),
+      "require('node:http').createServer((_, res) => res.end('ok')).listen(process.env.PORT || 3000);\n",
+      'utf-8'
+    );
+    await mkdir(join(workspace, 'templates'), { recursive: true });
+    await writeFile(
+      join(workspace, 'templates/index.html'),
+      '<!doctype html><html><body><div id="app">node script</div></body></html>',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+
+    assert.equal(normalization.injectedStaticBaseline, false);
+    assert.equal(normalization.injectedNodeScriptBaseline, true);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.runtime.framework, 'node_script');
+    assert.equal(compliance.manifest.start.command, 'node server.js');
+    assert.equal(compliance.checks.startCommandDetected, true);
+    assert.equal(bootstrap.analyticsInjected, true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization builds python fastapi baseline without package.json', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-python-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'requirements.txt'),
+      'fastapi\nuvicorn\n',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'main.py'),
+      "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/health')\ndef health():\n    return {'ok': True}\n",
+      'utf-8'
+    );
+    await mkdir(join(workspace, 'templates'), { recursive: true });
+    await writeFile(
+      join(workspace, 'templates/index.html'),
+      '<!doctype html><html><body><main>python app</main></body></html>',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const railwayConfig = await readFile(join(workspace, 'railway.json'), 'utf-8');
+
+    assert.equal(normalization.injectedPythonBaseline, true);
+    assert.equal(compliance.ok, true);
+    assert.equal(compliance.manifest.runtime.framework, 'fastapi');
+    assert.match(compliance.manifest.start.command, /^uvicorn main:app --host 0\.0\.0\.0 --port \$PORT$/);
+    assert.equal(compliance.checks.startCommandDetected, true);
+    assert.equal(bootstrap.analyticsInjected, true);
+    assert.match(railwayConfig, /uvicorn main:app --host 0\.0\.0\.0 --port \$PORT/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

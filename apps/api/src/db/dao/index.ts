@@ -12,6 +12,7 @@ export * from './user-codex-runtime-config.dao';
 export * from './user-skill.dao';
 export * from './task-session-connector-binding.dao';
 export * from './task-session-mcp-recovery-job.dao';
+export * from './task-session-deployment-sync-job.dao';
 export * from './connector-auth-request.dao';
 export * from './task-session-workspace-cache.dao';
 export * from './task-session-run.dao';

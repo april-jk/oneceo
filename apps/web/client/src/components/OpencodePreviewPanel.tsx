@@ -1,4 +1,5 @@
 import {
+  default as React,
   useCallback,
   useEffect,
   useMemo,
@@ -40,7 +41,6 @@ import {
   Unlock,
   Rocket,
   ScrollText,
-  Server,
   Settings2,
   ShieldCheck,
   TableProperties,
@@ -1333,11 +1333,11 @@ function getDeploymentAnalyticsPresentation(
     };
   }
 
-  if (analytics.status === "ready") {
+  if (analytics.status === "tracking") {
     return {
       integrationValue: "已接入",
       integrationSubtitle:
-        analytics.message || "当前已绑定 Umami website，并展示近 30 天聚合数据。",
+        analytics.message || "当前已绑定 Umami website，并确认线上站点已有访问数据。",
       trafficValue: formatMetricCount(analytics.pageviews, "0"),
       trafficSubtitle: `Visits ${formatMetricCount(analytics.visits, "0")} / Visitors ${formatMetricCount(analytics.visitors, "0")}`,
       realtimeValue: formatMetricCount(analytics.activeVisitors, "0"),
@@ -1345,6 +1345,18 @@ function getDeploymentAnalyticsPresentation(
         analytics.updatedAt
           ? `最近更新 ${formatPreviewTimestamp(analytics.updatedAt) || analytics.updatedAt}`
           : "当前在线访客数来自 Umami realtime。",
+    };
+  }
+
+  if (analytics.status === "bound") {
+    return {
+      integrationValue: "已绑定",
+      integrationSubtitle:
+        analytics.message || "当前已完成 Umami website 绑定，等待线上站点产生首批访问数据。",
+      trafficValue: formatMetricCount(analytics.pageviews, "0"),
+      trafficSubtitle: "当前还没有稳定的访问数据，首批访问进入后会自动切换为跟踪中。",
+      realtimeValue: formatMetricCount(analytics.activeVisitors, "0"),
+      realtimeSubtitle: "实时访客为 0 时不代表接入失败，只表示尚未观察到访问。",
     };
   }
 
@@ -1369,6 +1381,18 @@ function getDeploymentAnalyticsPresentation(
       trafficSubtitle: "当前不会自动注入 tracker 与 websiteId。",
       realtimeValue: "平台未配置",
       realtimeSubtitle: "当前没有可用的实时访客数据源。",
+    };
+  }
+
+  if (analytics.status === "pending_domain") {
+    return {
+      integrationValue: "等待域名",
+      integrationSubtitle:
+        analytics.message || "站点还没有稳定公网域名，平台暂时不会完成 website 绑定。",
+      trafficValue: "等待域名",
+      trafficSubtitle: "公网地址稳定后，平台才会开始读取聚合数据。",
+      realtimeValue: "等待域名",
+      realtimeSubtitle: "公网地址稳定后，平台才会开始读取实时访客。",
     };
   }
 
@@ -2450,15 +2474,36 @@ export function DeploymentPreview({
     info?.activeDeploymentPending || pendingStatuses.has(status.toUpperCase()),
   );
   const statusMeta = !info?.configured
-    ? {
-        label: "未就绪",
-        description: info?.missing.length
-          ? `还需准备 ${info.missing.length} 项部署资源后才能发布。`
-          : "正在准备部署资源。",
-        badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
-        dotClass: "bg-slate-400",
-        panelClass: "border-slate-200 bg-slate-50/80",
-      }
+    ? info?.bindingState === "repair_required" ||
+      info?.bindingState === "provider_error"
+      ? {
+          label: "资源待修复",
+          description:
+            info?.providerErrorMessage ||
+            info?.message ||
+            "当前部署资源绑定异常，平台需要先修复后才能继续发布。",
+          badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+          dotClass: "bg-rose-500",
+          panelClass: "border-rose-200 bg-rose-50/70",
+        }
+      : info?.bindingState === "provisioning"
+        ? {
+            label: "准备中",
+            description:
+              info?.message || "平台正在准备部署资源并同步发布状态。",
+            badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+            dotClass: "bg-amber-500",
+            panelClass: "border-amber-200 bg-amber-50/70",
+          }
+        : {
+            label: "未就绪",
+            description: info?.missing.length
+              ? `还需准备 ${info.missing.length} 项部署资源后才能发布。`
+              : "正在准备部署资源。",
+            badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+            dotClass: "bg-slate-400",
+            panelClass: "border-slate-200 bg-slate-50/80",
+          }
     : status === "SUCCESS"
       ? {
           label: "已发布",
@@ -2533,17 +2578,6 @@ export function DeploymentPreview({
     formatPreviewTimestamp(currentDeployment?.createdAt) ||
     currentDeployment?.createdAt ||
     "尚无记录";
-  const logsText = info?.logs.length
-    ? info.logs
-        .map(
-          (entry) =>
-            `${entry.timestamp ? `[${formatPreviewTimestamp(entry.timestamp) || entry.timestamp}] ` : ""}${
-              entry.severity ? `${entry.severity} ` : ""
-            }${entry.message}`,
-        )
-        .join("\n")
-    : "";
-
   if (loading && !info) {
     return <EmptyState text="正在加载部署信息..." />;
   }
@@ -2626,7 +2660,6 @@ export function DeploymentPreview({
             actionLoading={actionLoading}
             loading={loading}
             primaryActionText={primaryActionText}
-            logsText={logsText}
             onDeploy={onDeploy}
             onRedeploy={onRedeploy}
             onRollback={onRollback}
@@ -2719,7 +2752,6 @@ function DeploymentOverviewSection({
   actionLoading,
   loading,
   primaryActionText,
-  logsText,
   onDeploy,
   onRedeploy,
   onRollback,
@@ -2737,359 +2769,448 @@ function DeploymentOverviewSection({
   actionLoading: "deploy" | "redeploy" | "rollback" | null;
   loading: boolean;
   primaryActionText: string;
-  logsText: string;
   onDeploy: () => void;
   onRedeploy: () => void;
   onRollback: () => void;
   onRefresh: (deploymentId?: string) => void;
   onSelectDeployment: (deploymentId: string) => void;
 }) {
+  const [releaseListExpanded, setReleaseListExpanded] = useState(false);
+  const deployments = info?.deployments || [];
+  const visibleDeployments = releaseListExpanded
+    ? deployments.slice(0, 12)
+    : currentDeployment
+      ? [
+          currentDeployment,
+          ...deployments
+            .filter((item) => item.id !== currentDeployment.id)
+            .slice(0, 3),
+        ]
+      : deployments.slice(0, 4);
+  const logEntries = (info?.logs || []).slice(-4).reverse();
+  const currentVersionTimestamp =
+    formatPreviewTimestamp(currentDeployment?.createdAt) ||
+    currentDeployment?.createdAt ||
+    "等待首次发布";
+  const primaryDomainCount = Math.max(accessEntries.length - 1, 0);
+  const stableReleaseCount = deployments.filter(
+    (item) => item.status === "SUCCESS",
+  ).length;
+  const compactPrimaryActionText =
+    primaryActionText === "发布中..." ? "发布中" : "发布";
+  const compactActionButtonClass =
+    "h-7 gap-1 rounded-md px-2 text-[11px] leading-none has-[>svg]:px-2";
+  const compactActionIconClass = "size-3.5";
+
   return (
-    <>
-      <section className="rounded-lg border border-slate-200/80 bg-white p-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-600">
-              <Rocket className="size-3.5 text-slate-500" />
-              发布与访问
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div
-                  className={cn("size-2 rounded-full", statusMeta.dotClass)}
-                />
-                <h3 className="text-lg font-semibold text-slate-900">
-                  {statusMeta.label}
-                </h3>
-              </div>
-              <p className="max-w-2xl text-sm leading-6 text-slate-600">
-                {statusMeta.description}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              onClick={onDeploy}
-              disabled={!info?.canDeploy || Boolean(actionLoading)}
-            >
-              {actionLoading === "deploy" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Rocket className="size-4" />
-              )}
-              {primaryActionText}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onRedeploy}
-              disabled={!currentDeploymentId || Boolean(actionLoading)}
-            >
-              {actionLoading === "redeploy" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <History className="size-4" />
-              )}
-              重新发布
-            </Button>
-            <Button
-              variant="outline"
-              onClick={onRollback}
-              disabled={!currentDeploymentId || Boolean(actionLoading)}
-            >
-              {actionLoading === "rollback" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : null}
-              回滚版本
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <DeploymentMetricCard
-            title="当前状态"
-            value={statusMeta.label}
-            subtitle={
-              currentDeployment?.createdAt
-                ? `最近变更 ${formatPreviewTimestamp(currentDeployment.createdAt) || currentDeployment.createdAt}`
-                : "等待首次发布后展示版本时间"
-            }
-            className={statusMeta.panelClass}
-          />
-          <DeploymentMetricCard
-            title="访问入口"
-            value={primaryAccessUrl ? "网站已生成访问地址" : "尚未生成访问地址"}
-            subtitle={
-              primaryAccessUrl || "首次发布成功后，这里会展示线上访问地址。"
-            }
-          />
-          <DeploymentMetricCard
-            title="版本概览"
-            value={
-              info?.deployments.length
-                ? `${info.deployments.length} 次发布记录`
-                : "暂无发布记录"
-            }
-            subtitle={
-              info?.activeDeploymentPending
-                ? "当前有任务正在发布中。"
-                : "发布后可在这里查看历史版本与回滚入口。"
-            }
-          />
-        </div>
-
-        <div className="mt-4 rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                <Globe className="size-4 text-slate-500" />
-                网站地址
-              </div>
-              {primaryAccessUrl ? (
-                <a
-                  href={primaryAccessUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-sm text-blue-600 hover:text-blue-700"
-                >
-                  {primaryAccessUrl}
-                </a>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  发布完成后自动生成线上地址。
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {primaryAccessUrl ? (
-                <Button asChild>
-                  <a href={primaryAccessUrl} target="_blank" rel="noreferrer">
-                    <ExternalLink className="size-4" />
-                    打开网站
-                  </a>
-                </Button>
-              ) : null}
-              <Button
-                variant="outline"
-                onClick={() => onRefresh(currentDeploymentId || undefined)}
-                disabled={loading}
-              >
-                <RefreshCw
-                  className={cn("size-4", loading ? "animate-spin" : "")}
-                />
-                刷新结果
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {accessEntries.length ? (
-          <div className="mt-4 grid gap-2 md:grid-cols-2">
-            {accessEntries.map(([label, value]) => (
-              <a
-                key={`${label}-${value}`}
-                href={value}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-md border border-slate-200/80 bg-slate-50/40 px-3 py-3 transition-colors hover:border-slate-300 hover:bg-slate-50"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                      {label}
-                    </div>
-                    <div className="mt-1 break-all text-sm text-slate-700">
-                      {value}
-                    </div>
-                  </div>
-                  <ExternalLink className="size-4 shrink-0 text-slate-400" />
+    <div className="grid gap-3">
+      <section className="min-w-0 rounded-lg border border-slate-200/80 bg-white">
+        <div className="flex h-full min-h-0 flex-col p-3 sm:p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-600">
+                  <Rocket className="size-3.5 text-slate-500" />
+                  发布与访问
                 </div>
-              </a>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <History className="size-4 text-slate-500" />
-              发布记录
-            </div>
-            <div className="text-xs text-slate-500">
-              {currentDeployment
-                ? `当前查看 ${currentDeployment.id.slice(0, 8)}`
-                : "暂无记录"}
-            </div>
-          </div>
-          <div className="space-y-3 p-4">
-            {info?.deployments.length ? (
-              <div className="space-y-2">
-                {info.deployments.slice(0, 6).map((item) => {
-                  const itemSelected = item.id === currentDeployment?.id;
-                  const itemStatusClass =
-                    item.status === "SUCCESS"
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : item.status === "FAILED" || item.status === "CRASHED"
-                        ? "border-rose-200 bg-rose-50 text-rose-700"
-                        : "border-amber-200 bg-amber-50 text-amber-700";
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => onSelectDeployment(item.id)}
-                      className={cn(
-                        "w-full rounded-md border px-3 py-3 text-left transition-colors",
-                        itemSelected
-                          ? "border-slate-900 bg-slate-50"
-                          : "border-slate-200 hover:bg-slate-50",
-                      )}
+                <div
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px]",
+                    statusMeta.badgeClass,
+                  )}
+                >
+                  {info?.activeDeploymentPending ? "发布进行中" : "首屏已收敛"}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className={cn("size-2 rounded-full", statusMeta.dotClass)}
+                    />
+                    <h3 className="truncate text-lg font-semibold text-slate-900">
+                      {statusMeta.label}
+                    </h3>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="sm"
+                      className={compactActionButtonClass}
+                      onClick={onDeploy}
+                      disabled={!info?.canDeploy || Boolean(actionLoading)}
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={cn(
-                                "rounded-full border px-2 py-0.5 text-[11px]",
-                                itemStatusClass,
-                              )}
-                            >
-                              {item.status}
-                            </span>
-                            <span className="font-mono text-[11px] text-slate-400">
-                              {item.id.slice(0, 8)}
-                            </span>
-                          </div>
-                          <div className="text-sm font-medium text-slate-900">
-                            {item.commitMessage || "由 OneCEO 触发的版本发布"}
-                          </div>
+                      {actionLoading === "deploy" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : (
+                        <Rocket className={compactActionIconClass} />
+                      )}
+                      {compactPrimaryActionText}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={compactActionButtonClass}
+                      onClick={onRedeploy}
+                      disabled={!currentDeploymentId || Boolean(actionLoading)}
+                    >
+                      {actionLoading === "redeploy" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : (
+                        <History className={compactActionIconClass} />
+                      )}
+                      重发
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={compactActionButtonClass}
+                      onClick={onRollback}
+                      disabled={!currentDeploymentId || Boolean(actionLoading)}
+                    >
+                      {actionLoading === "rollback" ? (
+                        <Loader2
+                          className={cn(
+                            compactActionIconClass,
+                            "animate-spin",
+                          )}
+                        />
+                      ) : null}
+                      回滚
+                    </Button>
+                  </div>
+                </div>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                  {statusMeta.description}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <DashboardMiniStat
+              label="当前版本"
+              value={currentVersionTimestamp}
+              subtle
+            />
+            <DashboardMiniStat
+              label="访问入口"
+              value={
+                primaryAccessUrl ? `${accessEntries.length} 个入口` : "等待生成"
+              }
+              subtle
+            />
+            <DashboardMiniStat
+              label="发布记录"
+              value={
+                deployments.length ? `${deployments.length} 条记录` : "暂无记录"
+              }
+              subtle
+            />
+          </div>
+
+          <div className="mt-3 rounded-md border border-slate-200/80 bg-slate-50/60 p-3 sm:p-4">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                    <Globe className="size-4 text-slate-500" />
+                    主访问地址
+                  </div>
+                  {primaryAccessUrl ? (
+                    <a
+                      href={primaryAccessUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block break-all text-sm text-blue-600 hover:text-blue-700"
+                    >
+                      {primaryAccessUrl}
+                    </a>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-500">
+                      首次发布成功后会自动生成线上地址。
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {primaryAccessUrl ? (
+                    <Button asChild>
+                      <a
+                        href={primaryAccessUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="size-4" />
+                        打开网站
+                      </a>
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    onClick={() => onRefresh(currentDeploymentId || undefined)}
+                    disabled={loading}
+                  >
+                    <RefreshCw
+                      className={cn("size-4", loading ? "animate-spin" : "")}
+                    />
+                    刷新结果
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                {accessEntries.length ? (
+                  accessEntries.map(([label, value]) => (
+                    <a
+                      key={`${label}-${value}`}
+                      href={value}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">
+                          {label}
                         </div>
-                        <div className="text-xs text-slate-500">
-                          {formatPreviewTimestamp(item.createdAt) ||
-                            item.createdAt ||
-                            "时间未知"}
+                        <div className="mt-1 break-all text-sm text-slate-700">
+                          {value}
                         </div>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
-                暂无发布记录
-              </div>
-            )}
-
-            {currentDeployment ? (
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                      当前版本详情
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900">
-                      {currentDeployment.commitMessage ||
-                        "由 OneCEO 触发的版本发布"}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {currentDeployment.commitAuthor
-                        ? `提交人 ${currentDeployment.commitAuthor}`
-                        : "平台托管发布记录"}
-                    </div>
+                      <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                    </a>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-200 bg-white px-3 py-8 text-center text-sm text-slate-400">
+                    暂无可访问入口
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {runtimeUrl ? (
-                      <Button variant="outline" asChild>
-                        <a href={runtimeUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="size-4" />
-                          运行地址
-                        </a>
-                      </Button>
-                    ) : null}
-                    {staticUrl && staticUrl !== runtimeUrl ? (
-                      <Button variant="outline" asChild>
-                        <a href={staticUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="size-4" />
-                          静态地址
-                        </a>
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
+                )}
               </div>
-            ) : null}
+            </div>
           </div>
-        </section>
 
-        <div className="space-y-4">
-          <section className="rounded-lg border border-slate-200/80 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-              <Server className="size-4 text-slate-500" />
-              资源状态
-            </div>
-            <div className="grid gap-3 p-4">
-              <DeploymentInfoCard
-                title="项目"
-                value={info?.projectName || info?.projectId || "未配置"}
-                mono={Boolean(info?.projectId && info?.projectName)}
-                extra={
-                  info?.projectId && info?.projectName
-                    ? info.projectId
-                    : undefined
-                }
-              />
-              <DeploymentInfoCard
-                title="服务"
-                value={info?.serviceName || info?.serviceId || "未配置"}
-                mono={Boolean(info?.serviceId && info?.serviceName)}
-                extra={
-                  info?.serviceId && info?.serviceName
-                    ? info.serviceId
-                    : undefined
-                }
-              />
-              <DeploymentInfoCard
-                title="环境"
-                value={info?.environmentName || info?.environmentId || "未配置"}
-              />
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/40 p-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ShieldCheck className="size-4 text-slate-500" />
-                  部署准备情况
-                </div>
-                <div className="mt-2 text-xs leading-5 text-slate-600">
-                  {info?.missing.length
-                    ? `仍缺少 ${info.missing.join("、")}`
-                    : info?.configured
-                      ? "资源已准备完成，可继续发布与回滚。"
-                      : "正在准备部署资源。"}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
-            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-              <ScrollText className="size-4 text-slate-500" />
-              发布日志
-            </div>
-            {logsText ? (
-              <div className="max-h-[420px] overflow-auto overscroll-contain bg-slate-950 text-slate-100">
-                <pre className="px-4 py-4 text-[11px] leading-5 whitespace-pre-wrap break-words">
-                  <code>{logsText}</code>
-                </pre>
-              </div>
-            ) : (
-              <div className="px-4 py-10 text-sm text-slate-500">
-                {info?.configured
-                  ? "当前版本暂无日志输出"
-                  : "部署资源准备完成后可查看发布日志"}
-              </div>
-            )}
-          </section>
+          <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-slate-50/50 px-3 py-2 text-xs leading-5 text-slate-500">
+            {primaryAccessUrl
+              ? `当前已有 ${accessEntries.length} 个访问入口，其中 ${primaryDomainCount} 个为补充入口或绑定域名。`
+              : "当前首屏只保留访问与发布闭环；资源信息已移出该页。"}
+          </div>
         </div>
-      </div>
-    </>
+      </section>
+
+      <section className="min-w-0 rounded-lg border border-slate-200/80 bg-white">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
+                  发布卡
+                </div>
+                <div className="mt-2 text-base font-semibold text-slate-900">
+                  {currentDeployment?.commitMessage || "等待首次发布"}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span>{currentDeployment?.commitAuthor || "平台自动发布"}</span>
+                  <span className="size-1 rounded-full bg-slate-300" />
+                  <span>{currentVersionTimestamp}</span>
+                  {currentDeployment?.id ? (
+                    <>
+                      <span className="size-1 rounded-full bg-slate-300" />
+                      <span className="font-mono">
+                        {currentDeployment.id.slice(0, 8)}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {runtimeUrl ? (
+                  <Button variant="outline" asChild>
+                    <a href={runtimeUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink className="size-4" />
+                      运行地址
+                    </a>
+                  </Button>
+                ) : null}
+                {staticUrl && staticUrl !== runtimeUrl ? (
+                  <Button variant="outline" asChild>
+                    <a href={staticUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink className="size-4" />
+                      静态地址
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
+            <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <DashboardMiniStat
+                  label="线上状态"
+                  value={currentDeployment?.status || info?.latestStatus || "UNKNOWN"}
+                />
+                <DashboardMiniStat
+                  label="最近日志"
+                  value={logEntries.length ? `${logEntries.length} 条` : "暂无"}
+                />
+                <DashboardMiniStat
+                  label="回退空间"
+                  value={stableReleaseCount ? `${stableReleaseCount} 个稳定版本` : "暂无"}
+                />
+              </div>
+            </div>
+
+            <div className="min-h-0 rounded-md border border-slate-200/80">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <History className="size-4 text-slate-500" />
+                  发布记录
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">
+                    {deployments.length} 条
+                  </span>
+                  {deployments.length > 4 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReleaseListExpanded((current) => !current)
+                      }
+                      className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-1 text-[11px] text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                    >
+                      {releaseListExpanded ? "收起" : "展开"}
+                      <ChevronDown
+                        className={cn(
+                          "size-3 transition-transform",
+                          releaseListExpanded ? "rotate-180" : "",
+                        )}
+                      />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div
+                className={cn(
+                  "space-y-2 overflow-auto px-4 py-2.5",
+                  releaseListExpanded ? "max-h-[280px]" : "max-h-[208px]",
+                )}
+              >
+                {visibleDeployments.length ? (
+                  visibleDeployments.map((item) => {
+                    const itemSelected = item.id === currentDeployment?.id;
+                    const itemStatusClass =
+                      item.status === "SUCCESS"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : item.status === "FAILED" || item.status === "CRASHED"
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700";
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => onSelectDeployment(item.id)}
+                        className={cn(
+                          "w-full rounded-md border px-3 py-3 text-left transition-colors",
+                          itemSelected
+                            ? "border-slate-900 bg-slate-50"
+                            : "border-slate-200 hover:bg-slate-50",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-[11px]",
+                                  itemStatusClass,
+                                )}
+                              >
+                                {item.status}
+                              </span>
+                              <span className="font-mono text-[11px] text-slate-400">
+                                {item.id.slice(0, 8)}
+                              </span>
+                            </div>
+                            <div className="mt-2 text-sm font-medium text-slate-900">
+                              {item.commitMessage || "由 OneCEO 触发的版本发布"}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            {formatPreviewTimestamp(item.createdAt) ||
+                              item.createdAt ||
+                              "时间未知"}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+                    暂无发布记录
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="min-h-0 overflow-hidden rounded-md border border-slate-200/80 bg-slate-950 text-slate-100">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                  <ScrollText className="size-4 text-slate-400" />
+                  发布日志
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  仅展示最近内容
+                </div>
+              </div>
+              {logEntries.length ? (
+                <div className="max-h-[176px] overflow-auto overscroll-contain px-4 py-2.5">
+                  <div className="space-y-3">
+                    {logEntries.map((entry, index) => (
+                      <div
+                        key={`${entry.timestamp || "log"}-${index}`}
+                        className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                          {entry.timestamp ? (
+                            <span>
+                              {formatPreviewTimestamp(entry.timestamp) ||
+                                entry.timestamp}
+                            </span>
+                          ) : null}
+                          {entry.severity ? (
+                            <span className="rounded-full border border-slate-700 px-1.5 py-0.5 uppercase tracking-[0.08em] text-slate-300">
+                              {entry.severity}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 break-words font-mono text-[11px] leading-5 text-slate-100">
+                          {entry.message}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-4 py-10 text-sm text-slate-400">
+                  {info?.configured
+                    ? "当前版本暂无日志输出"
+                    : "部署资源准备完成后可查看发布日志"}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -3133,12 +3254,14 @@ function DeploymentDashboardSection({
       info?.analytics,
       Boolean(primaryUrl),
     );
+    const hasAnalyticsMetrics =
+      info?.analytics?.status === "tracking" || info?.analytics?.status === "bound";
     const visitsValue =
-      info?.analytics?.status === "ready"
+      hasAnalyticsMetrics
         ? formatMetricCount(info?.analytics?.visits, "0")
         : analyticsPresentation.integrationValue;
     const visitorsValue =
-      info?.analytics?.status === "ready"
+      hasAnalyticsMetrics
         ? formatMetricCount(info?.analytics?.visitors, "0")
         : analyticsPresentation.integrationValue;
     return (

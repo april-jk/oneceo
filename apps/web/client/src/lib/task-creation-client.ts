@@ -207,7 +207,13 @@ export type TaskCreationAnalyticsInfo = {
   provider: "umami";
   configured: boolean;
   enabled: boolean;
-  status: "ready" | "pending" | "unconfigured" | "error";
+  status:
+    | "bound"
+    | "tracking"
+    | "pending"
+    | "pending_domain"
+    | "unconfigured"
+    | "error";
   host?: string;
   websiteId?: string;
   websiteName?: string;
@@ -244,6 +250,16 @@ export type TaskCreationDeploymentInfo = {
   configured: boolean;
   canDeploy: boolean;
   message?: string;
+  bindingState?:
+    | "uninitialized"
+    | "provisioning"
+    | "ready"
+    | "repair_required"
+    | "provider_error";
+  provisioningPhase?: string;
+  providerErrorCode?: string;
+  providerErrorMessage?: string;
+  lastVerifiedAt?: string;
   projectId?: string;
   projectName?: string;
   environmentId?: string;

@@ -15,17 +15,24 @@ function resolveRedirectTarget() {
 }
 
 export default function Register() {
-  const { register, status } = useAuth();
+  const { register, sendRegisterCode, status } = useAuth();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [codeSentMessage, setCodeSentMessage] = useState<string | null>(null);
+  const [codeCooldownSeconds, setCodeCooldownSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const trimmedEmail = email.trim();
+  const hasValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
+  const canSendCode = hasValidEmail && codeCooldownSeconds === 0 && !sendingCode;
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -33,8 +40,49 @@ export default function Register() {
     }
   }, [redirectTarget, setLocation, status]);
 
+  useEffect(() => {
+    if (codeCooldownSeconds <= 0) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setCodeCooldownSeconds((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [codeCooldownSeconds]);
+
+  const handleSendCode = async () => {
+    if (!hasValidEmail) {
+      setError("请输入有效邮箱");
+      return;
+    }
+    setSendingCode(true);
+    setError(null);
+    setCodeSentMessage(null);
+    try {
+      const result = await sendRegisterCode({
+        email: trimmedEmail,
+      });
+      const cooldown = Math.max(0, Number(result.cooldownSeconds || 0));
+      const expiresInSeconds = Math.max(0, Number(result.expiresInSeconds || 0));
+      setCodeCooldownSeconds(cooldown);
+      setCodeSentMessage(
+        expiresInSeconds > 0
+          ? `验证码已发送到 ${trimmedEmail}，${Math.ceil(expiresInSeconds / 60)} 分钟内有效`
+          : `验证码已发送到 ${trimmedEmail}`
+      );
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "验证码发送失败");
+    } finally {
+      setSendingCode(false);
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!verificationCode.trim()) {
+      setError("请输入邮箱验证码");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("两次输入的密码不一致");
       return;
@@ -44,8 +92,9 @@ export default function Register() {
     try {
       await register({
         displayName: displayName.trim(),
-        email: email.trim(),
+        email: trimmedEmail,
         password,
+        verificationCode: verificationCode.trim(),
       });
       setLocation(redirectTarget);
     } catch (submitError) {
@@ -106,6 +155,37 @@ export default function Register() {
             </div>
 
             <div className="flex flex-col gap-2">
+              <Label htmlFor="register-verification-code" className="text-sm font-semibold text-[#151717]">
+                Verification Code
+              </Label>
+              <div className="flex gap-2">
+                <div className="flex h-[50px] flex-1 items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
+                  <Mail className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
+                  <Input
+                    id="register-verification-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="Enter verification code"
+                    value={verificationCode}
+                    onChange={(event) => setVerificationCode(event.target.value)}
+                    required
+                    className="ml-[10px] h-full border-0 bg-transparent px-0 py-0 text-[15px] shadow-none focus-visible:ring-0"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleSendCode()}
+                  disabled={!canSendCode}
+                  className="h-[50px] min-w-[124px] rounded-[10px] border-[#151717] px-4 text-[14px] font-medium text-[#151717] hover:bg-slate-50"
+                >
+                  {sendingCode ? "Sending..." : codeCooldownSeconds > 0 ? `${codeCooldownSeconds}s` : "Send Code"}
+                </Button>
+              </div>
+              {codeSentMessage ? <p className="text-sm text-emerald-700">{codeSentMessage}</p> : null}
+            </div>
+
+            <div className="flex flex-col gap-2">
               <Label htmlFor="register-password" className="text-sm font-semibold text-[#151717]">
                 Password
               </Label>
@@ -159,7 +239,7 @@ export default function Register() {
               </div>
             </div>
 
-            <p className="pt-1 text-sm text-slate-500">注册成功后会立即建立登录态，并跳回你进入前的页面。</p>
+            <p className="pt-1 text-sm text-slate-500">完成邮箱验证后注册会立即建立登录态，并跳回你进入前的页面。</p>
 
             {error ? (
               <div className="rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>

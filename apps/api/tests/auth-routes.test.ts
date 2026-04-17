@@ -11,12 +11,14 @@ type TestServer = {
 };
 
 const originalRegister = appAuthService.register;
+const originalSendRegisterVerificationCode = appAuthService.sendRegisterVerificationCode;
 const originalLogin = appAuthService.login;
 const originalLogout = appAuthService.logout;
 const originalResolve = appAuthService.resolveUserBySessionToken;
 
 after(() => {
   appAuthService.register = originalRegister;
+  appAuthService.sendRegisterVerificationCode = originalSendRegisterVerificationCode;
   appAuthService.login = originalLogin;
   appAuthService.logout = originalLogout;
   appAuthService.resolveUserBySessionToken = originalResolve;
@@ -62,6 +64,7 @@ test('POST /api/auth/register returns user and app session cookie', async () => 
   const server = await startServer();
   appAuthService.register = async (input) => {
     assert.equal(input.email, 'new@example.com');
+    assert.equal(input.verificationCode, '123456');
     return {
       token: 'app-token-register',
       session: { id: 'sess-1' } as any,
@@ -77,6 +80,7 @@ test('POST /api/auth/register returns user and app session cookie', async () => 
         email: 'new@example.com',
         password: 'password123',
         displayName: 'New User',
+        verificationCode: '123456',
       }),
     });
     const payload = await response.json();
@@ -85,6 +89,36 @@ test('POST /api/auth/register returns user and app session cookie', async () => 
     assert.equal(payload.success, true);
     assert.equal(payload.data.user.id, 'user-register-1');
     assert.match(response.headers.get('set-cookie') || '', /app_session_id=app-token-register/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/auth/register/send-code returns success without auth cookie', async () => {
+  const server = await startServer();
+  appAuthService.sendRegisterVerificationCode = async (input) => {
+    assert.equal(input.email, 'code@example.com');
+    return {
+      cooldownSeconds: 60,
+      expiresInSeconds: 600,
+    };
+  };
+
+  try {
+    const response = await fetch(`${server.origin}/api/auth/register/send-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email: 'code@example.com',
+      }),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.cooldownSeconds, 60);
+    assert.equal(payload.data.expiresInSeconds, 600);
+    assert.equal(response.headers.get('set-cookie'), null);
   } finally {
     await server.close();
   }

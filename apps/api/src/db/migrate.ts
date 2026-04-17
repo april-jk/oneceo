@@ -16,6 +16,7 @@ const REQUIRED_TABLES = [
   'app_users',
   'app_user_legacy_id_mappings',
   'app_user_sessions',
+  'app_user_email_verifications',
   'admin_users',
   'admin_user_sessions',
   'task_creation_sessions',
@@ -67,6 +68,12 @@ const REQUIRED_COLUMNS = [
   ['app_user_sessions', 'user_id'],
   ['app_user_sessions', 'session_token_hash'],
   ['app_user_sessions', 'expires_at'],
+  ['app_user_email_verifications', 'email'],
+  ['app_user_email_verifications', 'purpose'],
+  ['app_user_email_verifications', 'code_hash'],
+  ['app_user_email_verifications', 'expires_at'],
+  ['app_user_email_verifications', 'consumed_at'],
+  ['app_user_email_verifications', 'last_sent_at'],
   ['admin_users', 'login_name'],
   ['admin_users', 'password_hash'],
   ['admin_users', 'display_name'],
@@ -195,6 +202,8 @@ const REQUIRED_INDEXES = [
   'idx_app_users_email',
   'idx_app_user_legacy_mappings_legacy_user_id',
   'idx_app_user_sessions_token_hash',
+  'idx_app_user_email_verifications_email_purpose',
+  'idx_app_user_email_verifications_expires_at',
   'idx_admin_users_login_name',
   'idx_admin_user_sessions_token_hash',
   'idx_conversation_messages_session_message_key',
@@ -649,6 +658,18 @@ CREATE TABLE IF NOT EXISTS app_user_sessions (
   last_seen_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS app_user_email_verifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'register',
+  code_hash TEXT NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  consumed_at TIMESTAMP,
+  last_sent_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS admin_users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   login_name TEXT NOT NULL,
@@ -683,6 +704,10 @@ CREATE INDEX IF NOT EXISTS idx_app_user_legacy_mappings_app_user_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_sessions_token_hash ON app_user_sessions(session_token_hash);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_user_id ON app_user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_app_user_sessions_expires_at ON app_user_sessions(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_email_verifications_email_purpose
+  ON app_user_email_verifications(email, purpose);
+CREATE INDEX IF NOT EXISTS idx_app_user_email_verifications_expires_at
+  ON app_user_email_verifications(expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_login_name ON admin_users(login_name);
 CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role);
 CREATE INDEX IF NOT EXISTS idx_admin_users_status ON admin_users(status);

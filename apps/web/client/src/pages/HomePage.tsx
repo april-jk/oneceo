@@ -30,6 +30,67 @@ import {
   type PendingAttachment,
 } from "@/lib/task-attachments";
 
+const QUICK_ACTION_ROWS = [
+  [
+    "帮我梳理下周发布会的任务分工与时间排期",
+    "根据这个想法生成一版完整的产品需求文档",
+    "系统分析竞品的定价策略和主推卖点差异",
+    "把官网首页的信息架构和首屏文案一起整理出来",
+  ],
+  [
+    "规划一套 AI 工作流改造方案并拆成实施步骤",
+    "帮我排查这批线上异常日志并定位最可能的问题",
+    "整理本周销售跟进计划并补全下一步推进动作",
+    "为这个岗位写一版招聘 JD 和首轮面试问题清单",
+  ],
+  [
+    "输出一份上线前的部署检查清单和风险确认项",
+    "根据现有方案撰写一版可评审的技术设计文档",
+    "分析最近用户流失的原因并给出可执行改进建议",
+    "把这周周报整理成结果总结和下周行动项列表",
+  ],
+] as const;
+
+function QuickActionRow({
+  actions,
+  direction,
+  durationSeconds,
+  onSelect,
+}: {
+  actions: readonly string[];
+  direction: "left" | "right";
+  durationSeconds: number;
+  onSelect: (value: string) => void;
+}) {
+  const loopedActions = [...actions, ...actions, ...actions, ...actions];
+
+  return (
+    <div className="relative left-1/2 min-w-[280px] -translate-x-1/2 w-[min(calc(100%+30vw),calc(100vw-2rem))] sm:w-[min(calc(100%+30vw),calc(100vw-3rem))]">
+      <div className="homepage-marquee-mask relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/80 to-transparent sm:w-16" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background via-background/80 to-transparent sm:w-16" />
+
+        <div
+          className="homepage-marquee-track py-1"
+          data-direction={direction}
+          style={{ animationDuration: `${durationSeconds}s` }}
+        >
+          {loopedActions.map((action, index) => (
+            <Button
+              key={`${action}-${index}`}
+              variant="outline"
+              className="h-11 shrink-0 rounded-xl border-border bg-background px-4 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-foreground/15 hover:bg-accent"
+              onClick={() => onSelect(action)}
+            >
+              {action}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
@@ -62,7 +123,7 @@ export default function HomePage() {
       <nav className="border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-xl" />
+            <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-lg" />
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-foreground leading-tight">oneceo</span>
               <span className="text-xs text-muted-foreground leading-tight">AI Agent Platform</span>
@@ -185,31 +246,33 @@ export default function HomePage() {
             </div>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.4 }}
-            className="grid grid-cols-2 gap-3"
-          >
-            {[
-              "我想做一个Python开发行业的市场调研",
-              "帮我分析竞争对手的产品策略",
-              "创建一个新产品的营销计划",
-              "生成季度业务报告",
-            ].map((action) => (
-              <Button
-                key={action}
-                variant="outline"
-                className="h-auto py-3 px-4 rounded-xl border-border hover:bg-accent hover:border-primary/30 text-sm font-medium text-left whitespace-normal"
-                onClick={() => goToNewTask(action)}
-              >
-                {action}
-              </Button>
-            ))}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4, duration: 0.4 }}
+          className="pt-3 space-y-3"
+        >
+            <QuickActionRow
+              actions={QUICK_ACTION_ROWS[0]}
+              direction="left"
+              durationSeconds={28}
+              onSelect={goToNewTask}
+            />
+            <QuickActionRow
+              actions={QUICK_ACTION_ROWS[1]}
+              direction="right"
+              durationSeconds={32}
+              onSelect={goToNewTask}
+            />
+            <QuickActionRow
+              actions={QUICK_ACTION_ROWS[2]}
+              direction="left"
+              durationSeconds={36}
+              onSelect={goToNewTask}
+            />
           </motion.div>
         </motion.div>
       </div>
-
     </div>
   );
 }

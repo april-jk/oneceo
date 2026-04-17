@@ -3689,21 +3689,16 @@ select:focus-visible {
   line-height: 1.45;
 }
 
-.osac-release-console-grid {
+.osac-release-console-list-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 0.84fr) minmax(0, 1.16fr);
-  gap: 14px;
-  align-items: stretch;
   min-height: 0;
 }
 
-.osac-release-list-head,
-.osac-release-detail-head {
+.osac-release-list-head {
   align-items: flex-start;
 }
 
-.osac-release-list-panel,
-.osac-release-detail-panel {
+.osac-release-list-panel {
   min-height: 0;
   overflow: hidden;
 }
@@ -3721,21 +3716,6 @@ select:focus-visible {
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding-right: 2px;
-}
-
-.osac-release-detail-panel {
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.osac-release-detail-body {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  display: grid;
-  align-content: start;
-  gap: 16px;
   padding-right: 2px;
 }
 
@@ -3811,6 +3791,20 @@ select:focus-visible {
   align-content: center;
 }
 
+.osac-release-row-link {
+  color: var(--theme-primary-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.osac-release-list-head-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .osac-release-detail-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3884,6 +3878,41 @@ select:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.osac-release-modal {
+  width: min(1040px, calc(100vw - 40px));
+  max-height: calc(100vh - 32px);
+  margin-inline: auto;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--theme-primary) 5%, transparent), transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-elevated) 96%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+  color: var(--text);
+}
+
+.osac-release-modal-header {
+  margin-bottom: 14px;
+  align-items: center;
+}
+
+.osac-release-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.osac-release-modal-body {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.osac-release-modal-action-row {
+  padding-top: 2px;
 }
 
 .osac-release-upload-layout {
@@ -6619,7 +6648,10 @@ select:focus-visible {
 }
 
 .runtime-load-more-btn {
-  min-width: 220px;
+  min-width: 176px;
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
 }
 
 .runtime-load-more-btn.is-loading {
@@ -9155,7 +9187,6 @@ tbody tr:hover {
 
 @media (max-width: 1180px) {
   .osac-release-workbench,
-  .osac-release-console-grid,
   .osac-release-upload-layout,
   .skill-editor-layout,
   .skill-resource-layout,
@@ -9279,6 +9310,11 @@ tbody tr:hover {
 
   .osac-release-tab-btn {
     min-height: auto;
+  }
+
+  .osac-release-list-head-meta {
+    display: grid;
+    justify-content: stretch;
   }
 
   .state-timeline-item {

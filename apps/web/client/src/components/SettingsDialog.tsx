@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useSearch } from 'wouter';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
@@ -9,7 +9,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Plug, Settings2, SlidersHorizontal, UserRound, Wrench, X } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
+import {
+  ChevronLeft,
+  Copy,
+  KeyRound,
+  LogOut,
+  Mail,
+  Pencil,
+  Plug,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Trash2,
+  UserRound,
+  Wrench,
+  X,
+} from 'lucide-react';
 import { ConnectorCenterPanel } from '@/components/ConnectorCenterPanel';
 import { UserSkillSettingsPanel } from '@/components/UserSkillSettingsPanel';
 import { getCodexRuntimeConfig, updateCodexRuntimeConfig } from '@/lib/task-creation-client';
@@ -20,6 +37,7 @@ import {
   type SettingsTab,
 } from '@/lib/settings-dialog-events';
 import type { ConnectorKey } from '@/lib/connectors-client';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -41,9 +59,44 @@ const SETTINGS_TABS: SettingsTab[] = ['account', 'model', 'settings', 'skills', 
 const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
 const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
 const DEFAULT_CODEX_API_KEY = 'sk-2ea35443a67d931ba178743b155f9627b8e2f81e5bc531d727f53172c3aa5555';
+const ACCOUNT_AVATAR_TONES = [
+  'bg-emerald-500',
+  'bg-sky-500',
+  'bg-fuchsia-500',
+  'bg-amber-500',
+  'bg-rose-500',
+  'bg-cyan-500',
+];
 
 function isSettingsTab(value: string | null | undefined): value is SettingsTab {
   return Boolean(value && SETTINGS_TABS.includes(value as SettingsTab));
+}
+
+function getAccountInitial(value: string | null | undefined) {
+  const source = (value || '').trim();
+  return (source.slice(0, 1) || 'U').toUpperCase();
+}
+
+function getAccountAvatarTone(seed: string | null | undefined) {
+  const value = (seed || '').trim();
+  if (!value) {
+    return ACCOUNT_AVATAR_TONES[0];
+  }
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return ACCOUNT_AVATAR_TONES[hash % ACCOUNT_AVATAR_TONES.length];
+}
+
+function getReadableAccountStatus(status: string | undefined, fallback: string) {
+  if (!status) {
+    return fallback;
+  }
+  if (status === 'active') {
+    return fallback;
+  }
+  return status.replace(/[_-]/g, ' ');
 }
 
 export function SettingsPanel({
@@ -53,6 +106,8 @@ export function SettingsPanel({
   highlightedConnector,
 }: SettingsPanelProps) {
   const { t, i18n } = useTranslation();
+  const [, setLocation] = useLocation();
+  const { user, logout } = useAuth();
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
   const [theme, setTheme] = useState('light');
@@ -70,11 +125,14 @@ export function SettingsPanel({
   const [codexConfigError, setCodexConfigError] = useState('');
   const [codexConfigUpdatedAt, setCodexConfigUpdatedAt] = useState('');
   const [codexConfigLoaded, setCodexConfigLoaded] = useState(false);
+  const [accountDisplayNameDraft, setAccountDisplayNameDraft] = useState('');
+  const [accountView, setAccountView] = useState<'overview' | 'details'>('overview');
   // Altus 控制模式：
   // - sandbox: 直通模式，前端输入直接转发到 sandbox 内执行器（当前为 OpenCode）。
   // - managed: Altus 接管模式，走三层智能体编排。
   // 预留后续 claudecode/codex 直通模式扩展，保持此枚举语义稳定。
   const [altusMode, setAltusMode] = useState('sandbox');
+  const accountNameInputRef = useRef<HTMLInputElement | null>(null);
   const EXECUTOR_STORAGE_KEY = 'altus_executor';
   const ALTUS_MODE_STORAGE_KEY = 'altus_mode';
   const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
@@ -119,6 +177,11 @@ export function SettingsPanel({
 
   const shouldShowExecutorSettings = altusMode === 'sandbox';
   const shouldShowCodexLlmSettings = executor === 'codex' && altusMode === 'sandbox';
+  const accountInitial = getAccountInitial(user?.displayName || user?.email);
+  const accountAvatarTone = getAccountAvatarTone(user?.email || user?.displayName);
+  const accountStatusText = getReadableAccountStatus(user?.status, t('account.statusActive'));
+  const accountDisplayNameChanged =
+    accountDisplayNameDraft.trim() !== (user?.displayName || '').trim();
 
   useEffect(() => {
     if (!shouldShowCodexLlmSettings || codexConfigLoaded) return;
@@ -191,6 +254,16 @@ export function SettingsPanel({
     );
   }, [codexApiKey, codexAuthDirty]);
 
+  useEffect(() => {
+    setAccountDisplayNameDraft(user?.displayName || '');
+  }, [user?.displayName]);
+
+  useEffect(() => {
+    if (activeTab !== 'account') {
+      setAccountView('overview');
+    }
+  }, [activeTab]);
+
   const handleSaveCodexConfig = async () => {
     try {
       setCodexConfigSaving(true);
@@ -215,6 +288,39 @@ export function SettingsPanel({
       setCodexConfigError(error instanceof Error ? error.message : String(error));
     } finally {
       setCodexConfigSaving(false);
+    }
+  };
+
+  const handleCopyUserId = async () => {
+    if (!user?.id) return;
+    try {
+      await navigator.clipboard.writeText(user.id);
+      toast.success(t('account.userIdCopied'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('account.userIdCopyFailed'));
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      toast.success(t('account.logoutSuccess'));
+      setLocation('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('account.logoutFailed'));
+    }
+  };
+
+  const handleUnavailableAction = (message: string) => {
+    toast.error(message);
+  };
+
+  const handleOpenAccountDetails = () => {
+    setAccountView('details');
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        accountNameInputRef.current?.focus();
+      }, 0);
     }
   };
 
@@ -522,62 +628,308 @@ export function SettingsPanel({
               </TabsContent>
 
               {/* Account Tab */}
-              <TabsContent value="account" className="space-y-8 mt-0">
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <Label className="text-sm font-medium">{t('account.profileLabel')}</Label>
-                  <div className="space-y-2">
-                    <Label htmlFor="email" className="text-sm text-muted-foreground">
-                      {t('account.emailLabel')}
-                    </Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      placeholder="user@example.com"
-                      className="rounded-xl"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="username" className="text-sm text-muted-foreground">
-                      {t('account.usernameLabel')}
-                    </Label>
-                    <Input id="username" placeholder="username" className="rounded-xl" />
-                  </div>
-                  <Button className="rounded-xl bg-foreground hover:bg-foreground/90 text-background">
-                    {t('account.updateProfile')}
-                  </Button>
-                </div>
+              <TabsContent value="account" className="mt-0 h-full">
+                <div className="flex min-h-full flex-col px-0 md:px-2">
+                  <div className="flex min-h-full w-full flex-1 flex-col md:mx-auto md:max-w-[768px]">
+                    <div className="flex flex-1 flex-col items-start self-stretch pb-4 pt-2 md:pt-2">
+                      {accountView === 'overview' ? (
+                        <div className="flex w-full flex-col gap-5">
+                          <div className="flex flex-col justify-between gap-4 border-b border-border/60 pb-6 md:flex-row md:items-center">
+                            <div className="flex min-w-0 flex-1 items-center gap-4">
+                              <Avatar className="h-16 w-16 border border-border/70">
+                                <AvatarImage
+                                  src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                                  alt={user?.displayName || user?.email || t('account.title')}
+                                />
+                                <AvatarFallback
+                                  className={cn(
+                                    'text-[32px] font-bold text-white',
+                                    accountAvatarTone
+                                  )}
+                                >
+                                  {accountInitial}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[22px] font-semibold leading-[28px] text-foreground">
+                                  {user?.displayName || user?.email || t('account.unknownUser')}
+                                </div>
+                                <div className="truncate pt-1 text-sm leading-6 text-muted-foreground">
+                                  {user?.email || t('account.noEmail')}
+                                </div>
+                              </div>
+                            </div>
 
-                <div className="space-y-4 pb-6 border-b border-border/60">
-                  <Label className="text-sm font-medium">{t('account.changePasswordLabel')}</Label>
-                  <div className="space-y-2">
-                    <Label htmlFor="current-password" className="text-sm text-muted-foreground">
-                      {t('account.currentPassword')}
-                    </Label>
-                    <Input id="current-password" type="password" className="rounded-xl" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="new-password" className="text-sm text-muted-foreground">
-                      {t('account.newPassword')}
-                    </Label>
-                    <Input id="new-password" type="password" className="rounded-xl" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="confirm-password" className="text-sm text-muted-foreground">
-                      {t('account.confirmPassword')}
-                    </Label>
-                    <Input id="confirm-password" type="password" className="rounded-xl" />
-                  </div>
-                  <Button className="rounded-xl bg-foreground hover:bg-foreground/90 text-background">
-                    {t('account.changePassword')}
-                  </Button>
-                </div>
+                            <div className="flex gap-2 self-start md:self-center">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                onClick={handleOpenAccountDetails}
+                                className="h-9 w-9 rounded-lg border-border bg-background shadow-none"
+                                aria-label={t('account.editProfile')}
+                              >
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                onClick={() => void handleLogout()}
+                                className="h-9 w-9 rounded-lg border-border bg-background text-destructive shadow-none"
+                                aria-label={t('account.logout')}
+                              >
+                                <LogOut className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
 
-                <div className="space-y-4 pt-2 border-t border-destructive/20">
-                  <Label className="text-sm font-medium text-destructive">{t('account.dangerZone')}</Label>
-                  <p className="text-sm text-muted-foreground">{t('account.deleteAccountWarning')}</p>
-                  <Button variant="destructive" className="rounded-xl">
-                    {t('account.deleteAccount')}
-                  </Button>
+                          <div className="rounded-lg border border-border bg-muted/20 px-4">
+                            <div className="flex flex-col gap-3 border-b border-border/70 py-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex flex-col gap-1">
+                                <div className="text-base font-semibold leading-6 text-foreground">
+                                  {t('account.planFree')}
+                                </div>
+                                <div className="text-sm text-muted-foreground">
+                                  {t('account.planDescription')}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() =>
+                                  handleUnavailableAction(t('account.upgradeUnavailable'))
+                                }
+                                className="h-8 rounded-lg border-foreground bg-foreground px-3 text-sm text-background hover:bg-foreground/90 hover:text-background"
+                              >
+                                {t('account.upgrade')}
+                              </Button>
+                            </div>
+
+                            <div className="grid gap-4 py-4 sm:grid-cols-3">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                                  <span>{t('account.accountStatus')}</span>
+                                </div>
+                                <div className="text-sm text-muted-foreground">{accountStatusText}</div>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                  <Mail className="h-4 w-4 text-muted-foreground" />
+                                  <span>{t('account.authMethod')}</span>
+                                </div>
+                                <div className="text-sm text-muted-foreground">{t('account.authMethodEmail')}</div>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                  <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                                  <span>{t('account.sessionIsolation')}</span>
+                                </div>
+                                <div className="text-sm text-muted-foreground">
+                                  {t('account.sessionIsolationEnabled')}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex w-full flex-col gap-5">
+                          <div className="flex items-center gap-3 border-b border-border/60 pb-5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => setAccountView('overview')}
+                              className="h-8 w-8 rounded-md"
+                              aria-label={t('account.backToOverview')}
+                            >
+                              <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            <div>
+                              <div className="text-lg font-semibold leading-6 text-foreground">
+                                {t('account.detailsTitle')}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                {t('account.detailsDescription')}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col">
+                            <div className="flex flex-col gap-6 border-b border-border/60 py-4 sm:flex-row sm:items-center">
+                              <div className="group relative h-20 w-20 overflow-hidden rounded-full border border-border/70">
+                                <Avatar className="h-20 w-20 rounded-full">
+                                  <AvatarImage
+                                    src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                                    alt={user?.displayName || user?.email || t('account.title')}
+                                  />
+                                  <AvatarFallback
+                                    className={cn(
+                                      'text-[40px] font-bold text-white',
+                                      accountAvatarTone
+                                    )}
+                                  >
+                                    {accountInitial}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleUnavailableAction(t('account.avatarUploadUnavailable'))
+                                  }
+                                  className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
+                                  aria-label={t('account.editAvatar')}
+                                >
+                                  <Pencil className="h-5 w-5 text-white" />
+                                </button>
+                              </div>
+
+                              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                                <span className="text-sm leading-6 text-muted-foreground">
+                                  {t('account.usernameLabel')}
+                                </span>
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                                  <div className="group flex h-10 flex-1 items-center gap-3 rounded-lg border border-border bg-muted/30 px-4">
+                                    <input
+                                      ref={accountNameInputRef}
+                                      maxLength={20}
+                                      value={accountDisplayNameDraft}
+                                      onChange={(event) => setAccountDisplayNameDraft(event.target.value)}
+                                      className="h-full min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
+                                      placeholder={t('account.usernamePlaceholder')}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setAccountDisplayNameDraft('')}
+                                      className="text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+                                      aria-label={t('account.clearDisplayName')}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() =>
+                                      handleUnavailableAction(t('account.profileUpdateUnavailable'))
+                                    }
+                                    disabled={!accountDisplayNameChanged}
+                                    className="h-10 rounded-lg px-4"
+                                  >
+                                    {t('account.updateProfile')}
+                                  </Button>
+                                </div>
+                                <p className="text-xs leading-5 text-muted-foreground">
+                                  {t('account.profileUpdateHint')}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-3 border-b border-border/60 py-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex flex-col gap-1">
+                                <div className="text-sm leading-6 text-foreground">
+                                  {t('account.emailLabel')}
+                                </div>
+                                <div className="break-all text-xs text-muted-foreground">
+                                  {user?.email || t('account.noEmail')}
+                                </div>
+                              </div>
+                              <div className="flex gap-2 sm:justify-end">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  disabled
+                                  className="h-8 rounded-lg px-3 text-sm"
+                                >
+                                  {t('account.emailReadonly')}
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-3 border-b border-border/60 py-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex flex-col gap-1">
+                                <div className="text-sm leading-6 text-foreground">
+                                  {t('account.userIdLabel')}
+                                </div>
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <span className="break-all">{user?.id || t('account.noUserId')}</span>
+                                  {user?.id ? (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      onClick={() => void handleCopyUserId()}
+                                      className="h-6 w-6 rounded-md"
+                                      aria-label={t('account.copyUserId')}
+                                    >
+                                      <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-3 border-b border-border/60 py-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex flex-col gap-1">
+                                <div className="text-sm leading-6 text-foreground">
+                                  {t('account.changePasswordLabel')}
+                                </div>
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  {Array.from({ length: 10 }).map((_, index) => (
+                                    <span
+                                      key={`account-password-dot-${index}`}
+                                      className="h-2 w-2 rounded-full bg-muted-foreground/70"
+                                    />
+                                  ))}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {t('account.passwordHint')}
+                                </div>
+                              </div>
+                              <div className="flex gap-2 sm:justify-end">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() =>
+                                    handleUnavailableAction(t('account.passwordUpdateUnavailable'))
+                                  }
+                                  className="h-8 rounded-lg px-3 text-sm"
+                                >
+                                  <KeyRound className="h-4 w-4" />
+                                  {t('account.changePassword')}
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex flex-col gap-1">
+                                <div className="text-sm leading-6 text-foreground">
+                                  {t('account.deleteAccount')}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {t('account.deleteAccountWarning')}
+                                </div>
+                              </div>
+                              <div className="flex gap-2 sm:justify-end">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() =>
+                                    handleUnavailableAction(t('account.deleteAccountUnavailable'))
+                                  }
+                                  className="h-8 rounded-lg border-destructive/40 px-3 text-sm text-destructive hover:bg-destructive/8 hover:text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  {t('account.deleteAccount')}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </TabsContent>
 

@@ -78,6 +78,21 @@ type RuntimeRegistryResponse = {
   items: RuntimeRegistryItem[];
 };
 
+const RUNTIME_REGISTRY_MAX_LIMIT = 200;
+const LIVE_SUMMARY_CACHE_MS = 60000;
+const LIVE_SANDBOX_LIST_CACHE_MS = 30000;
+
+type LiveSummaryResponse = Awaited<ReturnType<typeof e2bConnector.summarizeLiveSandboxes>>;
+type LiveSandboxListCacheEntry = {
+  expiresAt: number;
+  limit: number;
+  data: E2bSandboxListItem[];
+};
+type LiveSandboxListRequest = {
+  limit: number;
+  promise: Promise<E2bSandboxListItem[]>;
+};
+
 type RuntimeDetailResponse = {
   runtime: RuntimeRegistryItem;
   trackedEnvironment: SandboxEnvironmentRecord | null;
@@ -131,6 +146,30 @@ function summarizeStatus(records: E2bSandboxListItem[]): SandboxStatusSummary {
     running: records.filter((item) => item.state === 'running').length,
     paused: records.filter((item) => item.state === 'paused').length,
   };
+}
+
+function createLiveSandboxListCacheKey(query?: {
+  state?: Array<'running' | 'paused'>;
+  metadata?: Record<string, string>;
+}) {
+  const state = [...(query?.state ?? ['running', 'paused'])].sort();
+  const metadata = query?.metadata
+    ? Object.fromEntries(Object.entries(query.metadata).sort(([left], [right]) => left.localeCompare(right)))
+    : null;
+  return JSON.stringify({ state, metadata });
+}
+
+function filterLiveSandboxes(
+  sandboxes: E2bSandboxListItem[],
+  limit: number,
+  query?: {
+    templateId?: string;
+  }
+) {
+  const filtered = query?.templateId
+    ? sandboxes.filter((item) => item.templateId === query.templateId || item.alias === query.templateId)
+    : sandboxes;
+  return filtered.slice(0, limit);
 }
 
 function asText(value: unknown): string | null {
@@ -481,6 +520,16 @@ function toLiveListItemFromDetail(
 }
 
 export class SandboxManagementService {
+  private liveSummaryCache: { expiresAt: number; data: LiveSummaryResponse } | null = null;
+  private liveSandboxListCache = new Map<string, LiveSandboxListCacheEntry>();
+  private liveSandboxListRequests = new Map<string, LiveSandboxListRequest>();
+
+  private clearLiveSandboxCaches() {
+    this.liveSummaryCache = null;
+    this.liveSandboxListCache.clear();
+    this.liveSandboxListRequests.clear();
+  }
+
   private async listTrackedEnvironments(limit: number) {
     return oneceoApiConnector.listSandboxEnvironmentRegistry(limit).catch(() => []);
   }
@@ -498,10 +547,41 @@ export class SandboxManagementService {
     }
   ) {
     if (!config.e2bApiKey) return [] as E2bSandboxListItem[];
-    const sandboxes = await e2bConnector.listSandboxes(limit, query);
-    return query?.templateId
-      ? sandboxes.filter((item) => item.templateId === query.templateId || item.alias === query.templateId)
-      : sandboxes;
+    const fetchLimit = Math.max(limit, RUNTIME_REGISTRY_MAX_LIMIT);
+    const cacheKey = createLiveSandboxListCacheKey(query);
+    const now = Date.now();
+    const cached = this.liveSandboxListCache.get(cacheKey);
+    if (cached && cached.expiresAt > now && cached.limit >= fetchLimit) {
+      return filterLiveSandboxes(cached.data, limit, query);
+    }
+
+    const inFlight = this.liveSandboxListRequests.get(cacheKey);
+    if (inFlight && inFlight.limit >= fetchLimit) {
+      const sandboxes = await inFlight.promise;
+      return filterLiveSandboxes(sandboxes, limit, query);
+    }
+
+    const request = e2bConnector
+      .listSandboxes(fetchLimit, {
+        state: query?.state,
+        metadata: query?.metadata,
+      })
+      .then((sandboxes) => {
+        this.liveSandboxListCache.set(cacheKey, {
+          expiresAt: Date.now() + LIVE_SANDBOX_LIST_CACHE_MS,
+          limit: fetchLimit,
+          data: sandboxes,
+        });
+        return sandboxes;
+      })
+      .finally(() => {
+        if (this.liveSandboxListRequests.get(cacheKey)?.promise === request) {
+          this.liveSandboxListRequests.delete(cacheKey);
+        }
+      });
+    this.liveSandboxListRequests.set(cacheKey, { limit: fetchLimit, promise: request });
+    const sandboxes = await request;
+    return filterLiveSandboxes(sandboxes, limit, query);
   }
 
   async getOverview(
@@ -555,13 +635,35 @@ export class SandboxManagementService {
     }
   }
 
+  async getLiveSummary(): Promise<LiveSummaryResponse> {
+    if (!config.e2bApiKey) {
+      return {
+        total: 0,
+        running: 0,
+        paused: 0,
+        pagesScanned: 0,
+        countedAt: new Date().toISOString(),
+      };
+    }
+    const now = Date.now();
+    if (this.liveSummaryCache && this.liveSummaryCache.expiresAt > now) {
+      return this.liveSummaryCache.data;
+    }
+    const data = await e2bConnector.summarizeLiveSandboxes();
+    this.liveSummaryCache = {
+      expiresAt: now + LIVE_SUMMARY_CACHE_MS,
+      data,
+    };
+    return data;
+  }
+
   async getRuntimeRegistry(limit = 80): Promise<RuntimeRegistryResponse> {
-    const fetchLimit = Math.max(1, limit);
-    const queryLimit = fetchLimit + 1;
+    const fetchLimit = Math.min(Math.max(1, limit), RUNTIME_REGISTRY_MAX_LIMIT);
+    const queryLimit = fetchLimit >= RUNTIME_REGISTRY_MAX_LIMIT ? fetchLimit : fetchLimit + 1;
     const [trackedEnvironments, taskSessions, liveSandboxes] = await Promise.all([
       this.listTrackedEnvironments(queryLimit),
       this.listTaskSessions(queryLimit),
-      this.listLiveSandboxes(queryLimit).catch(() => []),
+      this.listLiveSandboxes(queryLimit),
     ]);
 
     const taskSessionById = new Map(taskSessions.map((item) => [item.id, item]));
@@ -726,7 +828,9 @@ export class SandboxManagementService {
   }
 
   async setEnvironmentTimeout(sandboxId: string, timeoutMs: number) {
-    return e2bConnector.setSandboxTimeout(sandboxId, timeoutMs);
+    const result = await e2bConnector.setSandboxTimeout(sandboxId, timeoutMs);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async createEnvironment(payload: {
@@ -740,19 +844,27 @@ export class SandboxManagementService {
     network?: unknown;
     autoPause?: boolean;
   }) {
-    return e2bConnector.createSandbox(payload);
+    const result = await e2bConnector.createSandbox(payload);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async closeEnvironment(sandboxId: string) {
-    return oneceoApiConnector.closeSandboxEnvironment(sandboxId);
+    const result = await oneceoApiConnector.closeSandboxEnvironment(sandboxId);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async pauseEnvironment(sandboxId: string) {
-    return e2bConnector.pauseSandbox(sandboxId);
+    const result = await e2bConnector.pauseSandbox(sandboxId);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async resumeEnvironment(sandboxId: string) {
-    return e2bConnector.resumeSandbox(sandboxId);
+    const result = await e2bConnector.resumeSandbox(sandboxId);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async archiveEnvironment(sandboxId: string) {
@@ -770,6 +882,7 @@ export class SandboxManagementService {
       throw new AppError(400, '当前 Sandbox 已无活体实例，无法执行手动归档');
     }
     const result = await oneceoApiConnector.archiveSandboxEnvironment(sandboxId);
+    this.clearLiveSandboxCaches();
     return {
       action: 'archive',
       sandboxId,
@@ -779,17 +892,21 @@ export class SandboxManagementService {
   }
 
   async restoreEnvironment(sandboxId: string, options?: { snapshotKey?: string }) {
-    return oneceoApiConnector.restoreSandboxEnvironment(sandboxId, options);
+    const result = await oneceoApiConnector.restoreSandboxEnvironment(sandboxId, options);
+    this.clearLiveSandboxCaches();
+    return result;
   }
 
   async openEnvironment(sandboxId: string) {
     const detail = await this.getRuntimeDetail(sandboxId);
     if (detail.runtime.sandboxState === 'paused') {
       await e2bConnector.resumeSandbox(sandboxId);
+      this.clearLiveSandboxCaches();
       return { action: 'resume', sandboxId, taskSessionId: detail.runtime.taskSessionId || null };
     }
     if (detail.runtime.taskSessionId) {
       const result = await oneceoApiConnector.startTaskCreationRuntime(detail.runtime.taskSessionId);
+      this.clearLiveSandboxCaches();
       return { action: 'runtime_start', sandboxId, taskSessionId: detail.runtime.taskSessionId, result };
     }
     throw new AppError(400, '当前 Sandbox 未绑定 task session，无法执行开机');
@@ -807,6 +924,7 @@ export class SandboxManagementService {
       closeResult = await oneceoApiConnector.closeSandboxEnvironment(sandboxId);
     }
     const runtimeResult = await oneceoApiConnector.startTaskCreationRuntime(detail.runtime.taskSessionId);
+    this.clearLiveSandboxCaches();
     return {
       action: 'restart',
       sandboxId,

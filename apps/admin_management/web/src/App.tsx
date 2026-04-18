@@ -40,6 +40,7 @@ import type {
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
+  SandboxLiveSummary,
   VmItem,
 } from './types';
 
@@ -156,6 +157,13 @@ const FALLBACK_ADMIN_THEME_OPTIONS: AdminThemeSettings['themes'] = [
     lightSwatches: ['#faf4ed', '#575279', '#b4637a'],
     darkSwatches: ['#191724', '#e0def4', '#c4a7e7'],
   },
+  {
+    key: 'one-dark-light',
+    label: 'One Dark Light',
+    description: 'Atom One 风格，代码、日志和表格更利落。',
+    lightSwatches: ['#fafafa', '#383a42', '#4078f2'],
+    darkSwatches: ['#282c34', '#abb2bf', '#61afef'],
+  },
 ];
 const FALLBACK_ADMIN_THEME_MODES: AdminThemeSettings['modes'] = [
   { key: 'light', label: '亮色', description: '始终使用亮色外观。' },
@@ -187,6 +195,18 @@ function readLegacyAdminThemePreference(value: unknown): { theme: AdminThemeKey;
   }
   if (key === 'rosepine' || key === 'rose-pine' || key.startsWith('rose-pine-')) {
     return { theme: 'rose-pine', mode: key.includes('dawn') ? 'light' : 'dark' };
+  }
+  if (
+    key === 'one'
+    || key === 'one-light'
+    || key === 'one-dark'
+    || key === 'one-dark-light'
+    || key.startsWith('one-dark-light-')
+  ) {
+    return {
+      theme: 'one-dark-light',
+      mode: key === 'one-light' || key.includes('light') ? 'light' : key.includes('dark') ? 'dark' : null,
+    };
   }
   if (key.includes('light') || key.includes('dawn') || key.includes('day') || key.includes('frost')) {
     return { theme: DEFAULT_ADMIN_THEME, mode: 'light' };
@@ -224,6 +244,9 @@ function resolveAdminThemeVariant(themeKey: AdminThemeKey, tone: 'light' | 'dark
   }
   if (normalizedTheme === 'rose-pine') {
     return tone === 'dark' ? 'rose-pine-main' : 'rose-pine-dawn';
+  }
+  if (normalizedTheme === 'one-dark-light') {
+    return tone === 'dark' ? 'one-dark-light-dark' : 'one-dark-light';
   }
   return tone === 'dark' ? 'github-dark' : 'github-light';
 }
@@ -380,6 +403,7 @@ const VM_STATE_COLORS: Record<string, string> = {
 // 列表默认分页和“加载更多”步长，控制 Sandbox 运行时列表的性能与体验。
 const SANDBOX_RUNTIME_PAGE_SIZE = 80;
 const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
+const SANDBOX_RUNTIME_MAX_PAGE_SIZE = 200;
 
 // 运行时列表排序参数。
 type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active';
@@ -3520,6 +3544,7 @@ export default function App() {
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
+  const [sandboxLiveSummary, setSandboxLiveSummary] = useState<SandboxLiveSummary | null>(null);
   const [sandboxRuntimeRegistry, setSandboxRuntimeRegistry] = useState<SandboxRuntimeRegistry | null>(null);
   const [sandboxRuntimeDetail, setSandboxRuntimeDetail] = useState<SandboxRuntimeDetail | null>(null);
   const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
@@ -3612,6 +3637,7 @@ export default function App() {
   const sandboxSectionRequestRef = useRef<Promise<void> | null>(null);
   const sandboxOverviewRequestRef = useRef<Promise<void> | null>(null);
   const sandboxRuntimeRegistryRequestRef = useRef<Promise<void> | null>(null);
+  const sandboxRuntimeRegistryRequestVersionRef = useRef(0);
   const sandboxRegistryLimitRef = useRef(SANDBOX_RUNTIME_PAGE_SIZE);
   const runtimeColumnResizeRef = useRef<{
     columnKey: RuntimeColumnKey;
@@ -3970,14 +3996,22 @@ export default function App() {
     }
   }, []);
 
+  const loadSandboxLiveSummary = useCallback(async () => {
+    const summary = await api.getSandboxLiveSummary();
+    setSandboxLiveSummary(summary);
+  }, []);
+
   const loadSandboxRuntimeRegistry = useCallback(async () => {
     if (sandboxRuntimeRegistryRequestRef.current) {
       return sandboxRuntimeRegistryRequestRef.current;
     }
 
     const request = (async () => {
+      const requestVersion = ++sandboxRuntimeRegistryRequestVersionRef.current;
       const registry = await api.getSandboxRuntimeRegistry(sandboxRegistryLimitRef.current);
-      setSandboxRuntimeRegistry(registry);
+      if (requestVersion === sandboxRuntimeRegistryRequestVersionRef.current) {
+        setSandboxRuntimeRegistry(registry);
+      }
     })();
 
     sandboxRuntimeRegistryRequestRef.current = request;
@@ -3993,24 +4027,41 @@ export default function App() {
       return sandboxSectionRequestRef.current;
     }
 
-    const request = Promise.all([loadSandboxOverview(), loadSandboxRuntimeRegistry()]).then(() => undefined);
+    const request = (async () => {
+      await Promise.all([
+        loadSandboxOverview(),
+        loadSandboxRuntimeRegistry(),
+      ]);
+      await loadSandboxLiveSummary().catch(() => undefined);
+    })();
     sandboxSectionRequestRef.current = request;
     try {
       await request;
     } finally {
       sandboxSectionRequestRef.current = null;
     }
-  }, [loadSandboxOverview, loadSandboxRuntimeRegistry]);
+  }, [loadSandboxLiveSummary, loadSandboxOverview, loadSandboxRuntimeRegistry]);
 
   const loadMoreSandboxRuntime = useCallback(async () => {
     const previousLimit = sandboxRegistryLimitRef.current;
-    const nextLimit = previousLimit + SANDBOX_RUNTIME_LOAD_MORE_STEP;
+    const nextLimit = Math.min(
+      previousLimit + SANDBOX_RUNTIME_LOAD_MORE_STEP,
+      SANDBOX_RUNTIME_MAX_PAGE_SIZE
+    );
+    if (nextLimit <= previousLimit) {
+      setSandboxRegistryLoadMoreError(null);
+      return;
+    }
     sandboxRegistryLimitRef.current = nextLimit;
     setSandboxRegistryLimit(nextLimit);
     setSandboxRegistryLoadingMore(true);
     setSandboxRegistryLoadMoreError(null);
     try {
-      await loadSandboxRuntimeRegistry();
+      const requestVersion = ++sandboxRuntimeRegistryRequestVersionRef.current;
+      const registry = await api.getSandboxRuntimeRegistry(nextLimit);
+      if (requestVersion === sandboxRuntimeRegistryRequestVersionRef.current) {
+        setSandboxRuntimeRegistry(registry);
+      }
       setError(null);
       setSandboxRegistryLoadMoreError(null);
     } catch (requestError) {
@@ -4022,7 +4073,7 @@ export default function App() {
     } finally {
       setSandboxRegistryLoadingMore(false);
     }
-  }, [loadSandboxRuntimeRegistry]);
+  }, []);
 
   const loadTemplates = useCallback(async () => {
     const result = await api.listTemplates();
@@ -5127,7 +5178,12 @@ export default function App() {
 
     const timer = window.setInterval(() => {
       if (activeSection === 'sandbox') {
-        const refresh = sandboxTab === 'templates' ? loadTemplates : loadSandboxSection;
+        const refresh =
+          sandboxTab === 'templates'
+            ? loadTemplates
+            : sandboxRegistryLimitRef.current > SANDBOX_RUNTIME_PAGE_SIZE
+              ? () => Promise.all([loadSandboxOverview(), loadSandboxLiveSummary().catch(() => undefined)]).then(() => undefined)
+              : loadSandboxSection;
         void refresh().catch((requestError) => {
           setError(requestError instanceof Error ? requestError.message : 'Sandbox 自动刷新失败');
         });
@@ -5141,7 +5197,7 @@ export default function App() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxLiveSummary, loadSandboxOverview, loadSandboxSection, loadTemplates]);
 
   useEffect(() => {
     if (!sandboxModalOpen || sandboxDetailTab !== 'files') {
@@ -8623,8 +8679,11 @@ export default function App() {
         .map((item) => ((item as any).updatedAt ?? (item as any).createdAt ?? null) as string | null)
         .sort((a, b) => toTimestamp(b) - toTimestamp(a))[0] || null,
     };
-    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
     const loadedRuntimeCount = sandboxRegistryItems.length;
+    const runtimeRemainingCapacity = Math.max(0, SANDBOX_RUNTIME_MAX_PAGE_SIZE - sandboxRegistryLimit);
+    const runtimeLoadMoreStep = Math.min(SANDBOX_RUNTIME_LOAD_MORE_STEP, runtimeRemainingCapacity);
+    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore && runtimeRemainingCapacity > 0);
+    const runtimeReachedLoadLimit = Boolean(sandboxRuntimeRegistry?.hasMore && runtimeRemainingCapacity <= 0);
     const loadMoreTargetCount = Math.max(loadedRuntimeCount, sandboxRegistryLimit);
     const loadMoreRangeStart = loadedRuntimeCount + 1;
     const loadMoreRangeEnd = loadMoreTargetCount;
@@ -8889,8 +8948,8 @@ export default function App() {
                         : `已加载 ${loadedRuntimeCount} 条，当前筛选命中 ${runtimeItems.length} 条`}
                     </span>
                   </div>
-                  <span className="session-status">
-                    {runtimeItems.length} / {loadedRuntimeCount}
+                  <span className="session-status sandbox-live-count">
+                    E2B 当前 live：{sandboxLiveSummary?.total ?? '-'}
                   </span>
                 </div>
                 <div className="runtime-quick-filters">
@@ -9251,7 +9310,7 @@ export default function App() {
                           正在加载更多...
                         </>
                       ) : (
-                        `查看更多 Sandbox（+${SANDBOX_RUNTIME_LOAD_MORE_STEP}）`
+                        `查看更多 Sandbox（+${runtimeLoadMoreStep}）`
                       )}
                     </button>
                     <p className="session-meta runtime-load-feedback" aria-live="polite">
@@ -9261,6 +9320,10 @@ export default function App() {
                     </p>
                     {sandboxRegistryLoadMoreError ? <p className="runtime-load-error" role="status">加载更多失败，请重试。{sandboxRegistryLoadMoreError}</p> : null}
                   </div>
+                ) : runtimeReachedLoadLimit ? (
+                  <p className="session-meta runtime-load-feedback" aria-live="polite">
+                    已加载管理后台单次最多 {SANDBOX_RUNTIME_MAX_PAGE_SIZE} 条 Sandbox 记录，更早记录暂不在当前列表范围内。
+                  </p>
                 ) : null}
               </article>
 
@@ -11082,7 +11145,7 @@ export default function App() {
                       <div className="topbar-settings-section">
                         <div className="topbar-settings-section-head">
                           <span>主题</span>
-                          <small>GitHub、Nord、Rose Pine</small>
+                          <small>GitHub、Nord、Rose Pine、One Dark Light</small>
                         </div>
                         <div className="theme-family-grid">
                           {themeOptions.map((theme) => {

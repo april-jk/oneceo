@@ -1914,7 +1914,7 @@ export function FilePreview({
             {rootDirState?.hasMore ? (
               <button
                 type="button"
-                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-blue-600 transition-colors hover:border-blue-100 hover:bg-blue-50/60 disabled:text-muted-foreground"
+                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-[var(--brand-link)] transition-colors hover:border-[var(--brand-border)] hover:bg-[var(--brand-soft)] disabled:text-muted-foreground"
                 onClick={() => onLoadMoreDir("")}
                 disabled={Boolean(rootDirState.loading)}
               >
@@ -1939,7 +1939,7 @@ export function FilePreview({
           </div>
         </div>
       </ResizablePanel>
-      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-blue-500/70 data-[resize-handle-state=drag]:bg-blue-500" />
+      <ResizableHandle className="w-[2px] bg-border/80 transition-colors hover:bg-[var(--brand-soft-foreground)] data-[resize-handle-state=drag]:bg-[var(--brand-solid)]" />
       <ResizablePanel defaultSize={72} minSize={55}>
         <div className="h-full min-h-0 overflow-hidden bg-background p-3">
           {selectedPath ? (
@@ -2377,7 +2377,7 @@ function TreeList({
                     type="button"
                     onClick={() => onLoadMoreDir(node.path)}
                     disabled={Boolean(state.loading)}
-                    className="px-2 py-1 text-[11px] text-blue-600 hover:text-blue-700 disabled:text-muted-foreground"
+                    className="px-2 py-1 text-[11px] text-[var(--brand-link)] hover:text-[var(--brand-link-hover)] disabled:text-muted-foreground"
                     style={{ paddingLeft: `${indent + 28}px` }}
                   >
                     {state.loading ? i18n.t("common.loading") : i18n.t("previewPanel.loadMore")}
@@ -3016,7 +3016,7 @@ function DeploymentOverviewSection({
                       href={primaryAccessUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-2 block break-all text-sm text-blue-600 hover:text-blue-700"
+                      className="mt-2 block break-all text-sm text-[var(--brand-link)] hover:text-[var(--brand-link-hover)]"
                     >
                       {primaryAccessUrl}
                     </a>
@@ -6282,7 +6282,7 @@ export function DebugPreview({
             href={debugUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-blue-600 hover:text-blue-700"
+            className="text-xs text-[var(--brand-link)] hover:text-[var(--brand-link-hover)]"
           >
             {i18n.t("previewPanel.openInNewWindow")}
           </a>

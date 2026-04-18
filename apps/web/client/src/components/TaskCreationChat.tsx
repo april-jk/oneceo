@@ -264,8 +264,8 @@ export default function TaskCreationChat({
               animate={{ opacity: 1, y: 0 }}
               className="shrink-0 border-t border-border/70 bg-muted/35 p-4"
             >
-              <Card className="border-blue-500/30 bg-blue-500/10 p-4">
-                <p className="mb-3 text-sm font-medium text-blue-100">
+              <Card className="border-[var(--brand-border)] bg-[var(--brand-soft)] p-4">
+                <p className="mb-3 text-sm font-medium text-[var(--brand-soft-foreground)]">
                   {currentQuestion.question}
                 </p>
 
@@ -411,7 +411,7 @@ function MessageCard({ message }: { message: AgentMessage }) {
       case "error":
         return <span className="text-red-600">❌</span>;
       default:
-        return <span className="text-blue-600">🤖</span>;
+        return <span className="text-[var(--brand-link)]">🤖</span>;
     }
   };
 

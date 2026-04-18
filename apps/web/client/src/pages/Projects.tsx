@@ -216,7 +216,7 @@ export default function Projects() {
                     <span
                       className={`text-xs font-medium px-2 py-1 rounded-lg ${
                         project.status === 'active'
-                          ? 'bg-blue-50 text-blue-700'
+                          ? 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]'
                           : project.status === 'completed'
                           ? 'bg-green-50 text-green-700'
                           : 'bg-gray-100 text-gray-700'

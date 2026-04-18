@@ -328,7 +328,7 @@ export default function ManagerView() {
   const getProjectStatusColor = (status: string) => {
     switch (status) {
       case "active":
-        return "bg-blue-500";
+        return "bg-[var(--brand-solid)]";
       case "completed":
         return "bg-green-500";
       case "paused":

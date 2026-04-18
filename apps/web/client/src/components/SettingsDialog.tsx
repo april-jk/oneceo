@@ -161,6 +161,22 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
     );
   }
 
+  if (theme === "dark-gold") {
+    return (
+      <div className="flex h-full w-full flex-col bg-[#120F0A] p-2">
+        <div className="h-1.5 w-8 rounded-full bg-[#C8A24C]" />
+        <div className="mt-2 flex min-h-0 flex-1 gap-1.5">
+          <div className="w-4 rounded-md bg-[#241D14]" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="h-2.5 rounded-md bg-[#1D1811]" />
+            <div className="h-2.5 w-4/5 rounded-md bg-[#2A2218]" />
+            <div className="h-2.5 w-3/5 rounded-md bg-[#C8A24C]" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const isDark = theme === "dark";
 
   return (
@@ -199,7 +215,7 @@ function AppearancePreview({ theme }: { theme: ThemePreference }) {
           <div
             className={cn(
               "h-2.5 w-3/5 rounded-md",
-              isDark ? "bg-blue-500/70" : "bg-zinc-300",
+              isDark ? "bg-[var(--brand-soft-foreground)]" : "bg-zinc-300",
             )}
           />
         </div>
@@ -308,6 +324,7 @@ export function SettingsPanel({
       [
         { value: "light", label: t("settings.light") },
         { value: "dark", label: t("settings.dark") },
+        { value: "dark-gold", label: t("settings.darkGold") },
         { value: "system", label: t("settings.system") },
       ] as Array<{ value: ThemePreference; label: string }>,
     [i18n.resolvedLanguage, t],

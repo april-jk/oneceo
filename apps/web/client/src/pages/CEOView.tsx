@@ -160,8 +160,8 @@ export default function CEOView() {
                     {t("ceoView.activeProjects", { count: stats.activeProjects })}
                   </p>
                 </div>
-                <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center">
-                  <FolderOpen className="w-6 h-6 text-blue-500" />
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--brand-soft)]">
+                  <FolderOpen className="h-6 w-6 text-[var(--brand-link)]" />
                 </div>
               </div>
             </Card>

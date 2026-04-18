@@ -6,6 +6,17 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 import en from './locales/en.json';
 import zh from './locales/zh.json';
 
+export const SUPPORTED_LANGUAGES = ['zh', 'en'] as const;
+export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
+
+export function normalizeLanguage(value: string | null | undefined): SupportedLanguage {
+  const normalized = (value || '').trim().toLowerCase();
+  if (normalized.startsWith('zh')) {
+    return 'zh';
+  }
+  return 'en';
+}
+
 // 配置 i18n
 i18n
   .use(LanguageDetector) // 自动检测用户语言
@@ -19,7 +30,10 @@ i18n
         translation: zh,
       },
     },
-    fallbackLng: 'en', // 默认语言
+    fallbackLng: 'zh', // 默认语言
+    supportedLngs: SUPPORTED_LANGUAGES,
+    nonExplicitSupportedLngs: true,
+    load: 'languageOnly',
     debug: false,
     interpolation: {
       escapeValue: false, // React 已经处理了 XSS

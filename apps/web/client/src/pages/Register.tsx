@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ function resolveRedirectTarget() {
 
 export default function Register() {
   const { register, sendRegisterCode, status } = useAuth();
+  const { t } = useTranslation();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
   const [displayName, setDisplayName] = useState("");
@@ -52,7 +54,7 @@ export default function Register() {
 
   const handleSendCode = async () => {
     if (!hasValidEmail) {
-      setError("请输入有效邮箱");
+      setError(t("auth.invalidEmail"));
       return;
     }
     setSendingCode(true);
@@ -67,11 +69,11 @@ export default function Register() {
       setCodeCooldownSeconds(cooldown);
       setCodeSentMessage(
         expiresInSeconds > 0
-          ? `验证码已发送到 ${trimmedEmail}，${Math.ceil(expiresInSeconds / 60)} 分钟内有效`
-          : `验证码已发送到 ${trimmedEmail}`
+          ? t("auth.codeSentWithExpiry", { email: trimmedEmail, minutes: Math.ceil(expiresInSeconds / 60) })
+          : t("auth.codeSent", { email: trimmedEmail })
       );
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "验证码发送失败");
+      setError(submitError instanceof Error ? submitError.message : t("auth.sendCodeFailed"));
     } finally {
       setSendingCode(false);
     }
@@ -80,11 +82,11 @@ export default function Register() {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!verificationCode.trim()) {
-      setError("请输入邮箱验证码");
+      setError(t("auth.verificationCodeRequired"));
       return;
     }
     if (password !== confirmPassword) {
-      setError("两次输入的密码不一致");
+      setError(t("auth.passwordMismatch"));
       return;
     }
     setSubmitting(true);
@@ -98,7 +100,7 @@ export default function Register() {
       });
       setLocation(redirectTarget);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "注册失败");
+      setError(submitError instanceof Error ? submitError.message : t("auth.registerFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -111,22 +113,22 @@ export default function Register() {
           <div className="mb-6 flex items-center gap-3">
             <img src="/logo.png" alt="oneceo" className="size-11 rounded-[10px] object-cover" />
             <div className="space-y-1">
-              <p className="text-lg font-semibold leading-none text-[#151717]">创建 oneceo 账户</p>
-              <p className="text-sm text-slate-500">注册后直接进入你的个人工作区</p>
+              <p className="text-lg font-semibold leading-none text-[#151717]">{t("auth.registerTitle")}</p>
+              <p className="text-sm text-slate-500">{t("auth.registerSubtitle")}</p>
             </div>
           </div>
 
           <form className="flex flex-col gap-[10px]" onSubmit={handleSubmit}>
             <div className="flex flex-col gap-2">
               <Label htmlFor="register-display-name" className="text-sm font-semibold text-[#151717]">
-                Name
+                {t("auth.nameLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <UserRound className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
                 <Input
                   id="register-display-name"
                   autoComplete="name"
-                  placeholder="Enter your Name"
+                  placeholder={t("auth.namePlaceholder")}
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                   required
@@ -137,7 +139,7 @@ export default function Register() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="register-email" className="text-sm font-semibold text-[#151717]">
-                Email
+                {t("auth.emailLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <Mail className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
@@ -145,7 +147,7 @@ export default function Register() {
                   id="register-email"
                   type="email"
                   autoComplete="email"
-                  placeholder="Enter your Email"
+                  placeholder={t("auth.emailPlaceholder")}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required
@@ -156,7 +158,7 @@ export default function Register() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="register-verification-code" className="text-sm font-semibold text-[#151717]">
-                Verification Code
+                {t("auth.verificationCodeLabel")}
               </Label>
               <div className="flex gap-2">
                 <div className="flex h-[50px] flex-1 items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
@@ -165,7 +167,7 @@ export default function Register() {
                     id="register-verification-code"
                     inputMode="numeric"
                     autoComplete="one-time-code"
-                    placeholder="Enter verification code"
+                    placeholder={t("auth.verificationCodePlaceholder")}
                     value={verificationCode}
                     onChange={(event) => setVerificationCode(event.target.value)}
                     required
@@ -179,7 +181,11 @@ export default function Register() {
                   disabled={!canSendCode}
                   className="h-[50px] min-w-[124px] rounded-[10px] border-[#151717] px-4 text-[14px] font-medium text-[#151717] hover:bg-slate-50"
                 >
-                  {sendingCode ? "Sending..." : codeCooldownSeconds > 0 ? `${codeCooldownSeconds}s` : "Send Code"}
+                  {sendingCode
+                    ? t("auth.sendingCode")
+                    : codeCooldownSeconds > 0
+                      ? t("auth.codeCooldown", { seconds: codeCooldownSeconds })
+                      : t("auth.sendCode")}
                 </Button>
               </div>
               {codeSentMessage ? <p className="text-sm text-emerald-700">{codeSentMessage}</p> : null}
@@ -187,7 +193,7 @@ export default function Register() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="register-password" className="text-sm font-semibold text-[#151717]">
-                Password
+                {t("auth.passwordLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <LockKeyhole className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
@@ -195,7 +201,7 @@ export default function Register() {
                   id="register-password"
                   type={showPassword ? "text" : "password"}
                   autoComplete="new-password"
-                  placeholder="Enter your Password"
+                  placeholder={t("auth.passwordPlaceholder")}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
@@ -203,7 +209,7 @@ export default function Register() {
                 />
                 <button
                   type="button"
-                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  aria-label={showPassword ? t("common.hidePassword") : t("common.showPassword")}
                   onClick={() => setShowPassword((value) => !value)}
                   className="ml-2 inline-flex size-8 items-center justify-center rounded-[8px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                 >
@@ -214,7 +220,7 @@ export default function Register() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="register-confirm-password" className="text-sm font-semibold text-[#151717]">
-                Confirm Password
+                {t("auth.confirmPasswordLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <LockKeyhole className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
@@ -222,7 +228,7 @@ export default function Register() {
                   id="register-confirm-password"
                   type={showConfirmPassword ? "text" : "password"}
                   autoComplete="new-password"
-                  placeholder="Confirm your Password"
+                  placeholder={t("auth.confirmPasswordPlaceholder")}
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   required
@@ -230,7 +236,7 @@ export default function Register() {
                 />
                 <button
                   type="button"
-                  aria-label={showConfirmPassword ? "隐藏密码" : "显示密码"}
+                  aria-label={showConfirmPassword ? t("common.hidePassword") : t("common.showPassword")}
                   onClick={() => setShowConfirmPassword((value) => !value)}
                   className="ml-2 inline-flex size-8 items-center justify-center rounded-[8px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                 >
@@ -239,7 +245,7 @@ export default function Register() {
               </div>
             </div>
 
-            <p className="pt-1 text-sm text-slate-500">完成邮箱验证后注册会立即建立登录态，并跳回你进入前的页面。</p>
+            <p className="pt-1 text-sm text-slate-500">{t("auth.registerHint")}</p>
 
             {error ? (
               <div className="rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
@@ -250,17 +256,17 @@ export default function Register() {
               className="mt-[10px] h-[50px] w-full rounded-[10px] bg-[#151717] text-[15px] font-medium text-white hover:bg-[#252727]"
               disabled={submitting}
             >
-              {submitting ? "Creating Account..." : "Create Account"}
+              {submitting ? t("auth.creatingAccount") : t("auth.createAccount")}
             </Button>
           </form>
 
           <p className="mt-5 text-center text-sm text-slate-700">
-            Already have an account?
+            {t("auth.hasAccount")}
             <Link
               href={`/login?redirect=${encodeURIComponent(redirectTarget)}`}
               className="ml-1 font-medium text-[#2d79f3]"
             >
-              Sign In
+              {t("auth.signIn")}
             </Link>
           </p>
         </div>

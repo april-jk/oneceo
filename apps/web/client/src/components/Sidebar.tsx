@@ -370,18 +370,18 @@ export default function Sidebar({
       managers: [
         {
           id: "m1",
-          name: t("sidebar.sampleDevelopmentManager"),
+          name: "开发经理",
           type: "development",
           tasks: [
-            { id: "t1", name: t("sidebar.sampleApiDesignTask"), status: "in_progress" },
-            { id: "t2", name: t("sidebar.sampleDatabaseTask"), status: "completed" },
+            { id: "t1", name: "API 设计与实现", status: "in_progress" },
+            { id: "t2", name: "数据库优化", status: "completed" },
           ],
         },
         {
           id: "m2",
-          name: t("sidebar.sampleOperationsManager"),
+          name: "运营经理",
           type: "operations",
-          tasks: [{ id: "t3", name: t("sidebar.sampleGrowthTask"), status: "in_progress" }],
+          tasks: [{ id: "t3", name: "用户增长策略", status: "in_progress" }],
         },
       ],
     },
@@ -391,9 +391,9 @@ export default function Sidebar({
       managers: [
         {
           id: "m3",
-          name: t("sidebar.sampleDesignManager"),
+          name: "设计经理",
           type: "design",
-          tasks: [{ id: "t4", name: t("sidebar.sampleDesignTask"), status: "in_progress" }],
+          tasks: [{ id: "t4", name: "UI/UX 设计", status: "in_progress" }],
         },
       ],
     },
@@ -404,12 +404,12 @@ export default function Sidebar({
     },
     {
       id: "4",
-      name: t("sidebar.sampleAiEmployeesProject"),
+      name: "AI员工",
       managers: [],
     },
     {
       id: "5",
-      name: t("sidebar.sampleOpencodeProject"),
+      name: "opencode相关",
       managers: [],
     },
   ];

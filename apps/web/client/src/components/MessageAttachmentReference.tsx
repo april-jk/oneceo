@@ -1,4 +1,5 @@
 import { FileText, Paperclip, Wrench } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type {
   TaskCreationPlatformSkill,
@@ -17,10 +18,11 @@ type MessageAttachmentReferenceProps = {
 function buildReferenceSummary(
   skills: TaskCreationPlatformSkill[],
   attachments: UploadedTaskAttachment[],
+  t: ReturnType<typeof useTranslation>["t"],
 ) {
-  if (skills.length && attachments.length) return "Skills 与附件";
+  if (skills.length && attachments.length) return t("messageAttachmentReference.skillsAndAttachments");
   if (skills.length) return "Skills";
-  return "附件";
+  return t("messageAttachmentReference.attachments");
 }
 
 export default function MessageAttachmentReference({
@@ -29,6 +31,7 @@ export default function MessageAttachmentReference({
   tone = "default",
   className,
 }: MessageAttachmentReferenceProps) {
+  const { t } = useTranslation();
   if (skills.length === 0 && attachments.length === 0) return null;
 
   const inverse = tone === "inverse";
@@ -57,14 +60,16 @@ export default function MessageAttachmentReference({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className={cn("text-[10px] font-semibold uppercase tracking-[0.24em]", titleClass)}>
-              已附加
+              {t("messageAttachmentReference.attached")}
             </div>
             <div className={cn("mt-1 text-sm font-semibold", summaryClass)}>
-              {buildReferenceSummary(skills, attachments)}
+              {buildReferenceSummary(skills, attachments, t)}
             </div>
           </div>
           <div className={cn("shrink-0 text-[11px]", metaClass)}>
-            {skills.length + attachments.length} 项
+            {t("messageAttachmentReference.itemCount", {
+              count: skills.length + attachments.length,
+            })}
           </div>
         </div>
 
@@ -102,7 +107,7 @@ export default function MessageAttachmentReference({
             <div className="space-y-1.5">
               <div className={cn("flex items-center gap-1.5 text-[11px] font-medium", sectionLabelClass)}>
                 <Paperclip className="h-3.5 w-3.5" />
-                <span>附件</span>
+                <span>{t("messageAttachmentReference.attachments")}</span>
                 <span className={metaClass}>· {attachments.length}</span>
               </div>
               <div className="flex flex-wrap gap-2">

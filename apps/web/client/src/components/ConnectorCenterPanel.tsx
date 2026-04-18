@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation, useSearch } from "wouter";
 import {
   AlertCircle,
@@ -38,7 +39,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { CONNECTOR_GUIDES } from "@/lib/connector-guides";
+import { getConnectorGuides } from "@/lib/connector-guides";
 import {
   attachSessionConnector,
   clearConnectorProfileAuth,
@@ -62,6 +63,7 @@ import {
   formatConnectorStatus,
   resolveConnectorIcon,
 } from "@/lib/connector-ui";
+import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
 
 type ConnectorCenterPanelProps = {
@@ -78,10 +80,10 @@ export const SLACK_FIXED_CALLBACK_PATH = "/slack/callback";
 const GITHUB_APP_AUTHORIZATIONS_URL = "https://github.com/settings/apps/authorizations";
 const GITHUB_APP_INSTALLATIONS_URL = "https://github.com/settings/installations";
 const GITHUB_INSTALLATION_MISSING_PATTERN = /没有任何可用安装|未安装到任何账号|installation/i;
-const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; label: string }> = [
-  { key: "app", label: "应用" },
-  { key: "custom_api", label: "自定义 API" },
-  { key: "custom_mcp", label: "自定义 MCP" },
+const CONNECTOR_TABS: Array<{ key: ConnectorCenterTab; labelKey: string }> = [
+  { key: "app", labelKey: "connectors.tabs.app" },
+  { key: "custom_api", labelKey: "connectors.tabs.customApi" },
+  { key: "custom_mcp", labelKey: "connectors.tabs.customMcp" },
 ];
 
 function asText(value: unknown) {
@@ -315,20 +317,24 @@ function renderEmptyTab(tab: ConnectorCenterTab) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
       <div className="rounded-2xl border border-border/70 bg-muted/30 px-4 py-2 text-sm text-muted-foreground">
-        后续实现位
+        {i18n.t("connectors.comingSoon")}
       </div>
       <h4 className="mt-5 text-lg font-semibold text-foreground">
-        {isApi ? "自定义 API" : "自定义 MCP"} 入口已预留
+        {isApi
+          ? i18n.t("connectors.empty.customApiReserved")
+          : i18n.t("connectors.empty.customMcpReserved")}
       </h4>
       <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-        本轮先统一应用连接器目录、profile 规范和会话挂载边界。
+        {i18n.t("connectors.empty.intro")}
         {isApi
-          ? " 自定义 API 的 schema 导入与运行时装配将在下一阶段补齐。"
-          : " 自定义 MCP 的创建表单和运行时装配将在下一阶段补齐。"}
+          ? i18n.t("connectors.empty.customApiDetail")
+          : i18n.t("connectors.empty.customMcpDetail")}
       </p>
       <Button disabled className="mt-6 rounded-xl">
         <Plus className="mr-2 h-4 w-4" />
-        {isApi ? "创建自定义 API" : "创建自定义 MCP"}
+        {isApi
+          ? i18n.t("connectors.empty.createCustomApi")
+          : i18n.t("connectors.empty.createCustomMcp")}
       </Button>
     </div>
   );
@@ -347,13 +353,15 @@ export function shouldUseUnifiedConnectorCard(connectorKey: ConnectorKey | null 
 }
 
 function getGithubAppReauthHint() {
-  return "本地清除只会移除 oneceo 保存的授权态，不会撤销 GitHub 侧的 GitHub App 授权或安装批准。若需要强制重新走授权，请先到 GitHub 撤销授权或确认安装页已批准最新权限。";
+  return i18n.t("connectors.github.reauthHint");
 }
 
 export function ConnectorCenterPanel({
   targetSessionId,
   highlightedConnector,
 }: ConnectorCenterPanelProps) {
+  const { t } = useTranslation();
+  const connectorGuides = useMemo(() => getConnectorGuides(t), [t]);
   const [location, setLocation] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);
@@ -418,7 +426,7 @@ export function ConnectorCenterPanel({
         return next;
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load connectors");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -519,7 +527,7 @@ export function ConnectorCenterPanel({
               profileId: completedProfileId,
             });
           } catch (error) {
-            attachError = error instanceof Error ? error : new Error("连接器挂载失败");
+            attachError = error instanceof Error ? error : new Error(i18n.t("connectors.errors.attachFailed"));
           }
         }
 
@@ -529,7 +537,6 @@ export function ConnectorCenterPanel({
           })
         );
         
-        // OAuth回调完成后，优先选中刚授权的 Profile
         setSelectedProfileIds((prev) => ({
           ...prev,
           [connector]: completedProfileId,
@@ -538,7 +545,11 @@ export function ConnectorCenterPanel({
         await load();
 
         if (attachError) {
-          toast.error(`授权已完成，但挂载失败：${attachError.message}`);
+          toast.error(
+            i18n.t("connectors.oauth.completedButAttachFailed", {
+              message: attachError.message,
+            })
+          );
         } else if (
           authStatus !== "authorized" &&
           callbackLastError &&
@@ -546,12 +557,12 @@ export function ConnectorCenterPanel({
         ) {
           toast.error(callbackLastError);
         } else if (attachTarget) {
-          toast.success("授权完成，连接器已挂载到目标会话");
+          toast.success(i18n.t("connectors.oauth.completedAndAttached"));
         } else {
-          toast.success("授权完成");
+          toast.success(i18n.t("connectors.oauth.completed"));
         }
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "OAuth callback failed");
+        toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.oauthCallbackFailed"));
       } finally {
         setActionKey(null);
       }
@@ -655,13 +666,13 @@ export function ConnectorCenterPanel({
       item.key !== "github" && item.key !== "supabase" && item.key !== "notion";
 
     if (requiresExplicitProfileName && !payload.profileName) {
-      throw new Error("请先填写 profile name");
+      throw new Error(i18n.t("connectors.errors.profileNameRequired"));
     }
 
     const hasExistingSecret = Boolean(currentProfile?.secretSummary);
     const hasNewCredential = Object.keys(payload.credentials).length > 0;
     if (!hasExistingSecret && !hasNewCredential && !item.oauth?.supported) {
-      throw new Error("请先填写必需凭证");
+      throw new Error(i18n.t("connectors.errors.credentialsRequired"));
     }
 
     return editableProfileId
@@ -687,21 +698,25 @@ export function ConnectorCenterPanel({
             profileId: saved.profileId,
           });
         } catch (error) {
-          attachError = error instanceof Error ? error : new Error("连接器挂载失败");
+          attachError = error instanceof Error ? error : new Error(i18n.t("connectors.errors.attachFailed"));
         }
       }
 
       await load();
 
       if (attachError) {
-        toast.error(`profile 已保存，但挂载失败：${attachError.message}`);
+        toast.error(
+          i18n.t("connectors.profile.savedButAttachFailed", {
+            message: attachError.message,
+          })
+        );
       } else if (effectiveTargetSessionId && saved.authStatus === "authorized") {
-        toast.success("profile 已保存，并挂载到目标会话");
+        toast.success(i18n.t("connectors.profile.savedAndAttached"));
       } else {
-        toast.success("profile 已保存");
+        toast.success(i18n.t("connectors.profile.saved"));
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Save connector failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.saveFailed"));
     } finally {
       setActionKey(null);
     }
@@ -711,7 +726,7 @@ export function ConnectorCenterPanel({
     if (!detailItem || detailItem.key !== "supabase") return;
     const token = supabaseTokenInput.trim();
     if (!token) {
-      toast.error("请先输入 Supabase Personal Access Token");
+      toast.error(i18n.t("connectors.supabase.tokenRequired"));
       return;
     }
 
@@ -741,7 +756,7 @@ export function ConnectorCenterPanel({
             profileId: saved.profileId,
           });
         } catch (error) {
-          attachError = error instanceof Error ? error : new Error("连接器挂载失败");
+          attachError = error instanceof Error ? error : new Error(i18n.t("connectors.errors.attachFailed"));
         }
       }
 
@@ -749,14 +764,18 @@ export function ConnectorCenterPanel({
       setSupabaseConnectDialogOpen(false);
 
       if (attachError) {
-        toast.error(`profile 已保存，但挂载失败：${attachError.message}`);
+        toast.error(
+          i18n.t("connectors.profile.savedButAttachFailed", {
+            message: attachError.message,
+          })
+        );
       } else if (effectiveTargetSessionId && saved.authStatus === "authorized") {
-        toast.success("profile 已保存，并挂载到目标会话");
+        toast.success(i18n.t("connectors.profile.savedAndAttached"));
       } else {
-        toast.success("Supabase 已连接");
+        toast.success(i18n.t("connectors.supabase.connected"));
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Save connector failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.saveFailed"));
     } finally {
       setActionKey(null);
     }
@@ -792,7 +811,7 @@ export function ConnectorCenterPanel({
         window.location.href = authUrl;
         return;
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "OAuth start failed");
+        toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.oauthStartFailed"));
         setActionKey(null);
         return;
       }
@@ -806,7 +825,6 @@ export function ConnectorCenterPanel({
         profileId = defaultProfile.profileId;
       } else {
         profileId = NEW_PROFILE_ID;
-        // 自动设置 GitHub 的默认配置
         setFormState((prev) => ({
           ...prev,
           [editorKey(detailItem.key, profileId)]: {
@@ -838,11 +856,11 @@ export function ConnectorCenterPanel({
         returnToSessionId: effectiveTargetSessionId || undefined,
       });
       if (githubConnector) {
-        toast.info("即将跳转 GitHub。若 GitHub App 仍处于已授权状态，GitHub 可能会直接回跳到 oneceo。");
+        toast.info(i18n.t("connectors.github.redirectingHint"));
       }
       window.location.href = authUrl;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "OAuth start failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.oauthStartFailed"));
       setActionKey(null);
     }
   };
@@ -852,10 +870,10 @@ export function ConnectorCenterPanel({
     setActionKey(`default:${selectedDetailProfile.profileId}`);
     try {
       await setDefaultConnectorProfile(selectedDetailProfile.profileId);
-      toast.success("默认 profile 已更新");
+      toast.success(i18n.t("connectors.profile.defaultUpdated"));
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Set default failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.setDefaultFailed"));
     } finally {
       setActionKey(null);
     }
@@ -881,19 +899,21 @@ export function ConnectorCenterPanel({
       if (selectedDetailProfile.connectorKey === "github" && cleared.remoteGrantRevoked === false) {
         toast.warning(
           cleared.remoteGrantError
-            ? `本地授权已清除，但 GitHub 远端撤销未确认：${cleared.remoteGrantError}。如果重新连接时 GitHub 直接回跳，请到 GitHub 授权页手动撤销后再试。`
-            : "本地授权已清除，但 GitHub 远端撤销未确认。如果重新连接时 GitHub 直接回跳，请到 GitHub 授权页手动撤销后再试。"
+            ? i18n.t("connectors.github.localClearedRemoteUnconfirmedWithError", {
+                error: cleared.remoteGrantError,
+              })
+            : i18n.t("connectors.github.localClearedRemoteUnconfirmed")
         );
       } else {
         toast.success(
           selectedDetailProfile.connectorKey === "github"
-            ? "GitHub 本地授权已清除，运行态解绑已转为后台处理。"
-            : "连接器授权已清除"
+            ? i18n.t("connectors.github.localCleared")
+            : i18n.t("connectors.profile.authCleared")
         );
       }
       void load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Disconnect failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.disconnectFailed"));
     } finally {
       setActionKey(null);
     }
@@ -908,10 +928,10 @@ export function ConnectorCenterPanel({
         ...prev,
         [detailItem.key]: null,
       }));
-      toast.success("profile 已删除");
+      toast.success(i18n.t("connectors.profile.deleted"));
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Delete profile failed");
+      toast.error(error instanceof Error ? error.message : i18n.t("connectors.errors.deleteFailed"));
     } finally {
       setActionKey(null);
     }
@@ -922,7 +942,7 @@ export function ConnectorCenterPanel({
       <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
         <div className="flex items-center gap-2 font-medium">
           <ShieldCheck className="h-4 w-4" />
-          当前正在为目标会话准备连接器 profile
+          {t("connectors.targetBanner.title")}
         </div>
         <p className="mt-1 text-emerald-700">Session ID: {effectiveTargetSessionId}</p>
       </div>
@@ -958,12 +978,12 @@ export function ConnectorCenterPanel({
               <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
               {item.isNew ? (
                 <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                  新
+                  {t("connectors.badges.new")}
                 </span>
               ) : null}
               {pending ? (
                 <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                  待授权
+                  {t("connectors.badges.pendingAuth")}
                 </span>
               ) : null}
             </div>
@@ -975,7 +995,7 @@ export function ConnectorCenterPanel({
             {connected ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : null}
             {!item.available ? (
               <Badge variant="destructive" className="hidden sm:inline-flex">
-                不可用
+                {t("connectors.badges.unavailable")}
               </Badge>
             ) : null}
             <ChevronRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5" />
@@ -989,7 +1009,7 @@ export function ConnectorCenterPanel({
         <div className="space-y-6 px-6 pb-6">
           {featuredCatalog.length > 0 ? (
             <section className="space-y-3">
-              <div className="text-sm text-muted-foreground">推荐</div>
+              <div className="text-sm text-muted-foreground">{t("connectors.featured")}</div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {featuredCatalog.map((item) => renderCard(item))}
               </div>
@@ -997,13 +1017,13 @@ export function ConnectorCenterPanel({
           ) : null}
 
           <section className="space-y-3">
-            <div className="text-sm text-muted-foreground">应用</div>
+            <div className="text-sm text-muted-foreground">{t("connectors.tabs.app")}</div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {filteredAppCatalog.map((item) => renderCard(item))}
             </div>
             {!loading && filteredAppCatalog.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">
-                没有找到匹配的连接器
+                {t("connectors.empty.noMatches")}
               </div>
             ) : null}
           </section>
@@ -1016,7 +1036,7 @@ export function ConnectorCenterPanel({
     if (!detailItem) return null;
 
     const Icon = resolveConnectorIcon(detailItem.icon);
-    const guide = CONNECTOR_GUIDES[detailItem.key];
+    const guide = connectorGuides[detailItem.key];
     const githubConnector = isGithubConnector(detailItem);
     const connectorLevelOauth = shouldUseConnectorLevelOauth(detailItem.key);
     const unifiedOauthCard = shouldUseUnifiedConnectorCard(detailItem.key);
@@ -1040,9 +1060,9 @@ export function ConnectorCenterPanel({
       GITHUB_INSTALLATION_MISSING_PATTERN.test(selectedDetailProfile.lastError);
     const githubStatusHint =
       selectedDetailProfile?.authStatus === "authorized"
-        ? "当前 oneceo 已记录 GitHub 授权。若 GitHub App 权限刚变更，请到 GitHub 安装页确认已批准最新权限。"
+        ? t("connectors.github.statusAuthorized")
         : showGithubInstallationMissingWarning
-          ? "当前只完成了 GitHub App 用户授权，但 GitHub 侧没有任何可用安装。必须先安装该 App 或批准安装更新，然后再回 oneceo 重新连接。"
+          ? t("connectors.github.installationMissing")
           : getGithubAppReauthHint();
 
     const isSupabaseConnector = detailItem.key === "supabase";
@@ -1109,7 +1129,7 @@ export function ConnectorCenterPanel({
                     <div className="flex gap-2 items-center justify-center font-semibold overflow-hidden relative shrink-0 text-foreground text-[20px] tracking-[-0.44px] w-full">
                       <p className="leading-[26px] overflow-hidden text-ellipsis">{detailItem.name}</p>
                       {detailItem.isNew ? (
-                        <span className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700 ml-2">新</span>
+                        <span className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700 ml-2">{t("connectors.badges.new")}</span>
                       ) : null}
                     </div>
                     <div className="font-normal relative shrink-0 text-muted-foreground tracking-[-0.154px] w-full">
@@ -1122,12 +1142,12 @@ export function ConnectorCenterPanel({
                       <div className="flex items-center justify-center gap-[8px]">
                         <div className="flex items-center gap-[4px]">
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 fill-emerald-500/20" />
-                          <span className="text-muted-foreground text-center text-sm">授权账户</span>
+                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedAccount")}</span>
                         </div>
                         <div className="h-[1px] w-[16px] bg-muted-foreground/30"></div>
                         <div className="flex items-center gap-[4px]">
                           <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-muted-foreground text-center text-sm">授权仓库</span>
+                          <span className="text-muted-foreground text-center text-sm">{t("connectors.authorizedRepo")}</span>
                         </div>
                       </div>
                       
@@ -1141,7 +1161,7 @@ export function ConnectorCenterPanel({
                           {actionKey === `disconnect:${selectedDetailProfile.profileId}` ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           ) : null}
-                          取消授权
+                          {t("connectors.actions.disconnect")}
                         </Button>
                         {!isSupabaseConnector ? (
                           <Button
@@ -1152,7 +1172,7 @@ export function ConnectorCenterPanel({
                             {actionKey === `oauth:${detailItem.key}` ? (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : null}
-                            重新连接
+                            {t("connectors.actions.reconnect")}
                           </Button>
                         ) : null}
                       </div>
@@ -1163,7 +1183,7 @@ export function ConnectorCenterPanel({
                         <div className="mt-2 flex flex-col items-center gap-2">
                           <div className="inline-flex items-center gap-2 rounded-xl bg-muted px-4 py-2 text-sm text-muted-foreground">
                             <AlertCircle className="h-4 w-4" />
-                            此连接器需要额外配置
+                            {t("connectors.requiresExtraConfig")}
                           </div>
                         </div>
                       ) : null}
@@ -1182,7 +1202,7 @@ export function ConnectorCenterPanel({
                             ) : (
                               <Plus className="h-4 w-4" />
                             )}
-                            连接
+                            {t("connectors.actions.connect")}
                           </Button>
                           <a
                             href="https://supabase.com/dashboard/account/tokens"
@@ -1190,7 +1210,7 @@ export function ConnectorCenterPanel({
                             rel="noopener noreferrer"
                             className="inline-flex h-[36px] min-w-[72px] items-center justify-center gap-1 rounded-[8px] border border-border/60 bg-background px-[12px] text-sm text-foreground hover:bg-muted/40"
                           >
-                            前往 Token 创建
+                            {t("connectors.supabase.goToTokenCreation")}
                             <ArrowUpRight className="h-3.5 w-3.5" />
                           </a>
                         </div>
@@ -1207,7 +1227,7 @@ export function ConnectorCenterPanel({
                           ) : (
                             <Plus className="h-4 w-4" />
                           )}
-                          连接
+                          {t("connectors.actions.connect")}
                         </Button>
                       )}
                     </>
@@ -1221,7 +1241,7 @@ export function ConnectorCenterPanel({
                       onClick={() => setSupabaseDetailExpanded((prev) => !prev)}
                     >
                       <span className="text-[13px] leading-[18px] tracking-[-0.08px]">
-                        {supabaseDetailExpanded ? "隐藏详情" : "显示详情"}
+                        {supabaseDetailExpanded ? t("connectors.actions.hideDetails") : t("connectors.actions.showDetails")}
                       </span>
                       <ChevronRight
                         className={cn(
@@ -1241,37 +1261,37 @@ export function ConnectorCenterPanel({
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <Sparkles className="h-4 w-4 text-foreground/70" />
-                        MCP 详细信息
+                        {t("connectors.supabase.mcpDetails")}
                       </div>
                       <p className="text-sm leading-6 text-muted-foreground">
-                        与你的 Supabase 项目交互，支持管理数据表、执行 SQL、搜索文档、部署边缘函数与项目设置维护。
+                        {t("connectors.supabase.description")}
                       </p>
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">MCP Endpoint</p>
+                        <p className="text-xs text-muted-foreground">{t("connectors.supabase.mcpEndpoint")}</p>
                         <p className="mt-1 break-all text-sm font-medium text-foreground">{supabaseRuntimeUrl}</p>
                       </div>
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">认证方式</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">Personal Access Token</p>
+                        <p className="text-xs text-muted-foreground">{t("connectors.supabase.authMethod")}</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">{t("connectors.supabase.personalAccessToken")}</p>
                       </div>
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">当前状态</p>
+                        <p className="text-xs text-muted-foreground">{t("connectors.currentStatus")}</p>
                         <p className="mt-1 text-sm font-medium text-foreground">{statusText}</p>
                       </div>
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-xs text-muted-foreground">已选 Profile</p>
+                        <p className="text-xs text-muted-foreground">{t("connectors.selectedProfile")}</p>
                         <p className="mt-1 text-sm font-medium text-foreground">
-                          {selectedDetailProfile?.profileName || "Supabase Default"}
+                          {selectedDetailProfile?.profileName || t("connectors.supabase.defaultProfile")}
                         </p>
                       </div>
                     </div>
 
                     {guide?.quickLinks?.length ? (
                       <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground">相关文档</p>
+                        <p className="text-xs font-medium text-muted-foreground">{t("connectors.relatedDocs")}</p>
                         <div className="grid gap-2">
                           {guide.quickLinks.map((link) => (
                             <a
@@ -1290,10 +1310,10 @@ export function ConnectorCenterPanel({
                     ) : null}
 
                     <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                      <p className="text-sm font-medium text-foreground">从注册到生成 Token</p>
+                      <p className="text-sm font-medium text-foreground">{t("connectors.supabase.tokenGuideTitle")}</p>
                       <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
                         <li>
-                          打开
+                          {t("connectors.actions.open")}
                           <a
                             href="https://supabase.com"
                             target="_blank"
@@ -1302,29 +1322,29 @@ export function ConnectorCenterPanel({
                           >
                             supabase.com
                           </a>
-                          注册账号（已有账号可直接登录）。
+                          {t("connectors.supabase.steps.signup")}
                         </li>
-                        <li>登录后进入 Dashboard，按提示创建或进入任意项目。</li>
-                        <li>点击右上角头像，进入 Account Settings（账户设置）。</li>
+                        <li>{t("connectors.supabase.steps.dashboard")}</li>
+                        <li>{t("connectors.supabase.steps.accountSettings")}</li>
                         <li>
-                          打开
+                          {t("connectors.actions.open")}
                           <a
                             href="https://supabase.com/dashboard/account/tokens"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
                           >
-                            Access Tokens 页面
+                            {t("connectors.supabase.accessTokensPage")}
                           </a>
-                          ，点击创建新的 Personal Access Token。
+                          {t("connectors.supabase.steps.createTokenSuffix")}
                         </li>
-                        <li>复制新生成的 Token，回到本页面粘贴后点击“连接”。</li>
+                        <li>{t("connectors.supabase.steps.copyToken")}</li>
                       </ol>
                     </div>
 
                     {!isSupabaseAuthorized ? (
                       <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
-                        点击上方“连接”，输入 Token 后即可完成 Supabase MCP 挂载。
+                        {t("connectors.supabase.connectHint")}
                       </div>
                     ) : null}
                   </div>
@@ -1335,7 +1355,7 @@ export function ConnectorCenterPanel({
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <ShieldCheck className="h-4 w-4 text-foreground/70" />
-                        GitHub App 授权说明
+                        {t("connectors.github.authGuideTitle")}
                       </div>
                       <p className="text-sm leading-6 text-muted-foreground">{githubStatusHint}</p>
                     </div>
@@ -1344,7 +1364,7 @@ export function ConnectorCenterPanel({
                       <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                         <span className="leading-relaxed">
-                          GitHub 已拒绝当前操作。请到 GitHub App 安装页确认已批准最新权限，并检查安装范围是否覆盖当前账号或目标仓库。
+                          {t("connectors.github.permissionWarning")}
                         </span>
                       </div>
                     ) : null}
@@ -1353,7 +1373,7 @@ export function ConnectorCenterPanel({
                       <div className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                         <span className="leading-relaxed">
-                          当前 GitHub App 只有用户授权，没有任何安装上下文，所以 `create_repository` 这类账号级操作会被 GitHub 直接拒绝。
+                          {t("connectors.github.installationWarning")}
                         </span>
                       </div>
                     ) : null}
@@ -1371,7 +1391,7 @@ export function ConnectorCenterPanel({
                         className="rounded-xl justify-between bg-background"
                         onClick={() => window.open(GITHUB_APP_AUTHORIZATIONS_URL, "_blank", "noopener,noreferrer")}
                       >
-                        管理 GitHub 授权
+                        {t("connectors.github.manageAuthorization")}
                         <ArrowUpRight className="h-4 w-4" />
                       </Button>
                       <Button
@@ -1379,15 +1399,16 @@ export function ConnectorCenterPanel({
                         className="rounded-xl justify-between bg-background"
                         onClick={() => window.open(GITHUB_APP_INSTALLATIONS_URL, "_blank", "noopener,noreferrer")}
                       >
-                        管理 GitHub 安装
+                        {t("connectors.github.manageInstallation")}
                         <ArrowUpRight className="h-4 w-4" />
                       </Button>
                     </div>
 
                     <div className="rounded-2xl border border-border/60 bg-background px-4 py-3 text-sm text-muted-foreground">
                       <p className="leading-6">
-                        推荐顺序：先在 GitHub 侧撤销旧授权或批准安装更新，再回到 oneceo 点击“重新连接”。
-                        如果 GitHub 判断当前 App 已授权，授权页可能会直接回跳到 oneceo，这是 GitHub App 的正常行为。
+                        {t("connectors.github.reconnectOrder")}
+                        {" "}
+                        {t("connectors.github.directRedirectHint")}
                       </p>
                     </div>
                   </div>
@@ -1413,14 +1434,14 @@ export function ConnectorCenterPanel({
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <ShieldCheck className="h-4 w-4 text-foreground/70" />
-                        {detailItem.name} 使用指南
+                        {t("connectors.guideTitle", { name: detailItem.name })}
                       </div>
                       <p className="text-sm leading-6 text-muted-foreground">{guide.intro}</p>
                     </div>
 
                     {guide.steps?.length ? (
                       <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-sm font-medium text-foreground">连接步骤</p>
+                        <p className="text-sm font-medium text-foreground">{t("connectors.connectionSteps")}</p>
                         <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
                           {guide.steps.map((step) => (
                             <li key={step}>{step}</li>
@@ -1431,7 +1452,7 @@ export function ConnectorCenterPanel({
 
                     {guide.tips?.length ? (
                       <div className="space-y-3 rounded-2xl border border-border/60 bg-background px-4 py-3">
-                        <p className="text-sm font-medium text-foreground">使用提示</p>
+                        <p className="text-sm font-medium text-foreground">{t("connectors.usageTips")}</p>
                         <div className="space-y-2">
                           {guide.tips.map((tip) => (
                             <p key={tip} className="text-sm leading-6 text-muted-foreground">
@@ -1444,7 +1465,7 @@ export function ConnectorCenterPanel({
 
                     {guide.quickLinks?.length ? (
                       <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground">相关文档</p>
+                        <p className="text-xs font-medium text-muted-foreground">{t("connectors.relatedDocs")}</p>
                         <div className="grid gap-2">
                           {guide.quickLinks.map((link) => (
                             <a
@@ -1470,15 +1491,15 @@ export function ConnectorCenterPanel({
                 {!unifiedOauthCard && detailItem.key !== "supabase" ? (
                   <>
                     <div className="space-y-2">
-                      <Label className="text-base font-medium text-foreground">Profile 配置</Label>
+                      <Label className="text-base font-medium text-foreground">{t("connectors.profileConfigTitle")}</Label>
                       <p className="text-sm text-muted-foreground">
-                        在这里完成 profile 选择、凭证编辑和授权更新。
+                        {t("connectors.profileConfigDescription")}
                       </p>
                     </div>
 
                     <div className="space-y-6">
                       <div className="space-y-3">
-                        <Label className="text-sm font-medium">选择 Profile</Label>
+                        <Label className="text-sm font-medium">{t("connectors.selectProfile")}</Label>
                         <div className="flex flex-col gap-3">
                           <Select
                             value={selectedDetailProfileId || NEW_PROFILE_ID}
@@ -1490,16 +1511,16 @@ export function ConnectorCenterPanel({
                             }}
                           >
                             <SelectTrigger className="w-full rounded-xl bg-muted/20">
-                              <SelectValue placeholder="选择一个 profile" />
+                              <SelectValue placeholder={t("connectors.selectProfilePlaceholder")} />
                             </SelectTrigger>
                             <SelectContent className="rounded-xl">
                               {detailConnectorProfiles.map((profile) => (
                                 <SelectItem key={profile.profileId} value={profile.profileId} className="rounded-md">
                                   {profile.profileName}
-                                  {profile.isDefault ? " · 默认" : ""}
+                                  {profile.isDefault ? ` · ${t("connectors.defaultProfileSuffix")}` : ""}
                                 </SelectItem>
                               ))}
-                              <SelectItem value={NEW_PROFILE_ID} className="rounded-md">创建新 profile</SelectItem>
+                              <SelectItem value={NEW_PROFILE_ID} className="rounded-md">{t("connectors.createNewProfile")}</SelectItem>
                             </SelectContent>
                           </Select>
 
@@ -1522,14 +1543,14 @@ export function ConnectorCenterPanel({
                             }}
                           >
                             <Plus className="mr-2 h-4 w-4" />
-                            新建 profile
+                            {t("connectors.createProfile")}
                           </Button>
                         </div>
                       </div>
 
                       {selectedDetailProfile ? (
                         <div className="space-y-3">
-                          <Label className="text-sm font-medium">Profile 操作</Label>
+                          <Label className="text-sm font-medium">{t("connectors.profileActions")}</Label>
                           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                             {!selectedDetailProfile.isDefault ? (
                               <Button
@@ -1543,7 +1564,7 @@ export function ConnectorCenterPanel({
                                 ) : (
                                   <Check className="mr-2 h-4 w-4" />
                                 )}
-                                设为默认
+                                {t("connectors.actions.setDefault")}
                               </Button>
                             ) : null}
                             <Button
@@ -1557,7 +1578,7 @@ export function ConnectorCenterPanel({
                               ) : (
                                 <Unplug className="mr-2 h-4 w-4" />
                               )}
-                              清除授权
+                              {t("connectors.actions.clearAuth")}
                             </Button>
                             <Button
                               variant="outline"
@@ -1570,7 +1591,7 @@ export function ConnectorCenterPanel({
                               ) : (
                                 <Trash2 className="mr-2 h-4 w-4" />
                               )}
-                              删除
+                              {t("common.delete")}
                             </Button>
                           </div>
                         </div>
@@ -1592,8 +1613,8 @@ export function ConnectorCenterPanel({
 
                       <div className="space-y-5 rounded-2xl border border-border/60 bg-muted/20 p-5">
                         <div className="space-y-1">
-                          <Label className="text-sm font-medium">配置参数</Label>
-                          <p className="text-xs text-muted-foreground">填写此连接器所需的配置信息</p>
+                          <Label className="text-sm font-medium">{t("connectors.configFields")}</Label>
+                          <p className="text-xs text-muted-foreground">{t("connectors.configFieldsDescription")}</p>
                         </div>
                         
                         <div className="space-y-4">
@@ -1656,7 +1677,7 @@ export function ConnectorCenterPanel({
                         ) : (
                           <Check className="mr-2 h-4 w-4" />
                         )}
-                        保存 profile
+                        {t("connectors.actions.saveProfile")}
                       </Button>
                       {detailItem.oauth?.supported ? (
                         <Button
@@ -1672,24 +1693,24 @@ export function ConnectorCenterPanel({
                           )}
                           {connectorLevelOauth
                             ? detailItem.key === "notion"
-                              ? "重新连接 Notion"
-                              : "连接 Notion"
+                              ? t("connectors.actions.reconnectNotion")
+                              : t("connectors.actions.connectNotion")
                             : selectedDetailProfile?.authStatus === "authorized"
-                              ? "重新授权"
-                              : "发起 OAuth"}
+                              ? t("connectors.actions.reauthorize")
+                              : t("connectors.actions.startOauth")}
                         </Button>
                       ) : null}
                       
                       <div className="flex flex-col gap-2 w-full sm:w-auto">
                         {effectiveTargetSessionId && selectedDetailProfile?.authStatus === "authorized" ? (
                           <Badge variant="secondary" className="rounded-lg px-3 py-1.5 text-xs font-normal justify-center">
-                            保存后将自动挂载到目标会话
+                            {t("connectors.saveWillAttach")}
                           </Badge>
                         ) : null}
                         {actionBusy ? (
                           <Badge variant="outline" className="rounded-lg px-3 py-1.5 text-xs font-normal justify-center bg-background">
                             <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                            正在处理
+                            {t("connectors.processing")}
                           </Badge>
                         ) : null}
                       </div>
@@ -1732,24 +1753,24 @@ export function ConnectorCenterPanel({
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-2xl font-semibold text-foreground">连接 Supabase</h3>
+                <h3 className="text-2xl font-semibold text-foreground">{t("connectors.supabase.connectTitle")}</h3>
                 <p className="text-sm leading-6 text-muted-foreground">
-                  配置 Supabase 访问令牌以使用该功能。请参阅
+                  {t("connectors.supabase.connectDescriptionPrefix")}
                   <a
                     href="https://supabase.com/dashboard/account/tokens"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="mx-1 text-foreground underline decoration-muted-foreground/50 underline-offset-2"
                   >
-                    官方文档
+                    {t("connectors.supabase.officialDocs")}
                   </a>
-                  获取与管理 Token。
+                  {t("connectors.supabase.connectDescriptionSuffix")}
                 </p>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-base font-medium text-foreground">Personal Access Token</Label>
+              <Label className="text-base font-medium text-foreground">{t("connectors.supabase.personalAccessToken")}</Label>
               <Input
                 type="password"
                 value={supabaseTokenInput}
@@ -1767,7 +1788,7 @@ export function ConnectorCenterPanel({
               {actionKey === "save:supabase" ? (
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
               ) : null}
-              连接
+              {t("connectors.actions.connect")}
             </Button>
           </div>
         </DialogContent>
@@ -1794,7 +1815,7 @@ export function ConnectorCenterPanel({
                   activeTab === tab.key && "text-foreground"
                 )}
               >
-                {tab.label}
+                {t(tab.labelKey)}
                 {activeTab === tab.key ? (
                   <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-foreground" />
                 ) : null}
@@ -1805,7 +1826,7 @@ export function ConnectorCenterPanel({
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索"
+              placeholder={t("sidebar.search")}
               className="h-9 rounded-xl"
             />
           </div>

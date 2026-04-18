@@ -23,6 +23,8 @@ import {
 import { cn } from "@/lib/utils";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import type { PreviewDiffItem } from "@/lib/opencode-preview";
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
 
 export type AltusReplayActionStatus =
   | "running"
@@ -91,15 +93,15 @@ function getStatusIcon(status: AltusReplayActionStatus) {
 
 function getStatusBadgeCopy(status: AltusReplayActionStatus) {
   if (status === "completed") {
-    return "已完成";
+    return i18n.t("replayDrawer.completed");
   }
   if (status === "failed") {
-    return "失败";
+    return i18n.t("replayDrawer.failed");
   }
   if (status === "running") {
-    return "进行中";
+    return i18n.t("replayDrawer.running");
   }
-  return "待处理";
+  return i18n.t("replayDrawer.unknown");
 }
 
 function getStatusBadgeClass(status: AltusReplayActionStatus) {
@@ -147,6 +149,7 @@ export default function AltusRunReplayDrawer({
   onRequestRollbackByMessage,
   onOpenPreviewTab,
 }: AltusRunReplayDrawerProps) {
+  useTranslation();
   const normalizedFiles = useMemo(
     () => uniqueFiles(files, sessionId),
     [files, sessionId],
@@ -231,7 +234,9 @@ export default function AltusRunReplayDrawer({
       .catch((error) => {
         if (cancelled) return;
         setDeploymentError(
-          error instanceof Error ? error.message : "加载部署信息失败",
+          error instanceof Error
+            ? error.message
+            : i18n.t("replayDrawer.loadDeploymentFailed"),
         );
       })
       .finally(() => {
@@ -271,7 +276,9 @@ export default function AltusRunReplayDrawer({
       );
     } catch (error) {
       setDeploymentError(
-        error instanceof Error ? error.message : "加载部署信息失败",
+        error instanceof Error
+          ? error.message
+          : i18n.t("replayDrawer.loadDeploymentFailed"),
       );
     } finally {
       setDeploymentLoading(false);
@@ -295,9 +302,13 @@ export default function AltusRunReplayDrawer({
         setDeploymentAction(null);
         return;
       }
-      setDeploymentError("当前页面未绑定部署消息入口，请回到会话页触发部署。");
+      setDeploymentError(i18n.t("replayDrawer.missingDeployEntry"));
     } catch (error) {
-      setDeploymentError(error instanceof Error ? error.message : "部署操作失败");
+      setDeploymentError(
+        error instanceof Error
+          ? error.message
+          : i18n.t("replayDrawer.deployActionFailed"),
+      );
     } finally {
       setDeploymentAction(null);
     }
@@ -312,10 +323,10 @@ export default function AltusRunReplayDrawer({
         <div className="h-12 flex-shrink-0 px-3 flex items-center justify-between border-b border-border bg-background/95 backdrop-blur-sm">
           <div className="flex items-center min-w-0">
             <SheetTitle className="text-base font-semibold truncate">
-              {runTitle || "Altus Run Replay"}
+              {runTitle || i18n.t("replayDrawer.titleFallback")}
             </SheetTitle>
             <SheetDescription className="sr-only">
-              Altus 接管模式的 Actions 与 Files 回放查看器
+              {i18n.t("replayDrawer.description")}
             </SheetDescription>
           </div>
           <div className="flex items-center gap-1.5">
@@ -332,28 +343,28 @@ export default function AltusRunReplayDrawer({
                 onClick={() => setDrawerView("files")}
               >
                 <FileText className="h-3 w-3" />
-                <span>文件</span>
+                <span>{i18n.t("replayDrawer.tabs.files")}</span>
               </ReplayHeaderTab>
               <ReplayHeaderTab
                 active={drawerView === "changes"}
                 onClick={() => setDrawerView("changes")}
               >
                 <FileText className="h-3 w-3" />
-                <span>更改</span>
+                <span>{i18n.t("replayDrawer.tabs.changes")}</span>
               </ReplayHeaderTab>
               <ReplayHeaderTab
                 active={drawerView === "debug"}
                 onClick={() => setDrawerView("debug")}
               >
                 <Bug className="h-3 w-3" />
-                <span>调试</span>
+                <span>{i18n.t("replayDrawer.tabs.debug")}</span>
               </ReplayHeaderTab>
               <ReplayHeaderTab
                 active={drawerView === "deployment"}
                 onClick={() => setDrawerView("deployment")}
               >
                 <Rocket className="h-3 w-3" />
-                <span>部署</span>
+                <span>{i18n.t("replayDrawer.tabs.deployment")}</span>
               </ReplayHeaderTab>
             </div>
             <Button
@@ -362,7 +373,7 @@ export default function AltusRunReplayDrawer({
               size="icon"
               className="h-8 w-8 rounded-2xl text-muted-foreground hover:text-foreground"
               onClick={() => onOpenChange(false)}
-              title="关闭"
+              title={i18n.t("replayDrawer.close")}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
@@ -381,13 +392,16 @@ export default function AltusRunReplayDrawer({
                       </div>
                       <div className="min-w-0">
                         <div className="truncate text-base font-medium text-zinc-900 dark:text-zinc-100">
-                          Update Tasks
+                          {i18n.t("replayDrawer.updateTasks")}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center justify-center rounded-2xl border px-3 py-1.5 text-xs font-normal text-foreground">
-                        {completedCount} / {actions.length} tasks
+                        {i18n.t("replayDrawer.tasksProgress", {
+                          completed: completedCount,
+                          total: actions.length,
+                        })}
                       </span>
                     </div>
                   </div>
@@ -397,13 +411,13 @@ export default function AltusRunReplayDrawer({
                   <div className="py-0">
                     {actions.length === 0 ? (
                       <div className="px-4 py-8 text-sm text-muted-foreground">
-                        当前 run 还没有可回放的动作。
+                        {i18n.t("replayDrawer.emptyActions")}
                       </div>
                     ) : (
                       <div className="border-b border-zinc-200 dark:border-zinc-800 last:border-b-0">
                         <div className="flex items-center justify-between bg-zinc-50/80 px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 dark:bg-zinc-900/80">
                           <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                            {runTitle || "当前任务"}
+                            {runTitle || i18n.t("replayDrawer.currentTask")}
                           </h3>
                           <div className="flex items-center gap-2">
                             <span className="inline-flex items-center justify-center rounded-2xl border bg-white px-2 py-0 text-xs font-normal text-foreground dark:bg-zinc-800">
@@ -470,7 +484,7 @@ export default function AltusRunReplayDrawer({
                 <div className="border-t border-zinc-200 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/90">
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
-                      Selected Action
+                      {i18n.t("replayDrawer.selectedAction")}
                     </div>
                     <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900">
                       {selectedAction ? (
@@ -500,7 +514,7 @@ export default function AltusRunReplayDrawer({
                                     : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
                                 )}
                               >
-                                用户态
+                                {i18n.t("replayDrawer.userDetail")}
                               </button>
                               <button
                                 type="button"
@@ -512,7 +526,7 @@ export default function AltusRunReplayDrawer({
                                     : "border-zinc-200 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400",
                                 )}
                               >
-                                内部态
+                                {i18n.t("replayDrawer.internalDetail")}
                               </button>
                             </div>
                           ) : null}
@@ -521,7 +535,9 @@ export default function AltusRunReplayDrawer({
                           </pre>
                         </div>
                       ) : (
-                        <div className="text-sm text-muted-foreground">暂无选中的步骤。</div>
+                        <div className="text-sm text-muted-foreground">
+                          {i18n.t("replayDrawer.noSelectedStep")}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -575,7 +591,7 @@ export default function AltusRunReplayDrawer({
                   return;
                 }
                 if (!onRequestStartDebugByMessage) {
-                  debugPreview.setDebugError("缺少启动调试消息入口");
+                  debugPreview.setDebugError(i18n.t("previewPanel.debug.missingStartEntry"));
                   return;
                 }
                 onRequestStartDebugByMessage();
@@ -618,7 +634,7 @@ export default function AltusRunReplayDrawer({
               onClick={() => onSelectIndex(Math.max(0, currentIndex - 1))}
             >
               <ChevronLeft className="mr-1 h-3.5 w-3.5" />
-              <span>Prev</span>
+              <span>{i18n.t("replayDrawer.prev")}</span>
             </Button>
             <div className="flex items-center gap-1.5">
               <span className="min-w-[44px] text-xs font-medium tabular-nums text-zinc-600 dark:text-zinc-400">
@@ -631,7 +647,7 @@ export default function AltusRunReplayDrawer({
               >
                 <div className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
                 <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                  Jump to Latest
+                  {i18n.t("replayDrawer.jumpToLatest")}
                 </span>
               </button>
             </div>
@@ -643,7 +659,7 @@ export default function AltusRunReplayDrawer({
               className="h-8 rounded-2xl text-xs"
               onClick={() => onSelectIndex(Math.min(latestIndex, currentIndex + 1))}
             >
-              <span>Next</span>
+              <span>{i18n.t("replayDrawer.next")}</span>
               <ChevronRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </div>
@@ -680,10 +696,10 @@ function ReplayHeaderTab({
 }
 
 function formatAltusTimestamp(value?: string | null): string {
-  if (!value) return "时间未知";
+  if (!value) return i18n.t("replayDrawer.unknownTime");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
+  return date.toLocaleString(i18n.language === "zh" ? "zh-CN" : "en-US", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -702,11 +718,12 @@ function AltusPreviewChangesPanel({
   onSelectDiff: (id: string) => void;
   onOpenPreviewTab?: (tab: "files" | "changes" | "debug" | "deployment") => void;
 }) {
+  useTranslation();
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          更改
+          {i18n.t("replayDrawer.changesTitle")}
           <span className="text-xs text-muted-foreground">{diffItems.length}</span>
         </div>
         <Button
@@ -715,7 +732,7 @@ function AltusPreviewChangesPanel({
           className="h-7 rounded-full"
           onClick={() => onOpenPreviewTab?.("changes")}
         >
-          在内容预览中打开
+          {i18n.t("replayDrawer.openInPreview")}
         </Button>
       </div>
       <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-4">
@@ -723,7 +740,9 @@ function AltusPreviewChangesPanel({
           <>
             <section className="rounded-lg border border-slate-200/80 bg-white p-4">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">最近更改</span>
+                <span className="text-xs text-muted-foreground">
+                  {i18n.t("replayDrawer.recentChanges")}
+                </span>
                 <select
                   className="text-xs border border-border rounded-md bg-background px-2 py-1 flex-1"
                   value={currentDiff?.id || diffItems[diffItems.length - 1]?.id || ""}
@@ -746,10 +765,10 @@ function AltusPreviewChangesPanel({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
-                      当前更改
+                      {i18n.t("replayDrawer.currentChange")}
                     </div>
                     <div className="mt-1 truncate text-sm font-medium text-slate-900">
-                      {currentDiff.title || "最近更改"}
+                      {currentDiff.title || i18n.t("replayDrawer.recentChangeFallback")}
                     </div>
                   </div>
                   <span className="text-xs text-slate-500">
@@ -769,14 +788,14 @@ function AltusPreviewChangesPanel({
                   </div>
                 ) : null}
                 <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-all rounded-md border border-border/60 bg-muted/40 p-3 text-xs leading-5 text-foreground">
-                  {currentDiff.diff || "当前更改没有可展示的原始 diff。"}
+                  {currentDiff.diff || i18n.t("replayDrawer.noRawDiff")}
                 </pre>
               </section>
             ) : null}
           </>
         ) : (
           <div className="rounded-lg border border-dashed border-slate-200 px-6 py-12 text-center text-sm text-slate-500">
-            暂无更改
+            {i18n.t("replayDrawer.noChanges")}
           </div>
         )}
       </div>

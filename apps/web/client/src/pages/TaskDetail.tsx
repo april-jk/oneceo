@@ -34,6 +34,7 @@ import {
   Mic,
 } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useRoute } from "wouter";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
@@ -63,10 +64,11 @@ interface Message {
 
 export default function TaskDetail() {
   const [, params] = useRoute("/task/:projectId/:managerId/:taskId");
+  const { t } = useTranslation();
   const [ceoMessage, setCeoMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedDeliverable, setSelectedDeliverable] = useState<any>(null);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
 
   // Mock data - 模拟经理-员工对话数据
   const taskInfo = {
@@ -174,19 +176,19 @@ export default function TaskDetail() {
                 <div className="flex items-center gap-2">
                   <Clock className="w-4 h-4 text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">
-                    截止日期: {taskInfo.deadline}
+                    {t("taskDetail.deadline", { value: taskInfo.deadline })}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-orange-500" />
                   <span className="text-sm font-medium text-orange-500">
-                    高优先级
+                    {t("taskDetail.highPriority")}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-blue-500" />
                   <span className="text-sm text-muted-foreground">
-                    进行中
+                    {t("taskDetail.inProgress")}
                   </span>
                 </div>
               </div>
@@ -272,7 +274,7 @@ export default function TaskDetail() {
                               setSelectedDeliverable(message.deliverable)
                             }
                           >
-                            查看交付文档
+                            {t("taskDetail.viewDeliverable")}
                           </Button>
                         </div>
                         {message.deliverable.evaluation && (
@@ -288,11 +290,11 @@ export default function TaskDetail() {
                               }`}
                             >
                               {message.deliverable.evaluation === "perfect"
-                                ? "完美"
+                                ? t("managerNode.perfect")
                                 : message.deliverable.evaluation ===
                                   "acceptable"
-                                ? "可接受"
-                                : "不可接受"}
+                                ? t("managerNode.acceptable")
+                                : t("managerNode.unacceptable")}
                             </span>
                           </div>
                         )}
@@ -312,17 +314,17 @@ export default function TaskDetail() {
           <div className="max-w-4xl mx-auto">
             <div className="mb-3">
               <span className="text-sm font-medium text-foreground">
-                与经理对话
+                {t("taskDetail.talkToManager")}
               </span>
               <p className="text-xs text-muted-foreground mt-1">
-                您可以向经理提出优化建议，经理将根据您的建议调度员工完成任务
+                {t("taskDetail.talkToManagerHint")}
               </p>
             </div>
             <Card className="p-4">
               <div className="space-y-3">
                 {/* Textarea */}
                 <Textarea
-                  placeholder="输入您的指令或问题..."
+                  placeholder={t("taskDetail.messagePlaceholder")}
                   value={ceoMessage}
                   onChange={(e) => setCeoMessage(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -353,43 +355,43 @@ export default function TaskDetail() {
                               >
                                 <Sparkles className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm text-muted-foreground">
-                                  {selectedModel}
+                                  {t(`homePage.models.${selectedModel}`)}
                                 </span>
                               </Button>
                             </DropdownMenuTrigger>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Select AI model</p>
+                            <p>{t("homePage.selectModel")}</p>
                           </TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="start" className="w-48">
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Lite")}
+                            onClick={() => setSelectedModel("lite")}
                           >
                             <div className="flex flex-col gap-1">
-                              <span className="font-medium">Agent Lite</span>
+                              <span className="font-medium">{t("homePage.models.lite")}</span>
                               <span className="text-xs text-muted-foreground">
-                                Fast & efficient
+                                {t("ceoView.modelLiteHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Pro")}
+                            onClick={() => setSelectedModel("pro")}
                           >
                             <div className="flex flex-col gap-1">
-                              <span className="font-medium">Agent Pro</span>
+                              <span className="font-medium">{t("homePage.models.pro")}</span>
                               <span className="text-xs text-muted-foreground">
-                                Balanced performance
+                                {t("ceoView.modelProHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Max")}
+                            onClick={() => setSelectedModel("max")}
                           >
                             <div className="flex flex-col gap-1">
-                              <span className="font-medium">Agent Max</span>
+                              <span className="font-medium">{t("homePage.models.max")}</span>
                               <span className="text-xs text-muted-foreground">
-                                Maximum capability
+                                {t("ceoView.modelMaxHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
@@ -410,9 +412,9 @@ export default function TaskDetail() {
                             <Mic className="w-4 h-4 text-muted-foreground" />
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Voice input</p>
-                        </TooltipContent>
+                          <TooltipContent>
+                            <p>{t("homePage.voiceInput")}</p>
+                          </TooltipContent>
                       </Tooltip>
 
                       {/* Send Button */}
@@ -428,7 +430,7 @@ export default function TaskDetail() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Send message</p>
+                          <p>{t("homePage.sendMessage")}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>

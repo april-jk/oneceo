@@ -4,6 +4,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
 import WorkspaceLayout from "@/components/WorkspaceLayout";
 import { Button } from "@/components/ui/button";
@@ -275,6 +276,7 @@ const mockProjects: Project[] = [
 
 export default function ManagerView() {
   const [, setLocation] = useLocation();
+  const { t } = useTranslation();
   const [projects] = useState<Project[]>(mockProjects);
   const [expandedProjects, setExpandedProjects] = useState<{
     [key: string]: boolean;
@@ -313,11 +315,11 @@ export default function ManagerView() {
   const getStatusText = (status: string) => {
     switch (status) {
       case "idle":
-        return "空闲";
+        return t("managerView.employeeIdle");
       case "busy":
-        return "忙碌";
+        return t("managerView.employeeBusy");
       case "offline":
-        return "离线";
+        return t("managerView.employeeOffline");
       default:
         return status;
     }
@@ -339,11 +341,11 @@ export default function ManagerView() {
   const getProjectStatusText = (status: string) => {
     switch (status) {
       case "active":
-        return "进行中";
+        return t("managerView.projectActive");
       case "completed":
-        return "已完成";
+        return t("managerView.projectCompleted");
       case "paused":
-        return "暂停";
+        return t("managerView.projectPaused");
       default:
         return status;
     }
@@ -355,14 +357,14 @@ export default function ManagerView() {
         {/* 页面标题 */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">项目</h1>
+            <h1 className="text-3xl font-bold tracking-tight">{t("managerView.title")}</h1>
             <p className="text-muted-foreground mt-1">
-              以项目视角管理经理和员工
+              {t("managerView.subtitle")}
             </p>
           </div>
           <Button className="gap-2">
             <Plus className="w-4 h-4" />
-            创建项目
+            {t("managerView.createProject")}
           </Button>
         </div>
 
@@ -410,7 +412,7 @@ export default function ManagerView() {
                   onClick={() => setLocation(`/project/${project.id}`)}
                 >
                   <Eye className="w-4 h-4" />
-                  查看详情
+                  {t("managerView.viewDetails")}
                 </Button>
               </div>
 
@@ -418,17 +420,17 @@ export default function ManagerView() {
               <div className="flex items-center gap-6 ml-12 mb-4">
                 <div className="flex items-center gap-2 text-sm">
                   <BarChart className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-muted-foreground">进度:</span>
+                  <span className="text-muted-foreground">{t("managerView.progressLabel")}</span>
                   <span className="font-medium">{project.progress}%</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
                   <Users className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-muted-foreground">经理:</span>
+                  <span className="text-muted-foreground">{t("managerView.managersLabel")}</span>
                   <span className="font-medium">{project.managers.length}</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
                   <User className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-muted-foreground">员工:</span>
+                  <span className="text-muted-foreground">{t("managerView.employeesLabel")}</span>
                   <span className="font-medium">
                     {project.managers.reduce(
                       (sum, m) => sum + m.employees.length,
@@ -477,7 +479,7 @@ export default function ManagerView() {
                                 ({manager.name})
                               </span>
                               <Badge variant="outline">
-                                {manager.employees.length} 员工
+                                {t("managerView.employeesCount", { count: manager.employees.length })}
                               </Badge>
                             </div>
                             {manager.description && (
@@ -489,7 +491,7 @@ export default function ManagerView() {
                           <div className="flex gap-2">
                             <Button variant="outline" size="sm" className="h-7">
                               <Plus className="w-3 h-3 mr-1" />
-                              添加员工
+                              {t("managerView.addEmployee")}
                             </Button>
                             <Button
                               variant="ghost"
@@ -545,7 +547,7 @@ export default function ManagerView() {
                                       </div>
                                       {employee.currentTask && (
                                         <p className="text-xs text-muted-foreground mt-1">
-                                          当前任务: {employee.currentTask}
+                                          {t("managerView.currentTask", { value: employee.currentTask })}
                                         </p>
                                       )}
                                     </div>
@@ -568,7 +570,7 @@ export default function ManagerView() {
                     {/* 添加经理按钮 */}
                     <Button variant="outline" className="w-full" size="sm">
                       <Plus className="w-4 h-4 mr-2" />
-                      为此项目添加经理
+                      {t("managerView.addManager")}
                     </Button>
                   </motion.div>
                 )}

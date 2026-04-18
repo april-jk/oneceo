@@ -15,12 +15,14 @@ import {
 } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Home, LogIn, LogOut, ShieldCheck, UserRoundPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function UserMenu() {
   const [location, setLocation] = useLocation();
   const { user, status, logout } = useAuth();
+  const { t } = useTranslation();
 
   const handleLogout = async () => {
     await logout();
@@ -40,11 +42,11 @@ export default function UserMenu() {
           size="icon"
           className="h-9 w-9 rounded-full p-0"
         >
-          <Avatar className="h-9 w-9">
-            <AvatarImage
-              src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
-              alt="User"
-            />
+            <Avatar className="h-9 w-9">
+              <AvatarImage
+                src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                alt={t("userMenu.avatarAlt")}
+              />
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
         </Button>
@@ -55,16 +57,16 @@ export default function UserMenu() {
             <Avatar className="h-12 w-12">
               <AvatarImage
                 src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
-                alt="User"
+                alt={t("userMenu.avatarAlt")}
               />
               <AvatarFallback>{initials}</AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold text-foreground">
-                {status === "authenticated" ? user?.displayName || user?.email : "未登录"}
+                {status === "authenticated" ? user?.displayName || user?.email : t("userMenu.guestName")}
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {status === "authenticated" ? user?.email : "登录后绑定你的会话与授权"}
+                {status === "authenticated" ? user?.email : t("userMenu.guestSubtitle")}
               </div>
             </div>
           </div>
@@ -73,13 +75,13 @@ export default function UserMenu() {
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600" />
               <span className="text-sm font-medium text-foreground">
-                {status === "authenticated" ? "个人身份已绑定" : "尚未建立正式身份"}
+                {status === "authenticated" ? t("userMenu.boundTitle") : t("userMenu.guestTitle")}
               </span>
             </div>
             <div className="mt-2 text-xs text-muted-foreground">
               {status === "authenticated"
-                ? "对话、skills 与连接器授权将按当前账号隔离。"
-                : "请先登录或注册，再进入个人工作区。"}
+                ? t("userMenu.boundDescription")
+                : t("userMenu.guestDescription")}
             </div>
           </div>
         </div>
@@ -92,14 +94,14 @@ export default function UserMenu() {
                 className="cursor-pointer rounded-lg px-3 py-2.5"
               >
                 <Home className="mr-2 h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">进入工作区</span>
+                <span className="text-sm">{t("userMenu.workspace")}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => void handleLogout()}
                 className="cursor-pointer rounded-lg px-3 py-2.5"
               >
                 <LogOut className="mr-2 h-4 w-4 text-muted-foreground" />
-                <span className="text-sm">退出登录</span>
+                <span className="text-sm">{t("userMenu.logout")}</span>
               </DropdownMenuItem>
             </>
           ) : (
@@ -107,13 +109,13 @@ export default function UserMenu() {
               <DropdownMenuItem asChild className="cursor-pointer rounded-lg px-3 py-2.5">
                 <Link href={loginHref}>
                   <LogIn className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm">登录</span>
+                  <span className="text-sm">{t("userMenu.login")}</span>
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild className="cursor-pointer rounded-lg px-3 py-2.5">
                 <Link href={registerHref}>
                   <UserRoundPlus className="mr-2 h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm">注册账号</span>
+                  <span className="text-sm">{t("userMenu.register")}</span>
                 </Link>
               </DropdownMenuItem>
             </>

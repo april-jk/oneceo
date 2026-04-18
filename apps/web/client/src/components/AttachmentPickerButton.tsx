@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Cloud,
   Download,
@@ -48,38 +49,18 @@ type AttachmentPickerButtonProps = {
   disabled?: boolean;
 };
 
-const CLOUD_PROVIDER_ITEMS: Array<{
-  provider: RemoteAttachmentProvider;
-  label: string;
-  description: string;
-}> = [
-  {
-    provider: "google-drive",
-    label: "Google Drive",
-    description: "导入公开分享的 Drive 文件",
-  },
-  {
-    provider: "onedrive",
-    label: "OneDrive",
-    description: "导入公开分享的 OneDrive 文件",
-  },
-  {
-    provider: "website",
-    label: "网站",
-    description: "从网页链接直接下载文件",
-  },
-];
-
-function getProviderLabel(provider: RemoteAttachmentProvider): string {
-  return CLOUD_PROVIDER_ITEMS.find((item) => item.provider === provider)?.label || provider;
-}
-
-function formatSkillResourceSummary(skill: TaskCreationPlatformSkill): string {
+function formatSkillResourceSummary(
+  skill: TaskCreationPlatformSkill,
+  t: ReturnType<typeof useTranslation>["t"]
+): string {
   const summary = skill.resourceSummary;
   if (!summary || summary.totalCount <= 0) {
-    return "无额外资源";
+    return t("attachmentPicker.skills.noExtraResources");
   }
-  return `${summary.referenceCount} 个参考 + ${summary.templateCount} 个模板`;
+  return t("attachmentPicker.skills.resourceSummary", {
+    referenceCount: summary.referenceCount,
+    templateCount: summary.templateCount,
+  });
 }
 
 export default function AttachmentPickerButton({
@@ -87,6 +68,7 @@ export default function AttachmentPickerButton({
   onSelectSkills,
   disabled = false,
 }: AttachmentPickerButtonProps) {
+  const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const inputId = useId();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -97,28 +79,60 @@ export default function AttachmentPickerButton({
   const [skillsLoaded, setSkillsLoaded] = useState(false);
   const [skillsLoading, setSkillsLoading] = useState(false);
 
+  const cloudProviderItems = useMemo(
+    () =>
+      [
+        {
+          provider: "google-drive",
+          label: "Google Drive",
+          description: t("attachmentPicker.cloud.googleDriveDescription"),
+        },
+        {
+          provider: "onedrive",
+          label: "OneDrive",
+          description: t("attachmentPicker.cloud.oneDriveDescription"),
+        },
+        {
+          provider: "website",
+          label: t("attachmentPicker.cloud.websiteLabel"),
+          description: t("attachmentPicker.cloud.websiteDescription"),
+        },
+      ] as Array<{
+        provider: RemoteAttachmentProvider;
+        label: string;
+        description: string;
+      }>,
+    [t]
+  );
+
+  const getProviderLabel = useCallback(
+    (provider: RemoteAttachmentProvider) =>
+      cloudProviderItems.find((item) => item.provider === provider)?.label || provider,
+    [cloudProviderItems]
+  );
+
   const dialogCopy = useMemo(() => {
     if (!dialogProvider) return null;
     if (dialogProvider === "website") {
       return {
-        title: "从网站添加文件",
-        description: "输入可直接访问的文件地址，系统会先下载再作为附件加入当前对话。",
+        title: t("attachmentPicker.dialog.website.title"),
+        description: t("attachmentPicker.dialog.website.description"),
         placeholder: "https://example.com/files/spec.pdf",
       };
     }
     if (dialogProvider === "google-drive") {
       return {
-        title: "从 Google Drive 添加",
-        description: "输入公开分享的 Google Drive 文件链接，系统会转换成可下载地址。",
+        title: t("attachmentPicker.dialog.googleDrive.title"),
+        description: t("attachmentPicker.dialog.googleDrive.description"),
         placeholder: "https://drive.google.com/file/d/xxx/view?usp=sharing",
       };
     }
     return {
-      title: "从 OneDrive 添加",
-      description: "输入公开分享的 OneDrive 文件链接，系统会通过分享地址下载文件。",
+      title: t("attachmentPicker.dialog.oneDrive.title"),
+      description: t("attachmentPicker.dialog.oneDrive.description"),
       placeholder: "https://1drv.ms/u/s!example",
     };
-  }, [dialogProvider]);
+  }, [dialogProvider, t]);
 
   const handleLocalSelect = async (files: File[]) => {
     await Promise.resolve(onSelectFiles(files));
@@ -161,9 +175,9 @@ export default function AttachmentPickerButton({
     try {
       setMenuOpen(false);
       await Promise.resolve(onSelectSkills([skill]));
-      toast.success(`已添加技能：${skill.name}`);
+      toast.success(t("attachmentPicker.toasts.skillAdded", { name: skill.name }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "技能添加失败";
+      const message = error instanceof Error ? error.message : t("attachmentPicker.toasts.skillAddFailed");
       toast.error(message);
     }
   };
@@ -171,7 +185,7 @@ export default function AttachmentPickerButton({
   const handleRemoteImport = async () => {
     const trimmedUrl = remoteUrl.trim();
     if (!dialogProvider || !trimmedUrl) {
-      toast.error("请输入文件链接");
+      toast.error(t("attachmentPicker.toasts.urlRequired"));
       return;
     }
     setIsImportingRemote(true);
@@ -181,11 +195,16 @@ export default function AttachmentPickerButton({
         url: trimmedUrl,
       });
       await handleLocalSelect([file]);
-      toast.success(`已从${getProviderLabel(dialogProvider)}添加 ${file.name}`);
+      toast.success(
+        t("attachmentPicker.toasts.remoteAdded", {
+          provider: getProviderLabel(dialogProvider),
+          name: file.name,
+        })
+      );
       setDialogProvider(null);
       setRemoteUrl("");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "远程文件添加失败";
+      const message = error instanceof Error ? error.message : t("attachmentPicker.toasts.remoteAddFailed");
       toast.error(message);
     } finally {
       setIsImportingRemote(false);
@@ -205,7 +224,8 @@ export default function AttachmentPickerButton({
           const files = Array.from(event.target.files || []);
           if (files.length > 0) {
             void handleLocalSelect(files).catch((error) => {
-              const message = error instanceof Error ? error.message : "本地附件添加失败";
+              const message =
+                error instanceof Error ? error.message : t("attachmentPicker.toasts.localAddFailed");
               toast.error(message);
             });
           }
@@ -222,7 +242,7 @@ export default function AttachmentPickerButton({
                 size="icon"
                 className="h-9 w-9 rounded-xl hover:bg-muted transition-colors"
                 disabled={disabled}
-                aria-label="添加附件"
+                aria-label={t("attachmentPicker.triggerAriaLabel")}
                 data-testid="attachment-picker-trigger"
               >
                 <Plus className="w-4 h-4 text-muted-foreground" />
@@ -230,7 +250,7 @@ export default function AttachmentPickerButton({
             </DropdownMenuTrigger>
           </TooltipTrigger>
           <TooltipContent>
-            <p>添加附件</p>
+            <p>{t("attachmentPicker.triggerLabel")}</p>
           </TooltipContent>
         </Tooltip>
 
@@ -243,12 +263,12 @@ export default function AttachmentPickerButton({
             <DropdownMenuSubTrigger className="rounded-xl px-3 py-2">
               <Cloud className="h-4 w-4" />
               <div className="flex min-w-0 flex-1 flex-col items-start">
-                <span className="text-sm font-medium">从云端添加</span>
-                <span className="text-xs text-muted-foreground">Drive、OneDrive、网站下载</span>
+                <span className="text-sm font-medium">{t("attachmentPicker.cloud.title")}</span>
+                <span className="text-xs text-muted-foreground">{t("attachmentPicker.cloud.description")}</span>
               </div>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-72 rounded-2xl border-border/70 p-2 shadow-xl">
-              {CLOUD_PROVIDER_ITEMS.map((item) => (
+              {cloudProviderItems.map((item) => (
                 <DropdownMenuItem
                   key={item.provider}
                   className="rounded-xl px-3 py-2"
@@ -273,8 +293,8 @@ export default function AttachmentPickerButton({
               <DropdownMenuSubTrigger className="rounded-xl px-3 py-2">
                 <Sparkles className="h-4 w-4" />
                 <div className="flex min-w-0 flex-1 flex-col items-start">
-                  <span className="text-sm font-medium">使用技能</span>
-                  <span className="text-xs text-muted-foreground">选择你已启用的 skills 并同步到 sandbox</span>
+                  <span className="text-sm font-medium">{t("attachmentPicker.skills.title")}</span>
+                  <span className="text-xs text-muted-foreground">{t("attachmentPicker.skills.description")}</span>
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-72 rounded-2xl border-border/70 p-2 shadow-xl">
@@ -291,8 +311,12 @@ export default function AttachmentPickerButton({
                       <div className="flex min-w-0 flex-1 flex-col items-start">
                         <span className="text-sm font-medium">{item.name}</span>
                         <span className="text-xs text-muted-foreground">
-                          {item.sourceType === "custom" ? "自定义" : "平台模板"} · {item.description} ·{" "}
-                          {formatSkillResourceSummary(item)}
+                          {t(
+                            item.sourceType === "custom"
+                              ? "attachmentPicker.skills.sourceCustom"
+                              : "attachmentPicker.skills.sourceTemplate"
+                          )}{" "}
+                          · {item.description} · {formatSkillResourceSummary(item, t)}
                         </span>
                       </div>
                     </DropdownMenuItem>
@@ -311,12 +335,14 @@ export default function AttachmentPickerButton({
                     <Wrench className="h-4 w-4" />
                     <div className="flex min-w-0 flex-1 flex-col items-start">
                       <span className="text-sm font-medium">
-                        {skillsLoading || !skillsLoaded ? "正在加载技能" : "暂无可用技能"}
+                        {skillsLoading || !skillsLoaded
+                          ? t("attachmentPicker.skills.loading")
+                          : t("attachmentPicker.skills.empty")}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {skillsLoading || !skillsLoaded
-                          ? "正在同步用户当前已启用的 skills"
-                          : "前往 设置 > Skills 管理 启用平台模板或创建自定义 skills"}
+                          ? t("attachmentPicker.skills.loadingDescription")
+                          : t("attachmentPicker.skills.emptyDescription")}
                       </span>
                     </div>
                   </DropdownMenuItem>
@@ -334,8 +360,8 @@ export default function AttachmentPickerButton({
           >
             <HardDriveUpload className="h-4 w-4" />
             <div className="flex min-w-0 flex-1 flex-col items-start">
-              <span className="text-sm font-medium">从本地文件添加</span>
-              <span className="text-xs text-muted-foreground">选择电脑上的文档、图片或代码文件</span>
+              <span className="text-sm font-medium">{t("attachmentPicker.local.title")}</span>
+              <span className="text-xs text-muted-foreground">{t("attachmentPicker.local.description")}</span>
             </div>
             <FolderPlus className="ml-2 h-4 w-4 text-muted-foreground" />
           </DropdownMenuItem>
@@ -352,12 +378,12 @@ export default function AttachmentPickerButton({
       >
         <DialogContent className="max-w-md rounded-3xl p-0" showCloseButton={!isImportingRemote}>
           <DialogHeader className="border-b px-6 pt-6 pb-4">
-            <DialogTitle>{dialogCopy?.title || "添加远程文件"}</DialogTitle>
+            <DialogTitle>{dialogCopy?.title || t("attachmentPicker.dialog.defaultTitle")}</DialogTitle>
             <DialogDescription>{dialogCopy?.description}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 px-6 py-5">
             <label className="space-y-2 text-sm font-medium text-foreground">
-              <span>文件链接</span>
+              <span>{t("attachmentPicker.dialog.urlLabel")}</span>
               <Input
                 value={remoteUrl}
                 onChange={(event) => setRemoteUrl(event.target.value)}
@@ -373,7 +399,7 @@ export default function AttachmentPickerButton({
               />
             </label>
             <p className="text-xs leading-5 text-muted-foreground">
-              支持公开可访问的分享链接。文件会先下载到浏览器，再按普通附件加入当前会话。
+              {t("attachmentPicker.dialog.hint")}
             </p>
           </div>
           <DialogFooter className="border-t px-6 py-4">
@@ -385,10 +411,10 @@ export default function AttachmentPickerButton({
               }}
               disabled={isImportingRemote}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button onClick={() => void handleRemoteImport()} disabled={isImportingRemote || !remoteUrl.trim()}>
-              {isImportingRemote ? "导入中..." : "添加文件"}
+              {isImportingRemote ? t("attachmentPicker.dialog.importing") : t("attachmentPicker.dialog.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>

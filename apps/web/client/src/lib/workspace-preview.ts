@@ -1,4 +1,5 @@
 import type { WorkspaceRawHeadResult } from "@/lib/task-creation-client";
+import i18n from "@/i18n";
 
 export type WorkspaceHtmlPreviewState =
   | "checking"
@@ -16,30 +17,30 @@ export function mapWorkspaceRawPreviewHeadResult(result: WorkspaceRawHeadResult)
   if (result.status === 409) {
     return {
       state: "runtime_unavailable",
-      message: "预览环境已关闭或未启动，点击“重新加载预览”后重试。",
+      message: i18n.t("workspacePreview.runtimeUnavailable"),
     };
   }
   if (result.status === 404) {
     return {
       state: "runtime_unavailable",
-      message: "正在准备预览内容，点击“重新加载预览”继续。",
+      message: i18n.t("workspacePreview.preparing"),
     };
   }
   if (result.networkError) {
     return {
       state: "fetch_failed",
-      message: "网络异常，暂时无法加载预览，请稍后重试。",
+      message: i18n.t("workspacePreview.networkError"),
     };
   }
   if (result.status >= 500) {
     return {
       state: "runtime_unavailable",
-      message: "预览环境正在恢复中，点击“重新加载预览”继续尝试。",
+      message: i18n.t("workspacePreview.recovering"),
     };
   }
   return {
     state: "fetch_failed",
-    message: "预览加载失败，请稍后重试。",
+    message: i18n.t("workspacePreview.loadFailed"),
   };
 }
 

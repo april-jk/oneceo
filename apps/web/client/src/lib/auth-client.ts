@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { getApiBaseUrl } from "@/lib/runtime-config";
 
 export type AppAuthUser = {
@@ -79,7 +80,7 @@ export async function loginAppUser(input: {
     body: JSON.stringify(input),
   });
   if (!result.user) {
-    throw new Error("登录返回缺少用户信息");
+    throw new Error(i18n.t("auth.missingLoginUser"));
   }
   return result.user;
 }
@@ -95,7 +96,7 @@ export async function registerAppUser(input: {
     body: JSON.stringify(input),
   });
   if (!result.user) {
-    throw new Error("注册返回缺少用户信息");
+    throw new Error(i18n.t("auth.missingRegisterUser"));
   }
   return result.user;
 }

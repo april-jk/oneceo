@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/sheet";
 import type { OrchestrationRuntime } from "@/hooks/useTaskCreationAgent";
 import { Loader2, RefreshCw, TerminalSquare } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 function pickMessageText(message: OrchestrationRuntime["messages"][number]): string {
   const payload = (message?.payload || {}) as Record<string, unknown>;
@@ -60,6 +61,7 @@ interface TaskRuntimeDrawerProps {
 }
 
 export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskRuntimeDrawerProps) {
+  const { t } = useTranslation();
   const rows = [...runtime.messages]
     .filter((message) => !String(message.type || "").toUpperCase().includes("ERROR"))
     .reverse();
@@ -70,12 +72,12 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
         <SheetHeader className="border-b border-border pb-4">
           <SheetTitle className="flex items-center gap-2">
             <TerminalSquare className="h-4 w-4" />
-            执行日志
+            {t("runtimeDrawer.title")}
           </SheetTitle>
           <SheetDescription>
             {runtime.orchestratorSessionId
-              ? `编排会话：${runtime.orchestratorSessionId}`
-              : "尚未建立执行环境会话"}
+              ? t("runtimeDrawer.sessionId", { sessionId: runtime.orchestratorSessionId })
+              : t("runtimeDrawer.noSession")}
           </SheetDescription>
           <div className="flex items-center gap-2 pt-2">
             <Button
@@ -92,16 +94,16 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
               ) : (
                 <RefreshCw className="mr-2 h-4 w-4" />
               )}
-              {runtime.ready ? "刷新" : "加载日志"}
+              {runtime.ready ? t("runtimeDrawer.refresh") : t("runtimeDrawer.load")}
             </Button>
-            <span className="text-xs text-muted-foreground">消息数：{runtime.messages.length}</span>
+            <span className="text-xs text-muted-foreground">{t("runtimeDrawer.messageCount", { count: runtime.messages.length })}</span>
           </div>
         </SheetHeader>
 
         <ScrollArea className="h-[calc(100vh-180px)] px-4">
           {rows.length === 0 ? (
             <div className="py-8 text-sm text-muted-foreground">
-              {runtime.ready ? "暂无执行日志。" : "执行日志尚未加载。"}
+              {runtime.ready ? t("runtimeDrawer.emptyReady") : t("runtimeDrawer.emptyLoading")}
             </div>
           ) : (
             <div className="space-y-3 py-4">

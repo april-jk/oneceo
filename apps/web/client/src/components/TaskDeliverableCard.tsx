@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   downloadTaskCreationDeliverable,
@@ -42,6 +43,7 @@ export default function TaskDeliverableCard({
   sessionId,
   deliverables,
 }: TaskDeliverableCardProps) {
+  const { t } = useTranslation();
   const normalizedDeliverables = useMemo(() => {
     const unique = new Map<string, TaskCreationDeliverableArtifact>();
     for (const item of deliverables) {
@@ -62,9 +64,9 @@ export default function TaskDeliverableCard({
     <div className="mt-4 rounded-2xl border border-border/70 bg-card/90 p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-foreground">Task complete</div>
+          <div className="text-sm font-semibold text-foreground">{t("taskDeliverables.title")}</div>
           <div className="text-xs text-muted-foreground">
-            已生成 {normalizedDeliverables.length} 个最终交付物
+            {t("taskDeliverables.generatedCount", { count: normalizedDeliverables.length })}
           </div>
         </div>
       </div>
@@ -105,7 +107,7 @@ export default function TaskDeliverableCard({
                     .catch((error) => {
                       console.error("deliverable download failed", error);
                       toast.error(
-                        error instanceof Error ? error.message : "下载交付物失败",
+                        error instanceof Error ? error.message : t("taskDeliverables.downloadFailed"),
                       );
                     })
                     .finally(() => {
@@ -120,7 +122,7 @@ export default function TaskDeliverableCard({
                 ) : (
                   <Download className="h-3.5 w-3.5" />
                 )}
-                下载
+                {t("taskDeliverables.download")}
               </Button>
             </div>
           );

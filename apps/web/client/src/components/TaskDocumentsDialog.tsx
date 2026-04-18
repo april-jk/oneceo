@@ -3,6 +3,8 @@
  * Displays all deliverable documents for a specific task
  */
 
+import { useTranslation } from "react-i18next";
+
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -43,13 +45,14 @@ interface TaskDocumentsDialogProps {
 }
 
 export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDocumentsDialogProps) {
+  const { t } = useTranslation();
   if (!task) return null;
 
   const getEvaluationBadge = (evaluation: 'perfect' | 'acceptable' | 'rejected') => {
     const config = {
-      perfect: { label: '完美', icon: CheckCircle, className: 'bg-green-500/10 text-green-500 border-green-500/20' },
-      acceptable: { label: '可接受', icon: AlertCircle, className: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' },
-      rejected: { label: '需修改', icon: XCircle, className: 'bg-red-500/10 text-red-500 border-red-500/20' },
+      perfect: { label: t('taskDocumentsDialog.evaluation.perfect'), icon: CheckCircle, className: 'bg-green-500/10 text-green-500 border-green-500/20' },
+      acceptable: { label: t('taskDocumentsDialog.evaluation.acceptable'), icon: AlertCircle, className: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' },
+      rejected: { label: t('taskDocumentsDialog.evaluation.rejected'), icon: XCircle, className: 'bg-red-500/10 text-red-500 border-red-500/20' },
     };
     const { label, icon: Icon, className } = config[evaluation];
     return (
@@ -67,9 +70,12 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[80vh]">
         <DialogHeader>
-          <DialogTitle className="text-xl">任务交付文档</DialogTitle>
+          <DialogTitle className="text-xl">{t('taskDocumentsDialog.title')}</DialogTitle>
           <DialogDescription>
-            {task.title} - 共 {employeesWithDeliverables.length} 份文档
+            {t('taskDocumentsDialog.description', {
+              title: task.title,
+              count: employeesWithDeliverables.length,
+            })}
           </DialogDescription>
         </DialogHeader>
 
@@ -77,7 +83,7 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
           {employeesWithDeliverables.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <FileText className="w-12 h-12 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground">暂无交付文档</p>
+              <p className="text-muted-foreground">{t('taskDocumentsDialog.empty')}</p>
             </div>
           ) : (
             <div className="space-y-6">
@@ -96,7 +102,11 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
                         </div>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
                           <Calendar className="w-3 h-3" />
-                          <span>提交于 {assignment.deliverable?.submittedAt || '未知时间'}</span>
+                          <span>
+                            {t('taskDocumentsDialog.submittedAt', {
+                              value: assignment.deliverable?.submittedAt || t('taskDocumentsDialog.unknownTime'),
+                            })}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -116,7 +126,11 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
                   {/* 附件列表 */}
                   {assignment.deliverable?.attachments && assignment.deliverable.attachments.length > 0 && (
                     <div>
-                      <h5 className="text-sm font-medium mb-2">附件 ({assignment.deliverable.attachments.length})</h5>
+                      <h5 className="text-sm font-medium mb-2">
+                        {t('taskDocumentsDialog.attachments', {
+                          count: assignment.deliverable.attachments.length,
+                        })}
+                      </h5>
                       <div className="space-y-2">
                         {assignment.deliverable.attachments.map((attachment, index) => (
                           <div
@@ -132,7 +146,7 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
                             </div>
                             <Button size="sm" variant="ghost" className="gap-2">
                               <Download className="w-4 h-4" />
-                              下载
+                              {t('taskDocumentsDialog.download')}
                             </Button>
                           </div>
                         ))}
@@ -143,7 +157,7 @@ export default function TaskDocumentsDialog({ task, open, onOpenChange }: TaskDo
                   {/* 评价反馈 */}
                   {assignment.deliverable?.feedback && (
                     <div className="bg-background rounded p-3 border border-border">
-                      <h5 className="text-sm font-medium mb-1">评价反馈</h5>
+                      <h5 className="text-sm font-medium mb-1">{t('taskDocumentsDialog.feedback')}</h5>
                       <p className="text-sm text-muted-foreground">{assignment.deliverable.feedback}</p>
                     </div>
                   )}

@@ -43,6 +43,19 @@ interface CompanyProject {
   progress: number;
 }
 
+const INITIAL_GENERAL_MANAGER_MESSAGE =
+  'CEO，您好。我是您的总经理，负责统筹调度公司的所有事务。请告诉我您的战略方向，我将为您制定详细的执行计划。';
+const GENERAL_MANAGER_ANALYSIS_REPLY =
+  '我已经分析了您的战略意图。基于当前公司状况，我建议以下行动：';
+const CREATE_PROJECT_REASON =
+  '根据您提到的客户服务优化方向，建议创建新项目以提升客户体验';
+const MODIFY_PROJECT_REASON =
+  '当前营销项目进度缓慢，建议调整策略并增加资源投入';
+
+function buildApprovalConfirmedMessage(projectName: string): string {
+  return `已收到批准。我将立即执行 "${projectName}" 的相关操作，并为您持续跟踪进展。`;
+}
+
 export default function AgentProject() {
   const { t, i18n } = useTranslation();
   const [inputMessage, setInputMessage] = useState('');
@@ -50,7 +63,7 @@ export default function AgentProject() {
     {
       id: '1',
       role: 'general_manager',
-      content: t('agentProject.initialMessage'),
+      content: INITIAL_GENERAL_MANAGER_MESSAGE,
       timestamp: new Date(),
     },
   ]);
@@ -82,21 +95,21 @@ export default function AgentProject() {
       const gmReply: Message = {
         id: (Date.now() + 1).toString(),
         role: 'general_manager',
-        content: t('agentProject.analysisReply'),
+        content: GENERAL_MANAGER_ANALYSIS_REPLY,
         timestamp: new Date(),
         suggestions: [
           {
             id: 's1',
             type: 'create',
             projectName: 'AI Customer Service System',
-            reason: t('agentProject.createReason'),
+            reason: CREATE_PROJECT_REASON,
             status: 'pending',
           },
           {
             id: 's2',
             type: 'modify',
             projectName: 'Marketing Campaign',
-            reason: t('agentProject.modifyReason'),
+            reason: MODIFY_PROJECT_REASON,
             status: 'pending',
           },
         ],
@@ -140,7 +153,7 @@ export default function AgentProject() {
     const confirmMsg: Message = {
       id: Date.now().toString(),
       role: 'general_manager',
-      content: t('agentProject.approvalConfirmed', { projectName: selectedSuggestion.projectName }),
+      content: buildApprovalConfirmedMessage(selectedSuggestion.projectName),
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, confirmMsg]);

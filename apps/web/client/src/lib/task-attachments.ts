@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type {
   TaskCreationPlatformSkill,
   TaskCreationUploadedAttachment,
@@ -6,7 +7,7 @@ import type {
 export const MAX_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 export const DEFAULT_ATTACHMENT_PROMPT =
-  "请查看我添加的附件，并基于附件内容继续处理。";
+  i18n.t("attachments.defaultPrompt");
 export const ATTACHMENT_ACCEPT = [
   ".txt",
   ".md",
@@ -192,7 +193,7 @@ export function isSupportedAttachmentFile(
 }
 
 export function getUnsupportedAttachmentMessage(filename: string): string {
-  return `${filename} 格式不支持，仅允许文本、文档和图片类附件`;
+  return i18n.t("attachments.unsupportedFormat", { filename });
 }
 
 export function formatAttachmentSize(size: number): string {
@@ -229,11 +230,11 @@ export function mergePendingAttachments(
       continue;
     }
     if (file.size > MAX_ATTACHMENT_SIZE) {
-      rejected.push(`${file.name} 超过 10 MB 限制`);
+      rejected.push(i18n.t("attachments.sizeLimitExceeded", { name: file.name }));
       continue;
     }
     if (next.filter((item) => item.kind === "file").length >= MAX_ATTACHMENT_COUNT) {
-      rejected.push(`最多只能添加 ${MAX_ATTACHMENT_COUNT} 个附件`);
+      rejected.push(i18n.t("attachments.maxCountExceeded", { count: MAX_ATTACHMENT_COUNT }));
       break;
     }
     next.push({
@@ -314,7 +315,7 @@ export function appendAttachmentsToPrompt(
   const lines = attachments.map(
     (item) => `- ${item.path}${item.name ? ` (${item.name})` : ""}`
   );
-  return [text, `已添加以下附件，可直接在工作区中访问：\n${lines.join("\n")}`]
+  return [text, i18n.t("attachments.addedToWorkspace", { lines: lines.join("\n") })]
     .filter(Boolean)
     .join("\n\n");
 }

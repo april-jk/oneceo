@@ -403,7 +403,15 @@ function mergeUploadedAttachments(
   return Array.from(merged.values());
 }
 
+// These are written into the message stream and must stay fixed once generated.
+const WELCOME_MESSAGE_TEXT = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
 const INTERRUPT_CONFIRMATION_TEXT = '消息发送被中止，等待进一步指令';
+const MANAGED_RUN_CREATED_TEXT = 'managed run 已创建';
+const MANAGED_RUN_RUNNING_TEXT = '运行中';
+const MANAGED_RUN_DELIVERABLES_READY_TEXT = '交付文件已生成';
+const MANAGED_RUN_COMPLETED_TEXT = 'managed run 已完成';
+const MANAGED_RUN_FAILED_TEXT = 'managed run 已失败';
+const REQUEST_FAILED_RETRY_TEXT = '请求失败，请稍后重试';
 
 // Altus 控制模式存储键：
 // - sandbox: 直通 sandbox 执行器（OpenCode/ClaudeCode/Codex 等）
@@ -2610,7 +2618,7 @@ function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, histo
 
 export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const SESSION_STORAGE_KEY = 'task_creation_session_id';
-  const WELCOME_MESSAGE = '欢迎使用 Altus 任务创建助手！请描述您想要创建的任务。';
+  const WELCOME_MESSAGE = WELCOME_MESSAGE_TEXT;
   const autoRuntime = options?.autoRuntime !== false;
   const compactHistory = options?.compactHistory !== false;
   const runtimeLogPollingEnabled = options?.runtimeLogPollingEnabled === true;
@@ -3206,8 +3214,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         nextMessage = {
           type: 'status_update',
-          content: content || 'managed run 已创建',
-          message: content || 'managed run 已创建',
+          content: content || MANAGED_RUN_CREATED_TEXT,
+          message: content || MANAGED_RUN_CREATED_TEXT,
           stage: 'executing',
           tone: 'system',
           sessionId: sessionKey,
@@ -3225,8 +3233,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         nextMessage = {
           type: 'status_update',
-          content: content || managedStatus || '运行中',
-          message: content || managedStatus || '运行中',
+          content: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
+          message: content || managedStatus || MANAGED_RUN_RUNNING_TEXT,
           stage: managedStatus === 'waiting_user' ? 'clarifying' : 'executing',
           tone: 'execution',
           sessionId: sessionKey,
@@ -3256,8 +3264,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         nextMessage = {
           type: 'status_update',
-          content: content || '交付文件已生成',
-          message: content || '交付文件已生成',
+          content: content || MANAGED_RUN_DELIVERABLES_READY_TEXT,
+          message: content || MANAGED_RUN_DELIVERABLES_READY_TEXT,
           stage: 'reviewing',
           tone: 'review',
           sessionId: sessionKey,
@@ -3318,17 +3326,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           content:
             content ||
             (eventType === 'run_completed'
-              ? 'managed run 已完成'
+              ? MANAGED_RUN_COMPLETED_TEXT
               : eventType === 'run_stopped'
                 ? INTERRUPT_CONFIRMATION_TEXT
-                : 'managed run 已失败'),
+                : MANAGED_RUN_FAILED_TEXT),
           message:
             content ||
             (eventType === 'run_completed'
-              ? 'managed run 已完成'
+              ? MANAGED_RUN_COMPLETED_TEXT
               : eventType === 'run_stopped'
                 ? INTERRUPT_CONFIRMATION_TEXT
-                : 'managed run 已失败'),
+                : MANAGED_RUN_FAILED_TEXT),
           stage: terminalStage,
           tone: terminalStage === 'completed' ? 'review' : 'error',
           sessionId: sessionKey,
@@ -3639,7 +3647,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       };
       const message = normalizeRealtimeStatusMessage(rawMessage);
       if (message.type === 'error') {
-        const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
+        const errorText = (message.message || message.content || REQUEST_FAILED_RETRY_TEXT).trim();
         if (!shouldDisplayErrorText(errorText)) {
           return;
         }
@@ -3939,7 +3947,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         console.log('[TaskCreationAgent] 收到消息:', message);
         const altusMode = readAltusMode();
       if (message.type === 'error') {
-        const errorText = (message.message || message.content || '请求失败，请稍后重试').trim();
+        const errorText = (message.message || message.content || REQUEST_FAILED_RETRY_TEXT).trim();
         if (!shouldDisplayErrorText(errorText)) {
           setIsProcessing(false);
           activeProcessingMessageKeyRef.current = null;
@@ -5206,8 +5214,8 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
             {
               messageKey: runAckKey,
               type: 'status_update',
-              content: 'managed run 已创建',
-              message: 'managed run 已创建',
+              content: MANAGED_RUN_CREATED_TEXT,
+              message: MANAGED_RUN_CREATED_TEXT,
               stage: 'executing',
               tone: 'system',
               sessionId: activeSessionId || undefined,

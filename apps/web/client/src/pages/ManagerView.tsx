@@ -547,7 +547,9 @@ export default function ManagerView() {
                                       </div>
                                       {employee.currentTask && (
                                         <p className="text-xs text-muted-foreground mt-1">
-                                          {t("managerView.currentTask", { value: employee.currentTask })}
+                                          {t("managerView.currentTask", {
+                                            value: employee.currentTask,
+                                          })}
                                         </p>
                                       )}
                                     </div>

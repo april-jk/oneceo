@@ -19,9 +19,9 @@ export function RequireUserAuth({ children }: { children: ReactNode }) {
 
   if (status === "loading") {
     return (
-      <div className="min-h-screen bg-[linear-gradient(180deg,#f4f1ea_0%,#ffffff_38%,#efe7da_100%)] px-6 py-10 text-slate-900">
+      <div className="min-h-screen bg-background px-6 py-10 text-foreground">
         <div className="mx-auto flex min-h-[80vh] max-w-5xl items-center justify-center">
-          <div className="rounded-[28px] border border-black/10 bg-white/85 px-8 py-6 text-sm shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+          <div className="rounded-[28px] border border-border bg-card/90 px-8 py-6 text-sm text-muted-foreground shadow-xl shadow-black/5 backdrop-blur-xl">
             {t("requireAuth.verifying")}
           </div>
         </div>

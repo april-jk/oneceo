@@ -134,31 +134,33 @@ export default function TaskCreationChat({
       }
 
       if (altusMode === "managed") {
-        await sendChatInput(
-          baseText,
-          {
-            sessionId: targetSessionId,
-            metadata: hasAttachments
-              ? {
-                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
-                  originalInput: text || t("attachments.addedToWorkspace"),
-                }
-              : undefined,
-            files: uploadableAttachments.map((item) => item.file),
-          },
-        );
+        await sendChatInput(baseText, {
+          sessionId: targetSessionId,
+          metadata: hasAttachments
+            ? {
+                ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+                originalInput: text || t("attachments.addedToWorkspace"),
+              }
+            : undefined,
+          files: uploadableAttachments.map((item) => item.file),
+        });
       } else {
         await sendChatInput(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: targetSessionId,
-            metadata: uploadedAttachments.length || selectedSkills.length
-              ? {
-                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(selectedSkills.length ? { skills: selectedSkills } : {}),
-                  originalInput: text || t("attachments.addedToWorkspace"),
-                }
-              : undefined,
+            metadata:
+              uploadedAttachments.length || selectedSkills.length
+                ? {
+                    ...(uploadedAttachments.length
+                      ? { attachments: uploadedAttachments }
+                      : {}),
+                    ...(selectedSkills.length
+                      ? { skills: selectedSkills }
+                      : {}),
+                    originalInput: text || t("attachments.addedToWorkspace"),
+                  }
+                : undefined,
           },
         );
       }
@@ -215,11 +217,11 @@ export default function TaskCreationChat({
           </Button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-white shadow-sm">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
           <div className="flex-1 min-h-0 space-y-3 overflow-y-auto overscroll-contain p-4">
             {!isConnected && (
-              <Card className="border-yellow-200 bg-yellow-50 p-4">
-                <div className="flex items-center gap-2 text-yellow-800">
+              <Card className="border-yellow-500/30 bg-yellow-500/10 p-4">
+                <div className="flex items-center gap-2 text-yellow-200">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span className="text-sm">
                     {t("homeWorkspace.connectingAgent")}
@@ -260,10 +262,10 @@ export default function TaskCreationChat({
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="shrink-0 border-t border-border/70 bg-slate-50/70 p-4"
+              className="shrink-0 border-t border-border/70 bg-muted/35 p-4"
             >
-              <Card className="border-blue-200 bg-blue-50 p-4">
-                <p className="mb-3 text-sm font-medium text-blue-900">
+              <Card className="border-blue-500/30 bg-blue-500/10 p-4">
+                <p className="mb-3 text-sm font-medium text-blue-100">
                   {currentQuestion.question}
                 </p>
 
@@ -289,12 +291,22 @@ export default function TaskCreationChat({
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           if (showStopButton) {
-                            void interruptCurrentRun(sessionId || undefined).catch((error) => {
-                              const text = error instanceof Error ? error.message : String(error || "");
-                              if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
+                            void interruptCurrentRun(
+                              sessionId || undefined,
+                            ).catch((error) => {
+                              const text =
+                                error instanceof Error
+                                  ? error.message
+                                  : String(error || "");
+                              if (
+                                /signal:\s*terminated/i.test(text) ||
+                                /terminated/i.test(text)
+                              ) {
                                 return;
                               }
-                              toast.error(text || t("homeWorkspace.stopExecutionFailed"));
+                              toast.error(
+                                text || t("homeWorkspace.stopExecutionFailed"),
+                              );
                             });
                           } else {
                             handleAnswerSubmit();
@@ -304,29 +316,42 @@ export default function TaskCreationChat({
                       placeholder={t("homeWorkspace.answerPlaceholder")}
                       className="flex-1"
                     />
-                        <Button
-                          onClick={() => {
-                            if (showStopButton) {
-                              void interruptCurrentRun(sessionId || undefined).catch((error) => {
-                                const text = error instanceof Error ? error.message : String(error || "");
-                                if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
-                                  return;
-                                }
-                                toast.error(text || t("homeWorkspace.stopExecutionFailed"));
-                              });
-                            } else {
-                              handleAnswerSubmit();
+                    <Button
+                      onClick={() => {
+                        if (showStopButton) {
+                          void interruptCurrentRun(
+                            sessionId || undefined,
+                          ).catch((error) => {
+                            const text =
+                              error instanceof Error
+                                ? error.message
+                                : String(error || "");
+                            if (
+                              /signal:\s*terminated/i.test(text) ||
+                              /terminated/i.test(text)
+                            ) {
+                              return;
                             }
-                          }}
-                          disabled={isInterrupting || (showStopButton ? false : !userAnswer.trim())}
-                          size="icon"
-                        >
-                          {showStopButton ? (
-                            <Square className="w-4 h-4" />
-                          ) : (
-                            <Send className="w-4 h-4" />
-                          )}
-                        </Button>
+                            toast.error(
+                              text || t("homeWorkspace.stopExecutionFailed"),
+                            );
+                          });
+                        } else {
+                          handleAnswerSubmit();
+                        }
+                      }}
+                      disabled={
+                        isInterrupting ||
+                        (showStopButton ? false : !userAnswer.trim())
+                      }
+                      size="icon"
+                    >
+                      {showStopButton ? (
+                        <Square className="w-4 h-4" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                    </Button>
                   </div>
                 )}
               </Card>
@@ -417,7 +442,8 @@ function MessageCard({ message }: { message: AgentMessage }) {
             </p>
             <p className="text-sm text-green-700 mt-1">
               {t("homeWorkspace.projectLabel")}：
-              {message.plan?.project?.title || t("homeWorkspace.unnamedProject")}
+              {message.plan?.project?.title ||
+                t("homeWorkspace.unnamedProject")}
             </p>
           </div>
         </div>

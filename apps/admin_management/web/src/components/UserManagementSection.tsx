@@ -8,68 +8,37 @@ import type {
   AppUserSandboxSummary,
   AppUserSessionSummary,
 } from '../types';
+import {
+  DEFAULT_USER_MANAGEMENT_FILTERS,
+  DEFAULT_USER_MANAGEMENT_SORT,
+  DEFAULT_USER_MANAGEMENT_VIEW_STATE,
+} from './adminViewState';
+import type {
+  UserDetailTab,
+  UserManagementFilters,
+  UserManagementSort,
+  UserManagementSortDirection,
+  UserManagementSortKey,
+  UserManagementViewState,
+} from './adminViewState';
 
-type UserManagementFilters = {
-  query: string;
-  status: string;
-  activity: string;
-  hasSession: string;
-  hasConversation: string;
-};
-
-type UserManagementSortKey = 'user' | 'status' | 'last_activity' | 'sessions' | 'conversations' | 'sandboxes';
-type UserManagementSortDirection = 'asc' | 'desc';
-type UserManagementSort = {
-  key: UserManagementSortKey;
-  direction: UserManagementSortDirection;
-};
-
-type UserDetailTab = 'overview' | 'conversations' | 'sandboxes';
 type UserDetailJumpOrigin = {
   section: 'user';
   trail: string;
-};
-export type UserManagementViewState = {
-  filters: UserManagementFilters;
-  appliedFilters: UserManagementFilters;
-  sort: UserManagementSort;
-  selectedUserId: string | null;
-  selectedUserLabel: string | null;
-  drawerOpen: boolean;
-  detailTab: UserDetailTab;
 };
 
 type Props = {
   onError: (message: string | null) => void;
   onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
   onOpenConversation?: (sessionId: string, origin?: UserDetailJumpOrigin) => void;
   onOpenSandbox?: (sandboxId: string, origin?: UserDetailJumpOrigin) => void;
   persistedState?: UserManagementViewState | null;
   onStateChange?: (state: UserManagementViewState) => void;
 };
 
-const DEFAULT_FILTERS: UserManagementFilters = {
-  query: '',
-  status: 'all',
-  activity: 'all',
-  hasSession: 'all',
-  hasConversation: 'all',
-};
-
-const DEFAULT_SORT: UserManagementSort = {
-  key: 'last_activity',
-  direction: 'desc',
-};
-
-export const DEFAULT_USER_MANAGEMENT_VIEW_STATE: UserManagementViewState = {
-  filters: DEFAULT_FILTERS,
-  appliedFilters: DEFAULT_FILTERS,
-  sort: DEFAULT_SORT,
-  selectedUserId: null,
-  selectedUserLabel: null,
-  drawerOpen: false,
-  detailTab: 'overview',
-};
+const DEFAULT_FILTERS = DEFAULT_USER_MANAGEMENT_FILTERS;
+const DEFAULT_SORT = DEFAULT_USER_MANAGEMENT_SORT;
 
 const LIST_LIMIT = 120;
 
@@ -327,6 +296,7 @@ function SandboxItem({
 export function UserManagementSection({
   onError,
   onUpdatedAtChange,
+  onRegisterRefresh,
   onOpenConversation,
   onOpenSandbox,
   persistedState,
@@ -430,6 +400,20 @@ export function UserManagementSection({
       setSelectedUserLabel(selectedListItem.displayName || selectedListItem.email || selectedListItem.id);
     }
   }, [detail?.user, selectedListItem, selectedUserId]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadUsers(appliedFilters, sort);
+    if (drawerOpen && selectedUserId) {
+      await loadDetail(selectedUserId);
+    }
+  }, [appliedFilters, drawerOpen, loadDetail, loadUsers, selectedUserId, sort]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
 
   const openDetail = useCallback(
     (userId: string) => {
@@ -718,7 +702,7 @@ export function UserManagementSection({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-header user-management-modal-header">
-              <div>
+              <div className="user-management-modal-heading">
                 <p className="section-tag">用户详情</p>
                 <h2 id="user-management-detail-title">{detailUser?.displayName || '用户详情'}</h2>
                 <p className="panel-caption">{detailUser?.email || selectedUserId || '-'}</p>
@@ -766,9 +750,8 @@ export function UserManagementSection({
                   <article className="sub-panel user-management-detail-card user-management-overview-summary">
                     <div className="user-management-overview-top">
                       <div>
-                        <p className="section-tag">账号总览</p>
-                        <h3 className="user-management-overview-title">{detail.user?.displayName || '-'}</h3>
-                        <p className="user-management-overview-subtitle">{detail.user?.email || '-'}</p>
+                        <p className="section-tag">账号摘要</p>
+                        <p className="panel-caption user-management-overview-copy">聚焦当前状态、登录和来源信息。</p>
                       </div>
                       <div>
                         <div className="user-management-overview-badges">

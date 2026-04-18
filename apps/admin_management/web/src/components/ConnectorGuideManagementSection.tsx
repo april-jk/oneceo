@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type {
   ConnectorCatalogItem,
@@ -8,10 +8,21 @@ import type {
   ConnectorGuideRevision,
   ConnectorGuideValidationResult,
 } from '../types';
+import {
+  DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_FILTERS,
+  DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
+} from './adminViewState';
+import type { ConnectorGuideManagementViewState } from './adminViewState';
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: ConnectorGuideManagementViewState | null;
+  onStateChange?: (state: ConnectorGuideManagementViewState) => void;
 };
+
+const DEFAULT_FILTERS = DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_FILTERS;
 
 type EditorState = {
   description: string;
@@ -64,20 +75,24 @@ function triggerModeLabel(mode: string) {
   return mode;
 }
 
-export function ConnectorGuideManagementSection({ onError }: Props) {
+export function ConnectorGuideManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE;
   const [policies, setPolicies] = useState<ConnectorGuidePolicy[]>([]);
   const [catalogSummary, setCatalogSummary] = useState<ConnectorGuideCatalogSummary | null>(null);
-  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(initialState.selectedPolicyId);
   const [detail, setDetail] = useState<ConnectorGuidePolicyDetail | null>(null);
-  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(initialState.selectedRevisionId);
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const [validationResult, setValidationResult] = useState<ConnectorGuideValidationResult | null>(null);
-  const [filters, setFilters] = useState({
-    connectorKey: '',
-    status: 'all',
-    query: '',
-  });
+  const [filters, setFilters] = useState(initialState.filters);
   const [busy, setBusy] = useState(false);
+  const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const revision = useMemo(
     () => detail?.revisions.find((item) => item.id === selectedRevisionId) || detail?.publishedRevision || null,
@@ -103,6 +118,10 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
         : '-',
     [catalogVisibleItems]
   );
+
+  useEffect(() => {
+    selectedRevisionIdRef.current = selectedRevisionId;
+  }, [selectedRevisionId]);
 
   const loadPolicies = useCallback(async () => {
     const next = await api.listConnectorGuidePolicies({
@@ -139,9 +158,18 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     async (policyId: string) => {
       const next = await api.getConnectorGuidePolicy(policyId);
       setDetail(next);
-      const nextRevisionId = next.publishedRevision?.id || next.revisions[0]?.id || null;
+      const currentSelectedRevisionId = selectedRevisionIdRef.current;
+      const nextRevisionId =
+        currentSelectedRevisionId && next.revisions.some((item) => item.id === currentSelectedRevisionId)
+          ? currentSelectedRevisionId
+          : next.publishedRevision?.id || next.revisions[0]?.id || null;
+      const nextRevision =
+        next.revisions.find((item) => item.id === nextRevisionId)
+        || next.publishedRevision
+        || next.revisions[0]
+        || null;
       setSelectedRevisionId(nextRevisionId);
-      setEditor(toEditorState(next, next.publishedRevision || next.revisions[0] || null));
+      setEditor(toEditorState(next, nextRevision));
       setValidationResult(null);
       onError(null);
     },
@@ -165,6 +193,39 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
     if (!detail) return;
     setEditor(toEditorState(detail, revision));
   }, [detail, revision]);
+
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      detail?.updatedAt
+      || revision?.publishedAt
+      || revision?.createdAt
+      || catalogSummary?.updatedAt
+      || policies[0]?.updatedAt
+      || null
+    );
+  }, [catalogSummary?.updatedAt, detail?.updatedAt, onUpdatedAtChange, policies, revision?.createdAt, revision?.publishedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await refreshOverview();
+    if (selectedPolicyId) {
+      await loadDetail(selectedPolicyId);
+    }
+  }, [loadDetail, refreshOverview, selectedPolicyId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      filters,
+      selectedPolicyId,
+      selectedRevisionId,
+    });
+  }, [filters, onStateChange, selectedPolicyId, selectedRevisionId]);
 
   const createPolicy = async (connectorKey: string) => {
     setBusy(true);
@@ -193,13 +254,15 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
         triggerMode: editor.triggerMode,
         status: editor.status,
       });
+      let createdRevisionId: string | null = null;
       if (!revision) {
         const created = await api.createConnectorGuideRevision(detail.id, {
           createdBy: 'admin_management',
         });
+        createdRevisionId = created.id;
         setSelectedRevisionId(created.id);
       }
-      const targetRevisionId = revision?.id || selectedRevisionId;
+      const targetRevisionId = revision?.id || createdRevisionId || selectedRevisionIdRef.current;
       if (targetRevisionId) {
         await api.updateConnectorGuideRevision(detail.id, targetRevisionId, {
           serverInstructionsMarkdown: editor.serverInstructionsMarkdown,
@@ -290,13 +353,17 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
   const handleRefresh = async () => {
     setBusy(true);
     try {
-      await refreshOverview();
+      await handleExternalRefresh();
     } catch (error) {
       onError(error instanceof Error ? error.message : '刷新 connector guide 列表失败');
     } finally {
       setBusy(false);
     }
   };
+
+  const handleResetFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, []);
 
   return (
     <main className="content-stack">
@@ -320,7 +387,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
               </button>
             ))}
             <button type="button" className="primary-btn" disabled={busy} onClick={() => void handleRefresh()}>
-              刷新列表
+              同步列表
             </button>
           </div>
         </div>
@@ -330,7 +397,7 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
             <div className="editor-header">
               <div>
                 <h3>MCP Catalog 快照</h3>
-                <p className="cell-subtle">页面进入后立即获取一次，后续通过“刷新列表”手动同步。</p>
+                <p className="cell-subtle">页面进入后立即获取一次，后续通过“同步列表”手动同步。</p>
               </div>
             </div>
             <div className="signal-list">
@@ -400,8 +467,8 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
             value={filters.query}
             onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
           />
-          <button type="button" className="ghost-btn" disabled={busy} onClick={() => void loadPolicies()}>
-            应用筛选
+          <button type="button" className="secondary-btn" disabled={busy} onClick={handleResetFilters}>
+            重置筛选
           </button>
         </div>
 
@@ -598,19 +665,25 @@ export function ConnectorGuideManagementSection({ onError }: Props) {
                   <tbody>
                     {detail.revisions.map((item) => (
                       <tr key={item.id} className={selectedRevisionId === item.id ? 'selected' : ''}>
-                        <td onClick={() => setSelectedRevisionId(item.id)}>
-                          <strong>v{item.versionNumber}</strong>
-                          <div className="cell-subtle connector-guide-revision-meta">
-                            {formatDateTime(item.createdAt)}
-                          </div>
+                        <td>
+                          <button
+                            type="button"
+                            className={`connector-guide-revision-select ${selectedRevisionId === item.id ? 'active' : ''}`}
+                            onClick={() => setSelectedRevisionId(item.id)}
+                            aria-pressed={selectedRevisionId === item.id}
+                            aria-label={`查看 v${item.versionNumber} 版本`}
+                          >
+                            <strong>v{item.versionNumber}</strong>
+                            <span className="cell-subtle connector-guide-revision-meta">
+                              {formatDateTime(item.createdAt)}
+                            </span>
+                            <span className="connector-guide-revision-select-label">查看版本</span>
+                          </button>
                         </td>
-                        <td onClick={() => setSelectedRevisionId(item.id)}>
+                        <td>
                           <span className={`status-pill status-${item.status}`}>{item.status}</span>
                         </td>
-                        <td
-                          onClick={() => setSelectedRevisionId(item.id)}
-                          className="connector-guide-revision-date"
-                        >
+                        <td className="connector-guide-revision-date">
                           {formatDateTime(item.publishedAt)}
                         </td>
                         <td>

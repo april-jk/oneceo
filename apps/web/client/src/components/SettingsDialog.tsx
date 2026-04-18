@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
+import { normalizeLanguage } from '@/i18n';
 import {
   ChevronLeft,
   Copy,
@@ -137,10 +138,6 @@ export function SettingsPanel({
   const EXECUTOR_STORAGE_KEY = 'altus_executor';
   const CODEX_EXECUTION_MODE_STORAGE_KEY = 'codex_execution_mode';
 
-  const handleLanguageChange = (lang: string) => {
-    i18n.changeLanguage(lang);
-  };
-
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const storedExecutor = window.localStorage.getItem(EXECUTOR_STORAGE_KEY);
@@ -175,8 +172,13 @@ export function SettingsPanel({
   const accountInitial = getAccountInitial(user?.displayName || user?.email);
   const accountAvatarTone = getAccountAvatarTone(user?.email || user?.displayName);
   const accountStatusText = getReadableAccountStatus(user?.status, t('account.statusActive'));
+  const currentLanguage = normalizeLanguage(i18n.resolvedLanguage || i18n.language);
   const accountDisplayNameChanged =
     accountDisplayNameDraft.trim() !== (user?.displayName || '').trim();
+
+  const handleLanguageChange = (lang: string) => {
+    void i18n.changeLanguage(normalizeLanguage(lang));
+  };
 
   useEffect(() => {
     if (!shouldShowCodexLlmSettings || codexConfigLoaded) return;
@@ -368,7 +370,7 @@ export function SettingsPanel({
                     <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
                       <Wrench className="h-4 w-4" />
                     </span>
-                    <span className="truncate">Skills 管理</span>
+                    <span className="truncate">{t('settings.skillsTab')}</span>
                   </TabsTrigger>
                   <TabsTrigger
                     value="connectors"
@@ -377,7 +379,7 @@ export function SettingsPanel({
                     <span className="hidden md:block text-muted-foreground data-[state=active]:text-foreground">
                       <Plug className="h-4 w-4" />
                     </span>
-                    <span className="truncate">Connectors</span>
+                    <span className="truncate">{t('settings.connectorsTab')}</span>
                   </TabsTrigger>
                 </div>
               </TabsList>
@@ -393,7 +395,7 @@ export function SettingsPanel({
                     <Label className="text-sm font-medium">{t('settings.languageLabel')}</Label>
                     <p className="text-sm text-muted-foreground">{t('settings.languageDescription')}</p>
                   </div>
-                  <Select value={i18n.language} onValueChange={handleLanguageChange}>
+                  <Select value={currentLanguage} onValueChange={handleLanguageChange}>
                     <SelectTrigger className="w-full max-w-xs rounded-xl">
                       <SelectValue />
                     </SelectTrigger>

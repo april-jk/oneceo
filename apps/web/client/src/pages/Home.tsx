@@ -5851,7 +5851,7 @@ function OpencodeToolCard({
                   statusText === "completed"
                     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
                     : statusText === "in_progress"
-                      ? "border-blue-500/30 bg-blue-500/10 text-blue-200"
+                      ? "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]"
                       : "border-border bg-muted/50 text-muted-foreground";
                 return (
                   <div
@@ -6237,6 +6237,47 @@ function OpencodeToolCard({
   );
 }
 
+function getManagedToolStatusPresentation(status: string) {
+  if (status === "failed") {
+    return {
+      iconClass:
+        "border border-[var(--tool-error-border)] bg-[var(--tool-error-surface)] text-[var(--tool-error-foreground)]",
+      badgeClass:
+        "border-[var(--tool-error-border)] bg-[var(--tool-error-surface-strong)] text-[var(--tool-error-foreground)]",
+      hoverHeaderClass:
+        "border-b border-[var(--tool-error-border)] bg-[var(--tool-error-surface)]",
+      previewClass:
+        "border border-[var(--tool-error-border)] bg-[var(--tool-error-surface)] text-foreground",
+      detailClass: "text-foreground/82",
+      hintClass: "text-[var(--tool-error-foreground)]/80",
+    } as const;
+  }
+
+  if (status === "completed") {
+    return {
+      iconClass:
+        "border border-[var(--tool-success-border)] bg-[var(--tool-success-surface)] text-[var(--tool-success-foreground)]",
+      badgeClass:
+        "border-[var(--tool-success-border)] bg-[var(--tool-success-surface-strong)] text-[var(--tool-success-foreground)]",
+      hoverHeaderClass:
+        "border-b border-[var(--tool-success-border)] bg-[var(--tool-success-surface)]",
+      previewClass:
+        "border border-[var(--tool-success-border)] bg-[var(--tool-success-surface)] text-foreground",
+      detailClass: "text-foreground/82",
+      hintClass: "text-[var(--tool-success-foreground)]/80",
+    } as const;
+  }
+
+  return {
+    iconClass: "border border-border/70 bg-background/85 text-foreground/75",
+    badgeClass: "border-border/70 bg-background/90 text-foreground/75",
+    hoverHeaderClass: "border-b border-border/70 bg-muted/25",
+    previewClass: "border border-border/70 bg-background/70 text-foreground",
+    detailClass: "text-foreground/80",
+    hintClass: "text-muted-foreground",
+  } as const;
+}
+
 function ManagedToolCard({
   item,
   onOpenReplay,
@@ -6260,12 +6301,6 @@ function ManagedToolCard({
                 ? Sparkles
                 : FileSearch;
   const Icon = icon;
-  const toneClass =
-    item.status === "failed"
-      ? "border-rose-200 bg-rose-50 text-rose-700"
-      : item.status === "completed"
-        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-        : "border-border/70 bg-muted/50 text-foreground/85";
   const statusLabel =
     item.status === "failed"
       ? i18n.t("homeWorkspace.failedShort")
@@ -6283,18 +6318,9 @@ function ManagedToolCard({
     hoverPreview.preview ||
     summaryText ||
     "";
-  const statusToneClass =
-    item.status === "failed"
-      ? "border-rose-300/60 bg-rose-100/80 text-rose-700"
-      : item.status === "completed"
-        ? "border-emerald-300/60 bg-emerald-100/80 text-emerald-700"
-        : "border-border/70 bg-background/90 text-foreground/75";
+  const statusUi = getManagedToolStatusPresentation(item.status);
   const chipToneClass =
-    item.status === "failed"
-      ? "border-rose-200/80 bg-rose-50/80 text-rose-700 hover:bg-rose-50"
-      : item.status === "completed"
-        ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
-        : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
+    "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
   const writeFileProgress = readManagedWriteFileProgress(item.metadata);
   const isWriteFileExpanded = shouldExpandManagedWriteFileCard({
     toolName: item.toolName,
@@ -6352,7 +6378,9 @@ function ManagedToolCard({
                 <div className="flex h-[190px] w-full flex-col lg:h-[220px]">
                   <div className="flex items-center justify-between gap-3 border-b border-current/15 px-3 py-2">
                     <div className="min-w-0 flex items-center gap-2">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                      <span
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
+                      >
                         <Icon className="h-3.5 w-3.5" />
                       </span>
                       <div className="min-w-0">
@@ -6366,7 +6394,7 @@ function ManagedToolCard({
                     </div>
                     <div className="shrink-0 text-right">
                       <span
-                        className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                        className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
                       >
                         {statusLabel}
                       </span>
@@ -6387,7 +6415,9 @@ function ManagedToolCard({
               </div>
             ) : (
               <>
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                <span
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
+                >
                   <Icon className="h-3.5 w-3.5" />
                 </span>
                 <span className="min-w-0 flex items-center gap-2 overflow-hidden">
@@ -6395,7 +6425,7 @@ function ManagedToolCard({
                     {displayName}
                   </span>
                   <span
-                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
                   >
                     {statusLabel}
                   </span>
@@ -6412,11 +6442,13 @@ function ManagedToolCard({
         <HoverCardContent
           align="start"
           side="top"
-          className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+          className="w-[380px] rounded-2xl border border-border/80 bg-popover p-0 text-popover-foreground shadow-[0_18px_48px_rgba(0,0,0,0.32)]"
         >
-          <div className="space-y-0 border-b border-current/10 px-4 py-3">
+          <div className={`space-y-0 px-4 py-3 ${statusUi.hoverHeaderClass}`}>
             <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
+              <div
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm ${statusUi.iconClass}`}
+              >
                 <Icon className="h-4 w-4" />
               </div>
               <div className="min-w-0">
@@ -6425,7 +6457,7 @@ function ManagedToolCard({
                     {displayName}
                   </span>
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
                   >
                     {statusLabel}
                   </span>
@@ -6446,7 +6478,9 @@ function ManagedToolCard({
               <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
                 {i18n.t("homeWorkspace.toolResultSummary")}
               </div>
-              <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
+              <p
+                className={`whitespace-pre-wrap break-all rounded-xl px-3 py-2 font-mono text-[11px] leading-5 ${statusUi.previewClass}`}
+              >
                 {previewText}
               </p>
             </div>
@@ -6454,11 +6488,13 @@ function ManagedToolCard({
               <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
                 {i18n.t("homeWorkspace.moreInfo")}
               </div>
-              <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
+              <p
+                className={`whitespace-pre-wrap break-all text-[12px] leading-5 ${statusUi.detailClass}`}
+              >
                 {hoverPreview.preview}
               </p>
             </div>
-            <div className="text-[11px] leading-5 opacity-60">
+            <div className={`text-[11px] leading-5 ${statusUi.hintClass}`}>
               {i18n.t("homeWorkspace.clickMessageForReplay")}
             </div>
           </div>

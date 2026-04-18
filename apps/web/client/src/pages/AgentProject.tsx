@@ -186,7 +186,7 @@ export default function AgentProject() {
       case 'paused':
         return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100">{t('agentProject.statusPaused')}</Badge>;
       case 'completed':
-        return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">{t('agentProject.statusCompleted')}</Badge>;
+        return <Badge className="border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]">{t('agentProject.statusCompleted')}</Badge>;
     }
   };
 

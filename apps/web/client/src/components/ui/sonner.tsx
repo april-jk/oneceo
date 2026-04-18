@@ -6,7 +6,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
 
   return (
     <Sonner
-      theme={resolvedTheme as ToasterProps["theme"]}
+      theme={resolvedTheme === "light" ? "light" : "dark"}
       className="toaster group"
       style={
         {

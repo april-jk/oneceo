@@ -69,7 +69,7 @@ export function EmployeeDeliverableViewer({
       case 'perfect':
         return <Star className="w-5 h-5 text-green-600" />;
       case 'acceptable':
-        return <CheckCircle className="w-5 h-5 text-blue-600" />;
+        return <CheckCircle className="h-5 w-5 text-[var(--brand-link)]" />;
       case 'unacceptable':
         return <XCircle className="w-5 h-5 text-red-600" />;
     }
@@ -87,7 +87,7 @@ export function EmployeeDeliverableViewer({
   const getEvaluationColor = (rating: 'acceptable' | 'unacceptable' | 'perfect') => {
     const colors = {
       perfect: 'bg-green-100 text-green-700',
-      acceptable: 'bg-blue-100 text-blue-700',
+      acceptable: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       unacceptable: 'bg-red-100 text-red-700',
     };
     return colors[rating];

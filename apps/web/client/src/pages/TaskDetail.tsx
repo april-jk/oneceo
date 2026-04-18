@@ -186,7 +186,7 @@ export default function TaskDetail() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-blue-500" />
+                  <CheckCircle2 className="h-4 w-4 text-[var(--brand-link)]" />
                   <span className="text-sm text-muted-foreground">
                     {t("taskDetail.inProgress")}
                   </span>
@@ -210,14 +210,14 @@ export default function TaskDetail() {
                 <div
                   className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
                     message.sender === "manager"
-                      ? "bg-blue-100"
+                      ? "bg-[var(--brand-soft)]"
                       : message.sender === "employee"
                       ? "bg-green-100"
                       : "bg-purple-100"
                   }`}
                 >
                   {message.sender === "manager" ? (
-                    <User className="w-5 h-5 text-blue-600" />
+                    <User className="h-5 w-5 text-[var(--brand-link)]" />
                   ) : message.sender === "employee" ? (
                     <Users className="w-5 h-5 text-green-600" />
                   ) : (
@@ -283,9 +283,9 @@ export default function TaskDetail() {
                               className={`text-xs px-2 py-1 rounded-full ${
                                 message.deliverable.evaluation === "perfect"
                                   ? "bg-green-100 text-green-700"
-                                  : message.deliverable.evaluation ===
-                                    "acceptable"
-                                  ? "bg-blue-100 text-blue-700"
+                                : message.deliverable.evaluation ===
+                                  "acceptable"
+                                  ? "border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]"
                                   : "bg-red-100 text-red-700"
                               }`}
                             >

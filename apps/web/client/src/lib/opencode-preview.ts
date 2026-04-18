@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
 
 export type PreviewDiffItem = {
@@ -775,17 +776,17 @@ function buildDiffTitle(
 ): string {
   if (Array.isArray(payload) && payload.length > 0) {
     if (payload.length === 1) {
-      return `文件: ${getFilename(payload[0].file) || payload[0].file}`;
+      return `${i18n.t("homeWorkspace.file")}: ${getFilename(payload[0].file) || payload[0].file}`;
     }
-    return `修改 ${payload.length} 个文件`;
+    return i18n.t("homeWorkspace.modifiedFilesTitle", { count: payload.length });
   }
   if (typeof payload === "string" && payload.trim()) {
     const byApply = extractFileFromApplyPatch(payload);
-    if (byApply) return `文件: ${getFilename(byApply)}`;
+    if (byApply) return `${i18n.t("homeWorkspace.file")}: ${getFilename(byApply)}`;
     const byUnified = extractFileFromUnifiedDiff(payload);
-    if (byUnified) return `文件: ${getFilename(byUnified)}`;
+    if (byUnified) return `${i18n.t("homeWorkspace.file")}: ${getFilename(byUnified)}`;
   }
-  if (source === "apply_patch") return "补丁";
+  if (source === "apply_patch") return i18n.t("homeWorkspace.patchLabel");
   return `Diff ${index + 1}`;
 }
 

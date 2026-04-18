@@ -33,6 +33,7 @@ import {
 } from "@/lib/task-session-deployment-prompts";
 import { readAltusMode } from "@/lib/altus-settings";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 
 interface TaskCreationChatProps {
   onPlanGenerated?: (plan: any) => void;
@@ -74,6 +75,7 @@ export default function TaskCreationChat({
   initialInput,
   initialAttachments = [],
 }: TaskCreationChatProps) {
+  const { t } = useTranslation();
   const [userAnswer, setUserAnswer] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTab, setPreviewTab] = useState<
@@ -121,7 +123,9 @@ export default function TaskCreationChat({
       let uploadedAttachments: UploadedTaskAttachment[] = [];
 
       if (altusMode !== "managed" && uploadableAttachments.length > 0) {
-        targetSessionId = await ensureSession(text || "已添加附件");
+        targetSessionId = await ensureSession(
+          text || t("attachments.addedToWorkspace"),
+        );
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
             uploadTaskCreationAttachment(targetSessionId!, item.file),
@@ -137,7 +141,7 @@ export default function TaskCreationChat({
             metadata: hasAttachments
               ? {
                   ...(selectedSkills.length ? { skills: selectedSkills } : {}),
-                  originalInput: text || "已添加附件",
+                  originalInput: text || t("attachments.addedToWorkspace"),
                 }
               : undefined,
             files: uploadableAttachments.map((item) => item.file),
@@ -152,7 +156,7 @@ export default function TaskCreationChat({
               ? {
                   ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
                   ...(selectedSkills.length ? { skills: selectedSkills } : {}),
-                  originalInput: text || "已添加附件",
+                  originalInput: text || t("attachments.addedToWorkspace"),
                 }
               : undefined,
           },
@@ -160,7 +164,11 @@ export default function TaskCreationChat({
       }
     })().catch((error) => {
       console.error("任务创建附件发送失败:", error);
-      toast.error(error instanceof Error ? error.message : "附件发送失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.attachmentSendFailed"),
+      );
     });
   }, [
     ensureSession,
@@ -201,7 +209,9 @@ export default function TaskCreationChat({
             className="rounded-full"
             onClick={() => setPreviewOpen((prev) => !prev)}
           >
-            {previewOpen ? "隐藏预览" : "显示预览"}
+            {previewOpen
+              ? t("homeWorkspace.hidePreview")
+              : t("homeWorkspace.showPreview")}
           </Button>
         </div>
 
@@ -211,7 +221,9 @@ export default function TaskCreationChat({
               <Card className="border-yellow-200 bg-yellow-50 p-4">
                 <div className="flex items-center gap-2 text-yellow-800">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">正在连接智能体...</span>
+                  <span className="text-sm">
+                    {t("homeWorkspace.connectingAgent")}
+                  </span>
                 </div>
               </Card>
             )}
@@ -237,7 +249,9 @@ export default function TaskCreationChat({
                 className="flex items-center gap-2 text-muted-foreground"
               >
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-sm">智能体正在处理...</span>
+                <span className="text-sm">
+                  {t("homeWorkspace.agentProcessing")}
+                </span>
               </motion.div>
             )}
           </div>
@@ -280,14 +294,14 @@ export default function TaskCreationChat({
                               if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
                                 return;
                               }
-                              toast.error(text || "停止执行失败");
+                              toast.error(text || t("homeWorkspace.stopExecutionFailed"));
                             });
                           } else {
                             handleAnswerSubmit();
                           }
                         }
                       }}
-                      placeholder="请输入您的回答..."
+                      placeholder={t("homeWorkspace.answerPlaceholder")}
                       className="flex-1"
                     />
                         <Button
@@ -298,7 +312,7 @@ export default function TaskCreationChat({
                                 if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
                                   return;
                                 }
-                                toast.error(text || "停止执行失败");
+                                toast.error(text || t("homeWorkspace.stopExecutionFailed"));
                               });
                             } else {
                               handleAnswerSubmit();
@@ -351,17 +365,18 @@ export default function TaskCreationChat({
  * 消息卡片组件
  */
 function MessageCard({ message }: { message: AgentMessage }) {
+  const { t } = useTranslation();
   const attachments = getMessageAttachments(message);
   const skills = getMessageSkills(message);
 
   const getAgentName = (agent?: string) => {
     const nameMap: Record<string, string> = {
-      system: "系统",
-      intent_recognition: "意图识别",
-      planning: "任务规划",
-      execution_plan: "执行计划",
+      system: t("homeWorkspace.systemAgent"),
+      intent_recognition: t("homeWorkspace.intentRecognition"),
+      planning: t("homeWorkspace.taskPlanning"),
+      execution_plan: t("homeWorkspace.executionPlan"),
     };
-    return agent ? nameMap[agent] || agent : "智能体";
+    return agent ? nameMap[agent] || agent : t("homeWorkspace.agentLabel");
   };
 
   const getIcon = (type: string) => {
@@ -381,7 +396,9 @@ function MessageCard({ message }: { message: AgentMessage }) {
         <div className="flex items-start gap-3">
           {getIcon(message.type)}
           <div className="flex-1">
-            <p className="text-sm font-medium text-red-900">错误</p>
+            <p className="text-sm font-medium text-red-900">
+              {t("homeWorkspace.errorTitle")}
+            </p>
             <p className="text-sm text-red-700 mt-1">{message.message}</p>
           </div>
         </div>
@@ -395,9 +412,12 @@ function MessageCard({ message }: { message: AgentMessage }) {
         <div className="flex items-start gap-3">
           {getIcon(message.type)}
           <div className="flex-1">
-            <p className="text-sm font-medium text-green-900">执行计划已生成</p>
+            <p className="text-sm font-medium text-green-900">
+              {t("homeWorkspace.planGenerated")}
+            </p>
             <p className="text-sm text-green-700 mt-1">
-              项目：{message.plan?.project?.title || "未命名项目"}
+              {t("homeWorkspace.projectLabel")}：
+              {message.plan?.project?.title || t("homeWorkspace.unnamedProject")}
             </p>
           </div>
         </div>

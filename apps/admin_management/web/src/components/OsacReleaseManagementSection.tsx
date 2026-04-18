@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { OsacRelease, OsacReleaseDetailResponse } from '../types';
+import { DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE } from './adminViewState';
+import type { OsacReleaseManagementViewState, OsacReleaseTabKey } from './adminViewState';
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: OsacReleaseManagementViewState | null;
+  onStateChange?: (state: OsacReleaseManagementViewState) => void;
 };
 
-type TabKey = 'published' | 'pending' | 'all' | 'upload';
+type TabKey = OsacReleaseTabKey;
 
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
@@ -73,16 +79,23 @@ const DEFAULT_UPLOAD_FORM = {
   binary: null as File | null,
 };
 
-export function OsacReleaseManagementSection({ onError }: Props) {
-  const [tab, setTab] = useState<TabKey>('published');
+export function OsacReleaseManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE;
+  const [tab, setTab] = useState<TabKey>(initialState.tab);
   const [list, setList] = useState<OsacRelease[]>([]);
   const [publishedReleaseId, setPublishedReleaseId] = useState<string | null>(null);
   const [publishedVersion, setPublishedVersion] = useState<string | null>(null);
-  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(null);
+  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(initialState.selectedReleaseId);
   const [detail, setDetail] = useState<OsacReleaseDetailResponse | null>(null);
-  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
   const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialState.query);
   const [uploadForm, setUploadForm] = useState(DEFAULT_UPLOAD_FORM);
 
   const currentPublishedReleaseId =
@@ -206,11 +219,51 @@ export function OsacReleaseManagementSection({ onError }: Props) {
     });
   }, [loadList, onError]);
 
+  useEffect(() => {
+    if (!detailDialogOpen || !selectedReleaseId) return;
+    if (detail?.release?.id === selectedReleaseId) return;
+    void loadDetail(selectedReleaseId).catch((error) => {
+      onError(error instanceof Error ? error.message : 'OSAC release 详情加载失败');
+    });
+  }, [detail?.release?.id, detailDialogOpen, loadDetail, onError, selectedReleaseId]);
+
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      selectedRelease?.updatedAt
+      || currentPublishedRelease?.updatedAt
+      || list[0]?.updatedAt
+      || null
+    );
+  }, [currentPublishedRelease?.updatedAt, list, onUpdatedAtChange, selectedRelease?.updatedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadList();
+    if (selectedReleaseId) {
+      await loadDetail(selectedReleaseId);
+    }
+  }, [loadDetail, loadList, selectedReleaseId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      tab,
+      query,
+      selectedReleaseId,
+      detailDialogOpen,
+    });
+  }, [detailDialogOpen, onStateChange, query, selectedReleaseId, tab]);
+
   const handleRefreshList = useCallback(() => {
-    void loadList().catch((error) => {
+    void handleExternalRefresh().catch((error) => {
       onError(error instanceof Error ? error.message : 'OSAC release 列表加载失败');
     });
-  }, [loadList, onError]);
+  }, [handleExternalRefresh, onError]);
 
   const closeDetailDialog = useCallback(() => {
     setDetailDialogOpen(false);
@@ -358,7 +411,7 @@ export function OsacReleaseManagementSection({ onError }: Props) {
               onChange={(event) => setQuery(event.target.value)}
             />
             <button type="button" className="ghost-btn" onClick={handleRefreshList} disabled={busy}>
-              刷新
+              同步列表
             </button>
           </div>
         </div>

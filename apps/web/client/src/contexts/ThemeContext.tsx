@@ -6,8 +6,8 @@ import React, {
   useState,
 } from "react";
 
-export type ThemePreference = "light" | "dark" | "system";
-export type ResolvedTheme = "light" | "dark";
+export type ThemePreference = "light" | "dark" | "dark-gold" | "system";
+export type ResolvedTheme = "light" | "dark" | "dark-gold";
 
 interface ThemeContextType {
   theme: ThemePreference;
@@ -31,7 +31,12 @@ interface ThemeProviderProps {
 function isThemePreference(
   value: string | null | undefined,
 ): value is ThemePreference {
-  return value === "light" || value === "dark" || value === "system";
+  return (
+    value === "light" ||
+    value === "dark" ||
+    value === "dark-gold" ||
+    value === "system"
+  );
 }
 
 function getSystemTheme(): ResolvedTheme {
@@ -95,10 +100,11 @@ export function ThemeProvider({
     }
 
     const root = document.documentElement;
-    root.classList.toggle("dark", resolvedTheme === "dark");
+    const isDarkTheme = resolvedTheme === "dark" || resolvedTheme === "dark-gold";
+    root.classList.toggle("dark", isDarkTheme);
     root.dataset.theme = resolvedTheme;
     root.dataset.themePreference = theme;
-    root.style.colorScheme = resolvedTheme;
+    root.style.colorScheme = isDarkTheme ? "dark" : "light";
 
     if (switchable && typeof window !== "undefined") {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -107,7 +113,7 @@ export function ThemeProvider({
 
   const toggleTheme = () => {
     setTheme((prev) => {
-      if (prev === "dark") {
+      if (prev === "dark" || prev === "dark-gold") {
         return "light";
       }
       return "dark";

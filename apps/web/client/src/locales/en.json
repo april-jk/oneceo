@@ -84,6 +84,7 @@
     "themeDescription": "Select your preferred theme",
     "light": "Light",
     "dark": "Dark",
+    "darkGold": "Dark Gold",
     "system": "System",
     "notificationsLabel": "Notifications",
     "notificationsDescription": "Manage your notification preferences",

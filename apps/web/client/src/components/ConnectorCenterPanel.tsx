@@ -977,7 +977,7 @@ export function ConnectorCenterPanel({
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
               {item.isNew ? (
-                <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                <span className="rounded border border-[var(--brand-border)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--brand-soft-foreground)]">
                   {t("connectors.badges.new")}
                 </span>
               ) : null}
@@ -1129,7 +1129,7 @@ export function ConnectorCenterPanel({
                     <div className="flex gap-2 items-center justify-center font-semibold overflow-hidden relative shrink-0 text-foreground text-[20px] tracking-[-0.44px] w-full">
                       <p className="leading-[26px] overflow-hidden text-ellipsis">{detailItem.name}</p>
                       {detailItem.isNew ? (
-                        <span className="rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700 ml-2">{t("connectors.badges.new")}</span>
+                        <span className="ml-2 rounded-md border border-[var(--brand-border)] bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand-soft-foreground)]">{t("connectors.badges.new")}</span>
                       ) : null}
                     </div>
                     <div className="font-normal relative shrink-0 text-muted-foreground tracking-[-0.154px] w-full">

@@ -254,7 +254,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   const getManagerTypeColor = (type: Manager['type']) => {
     const colors = {
-      development: 'bg-blue-100 text-blue-700',
+      development: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       operations: 'bg-green-100 text-green-700',
       maintenance: 'bg-yellow-100 text-yellow-700',
       research: 'bg-purple-100 text-purple-700',
@@ -287,7 +287,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
       case 'completed':
         return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'in-progress':
-        return <Clock className="w-4 h-4 text-blue-600" />;
+        return <Clock className="h-4 w-4 text-[var(--brand-link)]" />;
       case 'pending':
         return <Clock className="w-4 h-4 text-muted-foreground" />;
     }
@@ -307,7 +307,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
     
     const styles = {
       perfect: 'bg-green-100 text-green-700',
-      acceptable: 'bg-blue-100 text-blue-700',
+      acceptable: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       rejected: 'bg-red-100 text-red-700',
     };
     

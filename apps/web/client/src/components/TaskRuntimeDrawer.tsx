@@ -61,7 +61,7 @@ function getTypeClass(type: string): string {
   if (type.includes("STATUS"))
     return "border-amber-500/30 bg-amber-500/10 text-amber-200";
   if (type.includes("OUTPUT"))
-    return "border-blue-500/30 bg-blue-500/10 text-blue-200";
+    return "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]";
   if (type.includes("LLM_PROXY"))
     return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
   return "border-border bg-muted/60 text-muted-foreground";

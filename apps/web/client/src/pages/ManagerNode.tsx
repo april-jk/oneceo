@@ -188,7 +188,7 @@ export default function ManagerNode() {
   const getStatusColor = (status: AssignedTask['status']) => {
     const colors = {
       pending: 'bg-muted text-muted-foreground',
-      'in-progress': 'bg-blue-100 text-blue-700',
+      'in-progress': 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       completed: 'bg-green-100 text-green-700',
       rejected: 'bg-red-100 text-red-700',
     };
@@ -228,7 +228,7 @@ export default function ManagerNode() {
       case 'perfect':
         return <Star className="w-4 h-4 text-green-600" />;
       case 'acceptable':
-        return <CheckCircle className="w-4 h-4 text-blue-600" />;
+        return <CheckCircle className="h-4 w-4 text-[var(--brand-link)]" />;
       case 'unacceptable':
         return <XCircle className="w-4 h-4 text-red-600" />;
     }
@@ -465,7 +465,7 @@ export default function ManagerNode() {
                                         {t('managerNode.perfect')}
                                       </Button>
                                       <Button variant="outline" className="gap-2">
-                                        <CheckCircle className="w-4 h-4 text-blue-600" />
+                                        <CheckCircle className="h-4 w-4 text-[var(--brand-link)]" />
                                         {t('managerNode.acceptable')}
                                       </Button>
                                       <Button variant="outline" className="gap-2">
@@ -549,7 +549,7 @@ export default function ManagerNode() {
                                 <Star className="w-3 h-3" />
                                 {t('managerNode.performancePerfect', { count: employee.performance.perfect })}
                               </div>
-                              <div className="flex items-center gap-1 text-blue-600">
+                              <div className="flex items-center gap-1 text-[var(--brand-link)]">
                                 <CheckCircle className="w-3 h-3" />
                                 {t('managerNode.performanceAcceptable', { count: employee.performance.acceptable })}
                               </div>

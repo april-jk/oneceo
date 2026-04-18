@@ -8,6 +8,11 @@ import type {
   SkillSummary,
   SkillValidationResult,
 } from '../types';
+import {
+  DEFAULT_SKILL_MANAGEMENT_FILTERS,
+  DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
+} from './adminViewState';
+import type { SkillManagementViewState, SkillViewFilter } from './adminViewState';
 
 type EditorState = {
   slug: string;
@@ -31,7 +36,6 @@ type ImportedFolderPayload = {
 };
 
 type ImportFileStatus = 'pending' | 'success' | 'failed';
-type SkillViewFilter = 'all' | 'active' | 'archived' | 'published' | 'unpublished';
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
@@ -43,6 +47,7 @@ const EMPTY_EDITOR: EditorState = {
 };
 
 const DEFAULT_CATEGORY_OPTIONS = ['general', 'office', 'engineering', 'ops', 'design'];
+const DEFAULT_FILTERS = DEFAULT_SKILL_MANAGEMENT_FILTERS;
 
 function toEditorState(detail: SkillDetail): EditorState {
   return {
@@ -129,26 +134,33 @@ async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativeP
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: SkillManagementViewState | null;
+  onStateChange?: (state: SkillManagementViewState) => void;
 };
 
-export function SkillManagementSection({ onError }: Props) {
+export function SkillManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_SKILL_MANAGEMENT_VIEW_STATE;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(initialState.selectedSkillId);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
-  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(initialState.selectedRevisionId);
   const [revisionResources, setRevisionResources] = useState<SkillRevisionResources | null>(null);
-  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(null);
+  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(initialState.selectedResourcePath);
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [validationSessionId, setValidationSessionId] = useState('');
-  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>('editor');
-  const [skillView, setSkillView] = useState<SkillViewFilter>('all');
-  const [filters, setFilters] = useState({
-    query: '',
-    status: 'all',
-    category: '',
-  });
+  const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
+  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>(initialState.detailTab);
+  const [skillView, setSkillView] = useState<SkillViewFilter>(initialState.skillView);
+  const [filters, setFilters] = useState(initialState.filters);
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
@@ -160,6 +172,7 @@ export function SkillManagementSection({ onError }: Props) {
   const [importJobId, setImportJobId] = useState<string | null>(null);
   const [importJobStatus, setImportJobStatus] = useState<'pending' | 'running' | 'completed' | 'failed' | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const resetImportState = useCallback(() => {
     setImportPreview(null);
@@ -177,6 +190,10 @@ export function SkillManagementSection({ onError }: Props) {
     }
     return Array.from(categories).sort((a, b) => skillCategoryLabel(a).localeCompare(skillCategoryLabel(b), 'zh-Hans-CN'));
   }, [skills]);
+
+  useEffect(() => {
+    selectedRevisionIdRef.current = selectedRevisionId;
+  }, [selectedRevisionId]);
 
   const loadSkills = useCallback(async () => {
     const next = await api.listSkills({
@@ -213,7 +230,11 @@ export function SkillManagementSection({ onError }: Props) {
       setSelectedDocumentIndex(0);
       const publishedRevision =
         nextRevisions.find((item) => item.isPublished) || nextRevisions[0] || null;
-      const nextRevisionId = publishedRevision?.id || null;
+      const currentSelectedRevisionId = selectedRevisionIdRef.current;
+      const nextRevisionId =
+        currentSelectedRevisionId && nextRevisions.some((item) => item.id === currentSelectedRevisionId)
+          ? currentSelectedRevisionId
+          : publishedRevision?.id || null;
       setSelectedRevisionId(nextRevisionId);
       setValidationResult(null);
       onError(null);
@@ -316,11 +337,50 @@ export function SkillManagementSection({ onError }: Props) {
     };
   }, [importDialogOpen, importJobId, loadSkills, onError]);
 
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      validationResult?.syncedAt
+      || detail?.updatedAt
+      || skills[0]?.updatedAt
+      || null
+    );
+  }, [detail?.updatedAt, onUpdatedAtChange, skills, validationResult?.syncedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadSkills();
+    if (selectedSkillId) {
+      await loadSkillDetail(selectedSkillId);
+    }
+  }, [loadSkillDetail, loadSkills, selectedSkillId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      filters,
+      skillView,
+      selectedSkillId,
+      detailDialogOpen,
+      detailTab,
+      selectedRevisionId,
+      selectedResourcePath,
+    });
+  }, [detailDialogOpen, detailTab, filters, onStateChange, selectedResourcePath, selectedRevisionId, selectedSkillId, skillView]);
+
   const handleRefreshSkills = useCallback(() => {
-    void loadSkills().catch((error) => {
+    void handleExternalRefresh().catch((error) => {
       onError(error instanceof Error ? error.message : '技能列表加载失败');
     });
-  }, [loadSkills, onError]);
+  }, [handleExternalRefresh, onError]);
+
+  const handleResetFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, []);
 
   const openCreateDialog = () => {
     setIsCreating(true);
@@ -693,8 +753,8 @@ export function SkillManagementSection({ onError }: Props) {
             >
               <span className="skill-action-btn-icon" aria-hidden="true">↻</span>
               <span className="skill-action-btn-copy">
-                <span className="skill-action-btn-label">刷新技能</span>
-                <span className="skill-action-btn-support">同步最新列表</span>
+                <span className="skill-action-btn-label">同步列表</span>
+                <span className="skill-action-btn-support">重新拉取当前结果</span>
               </span>
             </button>
           </div>
@@ -728,8 +788,8 @@ export function SkillManagementSection({ onError }: Props) {
                 </option>
               ))}
             </select>
-          <button type="button" className="ghost-btn" onClick={handleRefreshSkills} disabled={busy}>
-            应用筛选
+          <button type="button" className="secondary-btn" onClick={handleResetFilters} disabled={busy}>
+            重置筛选
           </button>
         </div>
 

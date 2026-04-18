@@ -1,30 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type * as React from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
 // 管理后台主页面：统一组装导航、区块切换和会话/主机/技能/发布等能力面板。
 import { api } from './api';
 import type { AdminUser } from './api';
-import { ConnectorGuideManagementSection } from './components/ConnectorGuideManagementSection';
-import { KvmControlCenter } from './components/KvmControlCenter';
-import { OsacReleaseManagementSection } from './components/OsacReleaseManagementSection';
-import { SkillManagementSection } from './components/SkillManagementSection';
-import { DEFAULT_USER_MANAGEMENT_VIEW_STATE, UserManagementSection } from './components/UserManagementSection';
-import type { UserManagementViewState } from './components/UserManagementSection';
+import {
+  DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE,
+  DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE,
+  DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
+  DEFAULT_USER_MANAGEMENT_VIEW_STATE,
+} from './components/adminViewState';
+import type {
+  ConnectorGuideManagementViewState,
+  OsacReleaseManagementViewState,
+  SkillManagementViewState,
+  UserManagementViewState,
+} from './components/adminViewState';
 import type {
   AdminThemeKey,
   AdminThemeMode,
@@ -51,6 +42,33 @@ import type {
   SandboxManagementOverview,
   VmItem,
 } from './types';
+
+const KvmControlCenter = lazy(() =>
+  import('./components/KvmControlCenter').then((module) => ({ default: module.KvmControlCenter }))
+);
+const KvmHostTrendChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmHostTrendChart }))
+);
+const KvmVmStatusPieChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmVmStatusPieChart }))
+);
+const KvmSessionStatusBarChart = lazy(() =>
+  import('./components/KvmCharts').then((module) => ({ default: module.KvmSessionStatusBarChart }))
+);
+const UserManagementSection = lazy(() =>
+  import('./components/UserManagementSection').then((module) => ({ default: module.UserManagementSection }))
+);
+const SkillManagementSection = lazy(() =>
+  import('./components/SkillManagementSection').then((module) => ({ default: module.SkillManagementSection }))
+);
+const ConnectorGuideManagementSection = lazy(() =>
+  import('./components/ConnectorGuideManagementSection').then((module) => ({
+    default: module.ConnectorGuideManagementSection,
+  }))
+);
+const OsacReleaseManagementSection = lazy(() =>
+  import('./components/OsacReleaseManagementSection').then((module) => ({ default: module.OsacReleaseManagementSection }))
+);
 
 type SectionKey = 'kvm' | 'conversation' | 'user' | 'agent' | 'skill' | 'connectorGuide' | 'osacRelease' | 'sandbox' | 'audit';
 type NavGroupKey = 'runtime' | 'platform';
@@ -3008,14 +3026,448 @@ const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
   to: '',
 };
 
+type AdminUrlState = {
+  activeSection: SectionKey;
+  conversation: {
+    query: string;
+    status: 'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed';
+    stage: string;
+    user: string;
+    executor: string;
+    updatedFrom: string;
+    updatedTo: string;
+    selectedSessionId: string | null;
+  };
+  sandbox: {
+    tab: 'overview' | 'runtime' | 'templates';
+    query: string;
+    executor: string;
+    status: string;
+    risk: string;
+    selectedSandboxId: string | null;
+    detailTab: SandboxDetailTab;
+  };
+  user: UserManagementViewState;
+  skill: SkillManagementViewState;
+  connectorGuide: ConnectorGuideManagementViewState;
+  osacRelease: OsacReleaseManagementViewState;
+  audit: AuditFilterState;
+};
+
+const ADMIN_URL_QUERY_KEYS = [
+  'section',
+  'conv_q',
+  'conv_status',
+  'conv_stage',
+  'conv_user',
+  'conv_exec',
+  'conv_from',
+  'conv_to',
+  'conv_session',
+  'sbx_tab',
+  'sbx_q',
+  'sbx_exec',
+  'sbx_status',
+  'sbx_risk',
+  'sbx_id',
+  'sbx_detail_tab',
+  'user_q',
+  'user_status',
+  'user_activity',
+  'user_session',
+  'user_conv',
+  'user_sort',
+  'user_dir',
+  'user_id',
+  'user_tab',
+  'skill_q',
+  'skill_status',
+  'skill_category',
+  'skill_view',
+  'skill_id',
+  'skill_dialog',
+  'skill_tab',
+  'skill_rev',
+  'guide_connector',
+  'guide_status',
+  'guide_q',
+  'guide_id',
+  'guide_rev',
+  'osac_tab',
+  'osac_q',
+  'osac_id',
+  'osac_dialog',
+  'audit_q',
+  'audit_operator',
+  'audit_action',
+  'audit_result',
+  'audit_session',
+  'audit_target',
+  'audit_from',
+  'audit_to',
+] as const;
+
+const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes']);
+const SANDBOX_TAB_VALUES = new Set(['overview', 'runtime', 'templates']);
+const SANDBOX_DETAIL_TAB_VALUES = new Set(['overview', 'files', 'processes', 'connectivity', 'archive', 'terminal']);
+const USER_SORT_KEY_VALUES = new Set(['user', 'status', 'last_activity', 'sessions', 'conversations', 'sandboxes']);
+const USER_SORT_DIRECTION_VALUES = new Set(['asc', 'desc']);
+const SKILL_VIEW_VALUES = new Set(['all', 'active', 'archived', 'published', 'unpublished']);
+const SKILL_DETAIL_TAB_VALUES = new Set(['editor', 'resources', 'validation']);
+const OSAC_TAB_VALUES = new Set(['published', 'pending', 'all', 'upload']);
+
+function isSectionKey(value: string | null): value is SectionKey {
+  return value === 'kvm'
+    || value === 'conversation'
+    || value === 'user'
+    || value === 'agent'
+    || value === 'skill'
+    || value === 'connectorGuide'
+    || value === 'osacRelease'
+    || value === 'sandbox'
+    || value === 'audit';
+}
+
+function cloneUserManagementViewState(state: UserManagementViewState = DEFAULT_USER_MANAGEMENT_VIEW_STATE): UserManagementViewState {
+  return {
+    filters: { ...state.filters },
+    appliedFilters: { ...state.appliedFilters },
+    sort: { ...state.sort },
+    selectedUserId: state.selectedUserId,
+    selectedUserLabel: state.selectedUserLabel,
+    drawerOpen: state.drawerOpen,
+    detailTab: state.detailTab,
+  };
+}
+
+function cloneSkillManagementViewState(
+  state: SkillManagementViewState = DEFAULT_SKILL_MANAGEMENT_VIEW_STATE
+): SkillManagementViewState {
+  return {
+    filters: { ...state.filters },
+    skillView: state.skillView,
+    selectedSkillId: state.selectedSkillId,
+    detailDialogOpen: state.detailDialogOpen,
+    detailTab: state.detailTab,
+    selectedRevisionId: state.selectedRevisionId,
+    selectedResourcePath: state.selectedResourcePath,
+  };
+}
+
+function cloneConnectorGuideManagementViewState(
+  state: ConnectorGuideManagementViewState = DEFAULT_CONNECTOR_GUIDE_MANAGEMENT_VIEW_STATE
+): ConnectorGuideManagementViewState {
+  return {
+    filters: { ...state.filters },
+    selectedPolicyId: state.selectedPolicyId,
+    selectedRevisionId: state.selectedRevisionId,
+  };
+}
+
+function cloneOsacReleaseManagementViewState(
+  state: OsacReleaseManagementViewState = DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE
+): OsacReleaseManagementViewState {
+  return {
+    tab: state.tab,
+    query: state.query,
+    selectedReleaseId: state.selectedReleaseId,
+    detailDialogOpen: state.detailDialogOpen,
+  };
+}
+
+function readAdminUrlState(): AdminUrlState {
+  const userState = cloneUserManagementViewState();
+  const skillState = cloneSkillManagementViewState();
+  const connectorGuideState = cloneConnectorGuideManagementViewState();
+  const osacReleaseState = cloneOsacReleaseManagementViewState();
+  const auditState = { ...DEFAULT_AUDIT_FILTERS };
+
+  if (typeof window === 'undefined') {
+    return {
+      activeSection: 'sandbox',
+      conversation: {
+        query: '',
+        status: 'all',
+        stage: 'all',
+        user: 'all',
+        executor: 'all',
+        updatedFrom: '',
+        updatedTo: '',
+        selectedSessionId: null,
+      },
+      sandbox: {
+        tab: 'runtime',
+        query: '',
+        executor: 'all',
+        status: 'all',
+        risk: 'all',
+        selectedSandboxId: null,
+        detailTab: 'overview',
+      },
+      user: userState,
+      skill: skillState,
+      connectorGuide: connectorGuideState,
+      osacRelease: osacReleaseState,
+      audit: auditState,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const sectionParam = params.get('section');
+  const activeSection = isSectionKey(sectionParam) ? sectionParam : 'sandbox';
+  const conversationStatus = params.get('conv_status');
+  const sandboxTab = params.get('sbx_tab');
+  const sandboxDetailTab = params.get('sbx_detail_tab');
+  const userSortKey = params.get('user_sort');
+  const userSortDirection = params.get('user_dir');
+  const userDetailTab = params.get('user_tab');
+  const skillView = params.get('skill_view');
+  const skillDetailTab = params.get('skill_tab');
+  const osacTab = params.get('osac_tab');
+
+  userState.filters = {
+    query: params.get('user_q') || '',
+    status: params.get('user_status') || 'all',
+    activity: params.get('user_activity') || 'all',
+    hasSession: params.get('user_session') || 'all',
+    hasConversation: params.get('user_conv') || 'all',
+  };
+  userState.appliedFilters = { ...userState.filters };
+  userState.sort = {
+    key: USER_SORT_KEY_VALUES.has(userSortKey || '') ? (userSortKey as UserManagementViewState['sort']['key']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.key,
+    direction: USER_SORT_DIRECTION_VALUES.has(userSortDirection || '') ? (userSortDirection as UserManagementViewState['sort']['direction']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.direction,
+  };
+  userState.selectedUserId = params.get('user_id') || null;
+  userState.selectedUserLabel = null;
+  userState.drawerOpen = Boolean(userState.selectedUserId);
+  userState.detailTab = USER_DETAIL_TAB_VALUES.has(userDetailTab || '')
+    ? (userDetailTab as UserManagementViewState['detailTab'])
+    : DEFAULT_USER_MANAGEMENT_VIEW_STATE.detailTab;
+
+  skillState.filters = {
+    query: params.get('skill_q') || '',
+    status: params.get('skill_status') || 'all',
+    category: params.get('skill_category') || '',
+  };
+  skillState.skillView = SKILL_VIEW_VALUES.has(skillView || '')
+    ? (skillView as SkillManagementViewState['skillView'])
+    : DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.skillView;
+  skillState.selectedSkillId = params.get('skill_id') || null;
+  skillState.detailDialogOpen = params.get('skill_dialog') === '1' && Boolean(skillState.selectedSkillId);
+  skillState.detailTab = SKILL_DETAIL_TAB_VALUES.has(skillDetailTab || '')
+    ? (skillDetailTab as SkillManagementViewState['detailTab'])
+    : DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.detailTab;
+  skillState.selectedRevisionId = params.get('skill_rev') || null;
+
+  connectorGuideState.filters = {
+    connectorKey: params.get('guide_connector') || '',
+    status: params.get('guide_status') || 'all',
+    query: params.get('guide_q') || '',
+  };
+  connectorGuideState.selectedPolicyId = params.get('guide_id') || null;
+  connectorGuideState.selectedRevisionId = params.get('guide_rev') || null;
+
+  osacReleaseState.tab = OSAC_TAB_VALUES.has(osacTab || '')
+    ? (osacTab as OsacReleaseManagementViewState['tab'])
+    : DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE.tab;
+  osacReleaseState.query = params.get('osac_q') || '';
+  osacReleaseState.selectedReleaseId = params.get('osac_id') || null;
+  osacReleaseState.detailDialogOpen = params.get('osac_dialog') === '1' && Boolean(osacReleaseState.selectedReleaseId);
+
+  auditState.query = params.get('audit_q') || '';
+  auditState.operator = params.get('audit_operator') || 'all';
+  auditState.action = params.get('audit_action') || 'all';
+  auditState.result = params.get('audit_result') || 'all';
+  auditState.sessionId = params.get('audit_session') || '';
+  auditState.targetVmId = params.get('audit_target') || '';
+  auditState.from = params.get('audit_from') || '';
+  auditState.to = params.get('audit_to') || '';
+
+  return {
+    activeSection,
+    conversation: {
+      query: params.get('conv_q') || '',
+      status:
+        conversationStatus === 'in_progress'
+        || conversationStatus === 'waiting_user'
+        || conversationStatus === 'failed'
+        || conversationStatus === 'completed'
+          ? conversationStatus
+          : 'all',
+      stage: params.get('conv_stage') || 'all',
+      user: params.get('conv_user') || 'all',
+      executor: params.get('conv_exec') || 'all',
+      updatedFrom: params.get('conv_from') || '',
+      updatedTo: params.get('conv_to') || '',
+      selectedSessionId: params.get('conv_session') || null,
+    },
+    sandbox: {
+      tab: SANDBOX_TAB_VALUES.has(sandboxTab || '') ? (sandboxTab as AdminUrlState['sandbox']['tab']) : 'runtime',
+      query: params.get('sbx_q') || '',
+      executor: params.get('sbx_exec') || 'all',
+      status: params.get('sbx_status') || 'all',
+      risk: params.get('sbx_risk') || 'all',
+      selectedSandboxId: params.get('sbx_id') || null,
+      detailTab: SANDBOX_DETAIL_TAB_VALUES.has(sandboxDetailTab || '')
+        ? (sandboxDetailTab as SandboxDetailTab)
+        : 'overview',
+    },
+    user: userState,
+    skill: skillState,
+    connectorGuide: connectorGuideState,
+    osacRelease: osacReleaseState,
+    audit: auditState,
+  };
+}
+
+function writeAdminUrlState(input: {
+  activeSection: SectionKey;
+  conversation: AdminUrlState['conversation'];
+  sandbox: AdminUrlState['sandbox'] & { modalOpen: boolean };
+  user: UserManagementViewState;
+  skill: SkillManagementViewState;
+  connectorGuide: ConnectorGuideManagementViewState;
+  osacRelease: OsacReleaseManagementViewState;
+  audit: AuditFilterState;
+}) {
+  if (typeof window === 'undefined') return;
+
+  const url = new URL(window.location.href);
+  for (const key of ADMIN_URL_QUERY_KEYS) {
+    url.searchParams.delete(key);
+  }
+
+  url.searchParams.set('section', input.activeSection);
+
+  if (input.activeSection === 'conversation') {
+    if (input.conversation.query) url.searchParams.set('conv_q', input.conversation.query);
+    if (input.conversation.status !== 'all') url.searchParams.set('conv_status', input.conversation.status);
+    if (input.conversation.stage !== 'all') url.searchParams.set('conv_stage', input.conversation.stage);
+    if (input.conversation.user !== 'all') url.searchParams.set('conv_user', input.conversation.user);
+    if (input.conversation.executor !== 'all') url.searchParams.set('conv_exec', input.conversation.executor);
+    if (input.conversation.updatedFrom) url.searchParams.set('conv_from', input.conversation.updatedFrom);
+    if (input.conversation.updatedTo) url.searchParams.set('conv_to', input.conversation.updatedTo);
+    if (input.conversation.selectedSessionId) url.searchParams.set('conv_session', input.conversation.selectedSessionId);
+  }
+
+  if (input.activeSection === 'sandbox') {
+    if (input.sandbox.tab !== 'runtime') url.searchParams.set('sbx_tab', input.sandbox.tab);
+    if (input.sandbox.query) url.searchParams.set('sbx_q', input.sandbox.query);
+    if (input.sandbox.executor !== 'all') url.searchParams.set('sbx_exec', input.sandbox.executor);
+    if (input.sandbox.status !== 'all') url.searchParams.set('sbx_status', input.sandbox.status);
+    if (input.sandbox.risk !== 'all') url.searchParams.set('sbx_risk', input.sandbox.risk);
+    if (input.sandbox.modalOpen && input.sandbox.selectedSandboxId) {
+      url.searchParams.set('sbx_id', input.sandbox.selectedSandboxId);
+      if (input.sandbox.detailTab !== 'overview') {
+        url.searchParams.set('sbx_detail_tab', input.sandbox.detailTab);
+      }
+    }
+  }
+
+  if (input.activeSection === 'user') {
+    const filters = input.user.appliedFilters;
+    if (filters.query) url.searchParams.set('user_q', filters.query);
+    if (filters.status !== 'all') url.searchParams.set('user_status', filters.status);
+    if (filters.activity !== 'all') url.searchParams.set('user_activity', filters.activity);
+    if (filters.hasSession !== 'all') url.searchParams.set('user_session', filters.hasSession);
+    if (filters.hasConversation !== 'all') url.searchParams.set('user_conv', filters.hasConversation);
+    if (input.user.sort.key !== DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.key) {
+      url.searchParams.set('user_sort', input.user.sort.key);
+    }
+    if (input.user.sort.direction !== DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.direction) {
+      url.searchParams.set('user_dir', input.user.sort.direction);
+    }
+    if (input.user.drawerOpen && input.user.selectedUserId) {
+      url.searchParams.set('user_id', input.user.selectedUserId);
+      if (input.user.detailTab !== 'overview') {
+        url.searchParams.set('user_tab', input.user.detailTab);
+      }
+    }
+  }
+
+  if (input.activeSection === 'skill') {
+    if (input.skill.filters.query) url.searchParams.set('skill_q', input.skill.filters.query);
+    if (input.skill.filters.status !== 'all') url.searchParams.set('skill_status', input.skill.filters.status);
+    if (input.skill.filters.category) url.searchParams.set('skill_category', input.skill.filters.category);
+    if (input.skill.skillView !== DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.skillView) {
+      url.searchParams.set('skill_view', input.skill.skillView);
+    }
+    if (input.skill.detailDialogOpen && input.skill.selectedSkillId) {
+      url.searchParams.set('skill_id', input.skill.selectedSkillId);
+      url.searchParams.set('skill_dialog', '1');
+      if (input.skill.detailTab !== DEFAULT_SKILL_MANAGEMENT_VIEW_STATE.detailTab) {
+        url.searchParams.set('skill_tab', input.skill.detailTab);
+      }
+      if (input.skill.selectedRevisionId) {
+        url.searchParams.set('skill_rev', input.skill.selectedRevisionId);
+      }
+    }
+  }
+
+  if (input.activeSection === 'connectorGuide') {
+    if (input.connectorGuide.filters.connectorKey) {
+      url.searchParams.set('guide_connector', input.connectorGuide.filters.connectorKey);
+    }
+    if (input.connectorGuide.filters.status !== 'all') {
+      url.searchParams.set('guide_status', input.connectorGuide.filters.status);
+    }
+    if (input.connectorGuide.filters.query) {
+      url.searchParams.set('guide_q', input.connectorGuide.filters.query);
+    }
+    if (input.connectorGuide.selectedPolicyId) {
+      url.searchParams.set('guide_id', input.connectorGuide.selectedPolicyId);
+    }
+    if (input.connectorGuide.selectedRevisionId) {
+      url.searchParams.set('guide_rev', input.connectorGuide.selectedRevisionId);
+    }
+  }
+
+  if (input.activeSection === 'osacRelease') {
+    if (input.osacRelease.tab !== DEFAULT_OSAC_RELEASE_MANAGEMENT_VIEW_STATE.tab) {
+      url.searchParams.set('osac_tab', input.osacRelease.tab);
+    }
+    if (input.osacRelease.query) {
+      url.searchParams.set('osac_q', input.osacRelease.query);
+    }
+    if (input.osacRelease.detailDialogOpen && input.osacRelease.selectedReleaseId) {
+      url.searchParams.set('osac_id', input.osacRelease.selectedReleaseId);
+      url.searchParams.set('osac_dialog', '1');
+    }
+  }
+
+  if (input.activeSection === 'audit') {
+    if (input.audit.query) url.searchParams.set('audit_q', input.audit.query);
+    if (input.audit.operator !== 'all') url.searchParams.set('audit_operator', input.audit.operator);
+    if (input.audit.action !== 'all') url.searchParams.set('audit_action', input.audit.action);
+    if (input.audit.result !== 'all') url.searchParams.set('audit_result', input.audit.result);
+    if (input.audit.sessionId) url.searchParams.set('audit_session', input.audit.sessionId);
+    if (input.audit.targetVmId) url.searchParams.set('audit_target', input.audit.targetVmId);
+    if (input.audit.from) url.searchParams.set('audit_from', input.audit.from);
+    if (input.audit.to) url.searchParams.set('audit_to', input.audit.to);
+  }
+
+  const nextQuery = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl !== currentUrl) {
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }
+}
+
 export default function App() {
+  const initialUrlStateRef = useRef<AdminUrlState | null>(null);
+  const initialUrlState = initialUrlStateRef.current || readAdminUrlState();
+  initialUrlStateRef.current = initialUrlState;
+  const sectionRefreshHandlerRef = useRef<(() => Promise<void>) | null>(null);
+  const initialSandboxDeepLinkHandledRef = useRef(false);
+
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null);
   const [loginName, setLoginName] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SectionKey>('sandbox');
+  const [activeSection, setActiveSection] = useState<SectionKey>(initialUrlState.activeSection);
   const [themeSettings, setThemeSettings] = useState<AdminThemeSettings | null>(null);
   const [currentTheme, setCurrentTheme] = useState<AdminThemeKey>(() => readStoredAdminTheme());
   const [currentThemeMode, setCurrentThemeMode] = useState<AdminThemeMode>(() => readStoredAdminThemeMode());
@@ -3033,17 +3485,17 @@ export default function App() {
   const [busyVmIds, setBusyVmIds] = useState<Record<string, boolean>>({});
 
   const [conversationSessions, setConversationSessions] = useState<ConversationSession[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialUrlState.conversation.selectedSessionId);
   const [conversationDetail, setConversationDetail] = useState<ConversationSessionDetailResponse | null>(null);
   const [conversationDetailLoading, setConversationDetailLoading] = useState(false);
   const [conversationInfraError, setConversationInfraError] = useState<string | null>(null);
-  const [conversationSearchQuery, setConversationSearchQuery] = useState('');
-  const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>('all');
-  const [conversationStageFilter, setConversationStageFilter] = useState('all');
-  const [conversationUserFilter, setConversationUserFilter] = useState('all');
-  const [conversationExecutorFilter, setConversationExecutorFilter] = useState('all');
-  const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState('');
-  const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState('');
+  const [conversationSearchQuery, setConversationSearchQuery] = useState(initialUrlState.conversation.query);
+  const [conversationStatusFilter, setConversationStatusFilter] = useState<'all' | 'in_progress' | 'waiting_user' | 'failed' | 'completed'>(initialUrlState.conversation.status);
+  const [conversationStageFilter, setConversationStageFilter] = useState(initialUrlState.conversation.stage);
+  const [conversationUserFilter, setConversationUserFilter] = useState(initialUrlState.conversation.user);
+  const [conversationExecutorFilter, setConversationExecutorFilter] = useState(initialUrlState.conversation.executor);
+  const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState(initialUrlState.conversation.updatedFrom);
+  const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState(initialUrlState.conversation.updatedTo);
   const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
   const [conversationDialogOrigin, setConversationDialogOrigin] = useState<AdminDetailOrigin | null>(null);
@@ -3058,7 +3510,13 @@ export default function App() {
   const [transitionFilters, setTransitionFilters] = useState(DEFAULT_TRANSITION_FILTERS);
   const [transitionAdvancedFiltersOpen, setTransitionAdvancedFiltersOpen] = useState(false);
   const [userManagementUpdatedAt, setUserManagementUpdatedAt] = useState<string | null>(null);
-  const [userManagementViewState, setUserManagementViewState] = useState<UserManagementViewState>(DEFAULT_USER_MANAGEMENT_VIEW_STATE);
+  const [skillManagementUpdatedAt, setSkillManagementUpdatedAt] = useState<string | null>(null);
+  const [connectorGuideUpdatedAt, setConnectorGuideUpdatedAt] = useState<string | null>(null);
+  const [osacReleaseUpdatedAt, setOsacReleaseUpdatedAt] = useState<string | null>(null);
+  const [userManagementViewState, setUserManagementViewState] = useState<UserManagementViewState>(() => cloneUserManagementViewState(initialUrlState.user));
+  const [skillManagementViewState, setSkillManagementViewState] = useState<SkillManagementViewState>(() => cloneSkillManagementViewState(initialUrlState.skill));
+  const [connectorGuideManagementViewState, setConnectorGuideManagementViewState] = useState<ConnectorGuideManagementViewState>(() => cloneConnectorGuideManagementViewState(initialUrlState.connectorGuide));
+  const [osacReleaseManagementViewState, setOsacReleaseManagementViewState] = useState<OsacReleaseManagementViewState>(() => cloneOsacReleaseManagementViewState(initialUrlState.osacRelease));
 
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
@@ -3070,11 +3528,12 @@ export default function App() {
   const [sandboxModalOrigin, setSandboxModalOrigin] = useState<AdminDetailOrigin | null>(null);
   const [sandboxModalZIndex, setSandboxModalZIndex] = useState(250);
   const [sandboxSectionOrigin, setSandboxSectionOrigin] = useState<AdminDetailOrigin | null>(null);
-  const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>('runtime');
-  const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState('');
-  const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState('all');
-  const [sandboxStatusFilter, setSandboxStatusFilter] = useState('all');
-  const [sandboxRiskFilter, setSandboxRiskFilter] = useState('all');
+  const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>(initialUrlState.sandbox.tab);
+  const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState(initialUrlState.sandbox.query);
+  const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState(initialUrlState.sandbox.executor);
+  const [sandboxStatusFilter, setSandboxStatusFilter] = useState(initialUrlState.sandbox.status);
+  const [sandboxRiskFilter, setSandboxRiskFilter] = useState(initialUrlState.sandbox.risk);
+  const [sandboxDeepLinkId, setSandboxDeepLinkId] = useState<string | null>(initialUrlState.sandbox.selectedSandboxId);
   const [runtimeSort, setRuntimeSort] = useState<RuntimeSortState>(DEFAULT_RUNTIME_SORT);
   const [runtimeColumnWidths, setRuntimeColumnWidths] = useState<Record<RuntimeColumnKey, number>>(DEFAULT_RUNTIME_COLUMN_WIDTHS);
   const [archiveSort, setArchiveSort] = useState<ArchiveSortState>(DEFAULT_ARCHIVE_SORT);
@@ -3082,7 +3541,7 @@ export default function App() {
   const [sandboxRegistryLimit, setSandboxRegistryLimit] = useState(SANDBOX_RUNTIME_PAGE_SIZE);
   const [sandboxRegistryLoadingMore, setSandboxRegistryLoadingMore] = useState(false);
   const [sandboxRegistryLoadMoreError, setSandboxRegistryLoadMoreError] = useState<string | null>(null);
-  const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>('overview');
+  const [sandboxDetailTab, setSandboxDetailTab] = useState<SandboxDetailTab>(initialUrlState.sandbox.detailTab);
   const [sandboxProcessToolView, setSandboxProcessToolView] = useState<SandboxProcessToolView>('processes');
   const [sandboxFullInfo, setSandboxFullInfo] = useState<E2bSandboxFullInfo | null>(null);
   const [sandboxConnectivityResult, setSandboxConnectivityResult] = useState<unknown>(null);
@@ -3140,8 +3599,8 @@ export default function App() {
     availableOperators: [],
     availableTargets: [],
   });
-  const [auditFilters, setAuditFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
-  const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTERS);
+  const [auditFilters, setAuditFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
+  const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
   const [auditDetail, setAuditDetail] = useState<AuditDetailResponse | null>(null);
   const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
   const [toasts, setToasts] = useState<UiToast[]>([]);
@@ -3663,13 +4122,14 @@ export default function App() {
   }, [runBlockingTask]);
 
   const openSandboxDetail = useCallback(
-    async (sandboxId: string, origin: AdminDetailOrigin | null = null) => {
+    async (sandboxId: string, origin: AdminDetailOrigin | null = null, initialDetailTab: SandboxDetailTab = 'overview') => {
       try {
         await runBlockingTask(
           '正在加载 Sandbox 详情',
           async () => {
             await loadSandboxRuntimeDetail(sandboxId);
-            setSandboxDetailTab('overview');
+            setSandboxDeepLinkId(sandboxId);
+            setSandboxDetailTab(initialDetailTab);
             setSandboxProcessToolView('processes');
             setSandboxConnectivityResult(null);
             setSandboxTerminalOutput('');
@@ -3703,6 +4163,7 @@ export default function App() {
   const closeSandboxDetail = useCallback(() => {
     setSandboxModalOpen(false);
     setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
   }, []);
 
   const closeTemplateDetail = useCallback(() => {
@@ -3743,22 +4204,38 @@ export default function App() {
   }, [auditOriginForEntry, openSandboxDetail]);
 
   const openConversationManagementView = useCallback(() => {
+    sectionRefreshHandlerRef.current = null;
     setConversationSectionOrigin(conversationDialogOrigin);
     setConversationDialog(null);
     setConversationDialogOrigin(null);
     setSandboxModalOpen(false);
     setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
     setActiveSection('conversation');
   }, [conversationDialogOrigin]);
 
   const openSandboxManagementView = useCallback(() => {
+    sectionRefreshHandlerRef.current = null;
     setSandboxSectionOrigin(sandboxModalOrigin);
     setSandboxModalOpen(false);
     setSandboxModalOrigin(null);
+    setSandboxDeepLinkId(null);
     setConversationDialog(null);
     setConversationDialogOrigin(null);
     setActiveSection('sandbox');
   }, [sandboxModalOrigin]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || activeSection !== 'sandbox') {
+      return;
+    }
+    const initialSandboxId = initialUrlStateRef.current?.sandbox.selectedSandboxId;
+    if (!initialSandboxId || initialSandboxDeepLinkHandledRef.current) {
+      return;
+    }
+    initialSandboxDeepLinkHandledRef.current = true;
+    void openSandboxDetail(initialSandboxId, null, initialUrlStateRef.current?.sandbox.detailTab || 'overview');
+  }, [activeSection, authStatus, openSandboxDetail]);
 
   const closeSandbox = useCallback(
     async (sandboxId: string) => {
@@ -4571,6 +5048,60 @@ export default function App() {
   useEffect(() => {
     auditAppliedFiltersRef.current = auditAppliedFilters;
   }, [auditAppliedFilters]);
+
+  useEffect(() => {
+    writeAdminUrlState({
+      activeSection,
+      conversation: {
+        query: conversationSearchQuery,
+        status: conversationStatusFilter,
+        stage: conversationStageFilter,
+        user: conversationUserFilter,
+        executor: conversationExecutorFilter,
+        updatedFrom: conversationUpdatedFromDate,
+        updatedTo: conversationUpdatedToDate,
+        selectedSessionId,
+      },
+      sandbox: {
+        tab: sandboxTab,
+        query: sandboxRuntimeQuery,
+        executor: sandboxExecutorFilter,
+        status: sandboxStatusFilter,
+        risk: sandboxRiskFilter,
+        selectedSandboxId: sandboxDeepLinkId,
+        detailTab: sandboxDetailTab,
+        modalOpen: sandboxModalOpen,
+      },
+      user: userManagementViewState,
+      skill: skillManagementViewState,
+      connectorGuide: connectorGuideManagementViewState,
+      osacRelease: osacReleaseManagementViewState,
+      audit: auditAppliedFilters,
+    });
+  }, [
+    activeSection,
+    auditAppliedFilters,
+    connectorGuideManagementViewState,
+    conversationExecutorFilter,
+    conversationSearchQuery,
+    conversationStageFilter,
+    conversationStatusFilter,
+    conversationUpdatedFromDate,
+    conversationUpdatedToDate,
+    conversationUserFilter,
+    sandboxDeepLinkId,
+    sandboxDetailTab,
+    sandboxExecutorFilter,
+    sandboxModalOpen,
+    sandboxRiskFilter,
+    sandboxRuntimeQuery,
+    sandboxStatusFilter,
+    sandboxTab,
+    skillManagementViewState,
+    selectedSessionId,
+    userManagementViewState,
+    osacReleaseManagementViewState,
+  ]);
 
   useEffect(() => {
     const firstStageKey = agentOverview?.stageDistribution?.[0]?.stageKey || null;
@@ -6273,6 +6804,12 @@ export default function App() {
         ? conversationDetail?.session.updatedAt || conversationSessions[0]?.updatedAt
         : activeSection === 'user'
           ? userManagementUpdatedAt
+        : activeSection === 'skill'
+          ? skillManagementUpdatedAt
+          : activeSection === 'connectorGuide'
+            ? connectorGuideUpdatedAt
+            : activeSection === 'osacRelease'
+              ? osacReleaseUpdatedAt
         : activeSection === 'agent'
           ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
         : activeSection === 'audit'
@@ -6289,9 +6826,22 @@ export default function App() {
   const currentTemplateAlias = templateAliasOf(templateDetail);
   const templateAliasCheck = parseAliasCheckResult(templateAliasResult);
 
+  const registerSectionRefresh = useCallback((handler: (() => Promise<void>) | null) => {
+    sectionRefreshHandlerRef.current = handler;
+  }, []);
+
   const refreshActiveSection = useCallback(async () => {
     try {
       await runBlockingTask(`正在刷新${breadcrumbTitle}`, async () => {
+        if (sectionRefreshHandlerRef.current) {
+          setRefreshing(true);
+          try {
+            await sectionRefreshHandlerRef.current();
+          } finally {
+            setRefreshing(false);
+          }
+          return;
+        }
         await loadSection(activeSection);
       });
     } catch {
@@ -6395,12 +6945,24 @@ export default function App() {
             <form className="admin-auth-form" onSubmit={handleAdminLogin}>
               <label>
                 <span>登录名</span>
-                <input value={loginName} onChange={(event) => setLoginName(event.target.value)} required />
+                <input
+                  type="text"
+                  name="username"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={loginName}
+                  onChange={(event) => setLoginName(event.target.value)}
+                  required
+                />
               </label>
               <label>
                 <span>密码</span>
                 <input
                   type="password"
+                  name="password"
+                  autoComplete="current-password"
                   value={loginPassword}
                   onChange={(event) => setLoginPassword(event.target.value)}
                   required
@@ -6530,42 +7092,9 @@ export default function App() {
                 </div>
 
                 <div className="host-trend-wrap">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={hostTrendMap[host.hostId] || []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                      <XAxis dataKey="timeLabel" minTickGap={20} />
-                      <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-                      <Tooltip formatter={(value) => [`${value}%`, '']} />
-                      <Legend />
-                      <Line
-                        type="monotone"
-                        dataKey="cpu"
-                        name="CPU"
-                        stroke="#0f766e"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="memory"
-                        name="内存"
-                        stroke="#0284c7"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="storage"
-                        name="存储"
-                        stroke="#f59e0b"
-                        strokeWidth={2}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<div className="loading-state chart-loading-state">正在加载趋势图...</div>}>
+                    <KvmHostTrendChart data={hostTrendMap[host.hostId] || []} />
+                  </Suspense>
                 </div>
               </article>
             ))}
@@ -6603,17 +7132,9 @@ export default function App() {
             <span className="panel-caption">状态分布</span>
           </div>
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <PieChart>
-                <Pie data={vmPieData} cx="50%" cy="50%" outerRadius={90} innerRadius={55} dataKey="value" nameKey="label">
-                  {vmPieData.map((item) => (
-                    <Cell key={item.label} fill={VM_STATE_COLORS[item.label] ?? '#0ea5a5'} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="loading-state chart-loading-state">正在加载状态图...</div>}>
+              <KvmVmStatusPieChart data={vmPieData} stateColors={VM_STATE_COLORS} />
+            </Suspense>
           </div>
         </article>
 
@@ -6623,15 +7144,9 @@ export default function App() {
             <span className="panel-caption">任务绑定态</span>
           </div>
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={kvmOverview?.sessionStatusDistribution ?? []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dbe7f4" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="value" name="数量" fill="#0284c7" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="loading-state chart-loading-state">正在加载会话图...</div>}>
+              <KvmSessionStatusBarChart data={kvmOverview?.sessionStatusDistribution ?? []} />
+            </Suspense>
           </div>
         </article>
       </section>
@@ -7598,7 +8113,7 @@ export default function App() {
               ))}
             </div>
             <div className="conversation-index-toolbar">
-              <div className="runtime-filter-grid conversation-index-filter-grid">
+              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-primary">
                 <label className="state-filter-field">
                   <span>搜索会话</span>
                   <input
@@ -7652,6 +8167,23 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+                <button
+                  type="button"
+                  className="secondary-btn conversation-index-reset-btn"
+                  onClick={() => {
+                    setConversationSearchQuery('');
+                    setConversationStatusFilter('all');
+                    setConversationStageFilter('all');
+                    setConversationUserFilter('all');
+                    setConversationExecutorFilter('all');
+                    setConversationUpdatedFromDate('');
+                    setConversationUpdatedToDate('');
+                  }}
+                >
+                  重置筛选
+                </button>
+              </div>
+              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-secondary">
                 <label className="state-filter-field">
                   <span>处理方式</span>
                   <select
@@ -7684,21 +8216,6 @@ export default function App() {
                     onChange={(event) => setConversationUpdatedToDate(event.target.value)}
                   />
                 </label>
-                <button
-                  type="button"
-                  className="secondary-btn conversation-index-reset-btn"
-                  onClick={() => {
-                    setConversationSearchQuery('');
-                    setConversationStatusFilter('all');
-                    setConversationStageFilter('all');
-                    setConversationUserFilter('all');
-                    setConversationExecutorFilter('all');
-                    setConversationUpdatedFromDate('');
-                    setConversationUpdatedToDate('');
-                  }}
-                >
-                  重置筛选
-                </button>
               </div>
               <p className="panel-caption">
                 按更新时间排序 · 当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
@@ -8537,15 +9054,6 @@ export default function App() {
                                   ) : (
                                     <strong title="-">-</strong>
                                   )}
-                                  {item.taskSessionId ? (
-                                    <button
-                                      type="button"
-                                      className="copy-btn"
-                                      onClick={() => void copyRuntimeField('会话 ID', item.taskSessionId!)}
-                                    >
-                                      复制
-                                    </button>
-                                  ) : null}
                                 </div>
                                 <p className="session-meta">{item.taskTitle || item.taskStatus || '-'}</p>
                               </div>
@@ -8554,13 +9062,6 @@ export default function App() {
                               <div className="runtime-primary-cell">
                                 <div className="runtime-id-row">
                                   <span className="mono mono-truncate" title={item.sandboxId}>{truncateMiddle(item.sandboxId, 8, 6)}</span>
-                                  <button
-                                    type="button"
-                                    className="copy-btn"
-                                    onClick={() => void copyRuntimeField('Sandbox ID', item.sandboxId)}
-                                  >
-                                    复制
-                                  </button>
                                 </div>
                                 <p className="session-meta" title={item.template || '-'}>{item.template || '-'}</p>
                               </div>
@@ -8633,7 +9134,7 @@ export default function App() {
                             <td className="runtime-col-actions">
                               <div className="action-inline runtime-actions">
                                 <button type="button" className="table-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
-                                  查看
+                                  详情
                                 </button>
                                 {item.sandboxState === 'running' ? (
                                   <button
@@ -8654,19 +9155,44 @@ export default function App() {
                                     开机
                                   </button>
                                 )}
-                                {item.sandboxState === 'running' || item.sandboxState === 'paused' ? (
-                                  <button
-                                    type="button"
-                                    className="secondary-btn"
-                                    disabled={sandboxBusyIds[item.sandboxId]}
-                                    onClick={() => void closeSandbox(item.sandboxId)}
-                                  >
-                                    关机
-                                  </button>
-                                ) : null}
                                 <details className="runtime-action-menu">
                                   <summary className="secondary-btn runtime-action-menu-trigger">更多</summary>
                                   <div className="runtime-action-menu-popover">
+                                    {item.taskSessionId ? (
+                                      <button
+                                        type="button"
+                                        className="table-btn runtime-action-menu-item"
+                                        onClick={(event) => {
+                                          closeParentDetails(event.currentTarget);
+                                          void copyRuntimeField('会话 ID', item.taskSessionId!);
+                                        }}
+                                      >
+                                        复制会话 ID
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="table-btn runtime-action-menu-item"
+                                      onClick={(event) => {
+                                        closeParentDetails(event.currentTarget);
+                                        void copyRuntimeField('Sandbox ID', item.sandboxId);
+                                      }}
+                                    >
+                                      复制 Sandbox ID
+                                    </button>
+                                    {item.sandboxState === 'running' || item.sandboxState === 'paused' ? (
+                                      <button
+                                        type="button"
+                                        className="table-btn runtime-action-menu-item"
+                                        disabled={sandboxBusyIds[item.sandboxId]}
+                                        onClick={(event) => {
+                                          closeParentDetails(event.currentTarget);
+                                          void closeSandbox(item.sandboxId);
+                                        }}
+                                      >
+                                        关机
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className="table-btn runtime-action-menu-item"
@@ -10357,12 +10883,14 @@ export default function App() {
   );
 
   const handleSidebarSectionOpen = (nextSection: SectionKey) => {
+    sectionRefreshHandlerRef.current = null;
     setConversationDialog(null);
     setConversationDialogOrigin(null);
     setConversationSectionOrigin(null);
     setSandboxModalOpen(false);
     setSandboxModalOrigin(null);
     setSandboxSectionOrigin(null);
+    setSandboxDeepLinkId(null);
     setSidebarMobileOpen(false);
     setActiveSection(nextSection);
   };
@@ -10392,6 +10920,7 @@ export default function App() {
         <UserManagementSection
           onError={setError}
           onUpdatedAtChange={setUserManagementUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
           persistedState={userManagementViewState}
           onStateChange={setUserManagementViewState}
           onOpenConversation={(sessionId, origin) => {
@@ -10404,9 +10933,39 @@ export default function App() {
       );
     }
     if (activeSection === 'agent') return renderAgentSection();
-    if (activeSection === 'skill') return <SkillManagementSection onError={setError} />;
-    if (activeSection === 'connectorGuide') return <ConnectorGuideManagementSection onError={setError} />;
-    if (activeSection === 'osacRelease') return <OsacReleaseManagementSection onError={setError} />;
+    if (activeSection === 'skill') {
+      return (
+        <SkillManagementSection
+          onError={setError}
+          onUpdatedAtChange={setSkillManagementUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={skillManagementViewState}
+          onStateChange={setSkillManagementViewState}
+        />
+      );
+    }
+    if (activeSection === 'connectorGuide') {
+      return (
+        <ConnectorGuideManagementSection
+          onError={setError}
+          onUpdatedAtChange={setConnectorGuideUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={connectorGuideManagementViewState}
+          onStateChange={setConnectorGuideManagementViewState}
+        />
+      );
+    }
+    if (activeSection === 'osacRelease') {
+      return (
+        <OsacReleaseManagementSection
+          onError={setError}
+          onUpdatedAtChange={setOsacReleaseUpdatedAt}
+          onRegisterRefresh={registerSectionRefresh}
+          persistedState={osacReleaseManagementViewState}
+          onStateChange={setOsacReleaseManagementViewState}
+        />
+      );
+    }
     if (activeSection === 'sandbox') return renderSandboxSection();
     return renderAuditSection();
   };
@@ -10490,9 +11049,6 @@ export default function App() {
                 <span className="updated-at topbar-meta-pill topbar-meta-pill-time">最后更新: {formatDateTime(updatedAtLabel)}</span>
                 <span className={`service-state topbar-meta-pill ${activeServiceOnline ? 'ok' : 'down'}`}>
                   {activeServiceOnline ? `${activeServiceLabel}在线` : `${activeServiceLabel}离线`}
-                </span>
-                <span className="updated-at topbar-meta-pill topbar-meta-pill-user">
-                  {adminDisplayNameLabel(adminUser?.displayName, adminUser?.loginName)}
                 </span>
               </div>
               <div className="header-actions page-header-compact-actions">
@@ -10583,15 +11139,16 @@ export default function App() {
                 <button
                   type="button"
                   className="primary-btn topbar-btn topbar-refresh-btn"
+                  aria-label={refreshing ? '刷新中' : '刷新当前页'}
                   onClick={() => void refreshActiveSection()}
                   disabled={refreshing}
                 >
                   <span aria-hidden="true">↻</span>
-                  <span>{refreshing ? '刷新中...' : '刷新'}</span>
+                  <span className="topbar-btn-label">{refreshing ? '刷新中...' : '刷新当前页'}</span>
                 </button>
-                <button type="button" className="secondary-btn topbar-btn topbar-logout-btn" onClick={() => void handleAdminLogout()}>
+                <button type="button" className="secondary-btn topbar-btn topbar-logout-btn" aria-label="退出" onClick={() => void handleAdminLogout()}>
                   <span aria-hidden="true">⎋</span>
-                  <span>退出</span>
+                  <span className="topbar-btn-label">退出</span>
                 </button>
               </div>
             </div>
@@ -10603,7 +11160,9 @@ export default function App() {
             </section>
           ) : null}
 
-          {renderContent()}
+          <Suspense fallback={<main className="loading-state">正在加载 {breadcrumbTitle} ...</main>}>
+            {renderContent()}
+          </Suspense>
           {activeSection !== 'conversation' && conversationDialog ? (
             <div className="section-overlay-host section-overlay-host-conversation">
               {renderConversationOpsSection()}

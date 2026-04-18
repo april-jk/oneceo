@@ -56,6 +56,13 @@ const ADMIN_THEME_OPTIONS: AdminThemeOption[] = [
     lightSwatches: ['#faf4ed', '#575279', '#b4637a'],
     darkSwatches: ['#191724', '#e0def4', '#c4a7e7'],
   },
+  {
+    key: 'one-dark-light',
+    label: 'One Dark Light',
+    description: 'Atom One 风格的明暗双态，适合代码、日志和运维表格。',
+    lightSwatches: ['#fafafa', '#383a42', '#4078f2'],
+    darkSwatches: ['#282c34', '#abb2bf', '#61afef'],
+  },
 ];
 
 const ADMIN_THEME_MODE_OPTIONS: AdminThemeModeOption[] = [
@@ -118,6 +125,18 @@ function resolveLegacyThemeKey(value: unknown): { theme: AdminThemeKey; mode: Ad
     return {
       theme: 'rose-pine',
       mode: key.includes('dawn') ? 'light' : 'dark',
+    };
+  }
+  if (
+    key === 'one'
+    || key === 'one-dark'
+    || key === 'one-light'
+    || key === 'one-dark-light'
+    || key.startsWith('one-dark-light-')
+  ) {
+    return {
+      theme: 'one-dark-light',
+      mode: key === 'one-light' || key.includes('light') ? 'light' : key.includes('dark') ? 'dark' : DEFAULT_ADMIN_THEME_MODE,
     };
   }
   return {

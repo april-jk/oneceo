@@ -45,6 +45,7 @@ import type {
   SandboxRuntimeDetail,
   SandboxRuntimeRegistry,
   SandboxManagementOverview,
+  SandboxLiveSummary,
   SandboxArchiveHistoryEntry,
   VmDetailResponse,
   VmIpInfo,
@@ -633,6 +634,11 @@ export const api = {
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
+  getSandboxLiveSummary: () =>
+    request<SandboxLiveSummary>('/api/sandbox-management/live-summary', {
+      timeoutMs: 30000,
+      abortMessage: '加载 E2B Sandbox 数量超时，请稍后重试',
+    }),
   getSandboxRuntimeRegistry: (limit = 100) =>
     request<SandboxRuntimeRegistry>(`/api/sandbox-management/runtime-registry?limit=${limit}`, {
       timeoutMs: 30000,

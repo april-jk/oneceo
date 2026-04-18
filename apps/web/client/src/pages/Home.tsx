@@ -5,7 +5,14 @@
  * - 支持对话模式和任务创建智能体
  */
 
-import { useState, useRef, useEffect, useMemo, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -270,12 +277,12 @@ export default function Home() {
   >([]);
   const [slashMcpCatalog, setSlashMcpCatalog] = useState<
     Array<{ key: string; name: string; category: string }>
-  >(
-    [],
-  );
+  >([]);
   const [slashCatalogLoaded, setSlashCatalogLoaded] = useState(false);
   const [slashCatalogLoading, setSlashCatalogLoading] = useState(false);
-  const [slashCatalogError, setSlashCatalogError] = useState<string | null>(null);
+  const [slashCatalogError, setSlashCatalogError] = useState<string | null>(
+    null,
+  );
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [altusReplayOpen, setAltusReplayOpen] = useState(false);
@@ -283,12 +290,14 @@ export default function Home() {
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
+    "pro",
+  );
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMaximized, setPreviewMaximized] = useState(false);
-  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<string | null>(
-    null,
-  );
+  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<
+    string | null
+  >(null);
   const [previewTab, setPreviewTab] = useState<
     "files" | "changes" | "debug" | "deployment"
   >("files");
@@ -455,7 +464,9 @@ export default function Home() {
         const accounts = Array.isArray(connectorAccounts.accounts)
           ? connectorAccounts.accounts.filter(
               (item): item is (typeof connectorAccounts.accounts)[number] =>
-                Boolean(item && typeof item === "object" && "connectorKey" in item),
+                Boolean(
+                  item && typeof item === "object" && "connectorKey" in item,
+                ),
             )
           : [];
         const catalogByKey = new Map(
@@ -465,11 +476,15 @@ export default function Home() {
           .filter((item) => {
             if (item.authStatus !== "authorized") return false;
             const catalogItem = catalogByKey.get(item.connectorKey);
-            return Boolean(catalogItem?.available) && catalogItem?.category === "custom_mcp";
+            return (
+              Boolean(catalogItem?.available) &&
+              catalogItem?.category === "custom_mcp"
+            );
           })
           .map((item) => ({
             key: item.connectorKey,
-            name: catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
+            name:
+              catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
             category: "custom_mcp",
           }));
         setSlashSkillCatalog(nextSkills);
@@ -506,7 +521,8 @@ export default function Home() {
       for (const skill of slashSkillCatalog) {
         const name = (skill.name || "").toLowerCase();
         const slug = (skill.slug || "").toLowerCase();
-        if (keyword && !name.includes(keyword) && !slug.includes(keyword)) continue;
+        if (keyword && !name.includes(keyword) && !slug.includes(keyword))
+          continue;
         const id = `skill:${skill.skillId}:${skill.revisionId}`;
         list.push({
           id,
@@ -528,7 +544,8 @@ export default function Home() {
       for (const item of slashMcpCatalog) {
         const name = (item.name || "").toLowerCase();
         const key = (item.key || "").toLowerCase();
-        if (keyword && !name.includes(keyword) && !key.includes(keyword)) continue;
+        if (keyword && !name.includes(keyword) && !key.includes(keyword))
+          continue;
         const id = `mcp:${item.key}`;
         list.push({
           id,
@@ -761,8 +778,13 @@ export default function Home() {
   };
 
   const removeComposerReference = (token: ComposerReferenceToken) => {
-    setComposerReferences((prev) => prev.filter((item) => item.id !== token.id));
-    setMessage((prev) => `${prev}${prev.endsWith(" ") || !prev ? "" : " "}${token.queryText} `);
+    setComposerReferences((prev) =>
+      prev.filter((item) => item.id !== token.id),
+    );
+    setMessage(
+      (prev) =>
+        `${prev}${prev.endsWith(" ") || !prev ? "" : " "}${token.queryText} `,
+    );
   };
 
   const applySlashSuggestion = (suggestion: SlashSuggestion) => {
@@ -800,7 +822,9 @@ export default function Home() {
       if (event.key === "ArrowUp") {
         event.preventDefault();
         setSlashActiveIndex((prev) =>
-          suggestionCount > 0 ? (prev - 1 + suggestionCount) % suggestionCount : 0,
+          suggestionCount > 0
+            ? (prev - 1 + suggestionCount) % suggestionCount
+            : 0,
         );
         return;
       }
@@ -820,7 +844,11 @@ export default function Home() {
       }
     }
 
-    if (event.key === "Backspace" && !message && composerReferences.length > 0) {
+    if (
+      event.key === "Backspace" &&
+      !message &&
+      composerReferences.length > 0
+    ) {
       event.preventDefault();
       const last = composerReferences[composerReferences.length - 1];
       if (last) {
@@ -905,7 +933,11 @@ export default function Home() {
     const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
     const hasReferences = referenceDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments || hasReferences ? t("homeWorkspace.referencesAdded") : "");
+    const displayText =
+      trimmed ||
+      (hasAttachments || hasReferences
+        ? t("homeWorkspace.referencesAdded")
+        : "");
     const baseText =
       trimmed ||
       (hasAttachments
@@ -967,8 +999,14 @@ export default function Home() {
           category: item.category,
         }));
       let activeSessionId = (sessionId || "").trim();
-      if (altusMode !== "managed" && uploadableAttachments.length > 0 && !activeSessionId) {
-        activeSessionId = await ensureSession(displayText || t("homeWorkspace.newTaskSession"));
+      if (
+        altusMode !== "managed" &&
+        uploadableAttachments.length > 0 &&
+        !activeSessionId
+      ) {
+        activeSessionId = await ensureSession(
+          displayText || t("homeWorkspace.newTaskSession"),
+        );
       }
 
       let uploadedAttachments: UploadedTaskAttachment[] = [];
@@ -982,43 +1020,45 @@ export default function Home() {
 
       exitHistoryView();
       if (altusMode === "managed") {
-        await sendChatInput(
-          baseText,
-          {
-            sessionId: activeSessionId || undefined,
-            metadata: hasAttachments
+        await sendChatInput(baseText, {
+          sessionId: activeSessionId || undefined,
+          metadata: hasAttachments
+            ? {
+                ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
+                originalInput: displayText,
+              }
+            : selectedMcp.length
               ? {
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
+                  mcpReferences: selectedMcp,
                   originalInput: displayText,
                 }
-              : selectedMcp.length
-                ? {
-                    mcpReferences: selectedMcp,
-                    originalInput: displayText,
-                  }
-                : undefined,
-            files: uploadableAttachments.map((item) => item.file),
-          },
-        );
+              : undefined,
+          files: uploadableAttachments.map((item) => item.file),
+        });
       } else {
         await sendChatInput(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId || undefined,
-            metadata: uploadedAttachments.length || mergedSkills.length
-              ? {
-                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                  originalInput: displayText,
-                }
-              : selectedMcp.length
+            metadata:
+              uploadedAttachments.length || mergedSkills.length
                 ? {
-                    mcpReferences: selectedMcp,
+                    ...(uploadedAttachments.length
+                      ? { attachments: uploadedAttachments }
+                      : {}),
+                    ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                    ...(selectedMcp.length
+                      ? { mcpReferences: selectedMcp }
+                      : {}),
                     originalInput: displayText,
                   }
-                : undefined,
+                : selectedMcp.length
+                  ? {
+                      mcpReferences: selectedMcp,
+                      originalInput: displayText,
+                    }
+                  : undefined,
           },
         );
       }
@@ -1027,21 +1067,35 @@ export default function Home() {
         const draftFiles = attachmentDrafts
           .filter((item) => item.kind === "file")
           .map((item) => item.file);
-        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        const draftSkills = attachmentDrafts.filter(
+          (item) => item.kind === "skill",
+        );
         setAttachments((current) => {
-          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          const mergedFiles = mergePendingAttachments(
+            current,
+            draftFiles,
+          ).attachments;
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
       }
       if (hasReferences) {
         setComposerReferences(referenceDrafts);
       }
-      toast.error(error instanceof Error ? error.message : t("homeWorkspace.attachmentSendFailed"));
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.attachmentSendFailed"),
+      );
     }
   }
 
   const handleSend = () => {
-    if (!message.trim() && attachments.length === 0 && composerReferences.length === 0) return;
+    if (
+      !message.trim() &&
+      attachments.length === 0 &&
+      composerReferences.length === 0
+    )
+      return;
     setMode("chat");
     void submitPrompt(message);
     setMessage("");
@@ -1070,7 +1124,11 @@ export default function Home() {
     const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
     const hasReferences = referenceDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments || hasReferences ? t("homeWorkspace.referencesAdded") : "");
+    const displayText =
+      trimmed ||
+      (hasAttachments || hasReferences
+        ? t("homeWorkspace.referencesAdded")
+        : "");
     const baseText =
       trimmed ||
       (hasAttachments
@@ -1134,7 +1192,11 @@ export default function Home() {
           category: item.category,
         }));
       let uploadedAttachments: UploadedTaskAttachment[] = [];
-      if (altusMode !== "managed" && uploadableAttachments.length > 0 && activeSessionId) {
+      if (
+        altusMode !== "managed" &&
+        uploadableAttachments.length > 0 &&
+        activeSessionId
+      ) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
@@ -1167,19 +1229,24 @@ export default function Home() {
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId,
-            metadata: uploadedAttachments.length || mergedSkills.length
-              ? {
-                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                  originalInput: displayText,
-                }
-              : selectedMcp.length
+            metadata:
+              uploadedAttachments.length || mergedSkills.length
                 ? {
-                    mcpReferences: selectedMcp,
+                    ...(uploadedAttachments.length
+                      ? { attachments: uploadedAttachments }
+                      : {}),
+                    ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                    ...(selectedMcp.length
+                      ? { mcpReferences: selectedMcp }
+                      : {}),
                     originalInput: displayText,
                   }
-                : undefined,
+                : selectedMcp.length
+                  ? {
+                      mcpReferences: selectedMcp,
+                      originalInput: displayText,
+                    }
+                  : undefined,
           },
         );
       }
@@ -1188,16 +1255,25 @@ export default function Home() {
         const draftFiles = attachmentDrafts
           .filter((item) => item.kind === "file")
           .map((item) => item.file);
-        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        const draftSkills = attachmentDrafts.filter(
+          (item) => item.kind === "skill",
+        );
         setAttachments((current) => {
-          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          const mergedFiles = mergePendingAttachments(
+            current,
+            draftFiles,
+          ).attachments;
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
       }
       if (hasReferences) {
         setComposerReferences(referenceDrafts);
       }
-      toast.error(error instanceof Error ? error.message : t("homeWorkspace.attachmentSendFailed"));
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.attachmentSendFailed"),
+      );
     }
   }
 
@@ -1205,7 +1281,9 @@ export default function Home() {
     void submitQuestionAnswer(answer);
   };
 
-  const quickActionLabels = t("homeWorkspace.quickActions", { returnObjects: true }) as string[];
+  const quickActionLabels = t("homeWorkspace.quickActions", {
+    returnObjects: true,
+  }) as string[];
   const quickActions = [
     { label: quickActionLabels[0] || "", icon: "📊" },
     { label: quickActionLabels[1] || "", icon: "📄" },
@@ -1213,14 +1291,19 @@ export default function Home() {
     { label: quickActionLabels[3] || "", icon: "💻" },
   ];
 
-  const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
+  const chatItems = useMemo(
+    () => collapseRepeatedChatAuthors(buildChatItems(messages)),
+    [messages],
+  );
   const managedReplayByRun = useMemo(
     () => buildManagedReplayData(messages),
     [messages],
   );
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
   const hasSendDraft =
-    Boolean(message.trim()) || attachments.length > 0 || composerReferences.length > 0;
+    Boolean(message.trim()) ||
+    attachments.length > 0 ||
+    composerReferences.length > 0;
   const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
   const slashSkillSuggestions = useMemo(
     () => slashSuggestions.filter((item) => item.kind === "skill"),
@@ -1282,8 +1365,12 @@ export default function Home() {
                     <Terminal className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{item.label}</span>
-                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                    <span className="block truncate font-semibold">
+                      {item.label}
+                    </span>
+                    <span className="block truncate text-xs opacity-80">
+                      {item.subLabel}
+                    </span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
                 </button>
@@ -1316,8 +1403,12 @@ export default function Home() {
                     <Plug className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{item.label}</span>
-                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                    <span className="block truncate font-semibold">
+                      {item.label}
+                    </span>
+                    <span className="block truncate text-xs opacity-80">
+                      {item.subLabel}
+                    </span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
                 </button>
@@ -1331,7 +1422,9 @@ export default function Home() {
         {slashCatalogLoading
           ? t("homeWorkspace.loadingReferences")
           : slashCatalogError
-            ? t("homeWorkspace.referenceLoadFailedWithReason", { reason: slashCatalogError })
+            ? t("homeWorkspace.referenceLoadFailedWithReason", {
+                reason: slashCatalogError,
+              })
             : t("homeWorkspace.noReferencesFound", {
                 skills: slashSkillCatalog.length,
                 connectors: slashMcpCatalog.length,
@@ -1437,7 +1530,10 @@ export default function Home() {
     const target = resolveDiffTarget(options);
     if (
       !target &&
-      (options?.diffId || options?.filePath || options?.messageKey || options?.messageIndex !== undefined)
+      (options?.diffId ||
+        options?.filePath ||
+        options?.messageKey ||
+        options?.messageIndex !== undefined)
     ) {
       setPendingDiffTarget({
         diffId: options?.diffId || null,
@@ -1482,7 +1578,11 @@ export default function Home() {
       await submitDeploymentPrompt("deploy");
       toast.success(t("homeWorkspace.deploySubmitted"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("homeWorkspace.deployFailed"));
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.deployFailed"),
+      );
       throw error;
     }
   };
@@ -1492,9 +1592,7 @@ export default function Home() {
     const current = diffItems.find((item) => item.id === selectedDiffId);
     if (!current) return;
     const nextMessageKey =
-      current.eventMessageKey ||
-      current.relatedMessageKeys?.[0] ||
-      null;
+      current.eventMessageKey || current.relatedMessageKeys?.[0] || null;
     if (!nextMessageKey || nextMessageKey === selectedDiffMessageKey) {
       return;
     }
@@ -1521,8 +1619,9 @@ export default function Home() {
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
-  const activeAltusReplay =
-    altusReplayRunId ? managedReplayByRun.get(altusReplayRunId) || null : null;
+  const activeAltusReplay = altusReplayRunId
+    ? managedReplayByRun.get(altusReplayRunId) || null
+    : null;
   const activeAltusReplayIndex =
     activeAltusReplay && activeAltusReplay.actions.length > 0
       ? Math.min(
@@ -1574,11 +1673,7 @@ export default function Home() {
     if (altusReplayIndex > maxIndex) {
       setAltusReplayIndex(maxIndex);
     }
-  }, [
-    activeAltusReplay,
-    altusReplayIndex,
-    pendingAltusReplayToolCallId,
-  ]);
+  }, [activeAltusReplay, altusReplayIndex, pendingAltusReplayToolCallId]);
 
   useEffect(() => {
     if (!previewOpen && previewMaximized) {
@@ -1625,7 +1720,7 @@ export default function Home() {
 
   const chatPanel = (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-white shadow-sm">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
           <div className="min-w-0 space-y-1">
             <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
@@ -1638,7 +1733,9 @@ export default function Home() {
           <div className="flex min-w-0 items-center gap-2">
             {runtime.orchestratorSessionId && runtime.ready ? (
               <span className="truncate text-xs text-muted-foreground">
-                {t("homeWorkspace.runtimeAttached", { sessionId: runtime.orchestratorSessionId })}
+                {t("homeWorkspace.runtimeAttached", {
+                  sessionId: runtime.orchestratorSessionId,
+                })}
               </span>
             ) : null}
             <Button
@@ -1655,7 +1752,9 @@ export default function Home() {
                 });
               }}
             >
-              {previewOpen ? t("homeWorkspace.hidePreview") : t("homeWorkspace.showPreview")}
+              {previewOpen
+                ? t("homeWorkspace.hidePreview")
+                : t("homeWorkspace.showPreview")}
             </Button>
             <Button
               type="button"
@@ -1712,7 +1811,9 @@ export default function Home() {
                     className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`}
                   />
                 }
-                text={t("homeWorkspace.runtimeConnected", { sessionId: runtime.orchestratorSessionId })}
+                text={t("homeWorkspace.runtimeConnected", {
+                  sessionId: runtime.orchestratorSessionId,
+                })}
               />
             )}
 
@@ -1753,13 +1854,17 @@ export default function Home() {
         >
           <div className="px-6 py-3">
             {slashSuggestionPanel ? (
-              <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+              <div className="mx-auto mb-2 w-[92%] max-w-full">
+                {slashSuggestionPanel}
+              </div>
             ) : null}
-            <div className="w-full rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)]">
+            <div className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
               <div className="space-y-3 p-4">
                 <Textarea
                   placeholder={
-                    currentQuestion ? t("homeWorkspace.answerPlaceholder") : t("homeWorkspace.continuePlaceholder")
+                    currentQuestion
+                      ? t("homeWorkspace.answerPlaceholder")
+                      : t("homeWorkspace.continuePlaceholder")
                   }
                   value={message}
                   onChange={(e) => handleComposerInputChange(e.target.value)}
@@ -1777,7 +1882,7 @@ export default function Home() {
                       },
                     })
                   }
-                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0"
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
                   rows={2}
                 />
                 {composerReferenceTokens}
@@ -1804,7 +1909,7 @@ export default function Home() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-[#F1F5F9]"
+                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-accent"
                               >
                                 <Sparkles className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm text-muted-foreground">
@@ -1822,7 +1927,9 @@ export default function Home() {
                             onClick={() => setSelectedModel("lite")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">{t("homePage.models.lite")}</span>
+                              <span className="font-medium">
+                                {t("homePage.models.lite")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
                                 {t("ceoView.modelLiteHint")}
                               </span>
@@ -1832,7 +1939,9 @@ export default function Home() {
                             onClick={() => setSelectedModel("pro")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">{t("homePage.models.pro")}</span>
+                              <span className="font-medium">
+                                {t("homePage.models.pro")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
                                 {t("ceoView.modelProHint")}
                               </span>
@@ -1842,7 +1951,9 @@ export default function Home() {
                             onClick={() => setSelectedModel("max")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">{t("homePage.models.max")}</span>
+                              <span className="font-medium">
+                                {t("homePage.models.max")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
                                 {t("ceoView.modelMaxHint")}
                               </span>
@@ -1858,7 +1969,7 @@ export default function Home() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 rounded-full transition-colors hover:bg-[#F1F5F9]"
+                            className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
                           >
                             <Mic className="w-4 h-4 text-muted-foreground" />
                           </Button>
@@ -1890,7 +2001,7 @@ export default function Home() {
                                   : !message.trim() && attachments.length === 0)
                             }
                             size="icon"
-                            className="h-9 w-9 rounded-full bg-[#0F172A] transition-colors hover:bg-[#1E293B] disabled:opacity-50"
+                            className="h-9 w-9 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
                           >
                             {showStopButton ? (
                               <Square className="w-4 h-4" />
@@ -1900,7 +2011,11 @@ export default function Home() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{showStopButton ? t("homeWorkspace.stopExecution") : t("homePage.sendMessage")}</p>
+                          <p>
+                            {showStopButton
+                              ? t("homeWorkspace.stopExecution")
+                              : t("homePage.sendMessage")}
+                          </p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -1985,21 +2100,25 @@ export default function Home() {
                     className="relative"
                   >
                     {slashSuggestionPanel ? (
-                      <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+                      <div className="mx-auto mb-2 w-[92%] max-w-full">
+                        {slashSuggestionPanel}
+                      </div>
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div className="rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)] space-y-3">
+                    <div className="space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
                       {/* Textarea */}
                       <Textarea
                         placeholder={t("homePage.textareaPlaceholder")}
                         value={message}
-                        onChange={(e) => handleComposerInputChange(e.target.value)}
+                        onChange={(e) =>
+                          handleComposerInputChange(e.target.value)
+                        }
                         onKeyDown={(e) =>
                           handleComposerKeyDown(e, {
                             submit: () => handleSend(),
                           })
                         }
-                        className="border-0 bg-transparent text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
+                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
                         rows={4}
                       />
                       {composerReferenceTokens}
@@ -2029,7 +2148,7 @@ export default function Home() {
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="h-9 px-3 rounded-xl hover:bg-[#F1F5F9] transition-colors gap-2"
+                                      className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
                                     >
                                       <Sparkles className="w-4 h-4 text-muted-foreground" />
                                       <span className="text-sm text-muted-foreground">
@@ -2050,7 +2169,9 @@ export default function Home() {
                                   onClick={() => setSelectedModel("lite")}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">{t("homePage.models.lite")}</span>
+                                    <span className="font-medium">
+                                      {t("homePage.models.lite")}
+                                    </span>
                                     <span className="text-xs text-muted-foreground">
                                       {t("ceoView.modelLiteHint")}
                                     </span>
@@ -2060,7 +2181,9 @@ export default function Home() {
                                   onClick={() => setSelectedModel("pro")}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">{t("homePage.models.pro")}</span>
+                                    <span className="font-medium">
+                                      {t("homePage.models.pro")}
+                                    </span>
                                     <span className="text-xs text-muted-foreground">
                                       {t("ceoView.modelProHint")}
                                     </span>
@@ -2070,7 +2193,9 @@ export default function Home() {
                                   onClick={() => setSelectedModel("max")}
                                 >
                                   <div className="flex flex-col">
-                                    <span className="font-medium">{t("homePage.models.max")}</span>
+                                    <span className="font-medium">
+                                      {t("homePage.models.max")}
+                                    </span>
                                     <span className="text-xs text-muted-foreground">
                                       {t("ceoView.modelMaxHint")}
                                     </span>
@@ -2088,7 +2213,7 @@ export default function Home() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-9 w-9 rounded-full hover:bg-[#F1F5F9] transition-colors"
+                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
                                 >
                                   <Mic className="w-4 h-4 text-muted-foreground" />
                                 </Button>
@@ -2109,7 +2234,7 @@ export default function Home() {
                                     composerReferences.length === 0
                                   }
                                   size="icon"
-                                  className="h-9 w-9 rounded-full bg-[#0F172A] hover:bg-[#1E293B] transition-colors disabled:opacity-50"
+                                  className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                                 >
                                   <Send className="w-4 h-4" />
                                 </Button>
@@ -2157,7 +2282,9 @@ export default function Home() {
                 {showDesktopPreview ? (
                   previewMaximized ? (
                     <div className="flex h-full min-h-0 flex-1 overflow-hidden">
-                      <div className="h-full min-h-0 w-full">{previewPanel}</div>
+                      <div className="h-full min-h-0 w-full">
+                        {previewPanel}
+                      </div>
                     </div>
                   ) : (
                     <ResizablePanelGroup
@@ -2172,8 +2299,14 @@ export default function Home() {
                         withHandle
                         className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
                       />
-                      <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
-                        <div className="h-full min-h-0 pl-2">{previewPanel}</div>
+                      <ResizablePanel
+                        defaultSize={34}
+                        minSize={30}
+                        maxSize={48}
+                      >
+                        <div className="h-full min-h-0 pl-2">
+                          {previewPanel}
+                        </div>
                       </ResizablePanel>
                     </ResizablePanelGroup>
                   )
@@ -2218,7 +2351,9 @@ export default function Home() {
           latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
-            setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
+            setAltusReplayIndex(
+              Math.max(0, activeAltusReplay.actions.length - 1),
+            )
           }
           diffItems={diffItems}
           runtimeReady={runtime.ready}
@@ -2281,7 +2416,13 @@ export type ChatItem =
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
-  | { kind: "agent"; markdown: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent";
+      markdown: string;
+      author?: string;
+      messageKey?: string;
+      showAuthor?: boolean;
+    }
   | {
       kind: "clarification_notice";
       text: string;
@@ -2297,7 +2438,13 @@ export type ChatItem =
       active?: boolean;
       showAuthor?: boolean;
     }
-  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent_plain";
+      text: string;
+      author?: string;
+      messageKey?: string;
+      showAuthor?: boolean;
+    }
   | {
       kind: "capsule";
       label: string;
@@ -2448,7 +2595,10 @@ const PROGRESS_STATUS_DEFINITIONS: ProgressStatusDefinition[] = [
     loading: true,
   },
   {
-    patterns: ["正在分析您的任务需求...", "Analyzing your task requirements..."],
+    patterns: [
+      "正在分析您的任务需求...",
+      "Analyzing your task requirements...",
+    ],
     tone: "intent",
     loading: true,
   },
@@ -2527,20 +2677,28 @@ const CAPSULE_FALLBACK_LABELS: FallbackLabelDefinition[] = [
   },
 ];
 
-function findProgressStatusDefinition(label: string): ProgressStatusDefinition | null {
+function findProgressStatusDefinition(
+  label: string,
+): ProgressStatusDefinition | null {
   const text = label.trim();
   if (!text) return null;
   return (
     PROGRESS_STATUS_DEFINITIONS.find((definition) =>
-      definition.patterns.some((pattern) => text.includes(pattern))
+      definition.patterns.some((pattern) => text.includes(pattern)),
     ) || null
   );
 }
 
-function findFallbackCapsuleLabel(label: string): FallbackLabelDefinition | null {
+function findFallbackCapsuleLabel(
+  label: string,
+): FallbackLabelDefinition | null {
   const text = label.trim();
   if (!text) return null;
-  return CAPSULE_FALLBACK_LABELS.find((definition) => text.startsWith(definition.pattern)) || null;
+  return (
+    CAPSULE_FALLBACK_LABELS.find((definition) =>
+      text.startsWith(definition.pattern),
+    ) || null
+  );
 }
 
 function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
@@ -2949,7 +3107,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           asText(metadata.toolCallId) ||
           message.messageKey ||
           `${managedRunId}:${managedToolName}:${index}`;
-        const artifactPath = extractManagedArtifactPath(managedToolName, metadata);
+        const artifactPath = extractManagedArtifactPath(
+          managedToolName,
+          metadata,
+        );
         if (
           managedEventType === "tool_call_completed" &&
           managedRunId &&
@@ -2994,7 +3155,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "capsule",
-            label: asText(metadata.content) || i18n.t("homeWorkspace.artifactUpdated"),
+            label:
+              asText(metadata.content) ||
+              i18n.t("homeWorkspace.artifactUpdated"),
             tone: "review",
             messageKey: message.messageKey,
           });
@@ -3017,7 +3180,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
       if (eventType === "turn.started") {
         const progressLabel = `${executorLabel} ${i18n.t("homeWorkspace.executionStarted")}`;
-        pushProgress(progressLabel, progressLabel, "execution", message.messageKey);
+        pushProgress(
+          progressLabel,
+          progressLabel,
+          "execution",
+          message.messageKey,
+        );
         continue;
       }
 
@@ -3028,7 +3196,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "capsule",
-            label: errorMessage || `${executorLabel} ${i18n.t("homeWorkspace.executionFailed")}`,
+            label:
+              errorMessage ||
+              `${executorLabel} ${i18n.t("homeWorkspace.executionFailed")}`,
             tone: "error",
             messageKey: message.messageKey,
           });
@@ -3085,14 +3255,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           i18n.t("homeWorkspace.shellCommand");
         const commandCard = getCodexCommandCardCopy(commandText);
         const targetPath =
-          asText(metadata.targetPath) || extractCodexCommandTargetPath(commandText);
+          asText(metadata.targetPath) ||
+          extractCodexCommandTargetPath(commandText);
         const outputPreview =
-          asText(metadata.outputPreview) ||
-          asText(item.aggregated_output);
+          asText(metadata.outputPreview) || asText(item.aggregated_output);
         const exitCodeValue =
-          metadata.exitCode ??
-          item.exit_code ??
-          item.exitCode;
+          metadata.exitCode ?? item.exit_code ?? item.exitCode;
         const exitCode =
           typeof exitCodeValue === "number" && Number.isFinite(exitCodeValue)
             ? exitCodeValue
@@ -3156,9 +3324,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const filePaths = Array.isArray(metadata.filePaths)
           ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
           : [];
-        const turnPaths = turnId
-          ? (codexTurnFilePaths.get(turnId) || [])
-          : [];
+        const turnPaths = turnId ? codexTurnFilePaths.get(turnId) || [] : [];
         const effectivePaths = filePaths.length > 0 ? filePaths : turnPaths;
         const effectiveFiles =
           fileChanges.length > 0
@@ -3296,7 +3462,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
                   "completed",
               },
             },
-            content: primary?.path ? `${i18n.t("homeWorkspace.changeDraft")} · ${getFilename(primary.path)}` : i18n.t("homeWorkspace.changeDraft"),
+            content: primary?.path
+              ? `${i18n.t("homeWorkspace.changeDraft")} · ${getFilename(primary.path)}`
+              : i18n.t("homeWorkspace.changeDraft"),
             metadata: {
               ...metadata,
               eventType: "file.changed",
@@ -3438,7 +3606,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "clarification_request") {
       flushProgress();
-      const question = message.question || i18n.t("homeWorkspace.provideMoreInfo");
+      const question =
+        message.question || i18n.t("homeWorkspace.provideMoreInfo");
       const previousMessage = index > 0 ? messages[index - 1] : null;
       const previousContent =
         previousMessage?.type === "agent_message"
@@ -3459,7 +3628,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         previousMessage?.type === "agent_message"
           ? asText(toRecord(previousMessage.metadata).runId)
           : "";
-      const isSameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
+      const isSameRun =
+        !currentRunId || !previousRunId || currentRunId === previousRunId;
       if (
         previousMessage?.type === "agent_message" &&
         isSameRun &&
@@ -3647,9 +3817,7 @@ function countDirectMarkdownLines(value: string) {
 function isLongDirectMarkdown(value: string) {
   const normalized = value.trim();
   if (!normalized) return false;
-  return (
-    countDirectMarkdownLines(normalized) >= 14 || normalized.length >= 600
-  );
+  return countDirectMarkdownLines(normalized) >= 14 || normalized.length >= 600;
 }
 
 function buildDirectMarkdownFoldSummary(
@@ -3708,7 +3876,10 @@ function buildRawMarkdownFoldSegment(
     /^diff --git\b/m.test(trimmed) ||
     (/^@@/m.test(trimmed) && /^[-+ ]/m.test(trimmed))
   ) {
-    return buildDirectMarkdownFoldSummary(i18n.t("homeWorkspace.patchLabel"), trimmed);
+    return buildDirectMarkdownFoldSummary(
+      i18n.t("homeWorkspace.patchLabel"),
+      trimmed,
+    );
   }
   return null;
 }
@@ -3809,7 +3980,11 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     return turn;
   };
 
-  const upsertTurnPart = (turn: DirectTurnDraft, key: string, part: OpencodeTurnPart) => {
+  const upsertTurnPart = (
+    turn: DirectTurnDraft,
+    key: string,
+    part: OpencodeTurnPart,
+  ) => {
     const existingIndex = turn.assistantPartIndex.get(key);
     if (existingIndex === undefined) {
       turn.assistantPartIndex.set(key, turn.assistantParts.length);
@@ -3882,7 +4057,9 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       }
       const turn = ensureTurnForMessage(messageId);
       turn.messageKey = turn.messageKey || message.messageKey;
-      const completedAt = asText(toRecord(toRecord(eventInfo.properties.info).time).completed);
+      const completedAt = asText(
+        toRecord(toRecord(eventInfo.properties.info).time).completed,
+      );
       if (completedAt) {
         turn.working = false;
       }
@@ -3897,7 +4074,8 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     turn.messageKey = turn.messageKey || message.messageKey;
 
     if (eventType === "message.final") {
-      const partId = asText(eventInfo.part.id) || asText(metadata.partId) || "final";
+      const partId =
+        asText(eventInfo.part.id) || asText(metadata.partId) || "final";
       if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
         continue;
       }
@@ -3911,11 +4089,17 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       continue;
     }
 
-    if (eventType !== "message.part.updated" && eventType !== "message.part.delta") {
+    if (
+      eventType !== "message.part.updated" &&
+      eventType !== "message.part.delta"
+    ) {
       continue;
     }
 
-    const partId = asText(eventInfo.part.id) || asText(metadata.partId) || `${eventInfo.partType || "part"}-${index}`;
+    const partId =
+      asText(eventInfo.part.id) ||
+      asText(metadata.partId) ||
+      `${eventInfo.partType || "part"}-${index}`;
     const partType = eventInfo.partType;
     if (partType === "text") {
       if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
@@ -3961,7 +4145,8 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
         }
         seenDiffSignatures.add(signature);
       }
-      const diffId = message.messageKey || `${messageId || "assistant"}:${partId}`;
+      const diffId =
+        message.messageKey || `${messageId || "assistant"}:${partId}`;
       upsertTurnPart(turn, `tool:${messageId || "assistant"}:${partId}`, {
         kind: "tool",
         eventType,
@@ -3973,7 +4158,9 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
         messageKey: message.messageKey,
         partId,
       });
-      const toolStatus = asText(toRecord(eventInfo.part.state).status).toLowerCase();
+      const toolStatus = asText(
+        toRecord(eventInfo.part.state).status,
+      ).toLowerCase();
       if (toolStatus === "pending" || toolStatus === "running") {
         turn.working = true;
       }
@@ -4005,11 +4192,15 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   }
 
-  return items.length > 0 ? [...fallbackItems, ...items] : buildLegacyChatItems(messages);
+  return items.length > 0
+    ? [...fallbackItems, ...items]
+    : buildLegacyChatItems(messages);
 }
 
 export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
-  const hasOpencodeEvents = messages.some((message) => message.type === "opencode_event");
+  const hasOpencodeEvents = messages.some(
+    (message) => message.type === "opencode_event",
+  );
   if (!hasOpencodeEvents) {
     return buildLegacyChatItems(messages);
   }
@@ -4117,10 +4308,7 @@ function DirectMarkdownMessage({
             muted={muted}
           />
         ) : (
-          <div
-            key={`markdown-${index}`}
-            className={bodyClassName}
-          >
+          <div key={`markdown-${index}`} className={bodyClassName}>
             <Streamdown>{segment.markdown}</Streamdown>
           </div>
         ),
@@ -4158,9 +4346,7 @@ function CodexExplanationMessage({
               {author}
             </div>
           ) : null}
-          <div className="text-sm leading-7 text-foreground">
-            {heading}
-          </div>
+          <div className="text-sm leading-7 text-foreground">{heading}</div>
           {collapsedMarkdown ? (
             <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
               <Streamdown>{collapsedMarkdown}</Streamdown>
@@ -4184,9 +4370,9 @@ function CodexExplanationMessage({
             {author}
           </div>
         ) : null}
-        <div className="relative overflow-hidden rounded-xl border border-slate-200/80 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.14),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm">
-          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-slate-500 to-transparent" />
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+        <div className="relative overflow-hidden rounded-xl border border-border/70 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.12),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm dark:bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.12),_transparent_58%),linear-gradient(180deg,rgba(24,24,27,0.96),rgba(17,17,20,0.96))]">
+          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-muted-foreground to-transparent" />
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             {heading}
           </div>
           <div className="pr-4">
@@ -4231,7 +4417,10 @@ function MessageBubble({
         className="w-full space-y-4"
         data-message-key={item.messageKey}
       >
-        <div className="w-full flex justify-end" data-message-key={item.userMessageKey}>
+        <div
+          className="w-full flex justify-end"
+          data-message-key={item.userMessageKey}
+        >
           <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
             {item.skills?.length || item.attachments?.length ? (
               <MessageAttachmentReference
@@ -4241,7 +4430,9 @@ function MessageBubble({
               />
             ) : null}
             {item.userText ? (
-              <span className="whitespace-pre-wrap break-words">{item.userText}</span>
+              <span className="whitespace-pre-wrap break-words">
+                {item.userText}
+              </span>
             ) : null}
           </div>
         </div>
@@ -4282,7 +4473,9 @@ function MessageBubble({
                 {i18n.t("homeWorkspace.thinking")}
               </span>
               {item.thinkingLabel ? (
-                <span className="text-muted-foreground">{item.thinkingLabel}</span>
+                <span className="text-muted-foreground">
+                  {item.thinkingLabel}
+                </span>
               ) : null}
             </div>
           ) : null}
@@ -4357,7 +4550,13 @@ function MessageBubble({
           className="flex items-center gap-[6px] py-1.5 text-sm font-medium"
           style={{ color: "var(--function-warning, rgb(217 119 6))" }}
         >
-          <svg height="16" width="16" fill="none" viewBox="0 0 16 16" aria-hidden="true">
+          <svg
+            height="16"
+            width="16"
+            fill="none"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
             <circle
               cx="8"
               cy="8"
@@ -4551,14 +4750,32 @@ function isProgressLoadingLabel(label: string): boolean {
   if (progressStatus) {
     return progressStatus.loading;
   }
-  const completeKeywords = ["完成", "已生成", "已就绪", "已接入", "成功", "completed", "generated", "ready", "attached", "success"];
-  return !completeKeywords.some((keyword) => text.toLowerCase().includes(keyword.toLowerCase()));
+  const completeKeywords = [
+    "完成",
+    "已生成",
+    "已就绪",
+    "已接入",
+    "成功",
+    "completed",
+    "generated",
+    "ready",
+    "attached",
+    "success",
+  ];
+  return !completeKeywords.some((keyword) =>
+    text.toLowerCase().includes(keyword.toLowerCase()),
+  );
 }
 
 function getCapsuleTone(label: string): CapsuleTone {
   const text = label.trim();
   const lower = text.toLowerCase();
-  if (lower.includes("错误") || lower.includes("失败") || lower.includes("error") || lower.includes("failed")) {
+  if (
+    lower.includes("错误") ||
+    lower.includes("失败") ||
+    lower.includes("error") ||
+    lower.includes("failed")
+  ) {
     return "error";
   }
   const progressStatus = findProgressStatusDefinition(text);
@@ -4566,7 +4783,8 @@ function getCapsuleTone(label: string): CapsuleTone {
   const fallbackLabel = findFallbackCapsuleLabel(text);
   if (fallbackLabel) return fallbackLabel.tone;
   if (lower.includes("analysis")) return "intent";
-  if (lower.includes("develop") || lower.includes("execution")) return "execution";
+  if (lower.includes("develop") || lower.includes("execution"))
+    return "execution";
   if (lower.includes("test")) return "review";
   if (lower.includes("plan")) return "planning";
   return "system";
@@ -4598,9 +4816,11 @@ function isLikelyMarkdownText(value: string): boolean {
 function formatOpencodeEventLabel(eventType: string, stream: boolean): string {
   if (stream) return i18n.t("homeWorkspace.opencodeLiveOutput");
   if (!eventType) return "OpenCode";
-  if (eventType === "message.final") return i18n.t("homeWorkspace.opencodeFinalOutput");
+  if (eventType === "message.final")
+    return i18n.t("homeWorkspace.opencodeFinalOutput");
   if (eventType === "session.idle") return i18n.t("homeWorkspace.opencodeIdle");
-  if (eventType === "session.status") return i18n.t("homeWorkspace.opencodeStatus");
+  if (eventType === "session.status")
+    return i18n.t("homeWorkspace.opencodeStatus");
   return `OpenCode · ${eventType}`;
 }
 
@@ -4690,8 +4910,11 @@ function getOpencodeEventInfo(
     part,
     partType,
     toolName,
-    role:
-      (asText(message.role) || asText(properties.role) || asText(part.role)).toLowerCase(),
+    role: (
+      asText(message.role) ||
+      asText(properties.role) ||
+      asText(part.role)
+    ).toLowerCase(),
   };
 }
 
@@ -4726,12 +4949,7 @@ function getDirectory(path: string | undefined) {
   return normalized.slice(0, idx + 1);
 }
 
-type CodexCommandCategory =
-  | "list"
-  | "search"
-  | "read"
-  | "write"
-  | "command";
+type CodexCommandCategory = "list" | "search" | "read" | "write" | "command";
 
 function normalizeShellCommand(command: string): string {
   const trimmed = command.trim();
@@ -4798,7 +5016,9 @@ function extractCodexCommandTargetPath(command: string): string {
 
   const heredocMatch = normalized.match(/(?:^|\s)>\s*([^\n]+)/);
   if (heredocMatch?.[1]) {
-    const token = stripShellQuotes(heredocMatch[1].trim().split(/\s+/)[0] || "");
+    const token = stripShellQuotes(
+      heredocMatch[1].trim().split(/\s+/)[0] || "",
+    );
     if (token) return token;
   }
 
@@ -4858,7 +5078,11 @@ function inferCodexWriteLabel(command: string): string {
   if (normalized.startsWith("mv ")) return i18n.t("homeWorkspace.moveFile");
   if (normalized.startsWith("cp ")) return i18n.t("homeWorkspace.copyFile");
   if (normalized.includes(">>")) return i18n.t("homeWorkspace.appendFile");
-  if (normalized.includes("cat <<") || normalized.includes(">") || normalized.includes("tee ")) {
+  if (
+    normalized.includes("cat <<") ||
+    normalized.includes(">") ||
+    normalized.includes("tee ")
+  ) {
     return i18n.t("homeWorkspace.fileEdit");
   }
   return i18n.t("homeWorkspace.fileEdit");
@@ -4868,15 +5092,31 @@ function getCodexCommandCardCopy(command: string) {
   const category = inferCodexCommandCategory(command);
   switch (category) {
     case "list":
-      return { category, title: i18n.t("homeWorkspace.directoryCheck"), icon: FolderSearch2 };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.directoryCheck"),
+        icon: FolderSearch2,
+      };
     case "search":
       return { category, title: i18n.t("homeWorkspace.search"), icon: Search };
     case "read":
-      return { category, title: i18n.t("homeWorkspace.fileView"), icon: FileSearch };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.fileView"),
+        icon: FileSearch,
+      };
     case "write":
-      return { category, title: i18n.t("homeWorkspace.fileEdit"), icon: FilePenLine };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.fileEdit"),
+        icon: FilePenLine,
+      };
     default:
-      return { category, title: i18n.t("homeWorkspace.shellExecution"), icon: Terminal };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.shellExecution"),
+        icon: Terminal,
+      };
   }
 }
 
@@ -4905,7 +5145,11 @@ function extractCodexFileChanges(
 
 function mapCodexFileChangeLabel(kind: string): string {
   const normalized = kind.trim().toLowerCase();
-  if (normalized === "add" || normalized === "create" || normalized === "created") {
+  if (
+    normalized === "add" ||
+    normalized === "create" ||
+    normalized === "created"
+  ) {
     return i18n.t("homeWorkspace.createFile");
   }
   if (
@@ -4923,29 +5167,50 @@ function getToolInfo(tool: string, input: Record<string, unknown>) {
   const lower = tool.toLowerCase();
   switch (lower) {
     case "read":
-      return { title: i18n.t("homeWorkspace.readAction"), subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("homeWorkspace.readAction"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "list":
       return {
         title: i18n.t("homeWorkspace.listAction"),
         subtitle: getDirectory(asText(input.path) || "/"),
       };
     case "glob":
-      return { title: i18n.t("homeWorkspace.matchAction"), subtitle: asText(input.pattern) };
+      return {
+        title: i18n.t("homeWorkspace.matchAction"),
+        subtitle: asText(input.pattern),
+      };
     case "grep":
-      return { title: i18n.t("homeWorkspace.search"), subtitle: asText(input.pattern) };
+      return {
+        title: i18n.t("homeWorkspace.search"),
+        subtitle: asText(input.pattern),
+      };
     case "webfetch":
-      return { title: i18n.t("homeWorkspace.fetchAction"), subtitle: asText(input.url) };
+      return {
+        title: i18n.t("homeWorkspace.fetchAction"),
+        subtitle: asText(input.url),
+      };
     case "task":
-      return { title: i18n.t("homeWorkspace.subtaskAction"), subtitle: asText(input.description) };
+      return {
+        title: i18n.t("homeWorkspace.subtaskAction"),
+        subtitle: asText(input.description),
+      };
     case "bash":
       return {
         title: "Shell",
         subtitle: asText(input.description) || asText(input.command),
       };
     case "edit":
-      return { title: i18n.t("common.edit"), subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("common.edit"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "write":
-      return { title: i18n.t("homeWorkspace.writeAction"), subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("homeWorkspace.writeAction"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "apply_patch":
       return {
         title: i18n.t("homeWorkspace.patchLabel"),
@@ -4984,11 +5249,17 @@ function summarizeTooltipLines(lines: Array<string | null | undefined>) {
     .join("\n");
 }
 
-function buildDetailPreview(value: string, maxLines = 3, maxCharsPerLine = 120) {
+function buildDetailPreview(
+  value: string,
+  maxLines = 3,
+  maxCharsPerLine = 120,
+) {
   const lines = value
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
-    .filter((line, index, arr) => line || arr.length === 1 || index < arr.length - 1);
+    .filter(
+      (line, index, arr) => line || arr.length === 1 || index < arr.length - 1,
+    );
   const normalizedLines = lines.length > 0 ? lines : [value.trim()];
   const previewLines = normalizedLines.slice(0, maxLines).map((line) => {
     if (line.length <= maxCharsPerLine) return line;
@@ -5043,7 +5314,9 @@ export function buildOpencodeAtomicTooltip(input: {
   const pattern = asText(toolInput.pattern) || asText(properties.pattern);
   const url = asText(toolInput.url) || asText(properties.url);
   const shortOutput = truncateText(output, 240).text;
-  const toolLabel = input.toolName ? `${i18n.t("homeWorkspace.toolLabel")}: ${input.toolName}` : "";
+  const toolLabel = input.toolName
+    ? `${i18n.t("homeWorkspace.toolLabel")}: ${input.toolName}`
+    : "";
   const fileList = Array.isArray((properties as Record<string, unknown>).files)
     ? ((properties as Record<string, unknown>).files as unknown[])
         .map((item) => toRecord(item))
@@ -5057,9 +5330,13 @@ export function buildOpencodeAtomicTooltip(input: {
   if (toolKey === "bash" || input.eventType === "command.executed") {
     return summarizeTooltipLines([
       toolLabel,
-      baseCommand ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}` : "",
+      baseCommand
+        ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}`
+        : "",
       cwd ? `${i18n.t("homeWorkspace.directoryLabel")}: ${cwd}` : "",
-      shortOutput ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}` : "",
+      shortOutput
+        ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}`
+        : "",
     ]);
   }
 
@@ -5087,7 +5364,9 @@ export function buildOpencodeAtomicTooltip(input: {
   if (toolKey === "grep") {
     return summarizeTooltipLines([
       toolLabel,
-      pattern ? `${i18n.t("homeWorkspace.searchPatternLabel")}: ${pattern}` : "",
+      pattern
+        ? `${i18n.t("homeWorkspace.searchPatternLabel")}: ${pattern}`
+        : "",
       filePath ? `${i18n.t("homeWorkspace.scopeLabel")}: ${filePath}` : "",
     ]);
   }
@@ -5103,7 +5382,9 @@ export function buildOpencodeAtomicTooltip(input: {
   if (toolKey === "list") {
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `${i18n.t("homeWorkspace.listDirectoryLabel")}: ${filePath}` : "",
+      filePath
+        ? `${i18n.t("homeWorkspace.listDirectoryLabel")}: ${filePath}`
+        : "",
     ]);
   }
 
@@ -5129,18 +5410,25 @@ export function buildOpencodeAtomicTooltip(input: {
       toolLabel,
       i18n.t("homeWorkspace.patchTargetFiles"),
       ...files.slice(0, 6).map((file) => `- ${file}`),
-      files.length > 6 ? `- ${i18n.t("homeWorkspace.otherFiles", { count: files.length - 6 })}` : "",
+      files.length > 6
+        ? `- ${i18n.t("homeWorkspace.otherFiles", { count: files.length - 6 })}`
+        : "",
     ]);
   }
 
-  if (input.eventType.startsWith("file.") || input.eventType === "file.changed") {
+  if (
+    input.eventType.startsWith("file.") ||
+    input.eventType === "file.changed"
+  ) {
     if (fileList.length > 0) {
       return summarizeTooltipLines([
         toolLabel,
         ...fileList
           .slice(0, 6)
           .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`),
-        fileList.length > 6 ? i18n.t("homeWorkspace.otherFiles", { count: fileList.length - 6 }) : "",
+        fileList.length > 6
+          ? i18n.t("homeWorkspace.otherFiles", { count: fileList.length - 6 })
+          : "",
       ]);
     }
     return summarizeTooltipLines([
@@ -5150,18 +5438,25 @@ export function buildOpencodeAtomicTooltip(input: {
   }
 
   if (toolKey === "task") {
-    const description = asText(toolInput.description) || asText(properties.description);
+    const description =
+      asText(toolInput.description) || asText(properties.description);
     return summarizeTooltipLines([
       toolLabel,
-      description ? `${i18n.t("homeWorkspace.subtaskLabel")}: ${description}` : "",
+      description
+        ? `${i18n.t("homeWorkspace.subtaskLabel")}: ${description}`
+        : "",
     ]);
   }
 
   return summarizeTooltipLines([
     toolLabel,
-    baseCommand ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}` : "",
+    baseCommand
+      ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}`
+      : "",
     filePath ? `${i18n.t("homeWorkspace.pathLabel")}: ${filePath}` : "",
-    shortOutput ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}` : "",
+    shortOutput
+      ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}`
+      : "",
   ]);
 }
 
@@ -5286,7 +5581,10 @@ function OpencodeToolCard({
     if (eventType.startsWith("file.")) {
       const filePath = asText(properties.file) || asText(properties.path);
       info = {
-        title: eventType === "file.watcher.updated" ? i18n.t("homeWorkspace.fileWatch") : i18n.t("homeWorkspace.fileUpdate"),
+        title:
+          eventType === "file.watcher.updated"
+            ? i18n.t("homeWorkspace.fileWatch")
+            : i18n.t("homeWorkspace.fileUpdate"),
         subtitle: getFilename(filePath),
       };
     } else if (eventType === "command.executed") {
@@ -5357,7 +5655,9 @@ function OpencodeToolCard({
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>{detailTitle}</DialogTitle>
-            <DialogDescription>{i18n.t("homeWorkspace.toolDetailDescription")}</DialogDescription>
+            <DialogDescription>
+              {i18n.t("homeWorkspace.toolDetailDescription")}
+            </DialogDescription>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
             {detailBodyText}
@@ -5386,13 +5686,13 @@ function OpencodeToolCard({
           }
           className="text-left"
         >
-            <EventCapsule
-              icon={FileDiff}
-              text={i18n.t("homeWorkspace.diffClickToView")}
-              title={explanationText || undefined}
-            />
+          <EventCapsule
+            icon={FileDiff}
+            text={i18n.t("homeWorkspace.diffClickToView")}
+            title={explanationText || undefined}
+          />
         </button>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5530,14 +5830,15 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="rounded-xl border border-border/70 bg-card px-4 py-3 text-sm text-foreground shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {i18n.t("homeWorkspace.todo")}
           </div>
           {todos.length > 0 ? (
             <div className="mt-3 space-y-2">
               {todos.map((todo, index) => {
-                const content = asText(todo.content) || i18n.t("homeWorkspace.todoItem");
+                const content =
+                  asText(todo.content) || i18n.t("homeWorkspace.todoItem");
                 const statusText = asText(todo.status) || "pending";
                 const priority = asText(todo.priority);
                 const statusLabel =
@@ -5548,19 +5849,19 @@ function OpencodeToolCard({
                       : i18n.t("homeWorkspace.pending");
                 const statusTone =
                   statusText === "completed"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
                     : statusText === "in_progress"
-                      ? "bg-blue-50 text-blue-700 border-blue-200"
-                      : "bg-slate-50 text-slate-600 border-slate-200";
+                      ? "border-blue-500/30 bg-blue-500/10 text-blue-200"
+                      : "border-border bg-muted/50 text-muted-foreground";
                 return (
                   <div
                     key={`${content}-${index}`}
                     className="flex items-center justify-between gap-3"
                   >
-                    <div className="text-sm text-slate-800">{content}</div>
+                    <div className="text-sm text-foreground">{content}</div>
                     <div className="flex items-center gap-2">
                       {priority ? (
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
                           {priority === "high"
                             ? i18n.t("homeWorkspace.priorityHigh")
                             : priority === "medium"
@@ -5580,7 +5881,7 @@ function OpencodeToolCard({
             </div>
           ) : null}
         </div>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5595,8 +5896,8 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="rounded-xl border border-border/70 bg-card px-4 py-3 text-sm text-foreground shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {i18n.t("homeWorkspace.pendingConfirmation")}
           </div>
           <div className="mt-3 space-y-3">
@@ -5606,15 +5907,15 @@ function OpencodeToolCard({
                 className="space-y-1.5"
               >
                 {question.header ? (
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {question.header}
                   </div>
                 ) : null}
-                <div className="text-sm text-slate-800">
+                <div className="text-sm text-foreground">
                   {question.question}
                 </div>
                 {question.options.length > 0 ? (
-                  <ul className="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                  <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
                     {question.options.map((option, optionIndex) => (
                       <li key={`${option}-${optionIndex}`}>{option}</li>
                     ))}
@@ -5622,7 +5923,7 @@ function OpencodeToolCard({
                 ) : null}
               </div>
             ))}
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-muted-foreground">
               {i18n.t("homeWorkspace.replyInComposer")}
             </div>
           </div>
@@ -5637,7 +5938,10 @@ function OpencodeToolCard({
       asText(input.path) ||
       asText(properties.file) ||
       asText(properties.path);
-    const label = toolKey === "write" ? i18n.t("homeWorkspace.writeFile") : i18n.t("homeWorkspace.editFile");
+    const label =
+      toolKey === "write"
+        ? i18n.t("homeWorkspace.writeFile")
+        : i18n.t("homeWorkspace.editFile");
     const fileName = getFilename(filePath) || i18n.t("homeWorkspace.file");
     const capsuleText = `${label} · ${fileName}`;
     return (
@@ -5718,19 +6022,26 @@ function OpencodeToolCard({
     if (isCodexExecutor && writeLike) {
       const resolvedLabel = inferCodexWriteLabel(commandText);
       const resolvedPath = targetPath || "";
-      const resolvedFileName = getFilename(resolvedPath) || i18n.t("homeWorkspace.file");
+      const resolvedFileName =
+        getFilename(resolvedPath) || i18n.t("homeWorkspace.file");
       const writePayloadPreview = extractCodexWritePayloadPreview(commandText);
       const commandPreview = truncateText(commandText || "", 2400);
       detailTitle = `${resolvedLabel} · ${resolvedFileName}`;
       detailBodyText = [
         `${i18n.t("homeWorkspace.operationLabel")}: ${resolvedLabel}`,
-        resolvedPath ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${resolvedPath}` : "",
+        resolvedPath
+          ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${resolvedPath}`
+          : "",
         writePayloadPreview
           ? i18n.t("homeWorkspace.writeContentPreviewLabel")
           : commandText
             ? i18n.t("homeWorkspace.commandSummaryLabel")
             : "",
-        writePayloadPreview ? writePayloadPreview.text : commandText ? commandPreview.text : "",
+        writePayloadPreview
+          ? writePayloadPreview.text
+          : commandText
+            ? commandPreview.text
+            : "",
         writePayloadPreview?.truncated
           ? i18n.t("homeWorkspace.writeContentTruncated")
           : commandText && commandPreview.truncated
@@ -5755,7 +6066,7 @@ function OpencodeToolCard({
             title={explanationText || commandHint || undefined}
           />
           {writeLike && inlineSummary ? (
-            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+            <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
               {inlineSummary}
             </div>
           ) : null}
@@ -5765,7 +6076,7 @@ function OpencodeToolCard({
             </div>
           ) : null}
           {compactOutput && previewText ? (
-            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+            <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
               {previewText}
             </div>
           ) : null}
@@ -5775,12 +6086,12 @@ function OpencodeToolCard({
             </div>
           ) : null}
           {!compactOutput && truncated ? (
-            <div className="text-[11px] text-slate-500">
+            <div className="text-[11px] text-muted-foreground">
               {i18n.t("homeWorkspace.outputTruncated")}
             </div>
           ) : null}
         </div>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5815,10 +6126,14 @@ function OpencodeToolCard({
         : `${label || i18n.t("homeWorkspace.fileChange")} · ${getFilename(primaryPath) || i18n.t("homeWorkspace.file")}`;
     detailBodyText = [
       `${i18n.t("homeWorkspace.operationLabel")}: ${label || i18n.t("homeWorkspace.fileChange")}`,
-      primaryPath ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${primaryPath}` : "",
+      primaryPath
+        ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${primaryPath}`
+        : "",
       files.length > 1
         ? `${i18n.t("homeWorkspace.affectedFilesLabel")}:\n${files
-            .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`)
+            .map(
+              (item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`,
+            )
             .join("\n")}`
         : "",
       asText(properties.diff) ? i18n.t("homeWorkspace.nativeDiffSynced") : "",
@@ -5844,12 +6159,20 @@ function OpencodeToolCard({
             }
             className="text-left"
           >
-            <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+            <EventCapsule
+              icon={icon}
+              text={text}
+              title={explanationText || undefined}
+            />
           </button>
         ) : (
-          <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+          <EventCapsule
+            icon={icon}
+            text={text}
+            title={explanationText || undefined}
+          />
         )}
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5891,7 +6214,7 @@ function OpencodeToolCard({
             title={explanationText || undefined}
           />
         )}
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5905,9 +6228,12 @@ function OpencodeToolCard({
       <EventCapsule
         icon={toolKey === "bash" ? Terminal : FileText}
         text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`}
-        title={explanationText || (toolKey === "bash" ? commandHint || undefined : undefined)}
+        title={
+          explanationText ||
+          (toolKey === "bash" ? commandHint || undefined : undefined)
+        }
       />
-    </motion.div>
+    </motion.div>,
   );
 }
 
@@ -5937,16 +6263,20 @@ function ManagedToolCard({
   const toneClass =
     item.status === "failed"
       ? "border-rose-200 bg-rose-50 text-rose-700"
-        : item.status === "completed"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-border/70 bg-muted/50 text-foreground/85";
+      : item.status === "completed"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border-border/70 bg-muted/50 text-foreground/85";
   const statusLabel =
     item.status === "failed"
       ? i18n.t("homeWorkspace.failedShort")
       : item.status === "completed"
         ? i18n.t("homeWorkspace.completed")
         : i18n.t("homeWorkspace.inProgress");
-  const hoverPreview = buildDetailPreview(item.detail || item.summary || item.toolName, 5, 96);
+  const hoverPreview = buildDetailPreview(
+    item.detail || item.summary || item.toolName,
+    5,
+    96,
+  );
   const summaryText = item.summary?.trim();
   const previewText =
     formatManagedToolPreview(item.toolName, item.metadata) ||
@@ -5966,18 +6296,23 @@ function ManagedToolCard({
         ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
         : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
   const writeFileProgress = readManagedWriteFileProgress(item.metadata);
-  const isWriteFileExpanded =
-    shouldExpandManagedWriteFileCard({
-      toolName: item.toolName,
-      status: item.status,
-      metadata: item.metadata,
-    });
-  const writeFilePath = writeFileProgress.path || summaryText || i18n.t("homeWorkspace.writeFile");
+  const isWriteFileExpanded = shouldExpandManagedWriteFileCard({
+    toolName: item.toolName,
+    status: item.status,
+    metadata: item.metadata,
+  });
+  const writeFilePath =
+    writeFileProgress.path || summaryText || i18n.t("homeWorkspace.writeFile");
   const writeFileGeneratedLabel =
     writeFileProgress.generatedChars > 0
-      ? i18n.t("homeWorkspace.generatedCharsLabel", { count: writeFileProgress.generatedChars })
+      ? i18n.t("homeWorkspace.generatedCharsLabel", {
+          count: writeFileProgress.generatedChars,
+        })
       : i18n.t("homeWorkspace.generatingCode");
-  const writeFilePreview = writeFileProgress.preview || previewText || i18n.t("homeWorkspace.generatingCodeSnippet");
+  const writeFilePreview =
+    writeFileProgress.preview ||
+    previewText ||
+    i18n.t("homeWorkspace.generatingCodeSnippet");
   const writeFilePreviewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -6003,7 +6338,9 @@ function ManagedToolCard({
                 onOpenReplay(item.runId, item.toolCallId);
               }
             }}
-            data-managed-tool-layout={isWriteFileExpanded ? "expanded" : "compact"}
+            data-managed-tool-layout={
+              isWriteFileExpanded ? "expanded" : "compact"
+            }
             className={
               isWriteFileExpanded
                 ? `group w-full max-w-full lg:max-w-[min(86vw,720px)] rounded-2xl border p-0 text-left transition ${chipToneClass}`
@@ -6028,7 +6365,9 @@ function ManagedToolCard({
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                      <span
+                        className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                      >
                         {statusLabel}
                       </span>
                       <div className="mt-1 text-[10px] leading-4 opacity-75">
@@ -6055,7 +6394,9 @@ function ManagedToolCard({
                   <span className="shrink-0 text-[11px] font-medium leading-5">
                     {displayName}
                   </span>
-                  <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                  <span
+                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                  >
                     {statusLabel}
                   </span>
                   {summaryText ? (
@@ -6083,7 +6424,9 @@ function ManagedToolCard({
                   <span className="text-sm font-medium leading-5">
                     {displayName}
                   </span>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}
+                  >
                     {statusLabel}
                   </span>
                 </div>
@@ -6193,10 +6536,16 @@ function collectManagedWebArtifacts(input: {
   managedArtifacts: AltusArtifactFile[];
 }): AltusArtifactFile[] {
   const unique = new Map<string, AltusArtifactFile>();
-  const pushArtifact = (pathRaw: string, previewType?: AltusArtifactFile["previewType"]) => {
-    const path = String(pathRaw || "").trim().replace(/\\/g, "/");
+  const pushArtifact = (
+    pathRaw: string,
+    previewType?: AltusArtifactFile["previewType"],
+  ) => {
+    const path = String(pathRaw || "")
+      .trim()
+      .replace(/\\/g, "/");
     if (!path) return;
-    const resolvedPreviewType = previewType || inferManagedArtifactPreviewType(path);
+    const resolvedPreviewType =
+      previewType || inferManagedArtifactPreviewType(path);
     if (resolvedPreviewType !== "web") return;
     if (unique.has(path)) return;
     unique.set(path, {
@@ -6220,7 +6569,8 @@ export function buildManagedCompletionCardItem(input: {
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
   emittedManagedCompletionRuns: Set<string>;
 }): ChatItem | null {
-  const { message, managedArtifactsByRun, emittedManagedCompletionRuns } = input;
+  const { message, managedArtifactsByRun, emittedManagedCompletionRuns } =
+    input;
   const metadata = toRecord(message.metadata);
   if (!isManagedExecutionEvent(metadata)) {
     return null;
@@ -6240,8 +6590,12 @@ export function buildManagedCompletionCardItem(input: {
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
-  const isRunCompletedContext = message.type === "status_update" && eventType === "run_completed";
-  if ((shouldEmitFromDeliverablesContext || isRunCompletedContext) && webArtifacts.length > 0) {
+  const isRunCompletedContext =
+    message.type === "status_update" && eventType === "run_completed";
+  if (
+    (shouldEmitFromDeliverablesContext || isRunCompletedContext) &&
+    webArtifacts.length > 0
+  ) {
     emittedManagedCompletionRuns.add(runId);
     return {
       kind: "managed_artifact_card",
@@ -6281,7 +6635,9 @@ export function buildManagedCompletionCardItem(input: {
   };
 }
 
-function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {
+function parseManagedToolOutputPreview(
+  outputPreviewRaw: unknown,
+): Record<string, unknown> {
   if (!outputPreviewRaw) return {};
   if (typeof outputPreviewRaw === "string") {
     const trimmed = outputPreviewRaw.trim();
@@ -6327,8 +6683,12 @@ function collectManagedReplayArtifactPaths(
     pushPath(output.path);
   }
 
-  if (toolName === "complete_task" && Array.isArray((args as { attachments?: unknown[] }).attachments)) {
-    for (const item of (args as { attachments?: unknown[] }).attachments || []) {
+  if (
+    toolName === "complete_task" &&
+    Array.isArray((args as { attachments?: unknown[] }).attachments)
+  ) {
+    for (const item of (args as { attachments?: unknown[] }).attachments ||
+      []) {
       const record = toRecord(item);
       pushPath(record.path);
       pushPath(record.filePath);
@@ -6435,7 +6795,8 @@ function buildManagedReplayData(messages: AgentMessage[]) {
               : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
-        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
+        internalDetail:
+          formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       });
     } else {
@@ -6452,7 +6813,8 @@ function buildManagedReplayData(messages: AgentMessage[]) {
                 : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
-        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
+        internalDetail:
+          formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       };
     }
@@ -6475,7 +6837,9 @@ function buildManagedReplayData(messages: AgentMessage[]) {
   );
 }
 
-function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previewType"] {
+function inferManagedArtifactPreviewType(
+  path: string,
+): AltusArtifactFile["previewType"] {
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
@@ -6504,7 +6868,10 @@ function readManagedDeploymentToolOutput(metadataRaw: unknown) {
   };
 }
 
-function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
+function extractManagedArtifactPath(
+  toolName: string,
+  metadataRaw: unknown,
+): string {
   if (toolName !== "write_file") return "";
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
@@ -6595,7 +6962,9 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     if (writeFileProgress.generatedChars > 0) {
       return [
         path || i18n.t("homeWorkspace.writeFile"),
-        i18n.t("homeWorkspace.generatingCharsLabel", { count: writeFileProgress.generatedChars }),
+        i18n.t("homeWorkspace.generatingCharsLabel", {
+          count: writeFileProgress.generatedChars,
+        }),
       ]
         .filter(Boolean)
         .join(" · ");
@@ -6614,7 +6983,9 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
   }
   if (toolName === "ask_user") {
-    return asText(args.question) || i18n.t("homeWorkspace.requestUserClarification");
+    return (
+      asText(args.question) || i18n.t("homeWorkspace.requestUserClarification")
+    );
   }
   if (isManagedDeploymentTool(toolName)) {
     if (projectedView.userSummary) {
@@ -6638,7 +7009,9 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     return i18n.t("homeWorkspace.checkDeploymentStatus");
   }
   if (toolName === "complete_task") {
-    return asText(args.summary) || i18n.t("homeWorkspace.finalCompletionSummary");
+    return (
+      asText(args.summary) || i18n.t("homeWorkspace.finalCompletionSummary")
+    );
   }
   return asText(metadata.content) || toolName;
 }
@@ -6654,7 +7027,10 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
 
   if (error) {
     if (isManagedDeploymentTool(toolName)) {
-      return projectedView.userPreview || i18n.t("homeWorkspace.deploymentNotFinished");
+      return (
+        projectedView.userPreview ||
+        i18n.t("homeWorkspace.deploymentNotFinished")
+      );
     }
     return error;
   }
@@ -6662,7 +7038,12 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   if (toolName === "shell_execute") {
     const stdout = asText(output.stdout);
     const stderr = asText(output.stderr);
-    return stdout || stderr || asText(args.command) || i18n.t("homeWorkspace.executeCommand");
+    return (
+      stdout ||
+      stderr ||
+      asText(args.command) ||
+      i18n.t("homeWorkspace.executeCommand")
+    );
   }
 
   if (toolName === "write_file") {
@@ -6676,15 +7057,27 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   }
 
   if (toolName === "read_file") {
-    return asText(output.content) || asText(output.path) || i18n.t("homeWorkspace.readTargetFile");
+    return (
+      asText(output.content) ||
+      asText(output.path) ||
+      i18n.t("homeWorkspace.readTargetFile")
+    );
   }
 
   if (toolName === "list_directory") {
-    return asText(output.output) || asText(output.path) || i18n.t("homeWorkspace.returnedDirectoryContent");
+    return (
+      asText(output.output) ||
+      asText(output.path) ||
+      i18n.t("homeWorkspace.returnedDirectoryContent")
+    );
   }
 
   if (toolName === "search_code") {
-    return asText(output.output) || asText(args.query) || i18n.t("homeWorkspace.returnedSearchResults");
+    return (
+      asText(output.output) ||
+      asText(args.query) ||
+      i18n.t("homeWorkspace.returnedSearchResults")
+    );
   }
 
   if (isManagedDeploymentTool(toolName)) {
@@ -6713,7 +7106,10 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   return asText(metadata.outputPreview) || asText(metadata.content);
 }
 
-function formatManagedToolInternalDetail(toolName: string, metadataRaw: unknown) {
+function formatManagedToolInternalDetail(
+  toolName: string,
+  metadataRaw: unknown,
+) {
   if (!isManagedDeploymentTool(toolName)) return "";
   const projectedView = readManagedToolViewProjection(metadataRaw);
   return projectedView.internalDetail;
@@ -6735,7 +7131,9 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     }
   };
 
-  lines.push(`${i18n.t("homeWorkspace.toolLabel")}: ${getManagedToolDisplayName(toolName)} (${toolName})`);
+  lines.push(
+    `${i18n.t("homeWorkspace.toolLabel")}: ${getManagedToolDisplayName(toolName)} (${toolName})`,
+  );
 
   if (toolName === "shell_execute") {
     pushLine(i18n.t("homeWorkspace.commandLabel"), args.command);
@@ -6744,34 +7142,69 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     pushLine(i18n.t("homeWorkspace.outputLabel"), output.stdout);
     pushLine(i18n.t("homeWorkspace.errorOutputLabel"), output.stderr);
   } else if (toolName === "write_file") {
-    pushLine(i18n.t("homeWorkspace.targetFileLabel"), args.path || output.path || writeFileProgress.path);
-    pushLine(i18n.t("homeWorkspace.generatedCharsField"), writeFileProgress.generatedChars > 0 ? String(writeFileProgress.generatedChars) : "");
-    pushLine(i18n.t("homeWorkspace.codePreviewLabel"), writeFileProgress.preview);
+    pushLine(
+      i18n.t("homeWorkspace.targetFileLabel"),
+      args.path || output.path || writeFileProgress.path,
+    );
+    pushLine(
+      i18n.t("homeWorkspace.generatedCharsField"),
+      writeFileProgress.generatedChars > 0
+        ? String(writeFileProgress.generatedChars)
+        : "",
+    );
+    pushLine(
+      i18n.t("homeWorkspace.codePreviewLabel"),
+      writeFileProgress.preview,
+    );
     pushLine(i18n.t("homeWorkspace.writeSizeLabel"), output.bytes);
   } else if (toolName === "read_file") {
     pushLine(i18n.t("homeWorkspace.targetFileLabel"), args.path || output.path);
     pushLine(i18n.t("homeWorkspace.contentPreviewLabel"), output.content);
   } else if (toolName === "list_directory") {
-    pushLine(i18n.t("homeWorkspace.targetDirectoryLabel"), args.path || output.path);
-    pushLine(i18n.t("homeWorkspace.recursionDepthLabel"), output.depth || args.depth);
+    pushLine(
+      i18n.t("homeWorkspace.targetDirectoryLabel"),
+      args.path || output.path,
+    );
+    pushLine(
+      i18n.t("homeWorkspace.recursionDepthLabel"),
+      output.depth || args.depth,
+    );
     pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
   } else if (toolName === "search_code") {
     pushLine(i18n.t("homeWorkspace.searchQueryLabel"), args.query);
-    pushLine(i18n.t("homeWorkspace.searchScopeLabel"), args.path || output.path);
+    pushLine(
+      i18n.t("homeWorkspace.searchScopeLabel"),
+      args.path || output.path,
+    );
     pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
   } else if (isManagedDeploymentTool(toolName)) {
     if (projectedView.userDetail) {
       return projectedView.userDetail;
     }
-    pushLine(i18n.t("homeWorkspace.phaseLabel"), deploymentOutput.phase || (error ? "failed" : "running"));
-    pushLine(i18n.t("homeWorkspace.statusLabel"), deploymentOutput.status || deploymentOutput.deploymentStatus);
+    pushLine(
+      i18n.t("homeWorkspace.phaseLabel"),
+      deploymentOutput.phase || (error ? "failed" : "running"),
+    );
+    pushLine(
+      i18n.t("homeWorkspace.statusLabel"),
+      deploymentOutput.status || deploymentOutput.deploymentStatus,
+    );
     pushLine(i18n.t("homeWorkspace.summaryLabel"), deploymentOutput.summary);
     pushLine(i18n.t("homeWorkspace.accessUrlLabel"), deploymentOutput.url);
-    pushLine(i18n.t("homeWorkspace.deploymentIdLabel"), deploymentOutput.deploymentId);
+    pushLine(
+      i18n.t("homeWorkspace.deploymentIdLabel"),
+      deploymentOutput.deploymentId,
+    );
     if (deploymentOutput.status === "retryable_repair_required") {
-      pushLine(i18n.t("homeWorkspace.handlingLabel"), i18n.t("homeWorkspace.altusRetryingRepair"));
+      pushLine(
+        i18n.t("homeWorkspace.handlingLabel"),
+        i18n.t("homeWorkspace.altusRetryingRepair"),
+      );
     } else if (error || deploymentOutput.status === "fatal_error") {
-      pushLine(i18n.t("homeWorkspace.handlingLabel"), i18n.t("homeWorkspace.internalDebugLogged"));
+      pushLine(
+        i18n.t("homeWorkspace.handlingLabel"),
+        i18n.t("homeWorkspace.internalDebugLogged"),
+      );
     }
   } else if (toolName === "ask_user") {
     pushLine(i18n.t("homeWorkspace.questionLabel"), args.question);
@@ -6798,12 +7231,17 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   if (error) {
     pushLine(
       i18n.t("homeWorkspace.failureReasonLabel"),
-      isManagedDeploymentTool(toolName) ? i18n.t("homeWorkspace.deploymentPending") : error,
+      isManagedDeploymentTool(toolName)
+        ? i18n.t("homeWorkspace.deploymentPending")
+        : error,
     );
   }
 
   if (lines.length === 1) {
-    pushLine(i18n.t("homeWorkspace.summaryLabel"), formatManagedToolSummary(toolName, metadata));
+    pushLine(
+      i18n.t("homeWorkspace.summaryLabel"),
+      formatManagedToolSummary(toolName, metadata),
+    );
   }
 
   return lines.join("\n");

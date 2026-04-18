@@ -1084,7 +1084,7 @@ export default function OpencodePreviewPanel({
   return (
     <aside
       className={cn(
-        "w-full h-full shrink-0 rounded-xl border border-border/70 bg-white flex flex-col min-h-0",
+        "w-full h-full shrink-0 rounded-xl border border-border/70 bg-card flex flex-col min-h-0",
         className,
       )}
     >
@@ -1914,7 +1914,7 @@ export function FilePreview({
             {rootDirState?.hasMore ? (
               <button
                 type="button"
-                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-blue-600 transition-colors hover:border-blue-100 hover:bg-blue-50/60 disabled:text-slate-400"
+                className="w-full rounded-md border border-transparent px-2 py-1 text-left text-[11px] text-blue-600 transition-colors hover:border-blue-100 hover:bg-blue-50/60 disabled:text-muted-foreground"
                 onClick={() => onLoadMoreDir("")}
                 disabled={Boolean(rootDirState.loading)}
               >
@@ -1943,8 +1943,8 @@ export function FilePreview({
       <ResizablePanel defaultSize={72} minSize={55}>
         <div className="h-full min-h-0 overflow-hidden bg-background p-3">
           {selectedPath ? (
-            <div className="flex h-full min-h-0 flex-col rounded-lg border border-slate-200 bg-white">
-              <div className="flex h-10 items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3">
+            <div className="flex h-full min-h-0 flex-col rounded-lg border border-border bg-card">
+              <div className="flex h-10 items-center justify-between gap-2 border-b border-border bg-muted/30 px-3">
                 <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[12px]">
                   {pathSegments.map((segment, index) => (
                     <div key={`${segment}-${index}`} className="flex min-w-0 items-center gap-1">
@@ -1952,14 +1952,14 @@ export function FilePreview({
                         className={cn(
                           "truncate",
                           index === pathSegments.length - 1
-                            ? "font-medium text-slate-900"
-                            : "text-slate-500",
+                            ? "font-medium text-foreground"
+                            : "text-muted-foreground",
                         )}
                       >
                         {segment}
                       </span>
                       {index < pathSegments.length - 1 ? (
-                        <span className="text-slate-400">/</span>
+                        <span className="text-muted-foreground">/</span>
                       ) : null}
                     </div>
                   ))}
@@ -1967,7 +1967,7 @@ export function FilePreview({
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() => void copyPath(selectedPath)}
                     title={
                       copiedKey === "path"
@@ -1979,7 +1979,7 @@ export function FilePreview({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() => void copyContent()}
                     disabled={!file || isBinary}
                     title={
@@ -1992,7 +1992,7 @@ export function FilePreview({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() =>
                       triggerFileDownload(selectedRawUrl, selectedFilename || "workspace-file")
                     }
@@ -2003,7 +2003,7 @@ export function FilePreview({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 disabled:opacity-40"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() =>
                       selectedRawUrl
                         ? window.open(selectedRawUrl, "_blank", "noopener,noreferrer")
@@ -2016,7 +2016,7 @@ export function FilePreview({
                   </button>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-500">
+              <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
                 <span className="truncate">{selectedPath}</span>
                 <span className="shrink-0">
                   {isBinary
@@ -2037,7 +2037,7 @@ export function FilePreview({
                           <iframe
                             src={effectiveHtmlPreviewUrl}
                             title={`preview-${selectedPath}`}
-                            className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                            className="h-full min-h-[360px] w-full rounded-md border border-border bg-card"
                             sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
                             onError={() => {
                               setHtmlPreviewState("fetch_failed");
@@ -2045,15 +2045,15 @@ export function FilePreview({
                             }}
                           />
                         ) : (
-                          <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
+                          <div className="flex h-full min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-6 text-center">
                             {htmlPreviewState === "checking" ? (
                               <>
-                                <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-                                <div className="text-xs text-slate-500">{i18n.t("previewPanel.checkingPreviewEnvironment")}</div>
+                                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                <div className="text-xs text-muted-foreground">{i18n.t("previewPanel.checkingPreviewEnvironment")}</div>
                               </>
                             ) : (
                               <>
-                                <div className="text-sm text-slate-700">
+                                <div className="text-sm text-foreground">
                                   {htmlPreviewMessage || i18n.t("previewPanel.htmlUnavailable")}
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -2100,7 +2100,7 @@ export function FilePreview({
                     </div>
                   )
                 ) : previewType === "markdown" && !isBinary ? (
-                  <div className="h-full min-h-0 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-slate-200 [&_pre]:bg-slate-50 [&_pre]:p-3 [&_code]:font-mono">
+                  <div className="h-full min-h-0 overflow-auto overscroll-contain px-3 py-3 text-sm leading-7 text-foreground [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_strong]:font-semibold [&_pre]:my-3 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/30 [&_pre]:p-3 [&_code]:font-mono">
                     <Streamdown>{file?.content || ""}</Streamdown>
                   </div>
                 ) : previewType === "image" && binaryDataUrl ? (
@@ -2108,7 +2108,7 @@ export function FilePreview({
                     <img
                       src={binaryDataUrl}
                       alt={selectedPath}
-                      className="max-h-full w-auto max-w-full rounded-md border border-slate-200 bg-slate-50"
+                      className="max-h-full w-auto max-w-full rounded-md border border-border bg-muted/30"
                     />
                   </div>
                 ) : previewType === "video" && binaryDataUrl ? (
@@ -2116,7 +2116,7 @@ export function FilePreview({
                     <video
                       src={binaryDataUrl}
                       controls
-                      className="max-h-full w-full rounded-md border border-slate-200 bg-black"
+                      className="max-h-full w-full rounded-md border border-border bg-black"
                     />
                   </div>
                 ) : previewType === "audio" && binaryDataUrl ? (
@@ -2128,31 +2128,31 @@ export function FilePreview({
                     <iframe
                       title={`preview-${selectedPath}`}
                       src={binaryDataUrl}
-                      className="h-full min-h-[360px] w-full rounded-md border border-slate-200 bg-white"
+                      className="h-full min-h-[360px] w-full rounded-md border border-border bg-card"
                     />
                   </div>
                 ) : isBinary ? (
                   <div className="h-full min-h-0 overflow-auto overscroll-contain p-4">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
-                      <div className="mb-3 text-sm font-medium text-slate-900">
+                    <div className="rounded-lg border border-border bg-muted/40 p-4">
+                      <div className="mb-3 text-sm font-medium text-foreground">
                         {i18n.t("previewPanel.binaryInfo")}
                       </div>
-                      <dl className="grid gap-3 text-xs text-slate-600">
+                      <dl className="grid gap-3 text-xs text-muted-foreground">
                         <div>
-                          <dt className="text-slate-500">{i18n.t("previewPanel.filePath")}</dt>
-                          <dd className="mt-0.5 break-all font-mono text-slate-800">{selectedPath}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.filePath")}</dt>
+                          <dd className="mt-0.5 break-all font-mono text-foreground">{selectedPath}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">{i18n.t("previewPanel.mimeType")}</dt>
-                          <dd className="mt-0.5 font-mono text-slate-800">{mimeType}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.mimeType")}</dt>
+                          <dd className="mt-0.5 font-mono text-foreground">{mimeType}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">{i18n.t("previewPanel.fileSize")}</dt>
-                          <dd className="mt-0.5 text-slate-800">{formatWorkspaceFileSize(file?.size)}</dd>
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.fileSize")}</dt>
+                          <dd className="mt-0.5 text-foreground">{formatWorkspaceFileSize(file?.size)}</dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">{i18n.t("previewPanel.previewPolicy")}</dt>
-                          <dd className="mt-0.5 text-slate-800">
+                          <dt className="text-muted-foreground">{i18n.t("previewPanel.previewPolicy")}</dt>
+                          <dd className="mt-0.5 text-foreground">
                             {file?.binaryTooLarge
                               ? i18n.t("previewPanel.binaryLargePreviewPolicy")
                               : i18n.t("previewPanel.binaryPreviewPolicy")}
@@ -2198,15 +2198,15 @@ export function FilePreview({
                 )}
               </div>
               {previewType === "html" && !isBinary ? (
-                <div className="border-t border-slate-100 px-3 py-1.5">
-                  <div className="inline-flex items-center rounded-md border border-slate-200 bg-white p-0.5 text-[11px]">
+                <div className="border-t border-border/70 px-3 py-1.5">
+                  <div className="inline-flex items-center rounded-md border border-border bg-card p-0.5 text-[11px]">
                     <button
                       type="button"
                       className={cn(
                         "rounded px-2 py-0.5",
                         htmlView === "preview"
                           ? "bg-slate-900 text-white"
-                          : "text-slate-600",
+                          : "text-muted-foreground",
                       )}
                       onClick={() => setHtmlView("preview")}
                     >
@@ -2218,7 +2218,7 @@ export function FilePreview({
                         "rounded px-2 py-0.5",
                         htmlView === "source"
                           ? "bg-slate-900 text-white"
-                          : "text-slate-600",
+                          : "text-muted-foreground",
                       )}
                       onClick={() => setHtmlView("source")}
                     >
@@ -2229,7 +2229,7 @@ export function FilePreview({
               ) : null}
             </div>
           ) : (
-            <div className="h-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70">
+            <div className="h-full rounded-lg border border-dashed border-border bg-muted/40">
               <EmptyState text={i18n.t("previewPanel.selectFilePreview")} />
             </div>
           )}
@@ -2299,12 +2299,12 @@ function TreeList({
               }}
               className={`group w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] transition-colors border cursor-pointer ${
                 selectedPath === node.path
-                  ? "bg-[var(--fill-tsp-white-dark)] border-slate-200 text-[var(--text-primary)]"
-                  : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-slate-200"
+                  ? "bg-[var(--fill-tsp-white-dark)] border-border text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] border-transparent hover:bg-[var(--fill-tsp-white-main)] hover:border-border"
               }`}
               style={{ paddingLeft: `${indent + 8}px` }}
             >
-              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-slate-500">
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
                 {isDir ? (
                   isOpen ? (
                     <ChevronDown className="h-3.5 w-3.5" />
@@ -2317,12 +2317,12 @@ function TreeList({
               </span>
               <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
               {isDir && state?.loading ? (
-                <span className="ml-1 text-[10px] text-slate-400">{i18n.t("common.loading")}</span>
+                <span className="ml-1 text-[10px] text-muted-foreground">{i18n.t("common.loading")}</span>
               ) : null}
               <span className="hidden items-center gap-1 group-hover:flex">
                 <button
                   type="button"
-                  className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-foreground"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2335,7 +2335,7 @@ function TreeList({
                 {!isDir && nodeRawUrl ? (
                   <button
                     type="button"
-                    className="rounded p-1 text-slate-400 transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-slate-700"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-[var(--fill-tsp-white-dark)] hover:text-foreground"
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -2377,7 +2377,7 @@ function TreeList({
                     type="button"
                     onClick={() => onLoadMoreDir(node.path)}
                     disabled={Boolean(state.loading)}
-                    className="px-2 py-1 text-[11px] text-blue-600 hover:text-blue-700 disabled:text-slate-400"
+                    className="px-2 py-1 text-[11px] text-blue-600 hover:text-blue-700 disabled:text-muted-foreground"
                     style={{ paddingLeft: `${indent + 28}px` }}
                   >
                     {state.loading ? i18n.t("common.loading") : i18n.t("previewPanel.loadMore")}
@@ -2389,7 +2389,7 @@ function TreeList({
                 !state.error &&
                 node.children.length === 0 ? (
                   <div
-                    className="px-2 py-1 text-[11px] text-slate-400"
+                    className="px-2 py-1 text-[11px] text-muted-foreground"
                     style={{ paddingLeft: `${indent + 28}px` }}
                   >
                     {i18n.t("previewPanel.emptyDirectory")}
@@ -2551,9 +2551,9 @@ export function DeploymentPreview({
                   count: info.missing.length,
                 })
               : i18n.t("previewPanel.deployment.status.preparingResources"),
-            badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+            badgeClass: "border-border bg-muted/50 text-foreground",
             dotClass: "bg-slate-400",
-            panelClass: "border-slate-200 bg-slate-50/80",
+            panelClass: "border-border bg-muted/40",
           }
     : status === "SUCCESS"
       ? {
@@ -2596,9 +2596,9 @@ export function DeploymentPreview({
                 : i18n.t(
                     "previewPanel.deployment.status.notPublishedDescription",
                   ),
-              badgeClass: "border-slate-200 bg-slate-100 text-slate-700",
+              badgeClass: "border-border bg-muted/50 text-foreground",
               dotClass: "bg-slate-400",
-              panelClass: "border-slate-200 bg-slate-50/80",
+              panelClass: "border-border bg-muted/40",
             };
   const staticUrl = currentDeployment?.staticUrl || info?.latestStaticUrl || "";
   const runtimeUrl = currentDeployment?.url || info?.latestUrl || "";
@@ -2881,13 +2881,13 @@ function DeploymentOverviewSection({
 
   return (
     <div className="grid gap-3">
-      <section className="min-w-0 rounded-lg border border-slate-200/80 bg-white">
+      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
         <div className="flex h-full min-h-0 flex-col p-3 sm:p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-600">
-                  <Rocket className="size-3.5 text-slate-500" />
+                <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                  <Rocket className="size-3.5 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.sections.overview")}
                 </div>
                 <div
@@ -2907,7 +2907,7 @@ function DeploymentOverviewSection({
                     <div
                       className={cn("size-2 rounded-full", statusMeta.dotClass)}
                     />
-                    <h3 className="truncate text-lg font-semibold text-slate-900">
+                    <h3 className="truncate text-lg font-semibold text-foreground">
                       {statusMeta.label}
                     </h3>
                   </div>
@@ -2968,7 +2968,7 @@ function DeploymentOverviewSection({
                     </Button>
                   </div>
                 </div>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                   {statusMeta.description}
                 </p>
               </div>
@@ -3003,12 +3003,12 @@ function DeploymentOverviewSection({
             />
           </div>
 
-          <div className="mt-3 rounded-md border border-slate-200/80 bg-slate-50/60 p-3 sm:p-4">
+          <div className="mt-3 rounded-md border border-border/70 bg-muted/30 p-3 sm:p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                    <Globe className="size-4 text-slate-500" />
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Globe className="size-4 text-muted-foreground" />
                     {i18n.t("previewPanel.deployment.overview.primaryAccessUrl")}
                   </div>
                   {primaryAccessUrl ? (
@@ -3021,7 +3021,7 @@ function DeploymentOverviewSection({
                       {primaryAccessUrl}
                     </a>
                   ) : (
-                    <p className="mt-2 text-sm text-slate-500">
+                    <p className="mt-2 text-sm text-muted-foreground">
                       {i18n.t(
                         "previewPanel.deployment.overview.firstReleaseGeneratesUrl",
                       )}
@@ -3062,21 +3062,21 @@ function DeploymentOverviewSection({
                       href={value}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                      className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-border hover:bg-muted/30"
                     >
                       <div className="min-w-0">
-                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">
+                        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                           {label}
                         </div>
-                        <div className="mt-1 break-all text-sm text-slate-700">
+                        <div className="mt-1 break-all text-sm text-foreground">
                           {value}
                         </div>
                       </div>
-                      <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                     </a>
                   ))
                 ) : (
-                  <div className="rounded-md border border-dashed border-slate-200 bg-white px-3 py-8 text-center text-sm text-slate-400">
+                  <div className="rounded-md border border-dashed border-border bg-card px-3 py-8 text-center text-sm text-muted-foreground">
                     {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
                   </div>
                 )}
@@ -3084,7 +3084,7 @@ function DeploymentOverviewSection({
             </div>
           </div>
 
-          <div className="mt-2 rounded-md border border-dashed border-slate-200 bg-slate-50/50 px-3 py-2 text-xs leading-5 text-slate-500">
+          <div className="mt-2 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
             {primaryAccessUrl
               ? i18n.t("previewPanel.deployment.overview.accessSummary", {
                   count: accessEntries.length,
@@ -3095,19 +3095,19 @@ function DeploymentOverviewSection({
         </div>
       </section>
 
-      <section className="min-w-0 rounded-lg border border-slate-200/80 bg-white">
+      <section className="min-w-0 rounded-lg border border-border/70 bg-card">
         <div className="flex h-full min-h-0 flex-col">
-          <div className="border-b border-slate-200 px-4 py-3">
+          <div className="border-b border-border px-4 py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                   {i18n.t("previewPanel.deployment.overview.releaseCard")}
                 </div>
-                <div className="mt-2 text-base font-semibold text-slate-900">
+                <div className="mt-2 text-base font-semibold text-foreground">
                   {currentDeployment?.commitMessage ||
                     i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
                 </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>
                     {currentDeployment?.commitAuthor ||
                       i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
@@ -3146,7 +3146,7 @@ function DeploymentOverviewSection({
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4">
-            <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
+            <div className="rounded-md border border-border/70 bg-muted/30 p-3">
               <div className="grid gap-3 sm:grid-cols-3">
                 <DashboardMiniStat
                   label={i18n.t("previewPanel.deployment.overview.onlineStatus")}
@@ -3175,14 +3175,14 @@ function DeploymentOverviewSection({
               </div>
             </div>
 
-            <div className="min-h-0 rounded-md border border-slate-200/80">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                  <History className="size-4 text-slate-500" />
+            <div className="min-h-0 rounded-md border border-border/70">
+              <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <History className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.overview.releaseList")}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-muted-foreground">
                     {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
                       count: deployments.length,
                     })}
@@ -3193,7 +3193,7 @@ function DeploymentOverviewSection({
                       onClick={() =>
                         setReleaseListExpanded((current) => !current)
                       }
-                      className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-1 text-[11px] text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
                     >
                       {releaseListExpanded
                         ? i18n.t("previewPanel.deployment.overview.collapse")
@@ -3231,8 +3231,8 @@ function DeploymentOverviewSection({
                         className={cn(
                           "w-full rounded-md border px-3 py-3 text-left transition-colors",
                           itemSelected
-                            ? "border-slate-900 bg-slate-50"
-                            : "border-slate-200 hover:bg-slate-50",
+                            ? "border-slate-900 bg-muted/30"
+                            : "border-border hover:bg-muted/30",
                         )}
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3246,18 +3246,18 @@ function DeploymentOverviewSection({
                               >
                                 {item.status}
                               </span>
-                              <span className="font-mono text-[11px] text-slate-400">
+                              <span className="font-mono text-[11px] text-muted-foreground">
                                 {item.id.slice(0, 8)}
                               </span>
                             </div>
-                            <div className="mt-2 text-sm font-medium text-slate-900">
+                            <div className="mt-2 text-sm font-medium text-foreground">
                               {item.commitMessage ||
                                 i18n.t(
                                   "previewPanel.deployment.overview.triggeredByOneceo",
                                 )}
                             </div>
                           </div>
-                          <div className="text-xs text-slate-500">
+                          <div className="text-xs text-muted-foreground">
                             {formatPreviewTimestamp(item.createdAt) ||
                               item.createdAt ||
                               i18n.t("previewPanel.deployment.overview.unknownTime")}
@@ -3267,20 +3267,20 @@ function DeploymentOverviewSection({
                     );
                   })
                 ) : (
-                  <div className="rounded-md border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+                  <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                     {i18n.t("previewPanel.deployment.noRecord")}
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="min-h-0 overflow-hidden rounded-md border border-slate-200/80 bg-slate-950 text-slate-100">
+            <div className="min-h-0 overflow-hidden rounded-md border border-border/70 bg-slate-950 text-slate-100">
               <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2.5">
                 <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                  <ScrollText className="size-4 text-slate-400" />
+                  <ScrollText className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.overview.releaseLog")}
                 </div>
-                <div className="text-[11px] text-slate-400">
+                <div className="text-[11px] text-muted-foreground">
                   {i18n.t("previewPanel.deployment.overview.onlyRecentContent")}
                 </div>
               </div>
@@ -3292,7 +3292,7 @@ function DeploymentOverviewSection({
                         key={`${entry.timestamp || "log"}-${index}`}
                         className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2"
                       >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                           {entry.timestamp ? (
                             <span>
                               {formatPreviewTimestamp(entry.timestamp) ||
@@ -3313,7 +3313,7 @@ function DeploymentOverviewSection({
                   </div>
                 </div>
               ) : (
-                <div className="px-4 py-10 text-sm text-slate-400">
+                <div className="px-4 py-10 text-sm text-muted-foreground">
                   {info?.configured
                     ? i18n.t("previewPanel.deployment.overview.noCurrentLog")
                     : i18n.t("previewPanel.deployment.overview.logsAfterReady")}
@@ -3384,16 +3384,16 @@ function DeploymentDashboardSection({
         : analyticsPresentation.integrationValue;
     return (
       <div className="space-y-4">
-        <section className="rounded-lg border border-slate-200/80 bg-white p-4 sm:p-5">
+        <section className="rounded-lg border border-border/70 bg-card p-4 sm:p-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <div className="flex items-start gap-3">
-                <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-700">
+                <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-border bg-muted/50 text-foreground">
                   <Globe2 className="size-4" />
                 </div>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold text-slate-900">
+                    <h3 className="text-lg font-semibold text-foreground">
                       {siteName}
                     </h3>
                     <span
@@ -3410,17 +3410,17 @@ function DeploymentDashboardSection({
                       href={primaryUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1 flex items-center gap-1 truncate text-sm text-slate-500 hover:text-slate-700 hover:underline"
+                      className="mt-1 flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground hover:underline"
                     >
                       {primaryUrl}
                       <ExternalLink className="size-3.5 shrink-0" />
                     </a>
                   ) : (
-                    <div className="mt-1 text-sm text-slate-500">
+                    <div className="mt-1 text-sm text-muted-foreground">
                       {i18n.t("previewPanel.deployment.dashboard.siteUrlMissing")}
                     </div>
                   )}
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                     {i18n.t(
                       "previewPanel.deployment.dashboard.siteViewDescription",
                     )}
@@ -3487,20 +3487,20 @@ function DeploymentDashboardSection({
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-slate-900">
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-4 sm:px-5">
+            <div className="text-sm font-semibold text-foreground">
               {i18n.t("previewPanel.deployment.dashboard.sensedDataTitle")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {i18n.t("previewPanel.deployment.dashboard.sensedDataDescription")}
             </div>
           </div>
           <div className="grid gap-4 p-4 sm:p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
             <div className="space-y-4">
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <Globe className="size-4 text-slate-500" />
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <Globe className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
                 </div>
                 <div className="mt-3 space-y-2">
@@ -3511,21 +3511,21 @@ function DeploymentDashboardSection({
                         href={url}
                         target="_blank"
                         rel="noreferrer"
-                        className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                        className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
                       >
                         <div className="min-w-0">
-                          <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+                          <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
                             {label}
                           </div>
-                          <div className="mt-1 break-all text-slate-700">
+                          <div className="mt-1 break-all text-foreground">
                             {url}
                           </div>
                         </div>
-                        <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                        <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                       </a>
                     ))
                   ) : (
-                    <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-400">
+                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
                       {sessionId
                         ? i18n.t("previewPanel.deployment.dashboard.noAccessEntries")
                         : i18n.t(
@@ -3598,9 +3598,9 @@ function DeploymentDashboardSection({
             </div>
 
             <div className="space-y-4">
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <BarChart3 className="size-4 text-slate-500" />
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <BarChart3 className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.dashboard.siteAnalytics")}
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -3627,14 +3627,14 @@ function DeploymentDashboardSection({
                     value={visitorsValue}
                   />
                 </div>
-                <div className="mt-3 text-xs leading-5 text-slate-500">
+                <div className="mt-3 text-xs leading-5 text-muted-foreground">
                   {analyticsPresentation.integrationSubtitle}
                 </div>
               </div>
 
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ScrollText className="size-4 text-slate-500" />
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ScrollText className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.dashboard.recentLogs")}
                 </div>
                 <div className="mt-3 space-y-2">
@@ -3642,9 +3642,9 @@ function DeploymentDashboardSection({
                     recentLogs.map((entry, index) => (
                       <div
                         key={`${entry.timestamp || "log"}-${index}`}
-                        className="rounded-md border border-slate-200 bg-white px-3 py-2"
+                        className="rounded-md border border-border bg-card px-3 py-2"
                       >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                           {entry.timestamp ? (
                             <span>
                               {formatPreviewTimestamp(entry.timestamp) ||
@@ -3652,27 +3652,27 @@ function DeploymentDashboardSection({
                             </span>
                           ) : null}
                           {entry.severity ? (
-                            <span className="rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                            <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                               {entry.severity}
                             </span>
                           ) : null}
                         </div>
-                        <div className="mt-1 text-sm leading-6 text-slate-700">
+                        <div className="mt-1 text-sm leading-6 text-foreground">
                           {entry.message}
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-md border border-dashed border-slate-200 px-3 py-8 text-center text-sm text-slate-400">
+                    <div className="rounded-md border border-dashed border-border px-3 py-8 text-center text-sm text-muted-foreground">
                       {i18n.t("previewPanel.deployment.dashboard.noRecentLogs")}
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
-                  <ShieldCheck className="size-4 text-slate-500" />
+              <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ShieldCheck className="size-4 text-muted-foreground" />
                   {i18n.t("previewPanel.deployment.dashboard.platformDecision")}
                 </div>
                 <div className="mt-3 grid gap-3">
@@ -3705,7 +3705,7 @@ function DeploymentDashboardSection({
                     }
                   />
                 </div>
-                <div className="mt-3 text-xs leading-5 text-slate-500">
+                <div className="mt-3 text-xs leading-5 text-muted-foreground">
                   {analyticsPresentation.realtimeSubtitle}
                 </div>
               </div>
@@ -3713,12 +3713,12 @@ function DeploymentDashboardSection({
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200/80 bg-white">
-          <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div className="text-sm font-semibold text-slate-900">
+        <section className="rounded-lg border border-border/70 bg-card">
+          <div className="border-b border-border px-4 py-4 sm:px-5">
+            <div className="text-sm font-semibold text-foreground">
               {i18n.t("previewPanel.deployment.dashboard.analyticsTitle")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {i18n.t("previewPanel.deployment.dashboard.analyticsDescription")}
             </div>
           </div>
@@ -3757,16 +3757,16 @@ function DeploymentDashboardSection({
 
   return (
     <div className="space-y-4">
-      <section className="overflow-hidden rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 p-4 sm:p-5">
+      <section className="overflow-hidden rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border p-4 sm:p-5">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+                <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
                   {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <h3 className="text-xl font-semibold text-slate-900">
+                  <h3 className="text-xl font-semibold text-foreground">
                     {i18n.t("previewPanel.deployment.dashboard.currentStatus", {
                       status: statusMeta.label,
                     })}
@@ -3782,7 +3782,7 @@ function DeploymentDashboardSection({
                       : i18n.t("previewPanel.deployment.dashboard.statusSynced")}
                   </span>
                 </div>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                   {statusMeta.description}
                 </p>
               </div>
@@ -3790,21 +3790,21 @@ function DeploymentDashboardSection({
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
                 {i18n.t("previewPanel.deployment.dashboard.latestSyncShort")}:{" "}
-                <span className="font-medium text-slate-900">
+                <span className="font-medium text-foreground">
                   {latestTimestamp}
                 </span>
               </div>
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
                 {i18n.t("previewPanel.deployment.dashboard.rollbackVersions")}:{" "}
-                <span className="font-medium text-slate-900">
+                <span className="font-medium text-foreground">
                   {successCount}
                 </span>
               </div>
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+              <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
                 {i18n.t("previewPanel.deployment.dashboard.accessEntriesShort")}:{" "}
-                <span className="font-medium text-slate-900">
+                <span className="font-medium text-foreground">
                   {accessEntries.length}
                 </span>
               </div>
@@ -3854,22 +3854,22 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-foreground">
             {i18n.t("previewPanel.deployment.dashboard.currentLiveVersion")}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
+          <div className="mt-1 text-xs text-muted-foreground">
             {i18n.t(
               "previewPanel.deployment.dashboard.currentLiveVersionDescription",
             )}
           </div>
         </div>
         <div className="space-y-4 p-4 sm:p-5">
-          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                   {i18n.t("previewPanel.deployment.dashboard.versionNotes")}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -3890,11 +3890,11 @@ function DeploymentDashboardSection({
                   ) : null}
                 </div>
               </div>
-              <div className="text-base font-semibold text-slate-900">
+              <div className="text-base font-semibold text-foreground">
                 {currentDeployment?.commitMessage ||
                   i18n.t("previewPanel.deployment.overview.waitingFirstRelease")}
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>
                   {currentDeployment?.commitAuthor ||
                     i18n.t("previewPanel.deployment.overview.platformAutoPublish")}
@@ -3918,8 +3918,8 @@ function DeploymentDashboardSection({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+            <div className="rounded-md border border-border/70 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                 {i18n.t("previewPanel.deployment.dashboard.accessEntries")}
               </div>
               <div className="mt-3 space-y-2">
@@ -3930,22 +3930,22 @@ function DeploymentDashboardSection({
                       href={url}
                       target="_blank"
                       rel="noreferrer"
-                      className="flex items-center justify-between gap-3 rounded-md border border-slate-200/80 bg-slate-50/60 px-3 py-2 text-sm text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+                      className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-foreground transition-colors hover:border-border hover:bg-muted/30"
                     >
                       <span className="truncate">{label}</span>
-                      <ExternalLink className="size-4 shrink-0 text-slate-400" />
+                      <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
                     </a>
                   ))
                 ) : (
-                  <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-sm text-slate-400">
+                  <div className="rounded-md border border-dashed border-border px-3 py-6 text-sm text-muted-foreground">
                     {i18n.t("previewPanel.deployment.overview.noAccessibleEntry")}
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="rounded-md border border-slate-200/80 p-4">
-              <div className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+            <div className="rounded-md border border-border/70 p-4">
+              <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
                 {i18n.t("previewPanel.deployment.dashboard.publishOverview")}
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -3972,12 +3972,12 @@ function DeploymentDashboardSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
-          <div className="text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <div className="text-sm font-semibold text-foreground">
             {i18n.t("previewPanel.deployment.dashboard.operationsDecision")}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
+          <div className="mt-1 text-xs text-muted-foreground">
             {i18n.t(
               "previewPanel.deployment.dashboard.operationsDecisionDescription",
             )}
@@ -4036,19 +4036,19 @@ function DeploymentDashboardSection({
         error={templateBaselineError}
       />
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="flex flex-col gap-2 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="flex flex-col gap-2 border-b border-border px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
+            <div className="text-sm font-semibold text-foreground">
               {i18n.t("previewPanel.deployment.dashboard.recentReleaseTimeline")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {i18n.t(
                 "previewPanel.deployment.dashboard.recentReleaseTimelineDescription",
               )}
             </div>
           </div>
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-muted-foreground">
             {i18n.t("previewPanel.deployment.dashboard.recordsCount", {
               count: info?.deployments.length || 0,
             })}
@@ -4062,7 +4062,7 @@ function DeploymentDashboardSection({
                   {index < Math.min(info.deployments.length, 6) - 1 ? (
                     <div className="absolute left-[7px] top-7 h-[calc(100%+12px)] w-px bg-slate-200" />
                   ) : null}
-                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-slate-200 bg-white">
+                  <div className="absolute left-0 top-1.5 size-4 rounded-full border border-border bg-card">
                     <div
                       className={cn(
                         "mx-auto mt-[3px] size-2 rounded-full",
@@ -4075,15 +4075,15 @@ function DeploymentDashboardSection({
                       )}
                     />
                   </div>
-                  <div className="flex flex-col gap-2 rounded-md border border-slate-200/80 bg-slate-50/60 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="flex flex-col gap-2 rounded-md border border-border/70 bg-muted/30 px-4 py-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-slate-900">
+                      <div className="text-sm font-medium text-foreground">
                         {item.commitMessage ||
                           i18n.t(
                             "previewPanel.deployment.overview.triggeredByOneceo",
                           )}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span>
                           {item.commitAuthor ||
                             i18n.t(
@@ -4100,7 +4100,7 @@ function DeploymentDashboardSection({
                         <span className="font-mono">{item.id.slice(0, 8)}</span>
                       </div>
                     </div>
-                    <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                    <span className="shrink-0 rounded-full border border-border bg-card px-2 py-1 text-[11px] text-foreground">
                       {item.status}
                     </span>
                   </div>
@@ -4108,7 +4108,7 @@ function DeploymentDashboardSection({
               ))}
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
+            <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
               {i18n.t("previewPanel.deployment.dashboard.noTimeline")}
             </div>
           )}
@@ -4389,15 +4389,15 @@ function DeploymentDatabaseSection({
 
   return (
     <div className="grid gap-4 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
+      <section className="rounded-lg border border-border/70 bg-card">
         <div className="relative flex h-full flex-col">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 right-0 border-r border-slate-200"
+            className="pointer-events-none absolute inset-y-0 right-0 border-r border-border"
           />
           <div className="flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
             {databaseLoading && !databaseInfo ? (
-              <div className="px-3 py-2 text-sm text-slate-500">
+              <div className="px-3 py-2 text-sm text-muted-foreground">
                 {i18n.t("previewPanel.deployment.database.preparing")}
               </div>
             ) : null}
@@ -4413,8 +4413,8 @@ function DeploymentDatabaseSection({
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition-colors",
                   activeTableId === table.id
-                    ? "bg-slate-100 text-slate-900"
-                    : "text-slate-700 hover:bg-slate-50",
+                    ? "bg-muted/50 text-foreground"
+                    : "text-foreground hover:bg-muted/30",
                 )}
               >
                 <div className="min-w-0 flex-1">
@@ -4422,18 +4422,18 @@ function DeploymentDatabaseSection({
                     {table.name}
                   </div>
                 </div>
-                <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-500">
+                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
                   {table.sourceLabel}
                 </span>
               </button>
             ))}
             {!databaseLoading && !databaseInfo?.tables.length ? (
-              <div className="rounded-md border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
+              <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
                 {i18n.t("previewPanel.deployment.database.readyNoTables")}
               </div>
             ) : null}
           </div>
-          <div className="border-t border-slate-200 p-3">
+          <div className="border-t border-border p-3">
             <Button
               variant="outline"
               className="w-full justify-center text-sm"
@@ -4446,15 +4446,15 @@ function DeploymentDatabaseSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
+            <div className="text-sm font-semibold text-foreground">
               {activeTable
                 ? activeTable.name
                 : i18n.t("previewPanel.deployment.database.database")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {activeTable
                 ? `${activeTable.schema}.${activeTable.name}`
                 : i18n.t("previewPanel.deployment.database.waitSelectTable")}
@@ -4495,17 +4495,17 @@ function DeploymentDatabaseSection({
             <>
               <div className="max-h-[520px] overflow-auto">
                 <table className="min-w-full border-separate border-spacing-0 text-sm">
-                  <thead className="sticky top-0 z-10 bg-white">
+                  <thead className="sticky top-0 z-10 bg-card">
                     <tr>
                       {rowsPage.columns.map((column) => (
                         <th
                           key={column.name}
-                          className="border-b border-slate-200 px-3 py-2 text-left font-medium text-slate-600"
+                          className="border-b border-border px-3 py-2 text-left font-medium text-muted-foreground"
                         >
                           <div className="flex items-center gap-2">
                             <span>{column.name}</span>
                             {column.isPrimaryKey ? (
-                              <KeyRound className="size-3.5 text-slate-400" />
+                              <KeyRound className="size-3.5 text-muted-foreground" />
                             ) : null}
                           </div>
                         </th>
@@ -4517,7 +4517,7 @@ function DeploymentDatabaseSection({
                       <tr>
                         <td
                           colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-slate-400"
+                          className="px-4 py-16 text-center text-muted-foreground"
                         >
                           {i18n.t("previewPanel.deployment.database.loadingData")}
                         </td>
@@ -4537,14 +4537,14 @@ function DeploymentDatabaseSection({
                             key={String(row._oneceo_ctid || index)}
                             className={cn(
                               "cursor-pointer transition-colors",
-                              active ? "bg-slate-50" : "hover:bg-slate-50/70",
+                              active ? "bg-muted/30" : "hover:bg-muted/40",
                             )}
                             onClick={() => handleSelectRow(row)}
                           >
                             {rowsPage.columns.map((column) => (
                               <td
                                 key={column.name}
-                                className="border-b border-slate-100 px-3 py-2 align-top text-slate-700"
+                                className="border-b border-border/70 px-3 py-2 align-top text-foreground"
                               >
                                 <div className="max-w-[220px] truncate">
                                   {formatDatabaseCell(row[column.name])}
@@ -4558,7 +4558,7 @@ function DeploymentDatabaseSection({
                       <tr>
                         <td
                           colSpan={Math.max(rowsPage.columns.length, 1)}
-                          className="px-4 py-16 text-center text-slate-400"
+                          className="px-4 py-16 text-center text-muted-foreground"
                         >
                           {i18n.t("previewPanel.deployment.database.noTableData")}
                         </td>
@@ -4567,7 +4567,7 @@ function DeploymentDatabaseSection({
                   </tbody>
                 </table>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs text-muted-foreground">
                 <div className="flex items-center gap-2">
                   <span>
                     {i18n.t("previewPanel.deployment.database.rows", {
@@ -4614,7 +4614,7 @@ function DeploymentDatabaseSection({
               </div>
             </>
           ) : (
-            <div className="px-4 py-20 text-center text-sm text-slate-400">
+            <div className="px-4 py-20 text-center text-sm text-muted-foreground">
               {databaseLoading
                 ? i18n.t("previewPanel.deployment.database.connecting")
                 : i18n.t("previewPanel.deployment.database.selectTableHint")}
@@ -4623,16 +4623,16 @@ function DeploymentDatabaseSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3">
-          <div className="text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3">
+          <div className="text-sm font-semibold text-foreground">
             {panelMode === "settings"
               ? i18n.t("previewPanel.deployment.database.connectionInfo")
               : panelMode === "insert"
                 ? i18n.t("previewPanel.deployment.database.newRecord")
                 : i18n.t("previewPanel.deployment.database.recordDetail")}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
+          <div className="mt-1 text-xs text-muted-foreground">
             {panelMode === "settings"
               ? i18n.t("previewPanel.deployment.database.canCopyToClient")
               : activeTable
@@ -4743,7 +4743,7 @@ function DeploymentDatabaseSection({
           ) : rowsPage ? (
             <>
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium text-slate-900">
+                <div className="text-sm font-medium text-foreground">
                   {panelMode === "insert"
                     ? i18n.t("previewPanel.deployment.database.prepareInsert")
                     : i18n.t("previewPanel.deployment.database.selectedRecord")}
@@ -4832,7 +4832,7 @@ function DeploymentDatabaseSection({
               </div>
             </>
           ) : (
-            <div className="py-10 text-center text-sm text-slate-400">
+            <div className="py-10 text-center text-sm text-muted-foreground">
               {databaseLoading
                 ? i18n.t("previewPanel.deployment.database.preparingPanel")
                 : i18n.t("previewPanel.deployment.database.waitPanelReady")}
@@ -4852,15 +4852,15 @@ function DashboardModeToggle({
   onChange: (mode: "deployments" | "site") => void;
 }) {
   return (
-    <div className="relative z-10 flex rounded-md border border-slate-200/80 bg-slate-50 p-1 text-xs text-slate-500">
+    <div className="relative z-10 flex rounded-md border border-border/70 bg-muted/30 p-1 text-xs text-muted-foreground">
       <button
         type="button"
         onClick={() => onChange("deployments")}
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
           mode === "deployments"
-            ? "bg-white text-slate-900 shadow-sm"
-            : "hover:text-slate-700",
+            ? "bg-card text-foreground shadow-sm"
+            : "hover:text-foreground",
         )}
       >
         {i18n.t("previewPanel.deployment.dashboard.deploymentData")}
@@ -4871,8 +4871,8 @@ function DashboardModeToggle({
         className={cn(
           "rounded-md px-3 py-1.5 transition-colors",
           mode === "site"
-            ? "bg-white text-slate-900 shadow-sm"
-            : "hover:text-slate-700",
+            ? "bg-card text-foreground shadow-sm"
+            : "hover:text-foreground",
         )}
       >
         {i18n.t("previewPanel.deployment.dashboard.siteData")}
@@ -4891,12 +4891,12 @@ function CompactDeploymentMetric({
   hint: string;
 }) {
   return (
-    <div className="bg-white px-5 py-4">
-      <div className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
+    <div className="bg-card px-5 py-4">
+      <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-      <div className="mt-1 text-xs text-slate-500">{hint}</div>
+      <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
     </div>
   );
 }
@@ -4915,17 +4915,17 @@ function DashboardMiniStat({
       className={cn(
         "rounded-md border px-3 py-3",
         subtle
-          ? "border-slate-100 bg-slate-50/80"
-          : "border-slate-200 bg-white",
+          ? "border-border/70 bg-muted/40"
+          : "border-border bg-card",
       )}
     >
-      <div className="text-[11px] uppercase tracking-[0.08em] text-slate-400">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </div>
       <div
         className={cn(
           "mt-2 text-sm font-medium",
-          subtle ? "text-slate-600" : "text-slate-900",
+          subtle ? "text-muted-foreground" : "text-foreground",
         )}
       >
         {value}
@@ -4942,9 +4942,9 @@ function InsightCard({
   description: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-      <div className="text-sm font-medium text-slate-900">{title}</div>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
     </div>
   );
 }
@@ -4963,9 +4963,9 @@ function ConnectionInfoField({
   sensitive?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-3">
+    <div className="rounded-md border border-border/70 bg-muted/30 p-3">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-xs uppercase tracking-[0.08em] text-slate-500">
+        <div className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
           {label}
         </div>
         <Button
@@ -4980,7 +4980,7 @@ function ConnectionInfoField({
             : i18n.t("previewPanel.deployment.database.copy")}
         </Button>
       </div>
-      <div className="mt-2 break-all font-mono text-xs text-slate-700">
+      <div className="mt-2 break-all font-mono text-xs text-foreground">
         {sensitive ? value : value}
       </div>
     </div>
@@ -5004,8 +5004,8 @@ function DatabaseFieldEditor({
     column.dataType.includes("timestamp");
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <span className="font-medium text-slate-700">{column.name}</span>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{column.name}</span>
         <span>{column.dataType}</span>
         {column.isPrimaryKey ? <KeyRound className="size-3.5" /> : null}
       </div>
@@ -5014,7 +5014,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="min-h-[88px] rounded-md border-slate-200 bg-white text-xs"
+          className="min-h-[88px] rounded-md border-border bg-card text-xs"
           placeholder={
             column.hasDefault
               ? column.defaultValue || ""
@@ -5028,7 +5028,7 @@ function DatabaseFieldEditor({
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
-          className="h-9 rounded-md border-slate-200 bg-white text-xs"
+          className="h-9 rounded-md border-border bg-card text-xs"
           placeholder={
             column.hasDefault
               ? column.defaultValue || ""
@@ -5133,8 +5133,8 @@ function DeploymentStorageSection({
 }) {
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
           {i18n.t("previewPanel.deployment.storage.title")}
         </div>
         <div className="grid gap-3 p-4 md:grid-cols-2">
@@ -5154,8 +5154,8 @@ function DeploymentStorageSection({
               "previewPanel.deployment.storage.recommendedUsageDescription",
             )}
           />
-          <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4 md:col-span-2">
-            <div className="text-sm font-semibold text-slate-900">
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4 md:col-span-2">
+            <div className="text-sm font-semibold text-foreground">
               {i18n.t("previewPanel.deployment.storage.visibleState")}
             </div>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
@@ -5180,8 +5180,8 @@ function DeploymentStorageSection({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
           {i18n.t("previewPanel.deployment.storage.scenarioPlanning")}
         </div>
         <div className="space-y-3 p-4">
@@ -5251,8 +5251,8 @@ function DeploymentSettingsSectionPanel({
 
   return (
     <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
           {i18n.t("previewPanel.deployment.sections.settings")}
         </div>
         <div className="flex gap-2 overflow-x-auto p-3 xl:flex-col xl:overflow-visible">
@@ -5294,8 +5294,8 @@ function DeploymentSettingsSectionPanel({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+      <section className="rounded-lg border border-border/70 bg-card">
+        <div className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
           {settingsSection === "general"
             ? i18n.t("previewPanel.deployment.settings.general")
             : null}
@@ -5572,12 +5572,12 @@ function DeploymentSettingsSectionPanel({
                   )}
                 />
               </div>
-              <div className="flex flex-col gap-3 rounded-md border border-slate-200/80 bg-slate-50/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 rounded-md border border-border/70 bg-muted/30 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-slate-900">
+                  <div className="text-sm font-medium text-foreground">
                     {i18n.t("previewPanel.deployment.settings.rotateCurrentToken")}
                   </div>
-                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                  <div className="mt-1 text-xs leading-5 text-muted-foreground">
                     {i18n.t(
                       "previewPanel.deployment.settings.rotateCurrentTokenDescription",
                     )}
@@ -5650,7 +5650,7 @@ function DeploymentSettingsSectionPanel({
                   href={resourceBinding.repositoryUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/30 sm:w-auto"
                 >
                   {i18n.t("previewPanel.deployment.settings.openManagedRepo")}
                   <ExternalLink className="size-4" />
@@ -5691,8 +5691,8 @@ function DeploymentMenuButton({
       className={cn(
         "inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
         active
-          ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
+          ? "border-border bg-muted/50 text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
       )}
     >
       <Icon className="size-3.5" />
@@ -5717,8 +5717,8 @@ function DeploymentSettingsButton({
       className={cn(
         "rounded-md border px-3 py-2 text-left text-sm transition-colors whitespace-nowrap",
         active
-          ? "border-slate-200 bg-slate-100 text-slate-900"
-          : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50",
+          ? "border-border bg-muted/50 text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-muted/30",
       )}
     >
       {label}
@@ -5788,20 +5788,20 @@ function DeploymentTemplateBaselineSection({
           i18n.t("previewPanel.deployment.baseline.notDeclared");
 
   return (
-    <section className="rounded-lg border border-slate-200/80 bg-white">
-      <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
+    <section className="rounded-lg border border-border/70 bg-card">
+      <div className="border-b border-border px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-sm font-semibold text-slate-900">
+            <div className="text-sm font-semibold text-foreground">
               {i18n.t("previewPanel.deployment.baseline.title")}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted-foreground">
               {i18n.t("previewPanel.deployment.baseline.description")}
             </div>
           </div>
-          <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+          <div className="rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
             {i18n.t("previewPanel.deployment.baseline.lastCheck")}:{" "}
-            <span className="font-medium text-slate-900">{checkedAt}</span>
+            <span className="font-medium text-foreground">{checkedAt}</span>
           </div>
         </div>
       </div>
@@ -5949,16 +5949,16 @@ function DeploymentMetricCard({
   return (
     <div
       className={cn(
-        "rounded-md border border-slate-200/80 bg-slate-50/40 p-3",
+        "rounded-md border border-border/70 bg-muted/30 p-3",
         className,
       )}
     >
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
-      <div className="mt-2 text-sm font-semibold text-slate-900">{value}</div>
+      <div className="mt-2 text-sm font-semibold text-foreground">{value}</div>
       {subtitle ? (
-        <div className="mt-1 text-xs leading-5 text-slate-600">{subtitle}</div>
+        <div className="mt-1 text-xs leading-5 text-muted-foreground">{subtitle}</div>
       ) : null}
     </div>
   );
@@ -5976,20 +5976,20 @@ function DeploymentInfoCard({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/60 p-4">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+    <div className="rounded-md border border-border/70 bg-muted/30 p-4">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {title}
       </div>
       <div
         className={cn(
-          "mt-2 text-sm font-medium text-slate-900 break-all",
+          "mt-2 text-sm font-medium text-foreground break-all",
           mono ? "font-mono text-[12px]" : "",
         )}
       >
         {value}
       </div>
       {extra ? (
-        <div className="mt-1 text-xs leading-5 text-slate-500">{extra}</div>
+        <div className="mt-1 text-xs leading-5 text-muted-foreground">{extra}</div>
       ) : null}
     </div>
   );
@@ -6003,11 +6003,11 @@ function DeploymentMiniStatus({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-200/80 bg-slate-50/30 px-3 py-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+    <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3">
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </div>
-      <div className="mt-1 text-sm font-medium text-slate-900">{value}</div>
+      <div className="mt-1 text-sm font-medium text-foreground">{value}</div>
     </div>
   );
 }
@@ -6020,9 +6020,9 @@ function DeploymentPlaceholderCard({
   description: string;
 }) {
   return (
-    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/40 p-4">
-      <div className="text-sm font-semibold text-slate-900">{title}</div>
-      <div className="mt-1 text-sm leading-6 text-slate-600">{description}</div>
+    <div className="rounded-md border border-dashed border-border bg-muted/30 p-4">
+      <div className="text-sm font-semibold text-foreground">{title}</div>
+      <div className="mt-1 text-sm leading-6 text-muted-foreground">{description}</div>
     </div>
   );
 }
@@ -6403,7 +6403,7 @@ function DiffBlock({
 
   if (baseFiles.length === 0) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 font-mono whitespace-pre-wrap break-words">
+      <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground font-mono whitespace-pre-wrap break-words">
         {diff || i18n.t("previewPanel.noChanges")}
       </div>
     );
@@ -6446,12 +6446,12 @@ function DiffBlock({
   };
 
   return (
-    <div className="flex h-full flex-col rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-mono overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 text-[11px] text-slate-500">
+    <div className="flex h-full flex-col rounded-lg border border-border bg-card text-xs text-foreground font-mono overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border text-[11px] text-muted-foreground">
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
+            className="rounded-full border border-border px-2 py-0.5 hover:bg-muted/50"
             onClick={() => {
               setCollapsedFiles(new Set(allFileIds));
               setCollapsedHunks(new Set(allHunkIds));
@@ -6461,7 +6461,7 @@ function DiffBlock({
           </button>
           <button
             type="button"
-            className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-slate-100"
+            className="rounded-full border border-border px-2 py-0.5 hover:bg-muted/50"
             onClick={() => {
               setCollapsedFiles(new Set());
               setCollapsedHunks(new Set());
@@ -6473,10 +6473,10 @@ function DiffBlock({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+            className={`rounded-full border px-2 py-0.5 hover:bg-muted/50 ${
               showWhitespace
                 ? "border-emerald-500 text-emerald-700"
-                : "border-slate-200"
+                : "border-border"
             }`}
             onClick={() => setShowWhitespace((prev) => !prev)}
           >
@@ -6484,10 +6484,10 @@ function DiffBlock({
           </button>
           <button
             type="button"
-            className={`rounded-full border px-2 py-0.5 hover:bg-slate-100 ${
+            className={`rounded-full border px-2 py-0.5 hover:bg-muted/50 ${
               ignoreWhitespace
                 ? "border-emerald-500 text-emerald-700"
-                : "border-slate-200"
+                : "border-border"
             }`}
             onClick={() => setIgnoreWhitespace((prev) => !prev)}
           >
@@ -6496,8 +6496,8 @@ function DiffBlock({
         </div>
       </div>
       {showGlobalHeader ? (
-        <div className="grid grid-cols-2 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
-          <div className="px-3 py-2 border-r border-slate-200">Before</div>
+        <div className="grid grid-cols-2 border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="px-3 py-2 border-r border-border">Before</div>
           <div className="px-3 py-2">After</div>
         </div>
       ) : null}
@@ -6505,27 +6505,27 @@ function DiffBlock({
         {displayFiles.map(({ file, stats, mode, hunks }) => {
           const fileCollapsed = collapsedFiles.has(file.id);
           return (
-            <div key={file.id} className="border-b border-slate-200">
-              <div className="flex items-center justify-between px-3 py-2 text-slate-700 bg-slate-50">
+            <div key={file.id} className="border-b border-border">
+              <div className="flex items-center justify-between px-3 py-2 text-foreground bg-muted/30">
                 <div>
                   <div className="text-xs font-semibold">
                     {i18n.t("previewPanel.fileLabel")}: {file.displayPath}
                   </div>
                   {(file.oldPath || file.newPath) && (
-                    <div className="text-[11px] text-slate-500">
+                    <div className="text-[11px] text-muted-foreground">
                       {file.oldPath ? `- ${file.oldPath}` : ""}
                       {file.oldPath && file.newPath ? " | " : ""}
                       {file.newPath ? `+ ${file.newPath}` : ""}
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                   <span className="text-emerald-600">+{stats.additions}</span>
                   <span className="text-rose-600">-{stats.deletions}</span>
                   <button
                     type="button"
                     onClick={() => toggleFile(file.id)}
-                    className="text-[11px] text-slate-500 hover:text-slate-900"
+                    className="text-[11px] text-muted-foreground hover:text-foreground"
                   >
                     {fileCollapsed ? i18n.t("common.expand") : i18n.t("common.collapse")}
                   </button>
@@ -6534,14 +6534,14 @@ function DiffBlock({
 
               {!fileCollapsed && !showGlobalHeader ? (
                 mode === "split" ? (
-                  <div className="grid grid-cols-2 border-t border-slate-200 border-b border-slate-200 text-[11px] uppercase tracking-wide text-slate-500">
-                    <div className="px-3 py-2 border-r border-slate-200">
+                  <div className="grid grid-cols-2 border-t border-border border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <div className="px-3 py-2 border-r border-border">
                       Before
                     </div>
                     <div className="px-3 py-2">After</div>
                   </div>
                 ) : (
-                  <div className="border-t border-slate-200 border-b border-slate-200 px-3 py-2 text-[11px] uppercase tracking-wide text-slate-500">
+                  <div className="border-t border-border border-b border-border px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">
                     {mode === "add-only" ? i18n.t("previewPanel.added") : i18n.t("common.delete")}
                   </div>
                 )
@@ -6551,13 +6551,13 @@ function DiffBlock({
                 hunks.map((hunk) => {
                   const hunkCollapsed = collapsedHunks.has(hunk.id);
                   return (
-                    <div key={hunk.id} className="border-t border-slate-200">
-                      <div className="flex items-center justify-between px-3 py-1 text-slate-500 bg-slate-50">
+                    <div key={hunk.id} className="border-t border-border">
+                      <div className="flex items-center justify-between px-3 py-1 text-muted-foreground bg-muted/30">
                         <span>{hunk.header}</span>
                         <button
                           type="button"
                           onClick={() => toggleHunk(hunk.id)}
-                          className="text-[11px] text-slate-500 hover:text-slate-900"
+                          className="text-[11px] text-muted-foreground hover:text-foreground"
                         >
                           {hunkCollapsed ? i18n.t("common.expand") : i18n.t("common.collapse")}
                         </button>
@@ -6571,13 +6571,13 @@ function DiffBlock({
                                 className="grid grid-cols-2"
                               >
                                 <div
-                                  className={`flex gap-2 px-3 py-0.5 border-r border-slate-200 ${
+                                  className={`flex gap-2 px-3 py-0.5 border-r border-border ${
                                     row.leftType === "del"
                                       ? "bg-rose-50 text-rose-700"
-                                      : "text-slate-700"
+                                      : "text-foreground"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {row.leftLine ?? ""}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
@@ -6591,10 +6591,10 @@ function DiffBlock({
                                   className={`flex gap-2 px-3 py-0.5 ${
                                     row.rightType === "add"
                                       ? "bg-emerald-50 text-emerald-700"
-                                      : "text-slate-700"
+                                      : "text-foreground"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {row.rightLine ?? ""}
                                   </span>
                                   <span className="whitespace-pre-wrap break-words flex-1">
@@ -6618,7 +6618,7 @@ function DiffBlock({
                                       : "bg-rose-50 text-rose-700"
                                   }`}
                                 >
-                                  <span className="w-8 text-right text-slate-400">
+                                  <span className="w-8 text-right text-muted-foreground">
                                     {isAdd
                                       ? (row.rightLine ?? "")
                                       : (row.leftLine ?? "")}
@@ -6635,7 +6635,7 @@ function DiffBlock({
                         </div>
                       )}
                       {hunkCollapsed && (
-                        <div className="px-3 py-1 text-[11px] text-slate-400">
+                        <div className="px-3 py-1 text-[11px] text-muted-foreground">
                           ...
                         </div>
                       )}

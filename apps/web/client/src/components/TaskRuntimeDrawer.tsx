@@ -11,7 +11,9 @@ import type { OrchestrationRuntime } from "@/hooks/useTaskCreationAgent";
 import { Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-function pickMessageText(message: OrchestrationRuntime["messages"][number]): string {
+function pickMessageText(
+  message: OrchestrationRuntime["messages"][number],
+): string {
   const payload = (message?.payload || {}) as Record<string, unknown>;
   const candidates = [
     payload.output,
@@ -35,9 +37,16 @@ function pickMessageText(message: OrchestrationRuntime["messages"][number]): str
   return JSON.stringify(payload);
 }
 
-function pickTimestamp(message: OrchestrationRuntime["messages"][number]): string | null {
+function pickTimestamp(
+  message: OrchestrationRuntime["messages"][number],
+): string | null {
   const payload = (message?.payload || {}) as Record<string, unknown>;
-  const candidates = [payload.at, payload.timestamp, payload.time, payload.createdAt];
+  const candidates = [
+    payload.at,
+    payload.timestamp,
+    payload.time,
+    payload.createdAt,
+  ];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
@@ -47,11 +56,15 @@ function pickTimestamp(message: OrchestrationRuntime["messages"][number]): strin
 }
 
 function getTypeClass(type: string): string {
-  if (type.includes("ERROR")) return "text-rose-700 bg-rose-50 border-rose-200";
-  if (type.includes("STATUS")) return "text-amber-700 bg-amber-50 border-amber-200";
-  if (type.includes("OUTPUT")) return "text-blue-700 bg-blue-50 border-blue-200";
-  if (type.includes("LLM_PROXY")) return "text-emerald-700 bg-emerald-50 border-emerald-200";
-  return "text-slate-700 bg-slate-50 border-slate-200";
+  if (type.includes("ERROR"))
+    return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+  if (type.includes("STATUS"))
+    return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  if (type.includes("OUTPUT"))
+    return "border-blue-500/30 bg-blue-500/10 text-blue-200";
+  if (type.includes("LLM_PROXY"))
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  return "border-border bg-muted/60 text-muted-foreground";
 }
 
 interface TaskRuntimeDrawerProps {
@@ -60,10 +73,19 @@ interface TaskRuntimeDrawerProps {
   runtime: OrchestrationRuntime;
 }
 
-export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskRuntimeDrawerProps) {
+export default function TaskRuntimeDrawer({
+  open,
+  onOpenChange,
+  runtime,
+}: TaskRuntimeDrawerProps) {
   const { t } = useTranslation();
   const rows = [...runtime.messages]
-    .filter((message) => !String(message.type || "").toUpperCase().includes("ERROR"))
+    .filter(
+      (message) =>
+        !String(message.type || "")
+          .toUpperCase()
+          .includes("ERROR"),
+    )
     .reverse();
 
   return (
@@ -76,7 +98,9 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
           </SheetTitle>
           <SheetDescription>
             {runtime.orchestratorSessionId
-              ? t("runtimeDrawer.sessionId", { sessionId: runtime.orchestratorSessionId })
+              ? t("runtimeDrawer.sessionId", {
+                  sessionId: runtime.orchestratorSessionId,
+                })
               : t("runtimeDrawer.noSession")}
           </SheetDescription>
           <div className="flex items-center gap-2 pt-2">
@@ -94,16 +118,24 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
               ) : (
                 <RefreshCw className="mr-2 h-4 w-4" />
               )}
-              {runtime.ready ? t("runtimeDrawer.refresh") : t("runtimeDrawer.load")}
+              {runtime.ready
+                ? t("runtimeDrawer.refresh")
+                : t("runtimeDrawer.load")}
             </Button>
-            <span className="text-xs text-muted-foreground">{t("runtimeDrawer.messageCount", { count: runtime.messages.length })}</span>
+            <span className="text-xs text-muted-foreground">
+              {t("runtimeDrawer.messageCount", {
+                count: runtime.messages.length,
+              })}
+            </span>
           </div>
         </SheetHeader>
 
         <ScrollArea className="h-[calc(100vh-180px)] px-4">
           {rows.length === 0 ? (
             <div className="py-8 text-sm text-muted-foreground">
-              {runtime.ready ? t("runtimeDrawer.emptyReady") : t("runtimeDrawer.emptyLoading")}
+              {runtime.ready
+                ? t("runtimeDrawer.emptyReady")
+                : t("runtimeDrawer.emptyLoading")}
             </div>
           ) : (
             <div className="space-y-3 py-4">
@@ -111,19 +143,33 @@ export default function TaskRuntimeDrawer({ open, onOpenChange, runtime }: TaskR
                 const type = String(message.type || "UNKNOWN");
                 const requestId =
                   (message.requestId as string | undefined) ||
-                  ((message.payload as Record<string, unknown> | undefined)?.requestId as string | undefined) ||
+                  ((message.payload as Record<string, unknown> | undefined)
+                    ?.requestId as string | undefined) ||
                   null;
                 const text = pickMessageText(message);
                 const timestamp = pickTimestamp(message);
 
                 return (
-                  <div key={`${type}-${requestId || "none"}-${index}`} className="rounded-lg border border-border p-3">
+                  <div
+                    key={`${type}-${requestId || "none"}-${index}`}
+                    className="rounded-lg border border-border p-3"
+                  >
                     <div className="mb-2 flex items-center gap-2">
-                      <span className={`rounded-full border px-2 py-0.5 text-xs ${getTypeClass(type)}`}>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-xs ${getTypeClass(type)}`}
+                      >
                         {type}
                       </span>
-                      {requestId && <span className="text-xs text-muted-foreground">requestId: {requestId}</span>}
-                      {timestamp && <span className="ml-auto text-xs text-muted-foreground">{timestamp}</span>}
+                      {requestId && (
+                        <span className="text-xs text-muted-foreground">
+                          requestId: {requestId}
+                        </span>
+                      )}
+                      {timestamp && (
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          {timestamp}
+                        </span>
+                      )}
                     </div>
                     <pre className="whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-xs leading-5 text-foreground">
                       {text}

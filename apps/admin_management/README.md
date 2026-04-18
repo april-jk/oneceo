@@ -40,12 +40,13 @@ VITE_OSAC_UPLOAD_TIMEOUT_MS=300000
 - `ADMIN_MANAGEMENT_WEB_HOST`：Vite 开发服务器监听地址，局域网访问建议保持 `0.0.0.0`；未配置时会回退到 `ADMIN_MANAGEMENT_BIND_HOST`
 - `ADMIN_MANAGEMENT_API_PROXY_HOST`：Vite 反向代理后台 API 时使用的本机连接地址，默认应为 `127.0.0.1`
 - `ADMIN_MANAGEMENT_CORS_ORIGINS`：后台允许的前端来源列表，逗号分隔；未配置时默认允许 `localhost`、`127.0.0.1` 和同端口私网 IP 来源
-- `ADMIN_MANAGEMENT_THEME`：管理后台主题家族，仅支持 `github`、`nord`、`rose-pine`
+- `ADMIN_MANAGEMENT_THEME`：管理后台主题家族，仅支持 `github`、`nord`、`rose-pine`、`one-dark-light`
 - `ADMIN_MANAGEMENT_THEME_MODE`：管理后台外观模式，仅支持 `light`、`dark`、`system`
 - 兼容说明：如果历史环境变量里仍然保留旧主题名或旧主题变体，服务端会自动映射到上述三套主题和对应明暗模式
   - `github-*` 统一映射到 `github`，其中 `github-light` 走亮色，其他变体走暗色
   - `nord-*` 统一映射到 `nord`，其中 `nord-frost` 走亮色，其他变体走暗色
   - `rosepine`、`rose-pine-*` 统一映射到 `rose-pine`，其中 `rose-pine-dawn` 走亮色，其他变体走暗色
+  - `one`、`one-light`、`one-dark`、`one-dark-light-*` 统一映射到 `one-dark-light`
 - `ONECEO_REQUEST_TIMEOUT_MS`：管理后台调用 oneceo-api 的默认超时（毫秒）
 - `ONECEO_OSAC_UPLOAD_TIMEOUT_MS`：OSAC 二进制上传链路专用超时（毫秒，默认 300000）
 - `VITE_API_TIMEOUT_MS`：前端调用管理后台 API 的默认超时（毫秒）

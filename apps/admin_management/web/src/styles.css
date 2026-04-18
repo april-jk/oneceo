@@ -251,6 +251,37 @@
   --theme-rail-soft: #191724;
 }
 
+:root[data-admin-theme='one-dark-light'],
+:root[data-admin-theme='one-dark-light-light'] {
+  --theme-bg: #fafafa;
+  --theme-bg-soft: #f0f2f5;
+  --theme-text: #383a42;
+  --theme-text-soft: #5c6370;
+  --theme-text-faint: #7f848e;
+  --theme-primary: #4078f2;
+  --theme-primary-strong: #255acb;
+  --theme-secondary: #0184bc;
+  --theme-warning: #c18401;
+  --theme-danger: #e45649;
+  --theme-rail: #21252b;
+  --theme-rail-soft: #2c313a;
+}
+
+:root[data-admin-theme='one-dark-light-dark'] {
+  --theme-bg: #282c34;
+  --theme-bg-soft: #21252b;
+  --theme-text: #d7dae0;
+  --theme-text-soft: #abb2bf;
+  --theme-text-faint: #8b93a3;
+  --theme-primary: #61afef;
+  --theme-primary-strong: #82c7ff;
+  --theme-secondary: #98c379;
+  --theme-warning: #e5c07b;
+  --theme-danger: #e06c75;
+  --theme-rail: #1c1f26;
+  --theme-rail-soft: #242933;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -5855,6 +5886,11 @@ select:focus-visible {
   background: rgba(37, 99, 235, 0.08);
   color: #365f9f;
   font-size: 11px;
+}
+
+.sandbox-live-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .session-status-governance {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ function resolveRedirectTarget() {
 
 export default function Login() {
   const { login, status } = useAuth();
+  const { t } = useTranslation();
   const [, setLocation] = useLocation();
   const redirectTarget = useMemo(resolveRedirectTarget, []);
   const [email, setEmail] = useState("");
@@ -38,7 +40,7 @@ export default function Login() {
       await login({ email: email.trim(), password });
       setLocation(redirectTarget);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "登录失败");
+      setError(submitError instanceof Error ? submitError.message : t("auth.loginFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -51,15 +53,15 @@ export default function Login() {
           <div className="mb-6 flex items-center gap-3">
             <img src="/logo.png" alt="oneceo" className="size-11 rounded-[10px] object-cover" />
             <div className="space-y-1">
-              <p className="text-lg font-semibold leading-none text-[#151717]">登录 oneceo</p>
-              <p className="text-sm text-slate-500">进入你的工作区与历史会话</p>
+              <p className="text-lg font-semibold leading-none text-[#151717]">{t("auth.loginTitle")}</p>
+              <p className="text-sm text-slate-500">{t("auth.loginSubtitle")}</p>
             </div>
           </div>
 
           <form className="flex flex-col gap-[10px]" onSubmit={handleSubmit}>
             <div className="flex flex-col gap-2">
               <Label htmlFor="login-email" className="text-sm font-semibold text-[#151717]">
-                Email
+                {t("auth.emailLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <Mail className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
@@ -67,7 +69,7 @@ export default function Login() {
                   id="login-email"
                   type="email"
                   autoComplete="email"
-                  placeholder="Enter your Email"
+                  placeholder={t("auth.emailPlaceholder")}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required
@@ -78,7 +80,7 @@ export default function Login() {
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="login-password" className="text-sm font-semibold text-[#151717]">
-                Password
+                {t("auth.passwordLabel")}
               </Label>
               <div className="flex h-[50px] items-center rounded-[10px] border-[1.5px] border-[#ecedec] px-[10px] transition-colors focus-within:border-[#2d79f3]">
                 <LockKeyhole className="size-5 shrink-0 text-[#151717]" strokeWidth={1.9} />
@@ -86,7 +88,7 @@ export default function Login() {
                   id="login-password"
                   type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
-                  placeholder="Enter your Password"
+                  placeholder={t("auth.passwordPlaceholder")}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
@@ -94,7 +96,7 @@ export default function Login() {
                 />
                 <button
                   type="button"
-                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  aria-label={showPassword ? t("common.hidePassword") : t("common.showPassword")}
                   onClick={() => setShowPassword((value) => !value)}
                   className="ml-2 inline-flex size-8 items-center justify-center rounded-[8px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                 >
@@ -103,7 +105,7 @@ export default function Login() {
               </div>
             </div>
 
-            <p className="pt-1 text-sm text-slate-500">登录成功后会自动回到原目标页面并恢复你的个人身份。</p>
+            <p className="pt-1 text-sm text-slate-500">{t("auth.loginHint")}</p>
 
             {error ? (
               <div className="rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
@@ -114,17 +116,17 @@ export default function Login() {
               className="mt-[10px] h-[50px] w-full rounded-[10px] bg-[#151717] text-[15px] font-medium text-white hover:bg-[#252727]"
               disabled={submitting}
             >
-              {submitting ? "Signing In..." : "Sign In"}
+              {submitting ? t("auth.signingIn") : t("auth.signIn")}
             </Button>
           </form>
 
           <p className="mt-5 text-center text-sm text-slate-700">
-            Don't have an account?
+            {t("auth.noAccount")}
             <Link
               href={`/register?redirect=${encodeURIComponent(redirectTarget)}`}
               className="ml-1 font-medium text-[#2d79f3]"
             >
-              Sign Up
+              {t("auth.signUp")}
             </Link>
           </p>
         </div>

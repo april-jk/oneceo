@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { Send, User, Bot, Briefcase, CheckCircle, XCircle, AlertCircle, Building2, TrendingUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -43,12 +44,13 @@ interface CompanyProject {
 }
 
 export default function AgentProject() {
+  const { t, i18n } = useTranslation();
   const [inputMessage, setInputMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'general_manager',
-      content: 'CEO，您好。我是您的总经理，负责统筹调度公司的所有事务。请告诉我您的战略方向，我将为您制定详细的执行计划。',
+      content: t('agentProject.initialMessage'),
       timestamp: new Date(),
     },
   ]);
@@ -80,21 +82,21 @@ export default function AgentProject() {
       const gmReply: Message = {
         id: (Date.now() + 1).toString(),
         role: 'general_manager',
-        content: '我已经分析了您的战略意图。基于当前公司状况，我建议以下行动：',
+        content: t('agentProject.analysisReply'),
         timestamp: new Date(),
         suggestions: [
           {
             id: 's1',
             type: 'create',
             projectName: 'AI Customer Service System',
-            reason: '根据您提到的客户服务优化方向，建议创建新项目以提升客户体验',
+            reason: t('agentProject.createReason'),
             status: 'pending',
           },
           {
             id: 's2',
             type: 'modify',
             projectName: 'Marketing Campaign',
-            reason: '当前营销项目进度缓慢，建议调整策略并增加资源投入',
+            reason: t('agentProject.modifyReason'),
             status: 'pending',
           },
         ],
@@ -138,7 +140,7 @@ export default function AgentProject() {
     const confirmMsg: Message = {
       id: Date.now().toString(),
       role: 'general_manager',
-      content: `已收到批准。我将立即执行 "${selectedSuggestion.projectName}" 的相关操作，并为您持续跟踪进展。`,
+      content: t('agentProject.approvalConfirmed', { projectName: selectedSuggestion.projectName }),
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, confirmMsg]);
@@ -167,11 +169,11 @@ export default function AgentProject() {
   const getStatusBadge = (status: CompanyProject['status']) => {
     switch (status) {
       case 'active':
-        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">进行中</Badge>;
+        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">{t('agentProject.statusActive')}</Badge>;
       case 'paused':
-        return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100">暂停</Badge>;
+        return <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100">{t('agentProject.statusPaused')}</Badge>;
       case 'completed':
-        return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">已完成</Badge>;
+        return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">{t('agentProject.statusCompleted')}</Badge>;
     }
   };
 
@@ -186,21 +188,21 @@ export default function AgentProject() {
               <CardHeader>
                 <div className="flex items-center gap-2">
                   <Building2 className="w-5 h-5 text-foreground/60" />
-                  <CardTitle className="text-lg">公司概况</CardTitle>
+                  <CardTitle className="text-lg">{t('agentProject.companyOverview')}</CardTitle>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="text-center">
-                    <div className="text-sm text-muted-foreground mb-1">活跃项目</div>
+                    <div className="text-sm text-muted-foreground mb-1">{t('agentProject.activeProjectsMetric')}</div>
                     <div className="text-3xl font-semibold text-foreground">{activeProjects}</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-sm text-muted-foreground mb-1">总经理数</div>
+                    <div className="text-sm text-muted-foreground mb-1">{t('agentProject.totalManagersMetric')}</div>
                     <div className="text-3xl font-semibold text-foreground">{totalManagers}</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-sm text-muted-foreground mb-1">平均进度</div>
+                    <div className="text-sm text-muted-foreground mb-1">{t('agentProject.averageProgressMetric')}</div>
                     <div className="text-3xl font-semibold text-foreground">{avgProgress}%</div>
                   </div>
                 </div>
@@ -212,7 +214,7 @@ export default function AgentProject() {
               <CardHeader>
                 <div className="flex items-center gap-2">
                   <Briefcase className="w-5 h-5 text-foreground/60" />
-                  <CardTitle className="text-lg">所有项目</CardTitle>
+                  <CardTitle className="text-lg">{t('agentProject.allProjectsCard')}</CardTitle>
                 </div>
               </CardHeader>
               <CardContent>
@@ -226,8 +228,8 @@ export default function AgentProject() {
                             {getStatusBadge(project.status)}
                           </div>
                           <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                            <span>{project.managersCount} 经理</span>
-                            <span>{project.employeesCount} 员工</span>
+                            <span>{t('agentProject.managersCount', { count: project.managersCount })}</span>
+                            <span>{t('agentProject.employeesCount', { count: project.employeesCount })}</span>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 ml-4">
@@ -277,7 +279,7 @@ export default function AgentProject() {
                         <p className="text-sm leading-relaxed">{message.content}</p>
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 px-2">
-                        {message.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                        {message.timestamp.toLocaleTimeString(i18n.language === 'en' ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit' })}
                       </div>
 
                       {/* 建议卡片 */}
@@ -303,15 +305,15 @@ export default function AgentProject() {
                                       <AlertCircle className="w-4 h-4 text-yellow-600" />
                                     )}
                                     <span className="text-sm font-medium text-foreground">
-                                      {suggestion.type === 'create' && '创建项目'}
-                                      {suggestion.type === 'delete' && '删除项目'}
-                                      {suggestion.type === 'modify' && '调整项目'}
+                                      {suggestion.type === 'create' && t('agentProject.suggestCreate')}
+                                      {suggestion.type === 'delete' && t('agentProject.suggestDelete')}
+                                      {suggestion.type === 'modify' && t('agentProject.suggestModify')}
                                     </span>
                                     {suggestion.status === 'approved' && (
-                                      <Badge className="bg-green-100 text-green-800">已批准</Badge>
+                                      <Badge className="bg-green-100 text-green-800">{t('agentProject.approved')}</Badge>
                                     )}
                                     {suggestion.status === 'rejected' && (
-                                      <Badge className="bg-red-100 text-red-800">已拒绝</Badge>
+                                      <Badge className="bg-red-100 text-red-800">{t('agentProject.rejected')}</Badge>
                                     )}
                                   </div>
                                   <p className="text-sm font-medium text-foreground mb-1">
@@ -327,7 +329,7 @@ export default function AgentProject() {
                                       onClick={() => handleApprove(suggestion)}
                                       className="rounded-lg"
                                     >
-                                      批准
+                                      {t('agentProject.approve')}
                                     </Button>
                                     <Button
                                       size="sm"
@@ -335,7 +337,7 @@ export default function AgentProject() {
                                       onClick={() => handleReject(suggestion)}
                                       className="rounded-lg text-red-600 hover:text-red-700"
                                     >
-                                      拒绝
+                                      {t('agentProject.reject')}
                                     </Button>
                                   </div>
                                 )}
@@ -363,7 +365,7 @@ export default function AgentProject() {
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="输入您的战略指令或问题..."
+                placeholder={t('agentProject.messagePlaceholder')}
                 className="flex-1 rounded-xl"
               />
               <Button
@@ -382,9 +384,9 @@ export default function AgentProject() {
       <Dialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
         <DialogContent className="rounded-xl">
           <DialogHeader>
-            <DialogTitle>确认执行</DialogTitle>
+            <DialogTitle>{t('agentProject.confirmTitle')}</DialogTitle>
             <DialogDescription>
-              您即将批准总经理的建议，此操作将立即执行，请确认是否继续。
+              {t('agentProject.confirmDescription')}
             </DialogDescription>
           </DialogHeader>
           {selectedSuggestion && (
@@ -394,9 +396,9 @@ export default function AgentProject() {
                 {selectedSuggestion.type === 'delete' && <XCircle className="w-5 h-5 text-red-600" />}
                 {selectedSuggestion.type === 'modify' && <AlertCircle className="w-5 h-5 text-yellow-600" />}
                 <span className="font-medium">
-                  {selectedSuggestion.type === 'create' && '创建项目'}
-                  {selectedSuggestion.type === 'delete' && '删除项目'}
-                  {selectedSuggestion.type === 'modify' && '调整项目'}
+                  {selectedSuggestion.type === 'create' && t('agentProject.suggestCreate')}
+                  {selectedSuggestion.type === 'delete' && t('agentProject.suggestDelete')}
+                  {selectedSuggestion.type === 'modify' && t('agentProject.suggestModify')}
                 </span>
               </div>
               <p className="text-sm font-medium mb-2">{selectedSuggestion.projectName}</p>
@@ -405,10 +407,10 @@ export default function AgentProject() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDialogOpen(false)} className="rounded-lg">
-              取消
+              {t('common.cancel')}
             </Button>
             <Button onClick={confirmApproval} className="rounded-lg bg-foreground text-background hover:bg-foreground/90">
-              确认批准
+              {t('agentProject.confirmApprove')}
             </Button>
           </DialogFooter>
         </DialogContent>

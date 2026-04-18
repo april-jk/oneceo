@@ -7,6 +7,7 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import { motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
   Tooltip,
@@ -29,27 +30,6 @@ import {
   stashPendingDraftAttachments,
   type PendingAttachment,
 } from "@/lib/task-attachments";
-
-const QUICK_ACTION_ROWS = [
-  [
-    "帮我梳理下周发布会的任务分工与时间排期",
-    "根据这个想法生成一版完整的产品需求文档",
-    "系统分析竞品的定价策略和主推卖点差异",
-    "把官网首页的信息架构和首屏文案一起整理出来",
-  ],
-  [
-    "规划一套 AI 工作流改造方案并拆成实施步骤",
-    "帮我排查这批线上异常日志并定位最可能的问题",
-    "整理本周销售跟进计划并补全下一步推进动作",
-    "为这个岗位写一版招聘 JD 和首轮面试问题清单",
-  ],
-  [
-    "输出一份上线前的部署检查清单和风险确认项",
-    "根据现有方案撰写一版可评审的技术设计文档",
-    "分析最近用户流失的原因并给出可执行改进建议",
-    "把这周周报整理成结果总结和下周行动项列表",
-  ],
-] as const;
 
 function QuickActionRow({
   actions,
@@ -93,9 +73,11 @@ function QuickActionRow({
 
 export default function HomePage() {
   const [, setLocation] = useLocation();
+  const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
 
   const goToNewTask = (input: string) => {
     const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
@@ -126,7 +108,7 @@ export default function HomePage() {
             <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-lg" />
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-foreground leading-tight">oneceo</span>
-              <span className="text-xs text-muted-foreground leading-tight">AI Agent Platform</span>
+              <span className="text-xs text-muted-foreground leading-tight">{t("homePage.platformSubtitle")}</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -152,7 +134,7 @@ export default function HomePage() {
               <div className="w-12 h-12 bg-foreground rounded-2xl flex items-center justify-center shadow-lg">
                 <span className="text-background font-bold text-xl">M</span>
               </div>
-              <h1 className="text-3xl font-semibold text-foreground tracking-tight">AI Agent</h1>
+              <h1 className="text-3xl font-semibold text-foreground tracking-tight">{t("homePage.title")}</h1>
             </motion.div>
             <motion.p
               initial={{ opacity: 0 }}
@@ -160,7 +142,7 @@ export default function HomePage() {
               transition={{ delay: 0.2, duration: 0.4 }}
               className="text-muted-foreground text-lg"
             >
-              What can I help you with today?
+              {t("homePage.subtitle")}
             </motion.p>
           </div>
 
@@ -172,7 +154,7 @@ export default function HomePage() {
           >
             <div className="p-4 space-y-3">
               <Textarea
-                placeholder="Type your message here..."
+                placeholder={t("homePage.textareaPlaceholder")}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={(e) => {
@@ -203,16 +185,16 @@ export default function HomePage() {
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="sm" className="h-9 px-3 rounded-xl gap-2 hover:bg-muted">
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                              <span className="text-sm text-muted-foreground">{t(`homePage.models.${selectedModel}`)}</span>
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
-                        <TooltipContent><p>Select AI model</p></TooltipContent>
+                        <TooltipContent><p>{t("homePage.selectModel")}</p></TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>Agent Lite</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>Agent Pro</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>Agent Max</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("lite")}>{t("homePage.models.lite")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("pro")}>{t("homePage.models.pro")}</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSelectedModel("max")}>{t("homePage.models.max")}</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
@@ -224,7 +206,7 @@ export default function HomePage() {
                           <Mic className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>Voice input</p></TooltipContent>
+                      <TooltipContent><p>{t("homePage.voiceInput")}</p></TooltipContent>
                     </Tooltip>
 
                     <Tooltip>
@@ -238,7 +220,7 @@ export default function HomePage() {
                           <Send className="w-4 h-4" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>Send message</p></TooltipContent>
+                      <TooltipContent><p>{t("homePage.sendMessage")}</p></TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
@@ -253,19 +235,19 @@ export default function HomePage() {
           className="pt-3 space-y-3"
         >
             <QuickActionRow
-              actions={QUICK_ACTION_ROWS[0]}
+              actions={quickActionRows[0] || []}
               direction="left"
               durationSeconds={28}
               onSelect={goToNewTask}
             />
             <QuickActionRow
-              actions={QUICK_ACTION_ROWS[1]}
+              actions={quickActionRows[1] || []}
               direction="right"
               durationSeconds={32}
               onSelect={goToNewTask}
             />
             <QuickActionRow
-              actions={QUICK_ACTION_ROWS[2]}
+              actions={quickActionRows[2] || []}
               direction="left"
               durationSeconds={36}
               onSelect={goToNewTask}

@@ -1,5 +1,10 @@
 import { taskCreationSessionDAO, userSkillDAO } from '../db/dao';
-import { platformSkillService, type PlatformSkillResourceSummary } from './platform-skill-service';
+import {
+  normalizePlatformSkillGovernance,
+  platformSkillService,
+  type PlatformSkillGovernance,
+  type PlatformSkillResourceSummary,
+} from './platform-skill-service';
 
 export type TaskCreationSkillReference = {
   sourceType: 'platform' | 'custom';
@@ -11,6 +16,7 @@ export type TaskCreationSkillReference = {
   category: string;
   revisionNumber: number | null;
   resourceSummary?: PlatformSkillResourceSummary | null;
+  governance?: PlatformSkillGovernance | null;
 };
 
 export type UserCustomSkillDocumentReference = {
@@ -36,6 +42,7 @@ export type ResolvedUserSkillSelection = {
   renderedMarkdown: string;
   revisionNumber: number | null;
   resourceSummary?: PlatformSkillResourceSummary | null;
+  governance?: PlatformSkillGovernance | null;
 };
 
 function asText(value: unknown) {
@@ -100,12 +107,25 @@ function summarizeCustomDocuments(
 
 export class UserSkillService {
   private async ensureDefaultPlatformBindings(userId: string) {
-    const bindings = await userSkillDAO.listPlatformBindings(userId);
-    if (bindings.length > 0) {
-      return bindings;
-    }
     const platformSkills = await platformSkillService.listPublicSkills();
+    const bindings = await userSkillDAO.listPlatformBindings(userId);
+
+    if (bindings.length === 0) {
+      for (const skill of platformSkills) {
+        await userSkillDAO.upsertPlatformBinding({
+          userId,
+          platformSkillId: skill.skillId,
+          enabled: true,
+        });
+      }
+      return userSkillDAO.listPlatformBindings(userId);
+    }
+
+    const bindingMap = new Map(bindings.map((item) => [item.platformSkillId, item]));
     for (const skill of platformSkills) {
+      if (!skill.governance?.required) continue;
+      const existing = bindingMap.get(skill.skillId);
+      if (existing?.enabled) continue;
       await userSkillDAO.upsertPlatformBinding({
         userId,
         platformSkillId: skill.skillId,
@@ -184,6 +204,7 @@ export class UserSkillService {
         category: item.category,
         revisionNumber: item.revisionNumber,
         resourceSummary: item.resourceSummary,
+        governance: item.governance,
       }));
 
     const customRefs: TaskCreationSkillReference[] = customSkills
@@ -381,6 +402,7 @@ export class UserSkillService {
           }),
           revisionNumber: 1,
           resourceSummary: summarizeCustomDocuments(await userSkillDAO.listCustomSkillDocuments(userId, customSkill.id)),
+          governance: null,
         });
         continue;
       }
@@ -405,6 +427,7 @@ export class UserSkillService {
         renderedMarkdown: current.renderedMarkdown,
         revisionNumber: current.revision.revisionNumber,
         resourceSummary: current.resourceSummary,
+        governance: normalizePlatformSkillGovernance(current.skill.metadataJson),
       });
     }
 

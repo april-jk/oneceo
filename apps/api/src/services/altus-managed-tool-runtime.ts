@@ -8,6 +8,7 @@ import { osacAgentService } from './osac-agent-service';
 import { connectorGuideService } from './connector-guide-service';
 import { markSandboxDirty, touchSandbox } from './sandbox-activity-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { userSkillService } from './user-skill-service';
 import {
   altusManagedDeploymentToolService,
   type AltusManagedDeploymentToolName,
@@ -16,14 +17,21 @@ import {
   asText,
   buildManagedMcpToolName,
   type ManagedCompletionAttachment,
+  type ManagedSkillCatalogEntry,
   type ManagedMcpProvider,
   type ManagedSkillContext,
 } from './altus-managed-shared';
 
 type ManagedToolResult =
-  | { type: 'result'; content: string }
-  | { type: 'ask_user'; question: string; options?: string[] }
-  | { type: 'complete'; summary: string; verification?: string[]; attachments?: ManagedCompletionAttachment[] };
+  | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
+  | { type: 'ask_user'; question: string; options?: string[]; activatedSkills?: ManagedSkillContext[] }
+  | {
+      type: 'complete';
+      summary: string;
+      verification?: string[];
+      attachments?: ManagedCompletionAttachment[];
+      activatedSkills?: ManagedSkillContext[];
+    };
 
 function asPositiveInt(value: unknown, fallback: number, max: number) {
   const parsed = Number(value);
@@ -93,9 +101,61 @@ function isManagedDeploymentToolName(value: string): value is AltusManagedDeploy
   );
 }
 
+function normalizeCommandForMatch(value: string) {
+  return asText(value).toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isLocalPreviewOrDevCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('vite preview') ||
+    normalized.includes('npm run preview') ||
+    normalized.includes('pnpm preview') ||
+    normalized.includes('yarn preview') ||
+    normalized.includes('bun preview') ||
+    normalized.includes('vite dev') ||
+    normalized.includes('npm run dev') ||
+    normalized.includes('pnpm dev') ||
+    normalized.includes('yarn dev') ||
+    normalized.includes('bun dev') ||
+    normalized.includes('react-scripts start')
+  );
+}
+
+function isFrontendBuildCommand(value: string) {
+  const normalized = normalizeCommandForMatch(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes('npm run build') ||
+    normalized.includes('pnpm build') ||
+    normalized.includes('yarn build') ||
+    normalized.includes('bun run build') ||
+    normalized.includes('bun build') ||
+    normalized.includes('vite build')
+  );
+}
+
+function extractLeadingCdTarget(value: string) {
+  const raw = asText(value).trim();
+  if (!raw.toLowerCase().startsWith('cd ')) {
+    return '';
+  }
+
+  const match = raw.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(?:&&|;)/i);
+  if (!match) {
+    return '';
+  }
+  return asText(match[1] ?? match[2] ?? match[3]);
+}
+
 export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
+
+  private hasActiveSkill(slug: string) {
+    return this.input.activeSkills.some((item) => asText(item.slug) === slug);
+  }
 
   constructor(
     private readonly input: {
@@ -103,6 +163,7 @@ export class AltusManagedToolRuntime {
       userId: string;
       sandboxId: string;
       workspaceRoot: string;
+      availableSkills?: ManagedSkillCatalogEntry[];
       activeSkills: ManagedSkillContext[];
       mcpProviders: ManagedMcpProvider[];
     },
@@ -244,6 +305,71 @@ export class AltusManagedToolRuntime {
     return result;
   }
 
+  private parseInspectionFlags(stdout: string) {
+    const flags = new Map<string, string>();
+    for (const line of String(stdout || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const separatorIndex = trimmed.indexOf('=');
+      if (separatorIndex <= 0) continue;
+      const key = trimmed.slice(0, separatorIndex);
+      const value = trimmed.slice(separatorIndex + 1);
+      flags.set(key, value);
+    }
+    return flags;
+  }
+
+  private async prepareFrontendBuildWorkspace(
+    command: string,
+    cwd: string,
+    signal?: AbortSignal
+  ) {
+    if (!isFrontendBuildCommand(command)) {
+      return;
+    }
+    const commandScopedCwd = extractLeadingCdTarget(command);
+    const inspectionCwd = commandScopedCwd || cwd;
+    const absoluteCwd = this.resolveWorkspacePath(inspectionCwd, { allowWorkspaceRoot: true });
+    const inspection = await this.runShell(
+      [
+        'if [ -f package.json ]; then echo "package_json=1"; else echo "package_json=0"; fi',
+        'if [ -f index.html ]; then echo "root_index=1"; else echo "root_index=0"; fi',
+        'if [ -f public/index.html ]; then echo "public_index=1"; else echo "public_index=0"; fi',
+        'if [ -f client/index.html ]; then echo "client_index=1"; else echo "client_index=0"; fi',
+        'if [ -f package.json ] && grep -qi \'"vite"\\|vite\' package.json; then echo "vite_project=1"; else echo "vite_project=0"; fi',
+      ].join('\n'),
+      {
+        cwd: absoluteCwd,
+        timeoutMs: 10000,
+      },
+      signal
+    );
+    const flags = this.parseInspectionFlags(asText((inspection as any)?.stdout));
+    if (flags.get('package_json') !== '1' || flags.get('vite_project') !== '1' || flags.get('root_index') === '1') {
+      return;
+    }
+
+    const source =
+      flags.get('public_index') === '1'
+        ? 'public/index.html'
+        : flags.get('client_index') === '1'
+          ? 'client/index.html'
+          : '';
+    if (!source) {
+      return;
+    }
+
+    await this.runShell(
+      `cp ${shellEscape(source)} index.html`,
+      {
+        cwd: absoluteCwd,
+        timeoutMs: 10000,
+      },
+      signal
+    );
+    await this.markWorkspaceDirty('managed_frontend_build_prepare');
+  }
+
   private compactSearchContent(value: string, limit = 1200) {
     return truncate(asText(value), limit);
   }
@@ -259,9 +385,75 @@ export class AltusManagedToolRuntime {
     await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, reason).catch(() => null);
   }
 
+  private findAutoAttachableSkillsForTool(toolName: string) {
+    const normalizedToolName = asText(toolName).toLowerCase();
+    if (!normalizedToolName) return [];
+    const activeKeys = new Set(
+      this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
+    );
+    const availableSkills = Array.isArray(this.input.availableSkills) ? this.input.availableSkills : [];
+    return availableSkills.filter((skill) => {
+      const governance = skill.governance;
+      if (!governance?.autoActivation?.enabled) return false;
+      if (!governance.autoActivation.toolNames.includes(normalizedToolName)) return false;
+      const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
+      return !activeKeys.has(key);
+    });
+  }
+
+  private async autoAttachSkillsForTool(toolName: string, signal?: AbortSignal): Promise<ManagedSkillContext[]> {
+    const candidates = this.findAutoAttachableSkillsForTool(toolName);
+    if (candidates.length === 0) {
+      return [];
+    }
+    const resolved = await userSkillService.resolveSelectionsForSession(
+      this.input.sessionId,
+      candidates.map((item) => ({
+        sourceType: item.sourceType,
+        skillId: item.skillId,
+        revisionId: item.revisionId,
+      }))
+    );
+    this.ensureNotAborted(signal);
+    if (resolved.length === 0) {
+      return [];
+    }
+
+    await sandboxSkillSyncService.syncResolvedSkills({
+      taskSessionId: this.input.sessionId,
+      orchestratorSessionId: this.input.sandboxId,
+      skills: resolved as any,
+    });
+    this.ensureNotAborted(signal);
+
+    const existingKeys = new Set(
+      this.input.activeSkills.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
+    );
+    const activated: ManagedSkillContext[] = [];
+    for (const skill of resolved as ManagedSkillContext[]) {
+      const key = `${skill.sourceType}:${skill.skillId}:${skill.revisionId}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      this.input.activeSkills.push(skill);
+      activated.push(skill);
+    }
+
+    if (activated.length > 0) {
+      writeConnectorDebugLog('[ALTUS_RUNTIME_AUTO_ATTACHED_SKILLS]', {
+        taskSessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        toolName,
+        skillSlugs: activated.map((item) => item.slug),
+      });
+    }
+
+    return activated;
+  }
+
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
     await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
+    const activatedSkills = await this.autoAttachSkillsForTool(toolName, signal);
     if (toolName === 'load_connector_guide') {
       const connectorKey = asText(rawArgs.connectorKey).toLowerCase();
       if (!connectorKey) {
@@ -280,6 +472,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           connectorKey: guide.connectorKey,
           policyId: guide.policyId,
@@ -341,6 +534,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty(`managed_mcp_tool:${mcpTool.toolName}`);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           providerId: response.providerId,
           toolName: response.toolName,
@@ -354,7 +548,16 @@ export class AltusManagedToolRuntime {
       if (!command) {
         throw new Error('shell_execute_missing_command');
       }
+      if (
+        this.hasActiveSkill('deployment-orchestrator') &&
+        isLocalPreviewOrDevCommand(command)
+      ) {
+        throw new Error(
+          'deployment_shell_preview_blocked:部署链路禁止使用本地 preview/dev 命令。请改用 deploy_application、redeploy_application 或 get_application_deployment_status，并依赖平台导出的标准 start/healthcheck 配置。'
+        );
+      }
       const cwd = asText(rawArgs.cwd) || '.';
+      await this.prepareFrontendBuildWorkspace(command, cwd, signal);
       const result = await this.runShell(command, {
         cwd,
         timeoutMs: asPositiveInt(rawArgs.timeoutMs, 20000, 120000),
@@ -365,6 +568,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_shell_execute');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           cwd: this.relativeForDisplay(this.resolveWorkspacePath(cwd, { allowWorkspaceRoot: true })),
           exitCode,
@@ -435,6 +639,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_debug_open_page');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           targetUrl,
           debugUrl: debugInfo?.url,
@@ -458,6 +663,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify(result),
       };
     }
@@ -469,6 +675,7 @@ export class AltusManagedToolRuntime {
       const content = Buffer.from(bytes).toString('utf-8');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           content: truncate(content, 24000),
@@ -489,6 +696,7 @@ export class AltusManagedToolRuntime {
       await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           bytes: Buffer.byteLength(content, 'utf-8'),
@@ -513,6 +721,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           path: this.relativeForDisplay(absolutePath),
           depth,
@@ -542,6 +751,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           query,
           path: this.relativeForDisplay(absolutePath),
@@ -572,6 +782,7 @@ export class AltusManagedToolRuntime {
       );
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           query: result.query,
           topic: result.topic,
@@ -608,6 +819,7 @@ export class AltusManagedToolRuntime {
       );
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           urls: result.urls,
           extractDepth: result.extractDepth,
@@ -646,6 +858,7 @@ export class AltusManagedToolRuntime {
       });
       return {
         type: 'result',
+        activatedSkills,
         content: JSON.stringify({
           skillId: result.skillId,
           revisionId: result.revisionId,
@@ -667,6 +880,7 @@ export class AltusManagedToolRuntime {
         : [];
       return {
         type: 'ask_user',
+        activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
       };
@@ -683,6 +897,7 @@ export class AltusManagedToolRuntime {
       const attachments = this.parseCompletionAttachments(rawArgs.attachments);
       return {
         type: 'complete',
+        activatedSkills,
         summary,
         verification: verification.length > 0 ? verification : undefined,
         attachments: attachments.length > 0 ? attachments : undefined,

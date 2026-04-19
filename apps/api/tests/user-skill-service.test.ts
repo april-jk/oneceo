@@ -183,3 +183,77 @@ test('user can resolve enabled platform skill for managed runtime usage', async 
   assert.equal(resolved[0]?.skillId, 'skill-1');
   assert.match(resolved[0]?.renderedMarkdown || '', /Skill Brief/);
 });
+
+test('listSettings backfills missing required platform bindings for existing users', async () => {
+  mock.method(platformSkillService, 'listPublicSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'skill-deploy',
+      revisionId: 'rev-deploy',
+      slug: 'deployment-orchestrator',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: true,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy'],
+          toolNames: ['deploy_application'],
+        },
+      },
+    },
+    {
+      sourceType: 'platform',
+      skillId: 'skill-office',
+      revisionId: 'rev-office',
+      slug: 'office-ppt',
+      name: 'PPT 办公',
+      description: '创建专业演示文稿',
+      category: 'office',
+      revisionNumber: 1,
+      resourceSummary: null,
+      governance: {
+        systemRole: null,
+        adminManaged: false,
+        required: false,
+        autoActivation: {
+          enabled: false,
+          triggers: [],
+          toolNames: [],
+        },
+      },
+    },
+  ] as any);
+  let bindings = [
+    {
+      id: 'binding-office',
+      userId: 'user-1',
+      platformSkillId: 'skill-office',
+      enabled: true,
+    },
+  ];
+  mock.method(userSkillDAO, 'listPlatformBindings', async () => bindings as any);
+  const upsertMock = mock.method(userSkillDAO, 'upsertPlatformBinding', async (input: any) => {
+    bindings = [
+      ...bindings,
+      {
+        id: 'binding-deploy',
+        userId: input.userId,
+        platformSkillId: input.platformSkillId,
+        enabled: input.enabled,
+      },
+    ];
+    return bindings[bindings.length - 1] as any;
+  });
+  mock.method(userSkillDAO, 'listCustomSkills', async () => []);
+
+  const settings = await userSkillService.listSettings('user-1');
+
+  assert.equal(upsertMock.mock.callCount(), 1);
+  assert.equal(settings.availableSkills.some((item) => item.skillId === 'skill-deploy'), true);
+});

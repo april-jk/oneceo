@@ -3,6 +3,27 @@ import { join } from 'node:path';
 
 const ANALYTICS_BOOTSTRAP_MARKER_START = '<!-- ONECEO_ANALYTICS:START -->';
 const ANALYTICS_BOOTSTRAP_MARKER_END = '<!-- ONECEO_ANALYTICS:END -->';
+export const DEPLOYMENT_TEMPLATE_HTML_ENTRY_RELATIVE_PATHS = [
+  'client/index.html',
+  'index.html',
+  'templates/index.html',
+  'app/templates/index.html',
+] as const;
+
+export const DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS = [
+  'views/layouts/main.ejs',
+  'views/layout.ejs',
+  'views/index.ejs',
+  'app/views/layouts/main.ejs',
+  'app/views/layout.ejs',
+  'app/views/index.ejs',
+] as const;
+
+export const DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS = [
+  ...DEPLOYMENT_TEMPLATE_HTML_ENTRY_RELATIVE_PATHS,
+  ...DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS,
+  'public/index.html',
+] as const;
 
 export type DeploymentTemplateBootstrapReport = {
   analyticsInjected: boolean;
@@ -34,13 +55,9 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function findHtmlEntryPath(sourceDir: string): Promise<string | null> {
-  const candidates = [
-    join(sourceDir, 'client/index.html'),
-    join(sourceDir, 'index.html'),
-    join(sourceDir, 'public/index.html'),
-    join(sourceDir, 'templates/index.html'),
-    join(sourceDir, 'app/templates/index.html'),
-  ];
+  const candidates = DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS.map((relativePath) =>
+    join(sourceDir, relativePath)
+  );
   for (const candidate of candidates) {
     if (await exists(candidate)) {
       return candidate;

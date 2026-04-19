@@ -26,6 +26,7 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
     pendingQuestion: null,
   }) as any);
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   const createRunMock = mock.method(taskSessionRunDAO, 'createRun', async (input: any) => ({
     ...run,
     connectorSnapshotId: input.connectorSnapshotId,
@@ -80,12 +81,41 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
       capturedAbortController = abortController;
     }),
   };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: {
+        sandboxId: null,
+        workspaceRoot: null,
+        reused: false,
+        updatedAt: null,
+      },
+      connectorRuntime: {
+        providerIds: [],
+        updatedAt: null,
+      },
+      stream: {
+        latestSequence: 1,
+        latestEventType: null,
+      },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+  };
 
   const service = new AltusManagedRunEntryService(
     setupService as any,
     eventWriter as any,
     {} as any,
-    coordinator as any
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any
   );
 
   const summary = await service.startRun('session-1', 'user-1', {
@@ -151,10 +181,11 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
 
   const eventCall = setupCalls.find((entry) => entry.type === 'event') as any;
   assert.equal(eventCall.args[0], 'run-1');
-  assert.equal(eventCall.args[2], 'run_ack');
-  assert.equal(eventCall.args[3].sourceMessageKey, 'msg-1');
-  assert.equal(eventCall.args[3].messageKey, 'managed:run-1:run_ack');
-  assert.notEqual(eventCall.args[3].messageKey, 'msg-1');
+  assert.equal(eventCall.args[2], 'user-1');
+  assert.equal(eventCall.args[3], 'run_ack');
+  assert.equal(eventCall.args[4].sourceMessageKey, 'msg-1');
+  assert.equal(eventCall.args[4].messageKey, 'managed:run-1:run_ack');
+  assert.notEqual(eventCall.args[4].messageKey, 'msg-1');
 
   assert.equal(capturedState?.input.runId, 'run-1');
   assert.equal(capturedState?.input.sessionId, 'session-1');
@@ -191,6 +222,7 @@ test('stopRun aborts active controller for in-flight run', async () => {
     pendingQuestion: null,
   }) as any);
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
   mock.method(taskSessionRunDAO, 'getRun', async () => run as any);
 
@@ -221,19 +253,56 @@ test('stopRun aborts active controller for in-flight run', async () => {
   };
 
   let capturedAbortController: AbortController | null = null;
-  const pendingExecution = new Promise<void>(() => {});
   const coordinator = {
     execute: mock.fn((_: any, abortController: AbortController) => {
       capturedAbortController = abortController;
-      return pendingExecution;
+      return new Promise<void>((resolve) => {
+        abortController.signal.addEventListener(
+          'abort',
+          () => {
+            resolve();
+          },
+          { once: true }
+        );
+      });
     }),
+  };
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => null),
+    buildRecoverySnapshot: mock.fn(async () => ({
+      model: 'altus-model',
+      status: 'queued',
+      sequence: 1,
+      sandbox: {
+        sandboxId: null,
+        workspaceRoot: null,
+        reused: false,
+        updatedAt: null,
+      },
+      connectorRuntime: {
+        providerIds: [],
+        updatedAt: null,
+      },
+      stream: {
+        latestSequence: 1,
+        latestEventType: null,
+      },
+    })),
+  };
+  const redisStateService = {
+    registerRun: mock.fn(async () => {}),
+    setRecoverySnapshot: mock.fn(async () => {}),
+    touchHeartbeat: mock.fn(async () => {}),
+    requestStop: mock.fn(async () => {}),
   };
 
   const service = new AltusManagedRunEntryService(
     setupService as any,
     eventWriter as any,
     {} as any,
-    coordinator as any
+    coordinator as any,
+    redisStateService as any,
+    recoveryService as any
   );
 
   await service.startRun('session-2', 'user-2', {
@@ -245,4 +314,57 @@ test('stopRun aborts active controller for in-flight run', async () => {
 
   assert.equal(summary?.id, 'run-2');
   assert.equal(capturedAbortController?.signal.aborted, true);
+});
+
+test('getLatestRun falls back to db summary when recovery reconciliation throws', async () => {
+  const run = {
+    id: 'run-latest-1',
+    sessionId: 'session-latest-1',
+    status: 'running',
+    model: 'altus-model',
+    stopReason: null,
+    startedAt: new Date('2026-03-24T04:00:00.000Z'),
+    completedAt: null,
+    updatedAt: new Date('2026-03-24T04:00:00.000Z'),
+  };
+
+  mock.method(taskSessionRunDAO, 'getLatestRun', async () => run as any);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+  };
+
+  const eventWriter = {
+    toSummary: mock.fn((value: any) => ({
+      id: value?.id || null,
+      sessionId: value?.sessionId || null,
+      status: value?.status || null,
+    })),
+  };
+
+  const recoveryService = {
+    reconcileLatestRun: mock.fn(async () => {
+      throw new Error('redis temporarily unavailable');
+    }),
+  };
+
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    eventWriter as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    recoveryService as any
+  );
+
+  const summary = await service.getLatestRun('session-latest-1', 'user-latest-1');
+
+  assert.deepEqual(summary, {
+    id: 'run-latest-1',
+    sessionId: 'session-latest-1',
+    status: 'running',
+  });
+  assert.equal(setupService.ensureSessionOwnership.mock.callCount(), 1);
+  assert.equal(recoveryService.reconcileLatestRun.mock.callCount(), 1);
+  assert.equal(eventWriter.toSummary.mock.callCount(), 1);
 });

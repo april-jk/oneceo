@@ -18,6 +18,14 @@ export function createSkillManagementRoutes(service: SkillManagementService) {
   );
 
   router.get(
+    '/governance-options',
+    asyncHandler(async (_req, res) => {
+      const result = await service.getSkillGovernanceOptions();
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/:skillId',
     asyncHandler(async (req, res) => {
       const result = await service.getSkill(req.params.skillId);

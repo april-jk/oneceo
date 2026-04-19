@@ -123,6 +123,7 @@ const REQUIRED_COLUMNS = [
   ['connector_auth_requests', 'profile_id'],
   ['connector_auth_requests', 'profile_draft_json'],
   ['platform_skills', 'slug'],
+  ['platform_skills', 'metadata_json'],
   ['platform_skills', 'published_revision_id'],
   ['platform_skill_revisions', 'skill_id'],
   ['platform_skill_revisions', 'revision_number'],
@@ -846,10 +847,13 @@ CREATE TABLE IF NOT EXISTS platform_skills (
   description TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT 'general',
   status TEXT NOT NULL DEFAULT 'active',
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   published_revision_id UUID,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+ALTER TABLE platform_skills
+  ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 -- 平台 skills revision 表
 CREATE TABLE IF NOT EXISTS platform_skill_revisions (
@@ -1452,6 +1456,16 @@ export async function runConnectorMigration() {
     console.error('❌ 连接器表迁移失败:', error);
     throw error;
   }
+}
+
+export async function ensurePlatformSkillGovernanceSchema() {
+  await ensureDatabaseConnection({ retries: 5, delayMs: 1200 });
+  await db.execute(
+    sql.raw(`
+      ALTER TABLE platform_skills
+        ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `)
+  );
 }
 
 /**

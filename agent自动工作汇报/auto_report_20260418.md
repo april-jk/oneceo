@@ -23,3 +23,124 @@
 - 计划如何解决：
   - DAO 测试已改成最小建表，不再依赖整套迁移。
   - 后续继续优先用应用自己的 DB 连接做状态核验，避免被 shell 环境差异误导。
+
+- 做了什么：
+  - 将 deployment skill 的治理属性正式接入平台 skill 数据模型，新增 `platform_skills.metadata_json`，用于承载 `systemRole / adminManaged / required / autoActivation`。
+  - 将 Altus 自动挂载 deployment skill 的判定从 `slug=deployment-orchestrator` 切换为基于治理元数据的 `systemRole=deployment_orchestrator + autoActivation` 解析。
+  - 将管理端 `技能管理` 接入 deployment governance 展示与编辑能力，可在后台直接维护系统角色、自动加载动作和必需属性。
+  - 为 governance 透传补齐平台 skill service、用户态 skill catalog、Altus input service 与相关单测。
+- 遇到什么：
+  - 现有 skill 平台最初只承载内容与资源，不承载系统级治理语义，导致 deployment 自动加载仍然绑定 slug 约定。
+  - 管理端 skills 管理界面原先没有治理字段展示位，需要在不重构整页的前提下补齐可见性。
+- 计划如何解决：
+  - 继续把 deployment skill 的语言规则更多地下沉到 revision resources，避免未来为了新语言再改 input service。
+  - 下一步补真实管理端操作回归，确认后台修改 governance 后，后续 deployment run 会按最新 published revision 生效。
+
+- 做了什么：
+  - 修复了 `技能管理` 在旧库上读取 `platform_skills.metadata_json` 时直接报错的问题。
+  - 将 `platform_skills.metadata_json` 纳入启动期 schema readiness 检查，缺失时 API 启动会主动触发迁移。
+  - 为 `platformSkillService.ensureSeeded()` 增加缺列自修复重试，避免首个 skill 请求直接 500。
+  - 补充回归测试，覆盖启动迁移触发与 seed 读取自修复两条路径。
+- 遇到什么：
+  - 启动期 schema 检查此前只校验了 `platform_skills.slug / published_revision_id`，遗漏了新加的 `metadata_json`。
+  - `ensureSeeded()` 在管理端首个请求链路中就会访问 `getSkillBySlug()`，所以一旦数据库缺列，错误会直接暴露到前台。
+- 计划如何解决：
+  - 保持 deployment/skills 新增字段都进入统一 readiness gate，避免后续再出现“schema 已就绪误判”。
+  - 后续补一轮管理端真实页面回归，确认旧库升级后的首屏加载已经稳定。
+
+- 做了什么：
+  - 修复了管理端 `技能管理` 在切换不同 skill 时复用旧 `selectedRevisionId`，导致资源请求报 `revision 不存在` 的问题。
+  - 在 skill 切换时主动清空旧 revision / 资源 / 校验状态，等待新详情加载后再恢复。
+- 遇到什么：
+  - 问题表面上看像旧 skill 数据损坏，但实际是前端状态时序错误：新 `skillId` 和旧 `revisionId` 被同时带到资源接口。
+- 计划如何解决：
+  - 后续补一轮真实管理端切换回归，重点验证列表切换、筛选自动切换、弹窗 reopen 三种路径都不会串 revision 状态。
+
+- 做了什么：
+  - 将 skill governance 的自动加载配置从仅支持 `autoActivation.triggers` 扩展为同时支持 `autoActivation.toolNames`。
+  - 在 Altus managed tool runtime 增加“工具命中后自动补挂 skill”的链路，并把新激活的 skill 同步进 sandbox。
+  - 调整 active skill prompt 语义，使其兼容“用户选择”和“平台自动挂载”两类来源。
+  - 为 required platform skill 增加老用户 binding 补齐逻辑，避免 deployment skill 对老用户缺失。
+- 遇到什么：
+  - 现有 run prompt 在首轮构建后不会自动重建，导致运行时补挂 skill 不能只停留在 metadata，需要把新 skill 作为追加系统消息送进后续轮次。
+  - 当前用户 skill binding 逻辑对“已有任意 binding 的老用户”直接短路，导致后来新增的系统 skill 永远不会进入可用 catalog。
+- 计划如何解决：
+  - 继续补 focused regression，验证 deployment tool 调用后，后续 repair loop 轮次确实能感知到新挂载 skill。
+  - 后续把管理端治理字段进一步收敛成可选枚举/建议值，减少手填 tool 名称出错的概率。
+
+- 做了什么：
+  - 将管理端 `技能管理` 中的 `系统角色`、`自动加载触发动作`、`自动加载工具` 三个字段改成平台受控选择，不再允许自由填写。
+  - 新增 API 统一治理选项源，`toolNames` 直接从平台 managed tool definitions 生成，避免前后端枚举漂移。
+  - 新增业务脚本 `apps/api/scripts/verify-skill-governance-business.ts`，直接验证 `deploy_application -> deployment-orchestrator` 自动挂载闭环。
+  - 补充治理选项测试，并完成 API / 管理端 type-check 与业务脚本回归。
+- 遇到什么：
+  - 管理端此前把这三类系统级字段都做成纯文本，任何拼写错误都只能在运行期暴露。
+  - 选项源如果放在前端维护，很容易随着 managed tools 演进再次漂移。
+- 计划如何解决：
+  - 后续如需开放更多系统角色或平台工具，统一只改 API 选项源，不再改前端表单结构。
+  - 如果未来要把动态 MCP 工具纳入治理，将另起一套“连接器运行时工具”选项源，避免混入平台内建工具集合。
+
+- 做了什么：
+  - 按真实用户链路复跑了“开发网站 -> 会话内部署”验收，覆盖前端页面、Altus managed run、数据库 run 事件、sandbox metadata、Railway 公网地址与线上浏览器渲染。
+  - 新增可复跑测试文档与辅助脚本：真实 session cookie 生成、会话证据采集、网站生成与部署 E2E 脚本。
+  - 复核了会话 `8e98bc00-4f8d-4b9a-ad77-e715dbbae28f` 的重新部署链路，并保留 fresh session `a5a938c3-7651-482b-8026-e314cc321c2d` 的失败证据。
+- 遇到什么：
+  - 提供的 `app_session_id` 对 API 有效，但在用户态前端访问 `/new-task` 时仍被重定向到 `/login`，说明前端登录态识别与 API cookie 校验存在脱节。
+  - fresh session 的代码生成 run 已经把网站写进工作区，但 run 长时间停留在 `running`，没有自然收尾。
+  - 已完成生成的网站会话里，部署 run 确实命中了 `deploy_application`，但没有任何 `deployment-orchestrator` 自动挂载证据；部署面板长期停留在 `uninitialized/resource_provisioning`，而 sandbox metadata 已进入 `deploymentState.provisioning`，平台状态存在断层。
+  - Railway 公网域名返回 200，但浏览器实际白屏，console 明确报 module script MIME type 错误。
+- 计划如何解决：
+  - 先修用户态前端 cookie 会话恢复链路，确保真实用户从页面进入 `/new-task` 不会被错误踢回登录页。
+  - 追 run 结束条件与 completion 解锁逻辑，解决“代码已生成但 managed run 不收尾”的问题。
+  - 核查 `deploy_application/redeploy_application` 触发后的 skill auto-attach 持久化与系统消息注入，补上缺失证据链。
+  - 修复 Railway 静态资源 / module script MIME type 问题，并让 deployment panel 与 sandbox metadata 使用同一份事实状态源。
+
+- 做了什么：
+  - 补齐了 `FRONTEND_DIST_SERVER_SOURCE` 的运行时统计注入能力，前端 `dist` 模板现在会像静态模板一样在返回 HTML 时动态插入 Umami 脚本。
+  - 扩展前端部署归一化逻辑：不再只识别根目录 `index.html`，现在 `public/index.html` / `client/index.html` 也会触发 `node server.js`、`oneceo.manifest.json`、`railway.json` 基线补齐。
+  - 对 AI 生成但不符合 Vite 约定的前端项目增加了发布修复：当项目只有 `public/index.html` 而没有根入口时，发布归一化会自动复制出根 `index.html`，让 `vite build` 可执行。
+  - 新增并通过回归测试，覆盖 `public/index.html` 前端项目归一化、根入口补齐、运行时统计注入，以及 deployment tool 的自动 skill 挂载脚本校验。
+  - 用固定测试账号 `test@test.com / testtest` 对真实会话 `732af5d2-d6c9-4d97-b7f3-ac64a19471b1` 重新执行了发布链路，确认平台侧 `publishReport.baseline` 已达到 `ready`，并且发布包中的 `startCommand=node server.js`、`healthcheck=/api/system/health`、`analyticsInjected=true` 全部成立。
+- 遇到什么：
+  - 真实中文 redeploy 提示词再次触发了“继续生成/修复页面”的路径，没有直接进入部署工具，因此不能拿它作为部署验收证据。
+  - Railway 第一版新部署 `e99ecf86-5fdc-4d29-83f4-be1027c78ab2` 构建失败，根因是当前工作区属于“`vite build` + `public/index.html`”的混合结构，发布前没有根入口。
+  - 修复后再次触发的正式部署 `4a787c0f-9474-4d4c-8350-9b92e5c8958e` 已成功进入平台侧 `QUEUED`，但在本次验收窗口内始终未被 Railway 消费，因此公网域名仍停留在旧成功版本，尚未切换到带 Umami 注入的新版本。
+- 计划如何解决：
+  - 后续继续盯 Railway 队列出队；一旦 `4a787c0f-9474-4d4c-8350-9b92e5c8958e` 从 `QUEUED` 进入 `SUCCESS`，立即再次抓取公网 HTML，确认 `ONECEO_ANALYTICS:START` / `data-oneceo-analytics` 已实际出现在线上页面。
+  - 业务验收上需要把“提示词触发部署”和“直接工具触发部署”两条路径分开记录，避免自然语言跑偏时误判成部署功能失效。
+
+- 做了什么：
+  - 修复 `apps/api/src/services/altus-managed-tool-runtime.ts`，让 `shell_execute` 在命令形如 `cd acrylic-export && npm run build` 时，先解析出真实子目录，再执行 Vite 根入口补齐逻辑。
+  - 补充回归测试，覆盖“只有 `public/index.html` 且命令自带 `cd 子目录`”这一真实 AI 生成路径。
+  - 修复 `apps/web/e2e/website-build-and-managed-deploy-real-e2e.mjs`：生成完成后如果看不到 composer，不再直接失败，而是自动走 API fallback；如果会话已经在生成 run 内完成部署，则直接跳过额外 deploy prompt，进入部署面板与公网校验。
+  - 用真实会话 `11b4131f-b800-4fab-99d3-e9d14c37b1fe` 完成了一条完整业务链验证：managed run 完成、`deploy_application` 被调用、`deployment-orchestrator` 自动挂载、Railway `latestStatus=SUCCESS`、公网域名返回站点内容、`/api/system/health` 返回 200、页面已注入 Umami 标记。
+  - 用 Playwright 直接打开该公网域名 `https://app-11b4131f-b80-46cb6c-app-11b4131f-b80-46cb6c.up.railway.app`，验证标题、产品/公司相关文本、Umami 注入、健康检查全部通过。
+- 遇到什么：
+  - 第二次整条脚本重跑时，业务链本身继续推进，但 API 在 `admin-auth` / `task-creation session list` / `app_auth_middleware` 相关查询上出现了 `ECONNRESET` 与 `timeout exceeded when trying to connect`，属于数据库连接稳定性问题，会污染“长时间重复回归”的结果。
+  - 因此当前可以确认“从想法到代码到部署到监控”的主链已成功跑通，但“连续多轮脚本回归始终绿灯”还受制于独立的 DB 连接问题，不是本次 deployment/skill 逻辑本身的失败。
+- 计划如何解决：
+  - 后续优先检查 API 到 PostgreSQL 的连接池参数与异常恢复，重点看 `pg-pool` timeout、连接重置后的重建能力，以及高频 `/api/internal/admin-auth/resolve` 轮询是否需要降压。
+  - 在下一轮回归中优先复用这次已修复的 E2E 脚本，目标是拿到“完整脚本 0 退出码”，而不是重新验证已经成功的业务主链。
+
+- 做了什么：
+  - 复核了 API 实际加载的数据库环境，确认当前 `apps/.env` 仍指向远程 PostgreSQL `182.42.66.5:25172`，并非本机。
+  - 已将 `DATABASE_URL` 改为本地 `postgresql://postgres:postgres@127.0.0.1:5432/oneceo_dev?sslmode=disable`，保持 `DATABASE_SSL=disable`，让 API 显式走本机 `localhost`。
+  - 检查本机 Postgres 后发现原先不存在 `oneceo_dev`，已创建该数据库并执行 `pnpm --filter api run db:init`，成功完成 schema 初始化。
+  - 再次验证环境加载结果，确认 API 现在从 `apps/.env` 读取的就是本地 `127.0.0.1` 数据库地址；并确认 `public` schema 已有 45 张表。
+- 遇到什么：
+  - 本机 Postgres 虽然在线，但最初只有 `postgres / watson / lobster` 等库，没有 `oneceo_dev`，所以不能只改环境变量，必须补建本地业务库并重新迁移。
+- 计划如何解决：
+  - 下一轮继续基于本地 `localhost` 数据库重跑 API 与整条业务 E2E，验证此前出现的 `ECONNRESET / timeout exceeded when trying to connect` 是否已经随远程库切换而消失。
+
+- 做了什么：
+  - 基于本地 `localhost` 数据库重跑真实业务链路，先确认 API 使用 `apps/.env` 中的本地 `oneceo_dev`，再执行 Playwright 全链路脚本。
+  - 首轮重跑暴露出新的本地环境基线问题：新建本地库缺少已发布 OSAC 版本，Altus 在 `osac_bridge` 阶段失败，报错 `未找到已发布的 OSAC 版本`。
+  - 使用仓库内现成二进制 `OSAC_client/dist/osac-linux-amd64_v1.1.3` 向 R2 上传并发布 `v1.1.3/stable`，补齐本地 `platform_runtime_artifact_releases` 与 `platform_runtime_artifact_channels`。
+  - 补齐 OSAC 发布基线后再次重跑，确认 Altus sandbox / OSAC / LLM 执行链恢复正常，网站生成 run 能完整完成。
+  - 对已完成生成的真实会话 `2741a534-85ce-4a6a-a122-f43f37301afe` 手动发起部署 run `0d04ac54-f7ea-46ed-a71f-b24ac6258adc`，成功完成 Railway 构建，deployment panel 进入 `bindingState=ready`、`latestStatus=SUCCESS`。
+  - 使用浏览器方式访问公网 `https://app-2741a534-85c-1ee52e-app-2741a534-85c-1ee52e.up.railway.app`，确认标题、产品/公司/联系文案、Umami 注入、`/api/system/health` 均通过。
+- 遇到什么：
+  - 官方 E2E 脚本在生成完成后的会话控制仍有缺陷：它会再次创建新会话并重复提交同一生成提示词，而不是稳定在首个成功会话上继续部署；因此我保留脚本证据后，改为基于已成功生成的真实会话继续完成部署验收。
+  - 浏览器公网验收时出现少量 `net::ERR_CONNECTION_CLOSED` console 噪音，但页面渲染、正文内容、Umami 注入和健康检查均为通过状态，暂未构成主链失败。
+- 计划如何解决：
+  - 后续应单独修复 `apps/web/e2e/website-build-and-managed-deploy-real-e2e.mjs` 的会话续跑逻辑，确保“生成完成后继续部署”稳定复用同一 `taskSessionId`，避免重复建会话。

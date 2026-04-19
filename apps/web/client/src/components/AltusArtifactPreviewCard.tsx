@@ -3,9 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getWorkspaceFile,
+  getTaskCreationDeploymentInfo,
   headWorkspaceRawFile,
   getWorkspaceRawFileUrl,
   startTaskCreationRuntime,
+  type TaskCreationDeploymentInfo,
   waitWorkspaceRawFileReady,
   type WorkspaceFile,
 } from "@/lib/task-creation-client";
@@ -47,6 +49,29 @@ function getFilename(path: string): string {
 
 function isWebArtifact(path: string): boolean {
   return /\.(html?)$/i.test(path);
+}
+
+export function resolveArtifactDeploymentPreviewUrl(
+  info: TaskCreationDeploymentInfo | null | undefined,
+): string {
+  if (!info) return "";
+  const selectedDeployment =
+    info.deployments.find((deployment) => deployment.id === info.deploymentId) || null;
+  const successfulDeployment =
+    info.deployments.find(
+      (deployment) =>
+        deployment.status === "SUCCESS" && Boolean(deployment.staticUrl || deployment.url),
+    ) || null;
+  return (
+    selectedDeployment?.staticUrl ||
+    selectedDeployment?.url ||
+    successfulDeployment?.staticUrl ||
+    successfulDeployment?.url ||
+    info.latestStaticUrl ||
+    info.latestUrl ||
+    info.domains[0] ||
+    ""
+  );
 }
 
 export default function AltusArtifactPreviewCard({
@@ -95,6 +120,7 @@ export default function AltusArtifactPreviewCard({
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [deploymentPreviewUrl, setDeploymentPreviewUrl] = useState("");
   const [webPreviewState, setWebPreviewState] = useState<WorkspaceHtmlPreviewState>("checking");
   const [webPreviewMessage, setWebPreviewMessage] = useState("");
   const [webPreviewReloading, setWebPreviewReloading] = useState(false);
@@ -149,19 +175,52 @@ export default function AltusArtifactPreviewCard({
   const selectedIsWebArtifact = Boolean(
     selectedArtifact && isWebArtifact(selectedArtifact.path),
   );
-  const hasPreviewTab = Boolean(previewPath);
   const effectiveRawPreviewUrl = appendPreviewCacheBust(rawPreviewUrl, webPreviewNonce);
   const effectiveRawSelectedUrl = appendPreviewCacheBust(rawSelectedUrl, webPreviewNonce);
-  const previewCheckEnabled = Boolean(activeTab === "preview" && previewPath);
+  const selectedPreviewUrl = selectedIsWebArtifact
+    ? deploymentPreviewUrl || effectiveRawPreviewUrl
+    : "";
+  const selectedOpenUrl = selectedIsWebArtifact
+    ? deploymentPreviewUrl || effectiveRawSelectedUrl
+    : effectiveRawSelectedUrl;
+  const hasPreviewTab = Boolean(previewPath);
+  const previewCheckEnabled = Boolean(
+    activeTab === "preview" && previewPath && !deploymentPreviewUrl,
+  );
   const frameClass = selectedIsWebArtifact
     ? "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[240px] sm:h-[400px] max-h-[640px]"
     : "group relative w-full overflow-hidden rounded-xl border bg-card pt-10 min-h-[320px]";
 
   useEffect(() => {
+    if (!visibleArtifacts.some((artifact) => isWebArtifact(artifact.path))) {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    let cancelled = false;
+    getTaskCreationDeploymentInfo(sessionId)
+      .then((info) => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl(resolveArtifactDeploymentPreviewUrl(info));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, visibleArtifacts]);
+
+  useEffect(() => {
+    if (deploymentPreviewUrl) {
+      setWebPreviewState("ready");
+      setWebPreviewMessage("");
+      return;
+    }
     setWebPreviewState("checking");
     setWebPreviewMessage("");
     setWebPreviewNonce(Date.now());
-  }, [previewPath]);
+  }, [deploymentPreviewUrl, previewPath]);
 
   useEffect(() => {
     if (!previewCheckEnabled || !previewPath) {
@@ -301,14 +360,14 @@ export default function AltusArtifactPreviewCard({
                         {i18n.t("previewPanel.artifactPreview.sourceCode")}
                       </TabsTrigger>
                     </TabsList>
-                    {rawSelectedUrl ? (
+                    {selectedOpenUrl ? (
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-8 rounded-2xl border-border/70 bg-background/80 text-xs backdrop-blur-sm"
                         onClick={() =>
-                          window.open(effectiveRawSelectedUrl, "_blank", "noopener,noreferrer")
+                          window.open(selectedOpenUrl, "_blank", "noopener,noreferrer")
                         }
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
@@ -322,10 +381,14 @@ export default function AltusArtifactPreviewCard({
                       <div className="absolute inset-0">
                         {webPreviewState === "ready" ? (
                           <iframe
-                            src={effectiveRawPreviewUrl}
+                            src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}
                             className="absolute inset-0 h-full w-full border-0"
-                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            sandbox={
+                              deploymentPreviewUrl
+                                ? undefined
+                                : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            }
                             style={{ background: "white" }}
                           />
                         ) : (

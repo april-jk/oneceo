@@ -151,6 +151,15 @@
 - `Open` 按钮继续保留为查看当前产物文件/网页的入口
 - `AltusRunReplayDrawer` 不接部署动作，继续保持 run 回放里的文件查看语义
 
+### 5.5 当前补充修正（2026-04-19）
+
+- 对于已经完成 Railway 发布的会话，`AltusArtifactPreviewCard` 不再只依赖 sandbox 工作区 `workspace/raw/*` 预览地址。
+- 当前端能读取到会话部署面板里的 `latestStaticUrl / latestUrl / domains[0]` 时，网页类交付物会优先切换到部署公网地址：
+  - `Preview` iframe 直接加载 Railway 线上地址
+  - `Open` 直接打开 Railway 线上地址
+- 这样即使 sandbox 内的原始 HTML 预览暂时不可恢复，已成功发布的交付物仍然可以稳定预览，不会再出现“线上可访问，但交付预览卡片空白”的割裂状态。
+- 同一策略也同步补到了右侧 `OpencodePreviewPanel` 的文件预览中，保证 `Load files -> 选中 HTML 文件` 走到的也是同一条线上预览链路。
+
 ## 6. 文件/网页预览的底层组件链
 
 ### 6.1 FileAttachment 是总分发器

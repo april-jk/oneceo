@@ -362,7 +362,6 @@ export function OsacReleaseManagementSection({
           <div>
             <p className="section-tag">OSAC 发布台</p>
             <h2>稳定版发布</h2>
-            <p className="panel-copy osac-release-hero-copy">上传、校验、切换 latest 都在同一条工作流里完成，减少来回跳转。</p>
           </div>
           <div className="osac-release-hero-meta">
             <span className="service-state ok">stable 渠道</span>
@@ -389,11 +388,6 @@ export function OsacReleaseManagementSection({
           </div>
         </div>
 
-        <div className="osac-release-rule-strip">
-          <span className="osac-release-rule-chip">上传后不会自动生效</span>
-          <span className="osac-release-rule-chip">发布记录决定 latest</span>
-          <span className="osac-release-rule-chip">二进制通过短时链接分发</span>
-        </div>
       </section>
 
       <section className="panel fade-in osac-release-panel osac-release-console">

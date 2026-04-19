@@ -650,11 +650,10 @@ export function SkillManagementSection({
   return (
     <main className="content-stack viewport-lock-page skill-management-page">
       <section className="panel fade-in skill-management-panel">
-        <div className="section-heading">
-          <div>
+        <div className="section-heading skill-management-heading">
+          <div className="skill-management-heading-copy">
             <p className="eyebrow">技能总览</p>
             <h2>技能管理</h2>
-            <p className="subtitle">维护平台技能、版本记录、资源文档与沙箱校验。</p>
           </div>
           <div className="section-actions skill-management-actions">
             <button
@@ -665,7 +664,6 @@ export function SkillManagementSection({
               <span className="skill-action-btn-icon" aria-hidden="true">+</span>
               <span className="skill-action-btn-copy">
                 <span className="skill-action-btn-label">新建技能</span>
-                <span className="skill-action-btn-support">从空白版本开始</span>
               </span>
             </button>
             <input
@@ -742,7 +740,6 @@ export function SkillManagementSection({
               <span className="skill-action-btn-icon" aria-hidden="true">↥</span>
               <span className="skill-action-btn-copy">
                 <span className="skill-action-btn-label">导入技能文件夹</span>
-                <span className="skill-action-btn-support">把目录转成版本</span>
               </span>
             </button>
             <button
@@ -754,7 +751,6 @@ export function SkillManagementSection({
               <span className="skill-action-btn-icon" aria-hidden="true">↻</span>
               <span className="skill-action-btn-copy">
                 <span className="skill-action-btn-label">同步列表</span>
-                <span className="skill-action-btn-support">重新拉取当前结果</span>
               </span>
             </button>
           </div>
@@ -791,25 +787,6 @@ export function SkillManagementSection({
           <button type="button" className="secondary-btn" onClick={handleResetFilters} disabled={busy}>
             重置筛选
           </button>
-        </div>
-
-        <div className="skill-overview-strip">
-          <div>
-            <span>技能总数</span>
-            <strong>{skillOverview.total}</strong>
-          </div>
-          <div>
-            <span>已启用</span>
-            <strong>{skillOverview.active}</strong>
-          </div>
-          <div>
-            <span>已发布</span>
-            <strong>{skillOverview.published}</strong>
-          </div>
-          <div>
-            <span>待发布</span>
-            <strong>{skillOverview.unpublished}</strong>
-          </div>
         </div>
 
         <div className="skill-secondary-menu" role="tablist" aria-label="技能二级筛选">
@@ -850,10 +827,15 @@ export function SkillManagementSection({
                   <tr
                     key={item.id}
                     className={selectedSkillId === item.id && detailDialogOpen ? 'selected' : ''}
-                    onClick={() => openDetailDialog(item.id)}
                   >
                     <td>
-                      <strong>{item.name}</strong>
+                      <button
+                        type="button"
+                        className="management-title-link"
+                        onClick={() => openDetailDialog(item.id)}
+                      >
+                        {item.name}
+                      </button>
                       <div className="cell-subtle">{item.slug}</div>
                     </td>
                     <td>{skillCategoryLabel(item.category)}</td>

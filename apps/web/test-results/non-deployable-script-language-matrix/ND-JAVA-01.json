@@ -1,0 +1,138 @@
+{
+  "id": "ND-JAVA-01",
+  "description": "Java Console 程序不应误部署",
+  "prompt": "请写一个 Java 控制台程序，模拟库存管理。不要做网页，也不要部署。",
+  "startedAt": "2026-04-19T15:08:29.834Z",
+  "passed": true,
+  "error": null,
+  "execution": {
+    "classification": "non_deployable_script",
+    "sessionId": "bebc20dc-f403-4753-ba48-0bcbcb53ee36",
+    "generationRunId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+    "workspaceEvidence": {
+      "itemCount": 9,
+      "matchedIndicators": [
+        "/(pom\\.xml|build\\.gradle|src\\/main\\/java)/i"
+      ]
+    },
+    "deploymentPanel": {
+      "bindingState": "uninitialized",
+      "latestStatus": null,
+      "latestUrl": null,
+      "latestStaticUrl": null
+    },
+    "evidence": {
+      "deployToolCalled": false,
+      "toolEvents": [
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 15,
+          "createdAt": "2026-04-19T23:08:44.956Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 40,
+          "createdAt": "2026-04-19T23:08:55.236Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 111,
+          "createdAt": "2026-04-19T23:09:56.486Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 122,
+          "createdAt": "2026-04-19T23:10:01.340Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 136,
+          "createdAt": "2026-04-19T23:10:06.017Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 147,
+          "createdAt": "2026-04-19T23:10:09.581Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 153,
+          "createdAt": "2026-04-19T23:10:12.375Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 163,
+          "createdAt": "2026-04-19T23:10:14.668Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 174,
+          "createdAt": "2026-04-19T23:10:16.724Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 180,
+          "createdAt": "2026-04-19T23:10:20.334Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 191,
+          "createdAt": "2026-04-19T23:10:24.312Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 217,
+          "createdAt": "2026-04-19T23:10:44.755Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 226,
+          "createdAt": "2026-04-19T23:10:47.784Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 232,
+          "createdAt": "2026-04-19T23:10:49.631Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "48091dde-3413-41ff-894b-8d94e80d2e68",
+          "sequence": 254,
+          "createdAt": "2026-04-19T23:11:03.551Z",
+          "toolName": "complete_task",
+          "content": "调用工具 complete_task"
+        }
+      ],
+      "autoAttachedMessages": []
+    }
+  },
+  "finishedAt": "2026-04-19T15:11:50.430Z",
+  "durationMs": 200596
+}

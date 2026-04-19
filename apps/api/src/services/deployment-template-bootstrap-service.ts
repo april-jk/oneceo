@@ -1,5 +1,5 @@
-import { access, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile, readdir, writeFile } from 'node:fs/promises';
+import { basename, join, relative } from 'node:path';
 
 const ANALYTICS_BOOTSTRAP_MARKER_START = '<!-- ONECEO_ANALYTICS:START -->';
 const ANALYTICS_BOOTSTRAP_MARKER_END = '<!-- ONECEO_ANALYTICS:END -->';
@@ -7,16 +7,28 @@ export const DEPLOYMENT_TEMPLATE_HTML_ENTRY_RELATIVE_PATHS = [
   'client/index.html',
   'index.html',
   'templates/index.html',
+  'templates/base.html',
+  'templates/layout.html',
+  'templates/main.html',
+  'templates/home.html',
   'app/templates/index.html',
+  'app/templates/base.html',
+  'app/templates/layout.html',
+  'app/templates/main.html',
+  'app/templates/home.html',
 ] as const;
 
 export const DEPLOYMENT_TEMPLATE_SERVER_RENDERED_ENTRY_RELATIVE_PATHS = [
   'views/layouts/main.ejs',
   'views/layout.ejs',
   'views/index.ejs',
+  'views/main.ejs',
+  'views/home.ejs',
   'app/views/layouts/main.ejs',
   'app/views/layout.ejs',
   'app/views/index.ejs',
+  'app/views/main.ejs',
+  'app/views/home.ejs',
 ] as const;
 
 export const DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS = [
@@ -54,16 +66,109 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function findHtmlEntryPath(sourceDir: string): Promise<string | null> {
-  const candidates = DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS.map((relativePath) =>
-    join(sourceDir, relativePath)
-  );
-  for (const candidate of candidates) {
+const TEMPLATE_SCAN_DIRECTORY_RELATIVE_PATHS = [
+  'templates',
+  'app/templates',
+  'views',
+  'app/views',
+] as const;
+
+const TEMPLATE_SCAN_FILE_SUFFIXES = ['.html', '.ejs', '.jinja', '.j2'] as const;
+
+function normalizeRelativePath(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+function rankTemplateCandidate(path: string): number {
+  const fileName = basename(path).toLowerCase();
+  if (fileName === 'base.html' || fileName === 'layout.html' || fileName === 'main.ejs') return 0;
+  if (fileName.startsWith('layout.') || fileName.startsWith('base.') || fileName.startsWith('main.'))
+    return 1;
+  if (fileName.startsWith('index.') || fileName.startsWith('home.')) return 2;
+  return 10;
+}
+
+async function findHtmlEntryPaths(sourceDir: string): Promise<string[]> {
+  const resolvedCandidates: string[] = [];
+  const seen = new Set<string>();
+
+  const rememberCandidate = (path: string) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    resolvedCandidates.push(path);
+  };
+
+  for (const relativePath of DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS) {
+    const candidate = join(sourceDir, relativePath);
     if (await exists(candidate)) {
-      return candidate;
+      rememberCandidate(candidate);
     }
   }
-  return null;
+
+  const scannedCandidates: string[] = [];
+  const queue: string[] = [];
+  for (const relativePath of TEMPLATE_SCAN_DIRECTORY_RELATIVE_PATHS) {
+    const candidateDir = join(sourceDir, relativePath);
+    if (await exists(candidateDir)) {
+      queue.push(candidateDir);
+    }
+  }
+
+  while (queue.length > 0 && scannedCandidates.length < 64) {
+    const currentDir = queue.shift();
+    if (!currentDir) continue;
+    let entries: Array<{
+      name: string;
+      isDirectory(): boolean;
+      isFile(): boolean;
+    }> = [];
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true, encoding: 'utf8' });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(entryPath);
+        continue;
+      }
+      if (
+        entry.isFile() &&
+        TEMPLATE_SCAN_FILE_SUFFIXES.some((suffix) => entry.name.toLowerCase().endsWith(suffix))
+      ) {
+        scannedCandidates.push(entryPath);
+      }
+    }
+  }
+
+  scannedCandidates
+    .sort((left, right) => {
+      const scoreDiff = rankTemplateCandidate(left) - rankTemplateCandidate(right);
+      if (scoreDiff !== 0) return scoreDiff;
+      return normalizeRelativePath(relative(sourceDir, left)).localeCompare(
+        normalizeRelativePath(relative(sourceDir, right))
+      );
+    })
+    .forEach(rememberCandidate);
+
+  return resolvedCandidates;
+}
+
+async function injectAnalyticsBootstrapIntoPath(
+  path: string,
+  analyticsConfig?: DeploymentTemplateAnalyticsConfig
+): Promise<boolean> {
+  const html = await readFile(path, 'utf-8');
+  const nextHtml = injectBeforeBodyClose(html, buildAnalyticsBootstrapSnippet(analyticsConfig));
+  if (!nextHtml) {
+    throw new Error(`HTML 入口 ${asText(path)} 内容异常，无法注入 analytics bootstrap`);
+  }
+  if (nextHtml === html) {
+    return false;
+  }
+  await writeFile(path, nextHtml, 'utf-8');
+  return true;
 }
 
 function buildAnalyticsBootstrapSnippet(config?: DeploymentTemplateAnalyticsConfig) {
@@ -135,8 +240,8 @@ export async function ensureDeploymentTemplateBootstrap(
 ): Promise<DeploymentTemplateBootstrapReport> {
   const warnings: string[] = [];
   const errors: string[] = [];
-  const htmlEntryPath = await findHtmlEntryPath(sourceDir);
-  if (!htmlEntryPath) {
+  const htmlEntryPaths = await findHtmlEntryPaths(sourceDir);
+  if (htmlEntryPaths.length === 0) {
     errors.push('未找到 HTML 入口文件，无法注入默认 analytics bootstrap');
     return {
       analyticsInjected: false,
@@ -145,30 +250,43 @@ export async function ensureDeploymentTemplateBootstrap(
     };
   }
 
-  const html = await readFile(htmlEntryPath, 'utf-8');
-  const nextHtml = injectBeforeBodyClose(
-    html,
-    buildAnalyticsBootstrapSnippet(options?.analyticsConfig)
-  );
-  if (!nextHtml) {
-    errors.push(`HTML 入口 ${asText(htmlEntryPath)} 内容异常，无法注入 analytics bootstrap`);
+  const failedTargets: string[] = [];
+  let injectedCount = 0;
+  for (const htmlEntryPath of htmlEntryPaths) {
+    try {
+      if (await injectAnalyticsBootstrapIntoPath(htmlEntryPath, options?.analyticsConfig)) {
+        injectedCount += 1;
+      }
+    } catch (error) {
+      failedTargets.push(asText(error instanceof Error ? error.message : htmlEntryPath));
+    }
+  }
+
+  if (failedTargets.length === htmlEntryPaths.length) {
+    errors.push(...failedTargets);
     return {
       analyticsInjected: false,
-      analyticsTargetPath: htmlEntryPath,
+      analyticsTargetPath: htmlEntryPaths[0],
       warnings,
       errors,
     };
   }
 
-  const analyticsInjected = nextHtml !== html;
+  const analyticsInjected = injectedCount > 0;
   if (analyticsInjected) {
-    await writeFile(htmlEntryPath, nextHtml, 'utf-8');
-    warnings.push('已自动注入 OneCEO analytics bootstrap 到 HTML 入口');
+    warnings.push(
+      injectedCount === 1
+        ? '已自动注入 OneCEO analytics bootstrap 到 HTML 入口'
+        : `已自动注入 OneCEO analytics bootstrap 到 ${injectedCount} 个模板入口`
+    );
+  }
+  if (failedTargets.length > 0) {
+    warnings.push(`部分模板入口注入失败，已跳过 ${failedTargets.length} 个文件`);
   }
 
   return {
     analyticsInjected,
-    analyticsTargetPath: htmlEntryPath,
+    analyticsTargetPath: htmlEntryPaths[0],
     warnings,
     errors,
   };

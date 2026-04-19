@@ -12,6 +12,10 @@ import { resolveOpencodeWorkspacePath } from '../utils/opencode-workspace';
 import { ensureSandboxRuntimeMetadata } from './sandbox-runtime-metadata-service';
 import { sandboxAgentProvisionService } from './sandbox-agent-provision-service';
 import { asText, pickObject, type ChatMessage, type ChatMessageContentPart } from './altus-managed-shared';
+import {
+  deriveManagedTaskIntentProfile,
+  type AltusManagedTaskIntentProfile,
+} from './altus-managed-prompt-service';
 import { buildAttachmentContextPrompt } from './task-attachment-service';
 import { managedImageObjectService, type ManagedImageObjectService } from './managed-image-object-service';
 import { isSameUserId } from '../utils/user-id';
@@ -463,9 +467,32 @@ export class AltusManagedSetupService {
               role: 'user' as const,
               content: currentInput,
             },
-          ]
+      ]
         : []),
     ];
+  }
+
+  async buildTaskIntentProfile(
+    sessionId: string,
+    currentInput?: string | null
+  ): Promise<AltusManagedTaskIntentProfile> {
+    const history = await taskCreationSessionDAO.getMessages(sessionId);
+    const relevantUserTexts = history
+      .filter(
+        (item) =>
+          normalizeHistoryRole(item.role) === 'user' &&
+          isHistoryMessageRelevant({ role: item.role, messageType: item.messageType })
+      )
+      .map((item) => asText(item.content))
+      .filter(Boolean)
+      .slice(-8);
+    const currentText = asText(currentInput);
+    const latestHistoryText = relevantUserTexts[relevantUserTexts.length - 1] || '';
+    const texts =
+      currentText && currentText !== latestHistoryText
+        ? [...relevantUserTexts, currentText]
+        : relevantUserTexts;
+    return deriveManagedTaskIntentProfile(texts);
   }
 
   async refreshInlineImageUrls(messages: ChatMessage[]): Promise<ChatMessage[]> {

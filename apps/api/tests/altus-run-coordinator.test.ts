@@ -28,6 +28,18 @@ function createState(runId: string, sessionId: string, userInput = '帮我开发
     mcpProviders: [],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
   });
 }
 
@@ -82,6 +94,31 @@ test('resolveDeploymentCompletionIntent accepts deployment status polling as com
     'redeploy_application',
     'get_application_deployment_status',
   ]);
+});
+
+test('resolveDeploymentCompletionIntent ignores negated deploy wording and non-deployable sessions', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  const negatedIntent = (coordinator as any).resolveDeploymentCompletionIntent(
+    '请写一个 HTML 邮件模板，不要部署。'
+  );
+  assert.equal(negatedIntent.mode, 'none');
+  assert.equal(negatedIntent.requiresManagedSuccess, false);
+
+  const profiledIntent = (coordinator as any).resolveDeploymentCompletionIntent('请按最佳方案直接继续。', {
+    mode: 'non_deployable_artifact',
+    reason: 'historical_explicit_no_deploy',
+    recentUserMessages: ['请写一个 HTML 邮件模板，不要部署。'],
+    explicitNoDeploy: true,
+    explicitNoWeb: true,
+    webArtifactRequested: false,
+    deployRequested: false,
+    scriptArtifactRequested: false,
+    emailTemplateRequested: true,
+    deploymentAllowed: false,
+  });
+  assert.equal(profiledIntent.mode, 'none');
+  assert.equal(profiledIntent.requiresManagedSuccess, false);
 });
 
 test('deployment status evidence only unlocks completion after non-transient success state', () => {
@@ -793,6 +830,18 @@ test('execute injects skill catalog prompt before active skill body', async () =
         },
       },
     ],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
   });
 
   const setupService = {
@@ -902,6 +951,18 @@ test('execute syncs resolved skills after sandbox becomes ready', async () => {
         },
       },
     ],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
   });
 
   const setupService = {
@@ -1594,6 +1655,18 @@ test('execute recovers from connector guide block by loading the guide and retry
     ],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
   });
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -1852,6 +1925,18 @@ test('execute recovers from connector guide block by loading the guide and retry
     ],
     skillCatalog: [],
     skills: [],
+    taskIntentProfile: {
+      mode: 'neutral',
+      reason: 'unknown',
+      recentUserMessages: [],
+      explicitNoDeploy: false,
+      explicitNoWeb: false,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: false,
+      deploymentAllowed: false,
+    },
   });
   const setupCalls: Record<string, unknown>[] = [];
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];

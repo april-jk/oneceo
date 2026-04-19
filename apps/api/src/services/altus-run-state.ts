@@ -1,6 +1,7 @@
 import type { ManagedRunStatus } from '../db/dao/task-session-run.dao';
 import type { TaskSessionDeliverableArtifactRecord } from './task-session-deliverable-service';
 import type { ManagedMcpProvider, ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-managed-shared';
+import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 
 export class AltusRunState {
   status: ManagedRunStatus;
@@ -24,6 +25,7 @@ export class AltusRunState {
       mcpProviders: ManagedMcpProvider[];
       skillCatalog: ManagedSkillCatalogEntry[];
       skills: ManagedSkillContext[];
+      taskIntentProfile: AltusManagedTaskIntentProfile;
     }
   ) {
     this.status = 'queued';

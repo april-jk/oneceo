@@ -163,14 +163,6 @@ export function resolveRailwaySelectedDeploymentId(input: {
     return requestedDeploymentId;
   }
 
-  const fallbackDeploymentId = firstText(input.fallbackDeploymentId);
-  if (
-    fallbackDeploymentId &&
-    input.deployments.some((item) => item.id === fallbackDeploymentId)
-  ) {
-    return fallbackDeploymentId;
-  }
-
   return input.deployments[0]?.id || '';
 }
 

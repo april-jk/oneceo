@@ -29,7 +29,7 @@ test('resolveRailwaySelectedDeploymentId keeps requested deployment when it stil
   assert.equal(result, 'dep_old');
 });
 
-test('resolveRailwaySelectedDeploymentId falls back when requested deployment is stale', () => {
+test('resolveRailwaySelectedDeploymentId prefers the newest deployment when requested deployment is stale', () => {
   const deployments = [makeDeployment('dep_latest'), makeDeployment('dep_old')];
 
   const result = resolveRailwaySelectedDeploymentId({
@@ -38,7 +38,7 @@ test('resolveRailwaySelectedDeploymentId falls back when requested deployment is
     fallbackDeploymentId: 'dep_old',
   });
 
-  assert.equal(result, 'dep_old');
+  assert.equal(result, 'dep_latest');
 });
 
 test('resolveRailwaySelectedDeploymentId ignores stale fallback deployment ids', () => {
@@ -51,6 +51,28 @@ test('resolveRailwaySelectedDeploymentId ignores stale fallback deployment ids',
   });
 
   assert.equal(result, 'dep_latest');
+});
+
+test('resolveRailwaySelectedDeploymentId ignores old fallback deployment ids when a newer retry exists', () => {
+  const deployments: RailwayDeploymentListItem[] = [
+    {
+      id: 'dep_retry_queued',
+      status: 'QUEUED',
+      createdAt: '2026-04-18T15:54:31.606Z',
+    },
+    {
+      id: 'dep_failed_old',
+      status: 'FAILED',
+      createdAt: '2026-04-18T15:54:12.989Z',
+    },
+  ];
+
+  const result = resolveRailwaySelectedDeploymentId({
+    deployments,
+    fallbackDeploymentId: 'dep_failed_old',
+  });
+
+  assert.equal(result, 'dep_retry_queued');
 });
 
 test('isRailwayBindingNotFoundError matches deleted railway resource messages', () => {

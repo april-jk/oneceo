@@ -204,6 +204,23 @@ function formatConnectors(connectors: SessionConnectorStatus[]): string {
 }
 
 export class AltusManagedPromptService {
+  private formatSkillSections(skills: ManagedSkillContext[]) {
+    return skills.map((skill) => {
+      const header = [
+        `## ${skill.name}`,
+        `- source: ${skill.sourceType}`,
+        `- slug: ${skill.slug}`,
+        `- revision: ${skill.revisionNumber ?? '-'}`,
+        `- resources: ${
+          skill.resourceSummary && skill.resourceSummary.totalCount > 0
+            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
+            : 'no extra resources'
+        }`,
+      ].join('\n');
+      return `${header}\n\n${skill.renderedMarkdown}`;
+    });
+  }
+
   buildSystemPrompt(input: {
     sessionId: string;
     sessionTitle?: string | null;
@@ -298,13 +315,15 @@ export class AltusManagedPromptService {
       '- For deployable web app tasks, include a healthcheck route path in `oneceo.manifest.json`. Prefer `/api/system/health` when you own the server route design.',
       '- Do not finish a deployable web app task while required deployment files are missing. Before completion, verify at least: `package.json`, `oneceo.manifest.json`, and the primary app entry files exist.',
       '- When the user asks to deploy, publish, go live, 上线, redeploy, rollback deployment, or check deployment status for the current app, use the managed deployment tools instead of replying with plain text.',
+      '- In deploy/redeploy/status flows, do not run local preview/dev commands such as `vite preview`, `npm run preview`, `vite dev`, `npm run dev`, or `react-scripts start` to decide whether Railway deployment is healthy.',
+      '- In deploy/redeploy/status flows, do not infer the public deployment start command from the raw workspace `package.json` or an outdated `oneceo.manifest.json`. The platform will normalize the deployable source before publishing.',
       '- Use `deploy_application` for first publish or publishing the latest workspace changes.',
       '- Use `redeploy_application` when the user wants the latest code changes published again.',
       '- Use `rollback_application_deployment` only when the user explicitly asks to rollback or revert the deployment.',
       '- Use `get_application_deployment_status` when the user asks for deployment progress, current URL, or deployment health.',
-      '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced.',
+      '- If `deploy_application` or `redeploy_application` returns `status=retryable_repair_required`, inspect `repair.category` first. For `template_compliance`, `deployment_configuration`, or `workspace_missing`, repair the workspace baseline with file/code tools and then call the deployment tool again. For `resource_binding`, do not keep editing workspace files; continue with deployment/status tools until the platform resource binding is repaired or a clear blocker is surfaced. For `deployment_pending`, do not edit workspace files; keep calling `get_application_deployment_status` until the deployment becomes ready.',
       '- `debug_open_page` only proves a local debug preview is reachable. It never proves that the managed public deployment succeeded.',
-      '- For deploy/redeploy/rollback requests, do not call `complete_task` until the matching managed deployment tool returns `status=success`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
+      '- For deploy/redeploy/rollback requests, do not call `complete_task` until deployment is actually ready online. Treat `bindingState=ready` plus a non-transient deployment status as the success condition. If the deployment tool reports `deployment_pending`, keep polling with `get_application_deployment_status`. If deployment is still failing, continue repairing or clearly report that the online deployment is not complete yet.',
       '- Keep deployment debug details internal. In user-facing replies, summarize only the current phase, whether auto-repair is happening, and the final result.',
       '',
       '# PPT workflow',
@@ -367,28 +386,28 @@ export class AltusManagedPromptService {
       return '';
     }
 
-    const sections = skills.map((skill) => {
-      const header = [
-        `## ${skill.name}`,
-        `- source: ${skill.sourceType}`,
-        `- slug: ${skill.slug}`,
-        `- revision: ${skill.revisionNumber ?? '-'}`,
-        `- resources: ${
-          skill.resourceSummary && skill.resourceSummary.totalCount > 0
-            ? `${skill.resourceSummary.referenceCount} references, ${skill.resourceSummary.templateCount} templates`
-            : 'no extra resources'
-        }`,
-      ].join('\n');
-      return `${header}\n\n${skill.renderedMarkdown}`;
-    });
-
     return [
       '# Active skills',
-      '- The user explicitly selected these skills for the current run.',
+      '- These skills are currently active for the run.',
+      '- They may be user-selected or auto-attached by platform governance.',
       '- These skills are already synced into the sandbox and must be followed when relevant.',
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '',
-      ...sections,
+      ...this.formatSkillSections(skills),
+    ].join('\n');
+  }
+
+  buildAutoAttachedSkillPrompt(skills: ManagedSkillContext[], toolName: string) {
+    if (!Array.isArray(skills) || skills.length === 0) {
+      return '';
+    }
+
+    return [
+      '# Newly auto-attached skills',
+      `- These skills were automatically activated because tool \`${toolName}\` was used.`,
+      '- They are now active for the rest of this run and must be followed when relevant.',
+      '',
+      ...this.formatSkillSections(skills),
     ].join('\n');
   }
 

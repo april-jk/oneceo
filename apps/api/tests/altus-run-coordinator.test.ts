@@ -70,6 +70,80 @@ test('readStreamedModelChoice emits assistant delta callbacks while accumulating
   ]);
 });
 
+test('resolveDeploymentCompletionIntent accepts deployment status polling as completion evidence', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+
+  const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
+
+  assert.equal(intent.mode, 'deploy');
+  assert.equal(intent.requiresManagedSuccess, true);
+  assert.deepEqual(intent.acceptedToolNames, [
+    'deploy_application',
+    'redeploy_application',
+    'get_application_deployment_status',
+  ]);
+});
+
+test('deployment status evidence only unlocks completion after non-transient success state', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const intent = (coordinator as any).resolveDeploymentCompletionIntent('帮我部署当前项目');
+
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'building',
+      summary: 'still building',
+    }),
+    false
+  );
+  assert.equal(
+    (coordinator as any).isManagedDeploymentEvidenceSuccessful(intent, {
+      toolName: 'get_application_deployment_status',
+      status: 'success',
+      deploymentStatus: 'success',
+      summary: 'deployment ready',
+    }),
+    true
+  );
+});
+
+test('getMaxToolRounds allows larger website-generation budgets while keeping a hard ceiling', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const originalValue = process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+  try {
+    process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '';
+    assert.equal((coordinator as any).getMaxToolRounds(), 192);
+
+    process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = '600';
+    assert.equal((coordinator as any).getMaxToolRounds(), 384);
+  } finally {
+    if (originalValue === undefined) {
+      delete process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS;
+    } else {
+      process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS = originalValue;
+    }
+  }
+});
+
+test('getModelRetryLimit defaults higher for transient upstream fetch failures while keeping a ceiling', () => {
+  const coordinator = new AltusRunCoordinator({} as any, {} as any, {} as any);
+  const originalValue = process.env.ALTUS_MANAGED_MODEL_RETRIES;
+  try {
+    process.env.ALTUS_MANAGED_MODEL_RETRIES = '';
+    assert.equal((coordinator as any).getModelRetryLimit(), 3);
+
+    process.env.ALTUS_MANAGED_MODEL_RETRIES = '20';
+    assert.equal((coordinator as any).getModelRetryLimit(), 5);
+  } finally {
+    if (originalValue === undefined) {
+      delete process.env.ALTUS_MANAGED_MODEL_RETRIES;
+    } else {
+      process.env.ALTUS_MANAGED_MODEL_RETRIES = originalValue;
+    }
+  }
+});
+
 test('execute completes after tool round and final assistant response', async () => {
   const state = createState('run-coordinator-complete', 'session-coordinator-complete');
   const setupCalls: Record<string, unknown>[] = [];

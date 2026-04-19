@@ -16,7 +16,6 @@ export type UserManagementSort = {
 export type UserDetailTab = 'overview' | 'conversations' | 'sandboxes';
 export type UserManagementViewState = {
   filters: UserManagementFilters;
-  appliedFilters: UserManagementFilters;
   sort: UserManagementSort;
   selectedUserId: string | null;
   selectedUserLabel: string | null;
@@ -39,7 +38,6 @@ export const DEFAULT_USER_MANAGEMENT_SORT: UserManagementSort = {
 
 export const DEFAULT_USER_MANAGEMENT_VIEW_STATE: UserManagementViewState = {
   filters: DEFAULT_USER_MANAGEMENT_FILTERS,
-  appliedFilters: DEFAULT_USER_MANAGEMENT_FILTERS,
   sort: DEFAULT_USER_MANAGEMENT_SORT,
   selectedUserId: null,
   selectedUserLabel: null,

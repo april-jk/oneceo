@@ -83,6 +83,12 @@ type SandboxFileTransferProgress = {
   detail: string;
   percent: number | null;
 };
+type SandboxLoadStepKey = 'overview' | 'runtime' | 'templates' | 'live';
+type SandboxLoadProgressState = {
+  active: boolean;
+  startedAt: number | null;
+  completed: Record<SandboxLoadStepKey, boolean>;
+};
 
 type UiToast = {
   id: number;
@@ -107,8 +113,6 @@ type AuditFilterState = {
   operator: string;
   action: string;
   result: string;
-  sessionId: string;
-  targetVmId: string;
   from: string;
   to: string;
 };
@@ -403,49 +407,81 @@ const VM_STATE_COLORS: Record<string, string> = {
 // 列表默认分页和“加载更多”步长，控制 Sandbox 运行时列表的性能与体验。
 const SANDBOX_RUNTIME_PAGE_SIZE = 80;
 const SANDBOX_RUNTIME_LOAD_MORE_STEP = 40;
-const SANDBOX_RUNTIME_MAX_PAGE_SIZE = 200;
+const SANDBOX_LOAD_STEPS: Array<{ key: SandboxLoadStepKey; label: string; detail: string }> = [
+  { key: 'overview', label: '概览', detail: '同步运行概览' },
+  { key: 'runtime', label: '列表', detail: '拉取 Runtime 列表' },
+  { key: 'templates', label: '模板', detail: '准备模板入口' },
+  { key: 'live', label: 'Live', detail: '统计 live 数量' },
+];
+const EMPTY_SANDBOX_LOAD_PROGRESS: Record<SandboxLoadStepKey, boolean> = {
+  overview: false,
+  runtime: false,
+  templates: false,
+  live: false,
+};
 
 // 运行时列表排序参数。
-type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active';
+type RuntimeSortKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'last_active';
 type RuntimeSortDirection = 'asc' | 'desc';
 type RuntimeSortState = {
   key: RuntimeSortKey;
   direction: RuntimeSortDirection;
 };
-type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'risk' | 'last_active' | 'actions';
+type RuntimeColumnKey = 'task_session' | 'sandbox' | 'executor' | 'status' | 'last_active' | 'actions';
 type ArchiveSortKey = 'time' | 'type' | 'size' | 'reason' | 'status';
 type ArchiveSortState = {
   key: ArchiveSortKey;
   direction: RuntimeSortDirection;
 };
 type ArchiveColumnKey = 'time' | 'type' | 'size' | 'reason' | 'status' | 'actions';
+type ConversationSortKey = 'session' | 'user' | 'executor' | 'session_id' | 'status' | 'updated_at' | 'created_at';
+type AuditSortKey = 'id' | 'time' | 'action' | 'result' | 'operator' | 'target' | 'session';
+type SortDirection = 'asc' | 'desc';
+
+type ConversationSortState = {
+  key: ConversationSortKey;
+  direction: SortDirection;
+};
+
+type AuditSortState = {
+  key: AuditSortKey;
+  direction: SortDirection;
+};
 
 const DEFAULT_RUNTIME_SORT: RuntimeSortState = {
-  key: 'risk',
+  key: 'last_active',
   direction: 'desc',
 };
 
 const DEFAULT_RUNTIME_COLUMN_WIDTHS: Record<RuntimeColumnKey, number> = {
-  task_session: 228,
-  sandbox: 212,
-  executor: 128,
-  status: 232,
-  risk: 174,
-  last_active: 170,
-  actions: 236,
+  task_session: 190,
+  sandbox: 176,
+  executor: 108,
+  status: 128,
+  last_active: 132,
+  actions: 178,
 };
 
 const RUNTIME_COLUMN_MIN_WIDTHS: Record<RuntimeColumnKey, number> = {
-  task_session: 168,
-  sandbox: 156,
-  executor: 108,
-  status: 186,
-  risk: 132,
-  last_active: 130,
-  actions: 206,
+  task_session: 150,
+  sandbox: 132,
+  executor: 92,
+  status: 112,
+  last_active: 110,
+  actions: 154,
 };
 
 const DEFAULT_ARCHIVE_SORT: ArchiveSortState = {
+  key: 'time',
+  direction: 'desc',
+};
+
+const DEFAULT_CONVERSATION_SORT: ConversationSortState = {
+  key: 'updated_at',
+  direction: 'desc',
+};
+
+const DEFAULT_AUDIT_SORT: AuditSortState = {
   key: 'time',
   direction: 'desc',
 };
@@ -503,6 +539,17 @@ function formatRelativeTime(value?: string | null) {
   return formatDateTime(value);
 }
 
+function formatCompactRelativeTime(value?: string | null, now = Date.now()) {
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return '-';
+  const deltaMs = Math.max(0, now - timestamp);
+  if (deltaMs < 60 * 1000) return `${Math.max(1, Math.floor(deltaMs / 1000))}秒前`;
+  if (deltaMs < 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 1000))}分钟前`;
+  if (deltaMs < 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 60 * 1000))}小时前`;
+  if (deltaMs < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (24 * 60 * 60 * 1000))}天前`;
+  return formatDateTime(value);
+}
+
 function stateClassName(state: string) {
   return `status-pill status-${state}`;
 }
@@ -510,7 +557,7 @@ function stateClassName(state: string) {
 function statusLabel(status: string) {
   if (status === 'in_progress') return '进行中';
   if (status === 'waiting_user') return '待用户确认';
-  if (status === 'completed') return '已完成';
+  if (status === 'completed') return '完成';
   if (status === 'failed') return '失败';
   if (status === 'unknown') return '未知';
   return status;
@@ -521,8 +568,8 @@ function conversationStageLabel(stage?: string | null) {
   if (stage === 'clarifying') return '等待补充';
   if (stage === 'planning') return '方案规划';
   if (stage === 'executing') return '执行中';
-  if (stage === 'completed') return '已完成';
-  if (stage === 'failed') return '已失败';
+  if (stage === 'completed') return '完成';
+  if (stage === 'failed') return '失败';
   if (stage === 'unknown') return '未知阶段';
   return stage || '-';
 }
@@ -2328,7 +2375,7 @@ function buildConversationOpencodeToolCard(input: {
       title: commandCard.title,
       subtitle: statusLabel,
       statusLabel,
-      tone: errorText ? 'error' : statusLabel === '已完成' ? 'success' : 'default',
+      tone: errorText ? 'error' : statusLabel === '完成' ? 'success' : 'default',
       command: commandText,
       preview: truncateConversationReplayText(outputText, 900).text,
       previewMode: 'code',
@@ -3044,8 +3091,6 @@ const DEFAULT_AUDIT_FILTERS: AuditFilterState = {
   operator: 'all',
   action: 'all',
   result: 'all',
-  sessionId: '',
-  targetVmId: '',
   from: '',
   to: '',
 };
@@ -3063,7 +3108,7 @@ type AdminUrlState = {
     selectedSessionId: string | null;
   };
   sandbox: {
-    tab: 'overview' | 'runtime' | 'templates';
+    tab: 'runtime';
     query: string;
     executor: string;
     status: string;
@@ -3132,7 +3177,7 @@ const ADMIN_URL_QUERY_KEYS = [
 ] as const;
 
 const USER_DETAIL_TAB_VALUES = new Set(['overview', 'conversations', 'sandboxes']);
-const SANDBOX_TAB_VALUES = new Set(['overview', 'runtime', 'templates']);
+const SANDBOX_TAB_VALUES = new Set(['runtime']);
 const SANDBOX_DETAIL_TAB_VALUES = new Set(['overview', 'files', 'processes', 'connectivity', 'archive', 'terminal']);
 const USER_SORT_KEY_VALUES = new Set(['user', 'status', 'last_activity', 'sessions', 'conversations', 'sandboxes']);
 const USER_SORT_DIRECTION_VALUES = new Set(['asc', 'desc']);
@@ -3155,7 +3200,6 @@ function isSectionKey(value: string | null): value is SectionKey {
 function cloneUserManagementViewState(state: UserManagementViewState = DEFAULT_USER_MANAGEMENT_VIEW_STATE): UserManagementViewState {
   return {
     filters: { ...state.filters },
-    appliedFilters: { ...state.appliedFilters },
     sort: { ...state.sort },
     selectedUserId: state.selectedUserId,
     selectedUserLabel: state.selectedUserLabel,
@@ -3256,7 +3300,6 @@ function readAdminUrlState(): AdminUrlState {
     hasSession: params.get('user_session') || 'all',
     hasConversation: params.get('user_conv') || 'all',
   };
-  userState.appliedFilters = { ...userState.filters };
   userState.sort = {
     key: USER_SORT_KEY_VALUES.has(userSortKey || '') ? (userSortKey as UserManagementViewState['sort']['key']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.key,
     direction: USER_SORT_DIRECTION_VALUES.has(userSortDirection || '') ? (userSortDirection as UserManagementViewState['sort']['direction']) : DEFAULT_USER_MANAGEMENT_VIEW_STATE.sort.direction,
@@ -3302,8 +3345,6 @@ function readAdminUrlState(): AdminUrlState {
   auditState.operator = params.get('audit_operator') || 'all';
   auditState.action = params.get('audit_action') || 'all';
   auditState.result = params.get('audit_result') || 'all';
-  auditState.sessionId = params.get('audit_session') || '';
-  auditState.targetVmId = params.get('audit_target') || '';
   auditState.from = params.get('audit_from') || '';
   auditState.to = params.get('audit_to') || '';
 
@@ -3375,7 +3416,6 @@ function writeAdminUrlState(input: {
   }
 
   if (input.activeSection === 'sandbox') {
-    if (input.sandbox.tab !== 'runtime') url.searchParams.set('sbx_tab', input.sandbox.tab);
     if (input.sandbox.query) url.searchParams.set('sbx_q', input.sandbox.query);
     if (input.sandbox.executor !== 'all') url.searchParams.set('sbx_exec', input.sandbox.executor);
     if (input.sandbox.status !== 'all') url.searchParams.set('sbx_status', input.sandbox.status);
@@ -3389,7 +3429,7 @@ function writeAdminUrlState(input: {
   }
 
   if (input.activeSection === 'user') {
-    const filters = input.user.appliedFilters;
+    const filters = input.user.filters;
     if (filters.query) url.searchParams.set('user_q', filters.query);
     if (filters.status !== 'all') url.searchParams.set('user_status', filters.status);
     if (filters.activity !== 'all') url.searchParams.set('user_activity', filters.activity);
@@ -3464,8 +3504,6 @@ function writeAdminUrlState(input: {
     if (input.audit.operator !== 'all') url.searchParams.set('audit_operator', input.audit.operator);
     if (input.audit.action !== 'all') url.searchParams.set('audit_action', input.audit.action);
     if (input.audit.result !== 'all') url.searchParams.set('audit_result', input.audit.result);
-    if (input.audit.sessionId) url.searchParams.set('audit_session', input.audit.sessionId);
-    if (input.audit.targetVmId) url.searchParams.set('audit_target', input.audit.targetVmId);
     if (input.audit.from) url.searchParams.set('audit_from', input.audit.from);
     if (input.audit.to) url.searchParams.set('audit_to', input.audit.to);
   }
@@ -3520,7 +3558,10 @@ export default function App() {
   const [conversationExecutorFilter, setConversationExecutorFilter] = useState(initialUrlState.conversation.executor);
   const [conversationUpdatedFromDate, setConversationUpdatedFromDate] = useState(initialUrlState.conversation.updatedFrom);
   const [conversationUpdatedToDate, setConversationUpdatedToDate] = useState(initialUrlState.conversation.updatedTo);
-  const [conversationAutoRefreshEnabled, setConversationAutoRefreshEnabled] = useState(true);
+  const [conversationSort, setConversationSort] = useState<ConversationSortState>(DEFAULT_CONVERSATION_SORT);
+  const [conversationSummaryRefreshing, setConversationSummaryRefreshing] = useState(false);
+  const [conversationSummaryFetchedAt, setConversationSummaryFetchedAt] = useState<string | null>(null);
+  const [conversationSummaryClock, setConversationSummaryClock] = useState(() => Date.now());
   const [conversationDialog, setConversationDialog] = useState<{ sessionId: string } | null>(null);
   const [conversationDialogOrigin, setConversationDialogOrigin] = useState<AdminDetailOrigin | null>(null);
   const [conversationDialogZIndex, setConversationDialogZIndex] = useState(240);
@@ -3545,6 +3586,8 @@ export default function App() {
   const [agentOverview, setAgentOverview] = useState<AgentManagementOverview | null>(null);
   const [sandboxOverview, setSandboxOverview] = useState<SandboxManagementOverview | null>(null);
   const [sandboxLiveSummary, setSandboxLiveSummary] = useState<SandboxLiveSummary | null>(null);
+  const [sandboxLiveSummaryRefreshing, setSandboxLiveSummaryRefreshing] = useState(false);
+  const [sandboxLiveSummaryClock, setSandboxLiveSummaryClock] = useState(() => Date.now());
   const [sandboxRuntimeRegistry, setSandboxRuntimeRegistry] = useState<SandboxRuntimeRegistry | null>(null);
   const [sandboxRuntimeDetail, setSandboxRuntimeDetail] = useState<SandboxRuntimeDetail | null>(null);
   const [sandboxDetail, setSandboxDetail] = useState<E2bSandboxDetail | null>(null);
@@ -3553,7 +3596,6 @@ export default function App() {
   const [sandboxModalOrigin, setSandboxModalOrigin] = useState<AdminDetailOrigin | null>(null);
   const [sandboxModalZIndex, setSandboxModalZIndex] = useState(250);
   const [sandboxSectionOrigin, setSandboxSectionOrigin] = useState<AdminDetailOrigin | null>(null);
-  const [sandboxTab, setSandboxTab] = useState<'overview' | 'runtime' | 'templates'>(initialUrlState.sandbox.tab);
   const [sandboxRuntimeQuery, setSandboxRuntimeQuery] = useState(initialUrlState.sandbox.query);
   const [sandboxExecutorFilter, setSandboxExecutorFilter] = useState(initialUrlState.sandbox.executor);
   const [sandboxStatusFilter, setSandboxStatusFilter] = useState(initialUrlState.sandbox.status);
@@ -3606,6 +3648,7 @@ export default function App() {
 
   const [templates, setTemplates] = useState<E2bTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateWorkbenchMode, setTemplateWorkbenchMode] = useState<'detail' | 'create'>('detail');
   const [templateDetail, setTemplateDetail] = useState<E2bTemplateWithBuilds | null>(null);
   const [templateBuildLogs, setTemplateBuildLogs] = useState<E2bTemplateBuildLogsResponse | null>(null);
   const [templateBuildStatus, setTemplateBuildStatus] = useState<E2bTemplateBuildInfo | null>(null);
@@ -3625,11 +3668,20 @@ export default function App() {
     availableTargets: [],
   });
   const [auditFilters, setAuditFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
-  const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditFilterState>({ ...initialUrlState.audit });
+  const [auditSort, setAuditSort] = useState<AuditSortState>(DEFAULT_AUDIT_SORT);
   const [auditDetail, setAuditDetail] = useState<AuditDetailResponse | null>(null);
+  const [auditSummaryRefreshing, setAuditSummaryRefreshing] = useState(false);
+  const [auditSummaryFetchedAt, setAuditSummaryFetchedAt] = useState<string | null>(null);
+  const [auditSummaryClock, setAuditSummaryClock] = useState(() => Date.now());
   const [selectedAgentStageKey, setSelectedAgentStageKey] = useState<string | null>(null);
   const [toasts, setToasts] = useState<UiToast[]>([]);
   const [operationOverlay, setOperationOverlay] = useState<{ message: string } | null>(null);
+  const [sandboxLoadProgress, setSandboxLoadProgress] = useState<SandboxLoadProgressState>({
+    active: false,
+    startedAt: null,
+    completed: { ...EMPTY_SANDBOX_LOAD_PROGRESS },
+  });
+  const [sandboxLoadProgressClock, setSandboxLoadProgressClock] = useState(() => Date.now());
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3650,7 +3702,8 @@ export default function App() {
     startWidth: number;
   } | null>(null);
   const conversationDetailCacheRef = useRef<Map<string, ConversationSessionDetailResponse>>(new Map());
-  const auditAppliedFiltersRef = useRef(DEFAULT_AUDIT_FILTERS);
+  const auditRequestVersionRef = useRef(0);
+  const auditFiltersRef = useRef<AuditFilterState>({ ...initialUrlState.audit });
   const toastIdRef = useRef(1);
   const lastErrorToastRef = useRef<string | null>(null);
   const sidebarNavRef = useRef<HTMLElement | null>(null);
@@ -3796,14 +3849,15 @@ export default function App() {
     }
   }, []);
 
-  const loadConversationSessions = useCallback(async () => {
-    const result = await api.listConversationSessions(200);
-    setConversationSessions(result.sessions);
+  const applyConversationSessions = useCallback((sessions: ConversationSession[], refreshedAt = new Date().toISOString()) => {
+    setConversationSessions(sessions);
+    setConversationSummaryFetchedAt(refreshedAt);
+    setConversationSummaryClock(Date.now());
 
-    if (result.sessions.length > 0) {
-      const nextId = selectedSessionId && result.sessions.some((item) => item.id === selectedSessionId)
+    if (sessions.length > 0) {
+      const nextId = selectedSessionId && sessions.some((item) => item.id === selectedSessionId)
         ? selectedSessionId
-        : result.sessions[0].id;
+        : sessions[0].id;
       setSelectedSessionId(nextId);
     } else {
       setSelectedSessionId(null);
@@ -3811,6 +3865,11 @@ export default function App() {
       setConversationDetailLoading(false);
     }
   }, [selectedSessionId]);
+
+  const loadConversationSessions = useCallback(async () => {
+    const result = await api.listConversationSessions(200);
+    applyConversationSessions(result.sessions);
+  }, [applyConversationSessions]);
 
   const selectConversationSession = useCallback((sessionId: string) => {
     if (selectedSessionId === sessionId) {
@@ -3881,10 +3940,40 @@ export default function App() {
           direction: previous.direction === 'asc' ? 'desc' : 'asc',
         };
       }
-      const initialDirection: RuntimeSortDirection = key === 'risk' || key === 'last_active' ? 'desc' : 'asc';
+      const initialDirection: RuntimeSortDirection = key === 'last_active' ? 'desc' : 'asc';
       return {
         key,
         direction: initialDirection,
+      };
+    });
+  }, []);
+
+  const toggleConversationSort = useCallback((key: ConversationSortKey) => {
+    setConversationSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: key === 'updated_at' || key === 'created_at' ? 'desc' : 'asc',
+      };
+    });
+  }, []);
+
+  const toggleAuditSort = useCallback((key: AuditSortKey) => {
+    setAuditSort((previous) => {
+      if (previous.key === key) {
+        return {
+          key,
+          direction: previous.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: key === 'time' ? 'desc' : 'asc',
       };
     });
   }, []);
@@ -3996,10 +4085,72 @@ export default function App() {
     }
   }, []);
 
-  const loadSandboxLiveSummary = useCallback(async () => {
-    const summary = await api.getSandboxLiveSummary();
+  const loadSandboxLiveSummary = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    const summary = await api.getSandboxLiveSummary(options);
     setSandboxLiveSummary(summary);
+    setSandboxLiveSummaryClock(Date.now());
   }, []);
+
+  const beginSandboxLoadProgress = useCallback(() => {
+    const startedAt = Date.now();
+    setSandboxLoadProgress({
+      active: true,
+      startedAt,
+      completed: { ...EMPTY_SANDBOX_LOAD_PROGRESS },
+    });
+    setSandboxLoadProgressClock(startedAt);
+  }, []);
+
+  const markSandboxLoadProgressStep = useCallback((step: SandboxLoadStepKey) => {
+    setSandboxLoadProgress((current) => {
+      if (!current.active || current.completed[step]) {
+        return current;
+      }
+      return {
+        ...current,
+        completed: {
+          ...current.completed,
+          [step]: true,
+        },
+      };
+    });
+  }, []);
+
+  const finishSandboxLoadProgress = useCallback(() => {
+    setSandboxLoadProgress((current) => {
+      if (!current.active) {
+        return current;
+      }
+      return {
+        ...current,
+        active: false,
+      };
+    });
+  }, []);
+
+  const refreshSandboxLiveSummary = useCallback(async () => {
+    setSandboxLiveSummaryRefreshing(true);
+    try {
+      await loadSandboxLiveSummary({ forceRefresh: true });
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新 E2B live 数量失败');
+    } finally {
+      setSandboxLiveSummaryRefreshing(false);
+    }
+  }, [loadSandboxLiveSummary]);
+
+  const refreshConversationSummary = useCallback(async () => {
+    setConversationSummaryRefreshing(true);
+    try {
+      await loadConversationSessions();
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新会话列表失败');
+    } finally {
+      setConversationSummaryRefreshing(false);
+    }
+  }, [loadConversationSessions]);
 
   const loadSandboxRuntimeRegistry = useCallback(async () => {
     if (sandboxRuntimeRegistryRequestRef.current) {
@@ -4044,14 +4195,7 @@ export default function App() {
 
   const loadMoreSandboxRuntime = useCallback(async () => {
     const previousLimit = sandboxRegistryLimitRef.current;
-    const nextLimit = Math.min(
-      previousLimit + SANDBOX_RUNTIME_LOAD_MORE_STEP,
-      SANDBOX_RUNTIME_MAX_PAGE_SIZE
-    );
-    if (nextLimit <= previousLimit) {
-      setSandboxRegistryLoadMoreError(null);
-      return;
-    }
+    const nextLimit = previousLimit + SANDBOX_RUNTIME_LOAD_MORE_STEP;
     sandboxRegistryLimitRef.current = nextLimit;
     setSandboxRegistryLimit(nextLimit);
     setSandboxRegistryLoadingMore(true);
@@ -4078,7 +4222,42 @@ export default function App() {
   const loadTemplates = useCallback(async () => {
     const result = await api.listTemplates();
     setTemplates(result);
+    return result;
   }, []);
+
+  const loadSandboxSectionWithProgress = useCallback(async () => {
+    beginSandboxLoadProgress();
+    try {
+      await Promise.all([
+        loadSandboxOverview().then(() => {
+          markSandboxLoadProgressStep('overview');
+        }),
+        loadSandboxRuntimeRegistry().then(() => {
+          markSandboxLoadProgressStep('runtime');
+        }),
+        loadTemplates()
+          .catch(() => undefined)
+          .finally(() => {
+            markSandboxLoadProgressStep('templates');
+          }),
+      ]);
+      await loadSandboxLiveSummary()
+        .catch(() => undefined)
+        .finally(() => {
+          markSandboxLoadProgressStep('live');
+        });
+    } finally {
+      finishSandboxLoadProgress();
+    }
+  }, [
+    beginSandboxLoadProgress,
+    finishSandboxLoadProgress,
+    loadSandboxLiveSummary,
+    loadSandboxOverview,
+    loadSandboxRuntimeRegistry,
+    loadTemplates,
+    markSandboxLoadProgressStep,
+  ]);
 
   const loadSandboxDetail = useCallback(async (sandboxId: string) => {
     const result = await api.getSandboxEnvironment(sandboxId);
@@ -4158,6 +4337,7 @@ export default function App() {
         '正在加载模板详情',
         async () => {
           const result = await api.getTemplate(templateId);
+          setTemplateWorkbenchMode('detail');
           setTemplateDetail(result);
           setTemplateAliasDraft(templateAliasOf(result));
           setTemplateAliasResult(null);
@@ -4171,6 +4351,35 @@ export default function App() {
       // error is routed to banner and toast
     }
   }, [runBlockingTask]);
+
+  const openTemplateCreateWorkbench = useCallback(() => {
+    setTemplateModalOpen(true);
+    setTemplateWorkbenchMode('create');
+    setTemplateBuildLogs(null);
+    setTemplateBuildStatus(null);
+    setTemplateAliasResult(null);
+    if (!templateActionPayload.trim()) {
+      setTemplateActionPayload('{}');
+    }
+  }, [templateActionPayload]);
+
+  const openTemplateWorkbench = useCallback(() => {
+    setTemplateModalOpen(true);
+    if (!templates.length) {
+      setTemplateWorkbenchMode('create');
+      return;
+    }
+    if (templateDetail) {
+      setTemplateWorkbenchMode('detail');
+      return;
+    }
+    const firstTemplateId = templates
+      .map((item) => templateIdOf(item))
+      .find((item): item is string => Boolean(item));
+    if (firstTemplateId) {
+      void openTemplateDetail(firstTemplateId);
+    }
+  }, [openTemplateDetail, templateDetail, templates]);
 
   const openSandboxDetail = useCallback(
     async (sandboxId: string, origin: AdminDetailOrigin | null = null, initialDetailTab: SandboxDetailTab = 'overview') => {
@@ -4219,6 +4428,7 @@ export default function App() {
 
   const closeTemplateDetail = useCallback(() => {
     setTemplateModalOpen(false);
+    setTemplateWorkbenchMode('detail');
   }, []);
 
   const copyRuntimeField = useCallback(async (label: string, value: string) => {
@@ -4819,27 +5029,55 @@ export default function App() {
         const payload = templateActionPayload.trim()
           ? (JSON.parse(templateActionPayload) as Record<string, unknown>)
           : {};
+        const payloadAlias = typeof payload.alias === 'string' ? payload.alias.trim() : '';
+        const payloadName = typeof payload.name === 'string' ? payload.name.trim() : '';
         const reason = action === 'delete' || action === 'rebuild' ? window.prompt('请输入操作备注（必填）') : 'ok';
         if ((action === 'delete' || action === 'rebuild') && !reason) return;
         await runBlockingTask(
           `正在${actionLabelMap[action]}`,
           async () => {
+            let createdTemplateId: string | null = null;
             if (action === 'create') {
-              await api.createTemplate(payload);
+              const created = await api.createTemplate(payload);
+              createdTemplateId = templateIdOf(created as E2bTemplate);
             } else if (action === 'update' && templateDetail) {
               await api.updateTemplate(templateIdOf(templateDetail), payload);
             } else if (action === 'rebuild' && templateDetail) {
               await api.rebuildTemplate(templateIdOf(templateDetail), payload);
             } else if (action === 'delete' && templateDetail) {
               await api.deleteTemplate(templateIdOf(templateDetail));
-              setTemplateModalOpen(false);
             } else if (action === 'tags-assign') {
               await api.assignTemplateTags(payload);
             } else if (action === 'tags-delete') {
               await api.deleteTemplateTags(payload);
             }
-            await loadTemplates();
-            if (templateDetail && action !== 'delete') {
+            const refreshedTemplates = await loadTemplates();
+            if (action === 'create') {
+              const nextTemplateId =
+                createdTemplateId
+                || refreshedTemplates.find((item) => templateAliasOf(item) === payloadAlias)?.templateID
+                || refreshedTemplates.find((item) => templateAliasOf(item) === payloadAlias)?.templateId
+                || refreshedTemplates.find((item) => String((item as any).name ?? '').trim() === payloadName)?.templateID
+                || refreshedTemplates.find((item) => String((item as any).name ?? '').trim() === payloadName)?.templateId
+                || null;
+              if (nextTemplateId) {
+                await updateTemplateDetail(nextTemplateId);
+                setTemplateWorkbenchMode('detail');
+              }
+            } else if (templateDetail && action === 'delete') {
+              const nextTemplateId = refreshedTemplates
+                .map((item) => templateIdOf(item))
+                .find((item): item is string => Boolean(item));
+              if (nextTemplateId) {
+                await updateTemplateDetail(nextTemplateId);
+              } else {
+                setTemplateDetail(null);
+                setTemplateAliasDraft('');
+                setTemplateAliasResult(null);
+                setTemplateBuildLogs(null);
+                setTemplateBuildStatus(null);
+              }
+            } else if (templateDetail) {
               await updateTemplateDetail(templateIdOf(templateDetail));
             }
           },
@@ -4925,27 +5163,46 @@ export default function App() {
     }
   }, [runBlockingTask]);
 
+  useEffect(() => {
+    auditFiltersRef.current = auditFilters;
+  }, [auditFilters]);
+
   const loadAuditSection = useCallback(
-    async (filters: AuditFilterState = auditAppliedFiltersRef.current) => {
+    async (filters: AuditFilterState = auditFiltersRef.current) => {
+      const requestVersion = ++auditRequestVersionRef.current;
       const result = await api.listAudit({
         query: filters.query.trim() || undefined,
         operator: filters.operator !== 'all' ? filters.operator : undefined,
         action: filters.action !== 'all' ? filters.action : undefined,
         result: filters.result !== 'all' ? filters.result : undefined,
-        sessionId: filters.sessionId.trim() || undefined,
-        targetVmId: filters.targetVmId.trim() || undefined,
         from: filters.from ? new Date(filters.from).toISOString() : undefined,
         to: filters.to ? new Date(filters.to).toISOString() : undefined,
         limit: 80,
         offset: 0,
       });
+      if (requestVersion !== auditRequestVersionRef.current) {
+        return;
+      }
       setAuditEntries(result.entries);
       setAuditResponseMeta(result);
-      auditAppliedFiltersRef.current = filters;
-      setAuditAppliedFilters(filters);
+      setAuditSummaryFetchedAt(new Date().toISOString());
+      setAuditSummaryClock(Date.now());
+      setError(null);
     },
     []
   );
+
+  const refreshAuditSummary = useCallback(async () => {
+    setAuditSummaryRefreshing(true);
+    try {
+      await loadAuditSection();
+      setError(null);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '刷新审计日志失败');
+    } finally {
+      setAuditSummaryRefreshing(false);
+    }
+  }, [loadAuditSection]);
 
   const openAuditDetail = useCallback(
     async (auditId: string) => {
@@ -4986,10 +5243,13 @@ export default function App() {
         } else if (section === 'connectorGuide') {
           setError(null);
         } else if (section === 'sandbox') {
-          if (sandboxTab === 'templates') {
-            await loadTemplates();
+          if (initial) {
+            await loadSandboxSectionWithProgress();
           } else {
-            await loadSandboxSection();
+            await Promise.all([
+              loadSandboxSection(),
+              loadTemplates().catch(() => undefined),
+            ]);
           }
         } else {
           await loadAuditSection();
@@ -5003,12 +5263,12 @@ export default function App() {
       }
     },
     [
-      sandboxTab,
       loadAgentSection,
       loadAuditSection,
       loadConversationSessions,
       loadKvmSection,
       loadSandboxSection,
+      loadSandboxSectionWithProgress,
       loadTemplates,
     ]
   );
@@ -5097,10 +5357,6 @@ export default function App() {
   }, [sandboxRegistryLimit]);
 
   useEffect(() => {
-    auditAppliedFiltersRef.current = auditAppliedFilters;
-  }, [auditAppliedFilters]);
-
-  useEffect(() => {
     writeAdminUrlState({
       activeSection,
       conversation: {
@@ -5114,7 +5370,7 @@ export default function App() {
         selectedSessionId,
       },
       sandbox: {
-        tab: sandboxTab,
+        tab: 'runtime',
         query: sandboxRuntimeQuery,
         executor: sandboxExecutorFilter,
         status: sandboxStatusFilter,
@@ -5127,11 +5383,11 @@ export default function App() {
       skill: skillManagementViewState,
       connectorGuide: connectorGuideManagementViewState,
       osacRelease: osacReleaseManagementViewState,
-      audit: auditAppliedFilters,
+      audit: auditFilters,
     });
   }, [
     activeSection,
-    auditAppliedFilters,
+    auditFilters,
     connectorGuideManagementViewState,
     conversationExecutorFilter,
     conversationSearchQuery,
@@ -5147,7 +5403,6 @@ export default function App() {
     sandboxRiskFilter,
     sandboxRuntimeQuery,
     sandboxStatusFilter,
-    sandboxTab,
     skillManagementViewState,
     selectedSessionId,
     userManagementViewState,
@@ -5169,6 +5424,55 @@ export default function App() {
   }, [activeSection, authStatus, loadSection]);
 
   useEffect(() => {
+    if (!sandboxLiveSummary?.countedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setSandboxLiveSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [sandboxLiveSummary?.countedAt]);
+
+  useEffect(() => {
+    if (!conversationSummaryFetchedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setConversationSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [conversationSummaryFetchedAt]);
+
+  useEffect(() => {
+    if (!auditSummaryFetchedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setAuditSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [auditSummaryFetchedAt]);
+
+  useEffect(() => {
+    if (!loading || activeSection !== 'sandbox' || !sandboxLoadProgress.startedAt) {
+      return;
+    }
+    setSandboxLoadProgressClock(Date.now());
+    const timer = window.setInterval(() => {
+      setSandboxLoadProgressClock(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeSection, loading, sandboxLoadProgress.startedAt]);
+
+  useEffect(() => {
     if (authStatus !== 'authenticated') {
       return;
     }
@@ -5179,11 +5483,9 @@ export default function App() {
     const timer = window.setInterval(() => {
       if (activeSection === 'sandbox') {
         const refresh =
-          sandboxTab === 'templates'
-            ? loadTemplates
-            : sandboxRegistryLimitRef.current > SANDBOX_RUNTIME_PAGE_SIZE
-              ? () => Promise.all([loadSandboxOverview(), loadSandboxLiveSummary().catch(() => undefined)]).then(() => undefined)
-              : loadSandboxSection;
+          sandboxRegistryLimitRef.current > SANDBOX_RUNTIME_PAGE_SIZE
+            ? () => Promise.all([loadSandboxOverview(), loadSandboxLiveSummary().catch(() => undefined)]).then(() => undefined)
+            : loadSandboxSection;
         void refresh().catch((requestError) => {
           setError(requestError instanceof Error ? requestError.message : 'Sandbox 自动刷新失败');
         });
@@ -5197,7 +5499,7 @@ export default function App() {
     return () => {
       window.clearInterval(timer);
     };
-  }, [activeSection, authStatus, sandboxTab, loadKvmSection, loadSandboxLiveSummary, loadSandboxOverview, loadSandboxSection, loadTemplates]);
+  }, [activeSection, authStatus, loadKvmSection, loadSandboxLiveSummary, loadSandboxOverview, loadSandboxSection]);
 
   useEffect(() => {
     if (!sandboxModalOpen || sandboxDetailTab !== 'files') {
@@ -5316,70 +5618,6 @@ export default function App() {
       cancelled = true;
     };
   }, [activeSection, authStatus, conversationDialog, selectedSessionId]);
-
-  useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
-    if (!selectedSessionId || !conversationAutoRefreshEnabled || (activeSection !== 'conversation' && !conversationDialog)) {
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const detail = await api.getConversationSessionCore(selectedSessionId);
-        if (!cancelled) {
-          conversationDetailCacheRef.current.set(selectedSessionId, detail);
-          setConversationDetail(detail);
-          setConversationInfraError(null);
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : '会话自动刷新失败');
-        }
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void run();
-    }, 4000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeSection, authStatus, conversationAutoRefreshEnabled, conversationDialog, selectedSessionId]);
-
-  useEffect(() => {
-    if (authStatus !== 'authenticated') {
-      return;
-    }
-    if (activeSection !== 'conversation' || !conversationAutoRefreshEnabled) {
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const sessions = await api.listConversationSessions(200);
-        if (!cancelled) {
-          setConversationSessions(sessions.sessions);
-        }
-      } catch {
-        // keep current list when periodic refresh fails
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void run();
-    }, 12000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeSection, authStatus, conversationAutoRefreshEnabled]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') {
@@ -5532,15 +5770,9 @@ export default function App() {
     { label: '进行中', value: 'in_progress', count: conversationSummary.inProgress, meta: '执行中或处理中' },
     { label: '待确认', value: 'waiting_user', count: conversationSummary.waitingUser, meta: '等待用户确认' },
     { label: '失败', value: 'failed', count: conversationSummary.failed, meta: '存在阻塞错误' },
-    { label: '已完成', value: 'completed', count: conversationSummary.completed, meta: '已完成的会话' },
+    { label: '完成', value: 'completed', count: conversationSummary.completed, meta: '已完成会话' },
   ] as const;
-  const conversationIndexSummaryCards = [
-    { label: '全部', value: conversationSummary.total, meta: '当前加载会话', tone: 'neutral' },
-    { label: '进行中', value: conversationSummary.inProgress, meta: '执行中或处理中', tone: 'active' },
-    { label: '待确认', value: conversationSummary.waitingUser, meta: '等待用户补充', tone: 'warning' },
-    { label: '失败', value: conversationSummary.failed, meta: '需要人工介入', tone: 'danger' },
-    { label: '最近活跃', value: formatDateTime(conversationSummary.latestUpdatedAt), meta: '按更新时间排序', tone: 'time' },
-  ] as const;
+  const conversationSummaryAge = formatCompactRelativeTime(conversationSummaryFetchedAt, conversationSummaryClock);
   const conversationStageOptions = uniqueSorted(conversationSessions.map((session) => session.stage));
   const conversationUserOptions = Array.from(
     conversationSessions.reduce<Map<string, { value: string; label: string; count: number }>>((map, session) => {
@@ -5601,7 +5833,7 @@ export default function App() {
     const query = conversationSearchQuery.trim().toLowerCase();
     const fromTime = conversationUpdatedFromDate ? new Date(`${conversationUpdatedFromDate}T00:00:00`).getTime() : null;
     const toTime = conversationUpdatedToDate ? new Date(`${conversationUpdatedToDate}T23:59:59.999`).getTime() : null;
-    return conversationSessions.filter((session) => {
+    const filtered = conversationSessions.filter((session) => {
       if (conversationStatusFilter !== 'all' && session.status !== conversationStatusFilter) {
         return false;
       }
@@ -5641,6 +5873,27 @@ export default function App() {
         .join(' ')
         .toLowerCase();
       return haystack.includes(query);
+    });
+
+    return filtered.sort((a, b) => {
+      let delta = 0;
+      if (conversationSort.key === 'session') {
+        delta = (a.title || a.id || '').localeCompare(b.title || b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'user') {
+        delta = conversationUserLabel(a.user).localeCompare(conversationUserLabel(b.user), 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'executor') {
+        delta = executorLabel(a.executor || 'unknown').localeCompare(executorLabel(b.executor || 'unknown'), 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'session_id') {
+        delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'status') {
+        delta = (a.status || '').localeCompare(b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
+      } else if (conversationSort.key === 'updated_at') {
+        delta = toTimestamp(a.updatedAt) - toTimestamp(b.updatedAt);
+      } else if (conversationSort.key === 'created_at') {
+        delta = toTimestamp(a.createdAt) - toTimestamp(b.createdAt);
+      }
+      if (delta !== 0) return conversationSort.direction === 'asc' ? delta : -delta;
+      return toTimestamp(b.updatedAt) - toTimestamp(a.updatedAt);
     });
   })();
   const conversationTabCounts = {
@@ -5705,16 +5958,27 @@ export default function App() {
       failed: auditEntries.filter((item) => item.result !== 'success').length,
     };
   })();
-  const auditActiveFilterCount = [
-    auditAppliedFilters.query.trim() ? 'query' : '',
-    auditAppliedFilters.operator !== 'all' ? 'operator' : '',
-    auditAppliedFilters.action !== 'all' ? 'action' : '',
-    auditAppliedFilters.result !== 'all' ? 'result' : '',
-    auditAppliedFilters.sessionId.trim() ? 'sessionId' : '',
-    auditAppliedFilters.targetVmId.trim() ? 'targetVmId' : '',
-    auditAppliedFilters.from ? 'from' : '',
-    auditAppliedFilters.to ? 'to' : '',
-  ].filter(Boolean).length;
+  const auditSummaryAge = formatCompactRelativeTime(auditSummaryFetchedAt, auditSummaryClock);
+  const sortedAuditEntries = [...auditEntries].sort((a, b) => {
+    let delta = 0;
+    if (auditSort.key === 'id') {
+      delta = (a.id || '').localeCompare(b.id || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'time') {
+      delta = toTimestamp(a.timestamp) - toTimestamp(b.timestamp);
+    } else if (auditSort.key === 'action') {
+      delta = auditActionLabel(a.action).localeCompare(auditActionLabel(b.action), 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'result') {
+      delta = auditResultLabel(a.result).localeCompare(auditResultLabel(b.result), 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'operator') {
+      delta = (a.operator || '').localeCompare(b.operator || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'target') {
+      delta = (a.targetVmId || '').localeCompare(b.targetVmId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    } else if (auditSort.key === 'session') {
+      delta = (a.sessionId || '').localeCompare(b.sessionId || '', 'zh-Hans-CN', { sensitivity: 'base' });
+    }
+    if (delta !== 0) return auditSort.direction === 'asc' ? delta : -delta;
+    return toTimestamp(b.timestamp) - toTimestamp(a.timestamp);
+  });
   const selectedAgentStage =
     agentOverview?.stageDistribution.find((item) => item.stageKey === selectedAgentStageKey) ||
     agentOverview?.stageDistribution[0] ||
@@ -6869,7 +7133,7 @@ export default function App() {
         : activeSection === 'agent'
           ? agentOverview?.agentApi.timestamp || agentOverview?.oneceoApi.timestamp
         : activeSection === 'audit'
-          ? auditEntries[0]?.timestamp
+          ? auditSummaryFetchedAt || auditEntries[0]?.timestamp
             : kvmOverview?.updatedAt;
   const lockMainAreaScroll =
     activeSection === 'conversation' ||
@@ -6877,9 +7141,15 @@ export default function App() {
     activeSection === 'skill' ||
     activeSection === 'osacRelease' ||
     activeSection === 'audit' ||
-    (activeSection === 'sandbox' && sandboxTab === 'runtime');
+    activeSection === 'sandbox';
   const currentTemplateId = templateIdOf(templateDetail);
   const currentTemplateAlias = templateAliasOf(templateDetail);
+  const templateWorkbenchTitle = templateWorkbenchMode === 'create'
+    ? '新建模板'
+    : currentTemplateAlias || currentTemplateId || '模板';
+  const templateWorkbenchCaption = templateWorkbenchMode === 'create'
+    ? '填写创建 payload 后会直接写入模板列表'
+    : templates.length ? `共 ${templates.length} 个模板` : '当前没有模板记录';
   const templateAliasCheck = parseAliasCheckResult(templateAliasResult);
 
   const registerSectionRefresh = useCallback((handler: (() => Promise<void>) | null) => {
@@ -6905,26 +7175,33 @@ export default function App() {
     }
   }, [activeSection, breadcrumbTitle, loadSection, runBlockingTask]);
 
-  const applyAuditFilters = useCallback(async () => {
-    try {
-      await runBlockingTask('正在筛选审计日志', async () => {
-        await loadAuditSection(auditFilters);
+  const updateAuditFilters = useCallback(
+    (nextValue: AuditFilterState | ((current: AuditFilterState) => AuditFilterState)) => {
+      setAuditFilters((current) => {
+        const next = typeof nextValue === 'function'
+          ? (nextValue as (value: AuditFilterState) => AuditFilterState)(current)
+          : nextValue;
+        auditFiltersRef.current = next;
+        void loadAuditSection(next)
+          .catch((requestError) => {
+            setError(requestError instanceof Error ? requestError.message : '审计日志加载失败');
+          });
+        return next;
       });
-    } catch {
-      // error is routed to banner and toast
-    }
-  }, [auditFilters, loadAuditSection, runBlockingTask]);
+    },
+    [loadAuditSection]
+  );
 
-  const resetAuditFilters = useCallback(async () => {
-    setAuditFilters(DEFAULT_AUDIT_FILTERS);
-    try {
-      await runBlockingTask('正在重置审计筛选', async () => {
-        await loadAuditSection(DEFAULT_AUDIT_FILTERS);
-      });
-    } catch {
-      // error is routed to banner and toast
-    }
-  }, [loadAuditSection, runBlockingTask]);
+  const resetAuditFilters = useCallback(() => {
+    updateAuditFilters(DEFAULT_AUDIT_FILTERS);
+  }, [updateAuditFilters]);
+
+  const resetSandboxRuntimeFilters = useCallback(() => {
+    setSandboxRuntimeQuery('');
+    setSandboxExecutorFilter('all');
+    setSandboxStatusFilter('all');
+    setSandboxRiskFilter('all');
+  }, []);
 
   const handleSidebarWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
     if (typeof window !== 'undefined' && window.innerWidth <= SIDEBAR_STACK_BREAKPOINT) {
@@ -8144,37 +8421,51 @@ export default function App() {
       <main className="content-stack conversation-content-stack">
         <section className="conversation-ops-layout fade-in">
           <article className="panel conversation-index-panel">
-            <div className="panel-header panel-header-stack">
+            <div className="panel-header conversation-index-panel-header">
               <div>
                 <p className="section-tag">会话索引</p>
                 <h2>会话索引</h2>
-                <p className="panel-caption">按更新时间浏览会话，点一行直接进入详情。</p>
               </div>
-              <label className="conversation-auto-refresh-toggle">
-                <input
-                  type="checkbox"
-                  checked={conversationAutoRefreshEnabled}
-                  onChange={(event) => setConversationAutoRefreshEnabled(event.target.checked)}
-                />
-                <span>{conversationAutoRefreshEnabled ? '自动刷新中' : '已暂停自动刷新'}</span>
-              </label>
-            </div>
-            <div className="conversation-index-summary-strip" aria-label="会话索引摘要">
-              {conversationIndexSummaryCards.map((item) => (
-                <article key={item.label} className={`conversation-index-summary-card conversation-index-summary-card-${item.tone}`}>
-                  <span className="conversation-index-summary-label">{item.label}</span>
-                  <strong>{item.value}</strong>
-                  <span>{item.meta}</span>
-                </article>
-              ))}
+              <div className="sandbox-list-header-actions conversation-index-header-actions">
+                <div className="conversation-live-summary-strip session-status sandbox-live-count" aria-label="会话索引摘要">
+                  <span className="sandbox-live-metric sandbox-live-metric-total">
+                    <span>全部</span>
+                    <strong>{conversationSummary.total}</strong>
+                  </span>
+                  <span className="sandbox-live-metric sandbox-live-metric-running">
+                    <span>进行中</span>
+                    <strong>{conversationSummary.inProgress}</strong>
+                  </span>
+                  <span className="sandbox-live-metric conversation-live-metric-waiting">
+                    <span>待确认</span>
+                    <strong>{conversationSummary.waitingUser}</strong>
+                  </span>
+                  <span className="sandbox-live-metric conversation-live-metric-failed">
+                    <span>失败</span>
+                    <strong>{conversationSummary.failed}</strong>
+                  </span>
+                  <span className="sandbox-live-age" title={formatDateTime(conversationSummaryFetchedAt)}>
+                    {conversationSummaryAge}
+                  </span>
+                  <button
+                    type="button"
+                    className={`sandbox-live-refresh-btn ${conversationSummaryRefreshing ? 'is-refreshing' : ''}`}
+                    onClick={() => void refreshConversationSummary()}
+                    disabled={conversationSummaryRefreshing}
+                    aria-label="刷新会话列表"
+                  >
+                    ↻
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="conversation-index-toolbar">
-              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-primary">
+              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-compact">
                 <label className="state-filter-field">
                   <span>搜索会话</span>
                   <input
                     type="search"
-                    placeholder="sessionId / 标题 / 阶段 / 待确认问题"
+                    placeholder="sessionId / 标题 / 用户名 / 执行器"
                     value={conversationSearchQuery}
                     onChange={(event) => setConversationSearchQuery(event.target.value)}
                   />
@@ -8223,23 +8514,6 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <button
-                  type="button"
-                  className="secondary-btn conversation-index-reset-btn"
-                  onClick={() => {
-                    setConversationSearchQuery('');
-                    setConversationStatusFilter('all');
-                    setConversationStageFilter('all');
-                    setConversationUserFilter('all');
-                    setConversationExecutorFilter('all');
-                    setConversationUpdatedFromDate('');
-                    setConversationUpdatedToDate('');
-                  }}
-                >
-                  重置筛选
-                </button>
-              </div>
-              <div className="runtime-filter-grid conversation-index-filter-grid conversation-index-filter-grid-secondary">
                 <label className="state-filter-field">
                   <span>处理方式</span>
                   <select
@@ -8272,34 +8546,92 @@ export default function App() {
                     onChange={(event) => setConversationUpdatedToDate(event.target.value)}
                   />
                 </label>
+                <button
+                  type="button"
+                  className="secondary-btn conversation-index-reset-btn"
+                  onClick={() => {
+                    setConversationSearchQuery('');
+                    setConversationStatusFilter('all');
+                    setConversationStageFilter('all');
+                    setConversationUserFilter('all');
+                    setConversationExecutorFilter('all');
+                    setConversationUpdatedFromDate('');
+                    setConversationUpdatedToDate('');
+                  }}
+                >
+                  重置筛选
+                </button>
               </div>
               <p className="panel-caption">
-                按更新时间排序 · 当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
+                当前筛选命中 {filteredConversationSessions.length} / {conversationSessions.length} · 进行中 {conversationSummary.inProgress} · 待确认 {conversationSummary.waitingUser} · 失败 {conversationSummary.failed}
                 {activeConversationFilterLabels.length ? ` · 已启用 ${activeConversationFilterLabels.join(' / ')}` : ''}
               </p>
             </div>
             <div className="table-wrap conversation-index-table-wrap">
               <table className="conversation-index-table">
                 <colgroup>
-                  <col style={{ width: '58%' }} />
-                  <col style={{ width: '24%' }} />
-                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '26%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '12%' }} />
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>会话</th>
-                    <th>状态</th>
-                    <th>时间</th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'session' ? 'active' : ''}`} onClick={() => toggleConversationSort('session')}>
+                        会话
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'session' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'user' ? 'active' : ''}`} onClick={() => toggleConversationSort('user')}>
+                        用户名
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'user' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'executor' ? 'active' : ''}`} onClick={() => toggleConversationSort('executor')}>
+                        执行器
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'executor' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'session_id' ? 'active' : ''}`} onClick={() => toggleConversationSort('session_id')}>
+                        会话 ID
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'session_id' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'status' ? 'active' : ''}`} onClick={() => toggleConversationSort('status')}>
+                        状态
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'status' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'updated_at' ? 'active' : ''}`} onClick={() => toggleConversationSort('updated_at')}>
+                        最近活跃
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'updated_at' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button type="button" className={`runtime-sort-btn ${conversationSort.key === 'created_at' ? 'active' : ''}`} onClick={() => toggleConversationSort('created_at')}>
+                        创建时间
+                        <span className="runtime-sort-indicator">{conversationSort.key === 'created_at' ? (conversationSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {conversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="empty">暂无对话会话。</td>
+                      <td colSpan={7} className="empty">暂无对话会话。</td>
                     </tr>
                   ) : filteredConversationSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="empty">当前筛选条件下无会话。</td>
+                      <td colSpan={7} className="empty">当前筛选条件下无会话。</td>
                     </tr>
                   ) : (
                     filteredConversationSessions.map((session) => {
@@ -8308,72 +8640,67 @@ export default function App() {
                       const statusText = statusLabel(session.status);
                       const stageDisplay = stageLabel !== '-' && stageLabel !== statusText ? stageLabel : null;
                       const executorText = session.executor ? executorLabel(session.executor) : null;
-                      const pendingSummary = session.pendingQuestion
-                        ? summarizeText(session.pendingQuestion, 96)
-                        : session.status === 'waiting_user'
-                          ? '等待用户补充信息'
-                          : session.status === 'failed'
-                            ? '执行受阻，等待排查'
-                            : session.status === 'completed'
-                              ? '对话已完成'
-                              : '当前没有待确认问题';
-                      const progressMeta = session.pendingOptions?.length
-                        ? `待确认 ${session.pendingOptions.length} 项`
-                        : session.status === 'in_progress'
-                          ? '系统处理中'
-                          : session.status === 'waiting_user'
-                            ? '等待用户回复'
-                            : session.status === 'failed'
-                              ? '需要人工处理'
-                              : '流程已结束';
                       const sourceUserLabel = conversationUserLabel(session.user);
                       const sourceUserMeta = conversationUserMeta(session.user);
+                      const titleText = session.title || session.id;
                       return (
                         <tr
                           key={session.id}
                           className={`${isSelected ? 'selected-row' : ''} conversation-index-row`}
-                          onClick={() => openConversationDialog(session.id, 'overview')}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              openConversationDialog(session.id, 'overview');
-                            }
-                          }}
                           aria-selected={isSelected}
-                          aria-label={`打开会话 ${session.title || session.id} 的详情`}
-                          role="button"
-                          tabIndex={0}
                         >
                           <td>
                             <div className="runtime-primary-cell conversation-index-primary-cell">
-                              <p className="conversation-index-title" title={session.title || session.id}>{session.title || session.id}</p>
-                              <p className="conversation-index-summary" title={pendingSummary}>{pendingSummary}</p>
-                              <div className="conversation-index-meta-row" title={sourceUserMeta}>
-                                <span className="conversation-index-meta-pill conversation-index-meta-pill-user">
-                                  {sourceUserLabel}
-                                </span>
-                                {executorText ? <span className="conversation-index-meta-pill">{executorText}</span> : null}
-                                <span className="conversation-index-meta-pill conversation-index-meta-pill-id mono" title={session.id}>
-                                  {truncateMiddle(session.id, 10, 8)}
-                                </span>
-                              </div>
+                              <button
+                                type="button"
+                                className="link-btn sandbox-jump-btn conversation-index-title"
+                                title={titleText}
+                                onClick={() => openConversationDialog(session.id, 'overview')}
+                              >
+                                {titleText}
+                              </button>
                             </div>
                           </td>
                           <td>
-                            <div className="conversation-index-status-stack">
-                              <div className="action-inline conversation-index-status-row">
-                                <span className={stateClassName(session.status)}>{statusText}</span>
-                                {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
-                              </div>
-                              <p className="conversation-index-status-summary">{progressMeta}</p>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-user-text" title={sourceUserMeta}>
+                                {sourceUserLabel}
+                              </span>
                             </div>
                           </td>
                           <td>
-                            <div className="conversation-index-time-cell">
-                              <strong>{formatDateTime(session.updatedAt)}</strong>
-                              <span>{formatRelativeTime(session.updatedAt)}</span>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-text" title={executorText || '-'}>
+                                {executorText || '-'}
+                              </span>
                             </div>
-                            <p className="conversation-index-time-meta">创建于 {formatDateTime(session.createdAt)}</p>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-session-id mono" title={session.id}>
+                                {truncateMiddle(session.id, 10, 8)}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-status-cell">
+                              <span className={stateClassName(session.status)}>{statusText}</span>
+                              {stageDisplay ? <span className="session-status">{stageDisplay}</span> : null}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-time-text" title={formatDateTime(session.updatedAt)}>
+                                {formatCompactRelativeTime(session.updatedAt)}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="conversation-index-compact-cell">
+                              <span className="conversation-index-time-text" title={formatDateTime(session.createdAt)}>
+                                {formatDateTime(session.createdAt)}
+                              </span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -8631,29 +8958,6 @@ export default function App() {
       liveSandboxIdSet.size === 0
         ? sandboxRegistryItems
         : sandboxRegistryItems.filter((item) => liveSandboxIdSet.has(item.sandboxId));
-    const summary = {
-      total: sandboxOverview?.summary.total ?? currentScopeItems.length,
-      running:
-        sandboxOverview?.summary.running ??
-        currentScopeItems.filter((item) => item.sandboxState === 'running' || (!item.sandboxState && item.status === 'ready')).length,
-      paused: sandboxOverview?.summary.paused ?? currentScopeItems.filter((item) => item.sandboxState === 'paused').length,
-      pendingArchive: currentScopeItems.filter((item) => item.pendingArchiveUpdate || item.archiveStatus === 'pending_update').length,
-      archiveFailed: currentScopeItems.filter((item) => item.archiveStatus === 'failed').length,
-      risky: currentScopeItems.filter((item) => item.riskTags.length > 0).length,
-    };
-    const riskyItems = currentScopeItems
-      .filter((item) => item.riskTags.length > 0)
-      .sort((a, b) => b.riskTags.length - a.riskTags.length || toTimestamp(b.lastActiveAt || b.updatedAt) - toTimestamp(a.lastActiveAt || a.updatedAt))
-      .slice(0, 6);
-    const executorDistribution = Array.from(
-      currentScopeItems.reduce((acc, item) => {
-        const key = item.executor || 'unknown';
-        acc.set(key, (acc.get(key) || 0) + 1);
-        return acc;
-      }, new Map<string, number>())
-    )
-      .map(([label, value]) => ({ label: executorLabel(label), value }))
-      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
     const executorOptions = Array.from(new Set(sandboxRegistryItems.map((item) => item.executor).filter(Boolean))).sort();
     const statusOptions = Array.from(
       new Set([
@@ -8663,30 +8967,16 @@ export default function App() {
         'pending_archive',
       ])
     ).sort();
-    const runtimeQuickStatusFilters = [
-      { label: '全部', value: 'all', count: summary?.total ?? 0, meta: '全部 Sandbox' },
-      { label: '运行中', value: 'running', count: summary?.running ?? 0, meta: '运行中的 Sandbox' },
-      { label: '暂停中', value: 'paused', count: summary?.paused ?? 0, meta: '暂停且不计费' },
-      { label: '待归档', value: 'pending_archive', count: summary?.pendingArchive ?? 0, meta: '待归档更新' },
-    ];
     const riskOptions = Array.from(new Set(currentScopeItems.flatMap((item) => item.riskTags))).sort((a, b) =>
       sandboxRiskLabel(a).localeCompare(sandboxRiskLabel(b), 'zh-Hans-CN', { sensitivity: 'base' })
     );
-    const templateSummary = {
-      total: templates.length,
-      aliased: templates.filter((item) => templateAliasOf(item)).length,
-      lastUpdatedAt: templates
-        .map((item) => ((item as any).updatedAt ?? (item as any).createdAt ?? null) as string | null)
-        .sort((a, b) => toTimestamp(b) - toTimestamp(a))[0] || null,
-    };
     const loadedRuntimeCount = sandboxRegistryItems.length;
-    const runtimeRemainingCapacity = Math.max(0, SANDBOX_RUNTIME_MAX_PAGE_SIZE - sandboxRegistryLimit);
-    const runtimeLoadMoreStep = Math.min(SANDBOX_RUNTIME_LOAD_MORE_STEP, runtimeRemainingCapacity);
-    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore && runtimeRemainingCapacity > 0);
-    const runtimeReachedLoadLimit = Boolean(sandboxRuntimeRegistry?.hasMore && runtimeRemainingCapacity <= 0);
+    const runtimeLoadMoreStep = SANDBOX_RUNTIME_LOAD_MORE_STEP;
+    const canLoadMoreRuntime = Boolean(sandboxRuntimeRegistry?.hasMore);
     const loadMoreTargetCount = Math.max(loadedRuntimeCount, sandboxRegistryLimit);
     const loadMoreRangeStart = loadedRuntimeCount + 1;
     const loadMoreRangeEnd = loadMoreTargetCount;
+    const liveSummaryAge = formatCompactRelativeTime(sandboxLiveSummary?.countedAt, sandboxLiveSummaryClock);
     const runtimeFilteredItems = sandboxRegistryItems
       .filter((item) => {
         const query = sandboxRuntimeQuery.trim().toLowerCase();
@@ -8723,8 +9013,6 @@ export default function App() {
         delta = (a.executor || '').localeCompare(b.executor || '', 'zh-Hans-CN', { sensitivity: 'base' });
       } else if (runtimeSort.key === 'status') {
         delta = (a.sandboxState || a.status || '').localeCompare(b.sandboxState || b.status || '', 'zh-Hans-CN', { sensitivity: 'base' });
-      } else if (runtimeSort.key === 'risk') {
-        delta = a.riskTags.length - b.riskTags.length;
       } else if (runtimeSort.key === 'last_active') {
         delta =
           toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt) - toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt);
@@ -8734,8 +9022,6 @@ export default function App() {
         return runtimeSort.direction === 'asc' ? delta : -delta;
       }
 
-      const riskDelta = b.riskTags.length - a.riskTags.length;
-      if (riskDelta !== 0) return riskDelta;
       return toTimestamp(b.lastActiveAt || b.updatedAt || b.createdAt) - toTimestamp(a.lastActiveAt || a.updatedAt || a.createdAt);
     });
     const runtimeSkeletonRowCount = runtimeItems.length > 0 && sandboxRegistryLoadingMore ? 4 : 0;
@@ -8820,123 +9106,24 @@ export default function App() {
     const portListAgeLabel = sandboxPortFetchedAt
       ? `这是 ${Math.max(0, Math.floor((sandboxToolSnapshotClock - sandboxPortFetchedAt) / 1000))} 秒前的端口列表`
       : '等待刷新端口列表';
+    const renderSandboxToolbarActions = () => (
+      <div className="sandbox-workspace-actions">
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => setSandboxCreateDrawerOpen(true)}
+        >
+          新建 Sandbox
+        </button>
+        <button type="button" className="secondary-btn template-workbench-open-btn" onClick={openTemplateWorkbench}>
+          模板
+        </button>
+      </div>
+    );
 
     return (
       <>
-        <main className={`content-stack sandbox-page${sandboxTab === 'runtime' ? ' viewport-lock-page sandbox-page-runtime' : ''}`}>
-          <section className="panel fade-in">
-            <div className="panel-header">
-              <div>
-                <h2>Sandbox 工作区</h2>
-                <span className="panel-caption">主工作区切换</span>
-              </div>
-              <button
-                type="button"
-                className="primary-btn"
-                onClick={() => setSandboxCreateDrawerOpen(true)}
-              >
-                新建 Sandbox
-              </button>
-            </div>
-            <div className="button-grid button-grid-three">
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'overview' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('overview')}
-              >
-                概览
-              </button>
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'runtime' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('runtime')}
-              >
-                Sandbox
-              </button>
-              <button
-                type="button"
-                className={`secondary-btn ${sandboxTab === 'templates' ? 'active' : ''}`}
-                onClick={() => setSandboxTab('templates')}
-              >
-                模板
-              </button>
-            </div>
-          </section>
-
-          {sandboxTab === 'overview' ? (
-            <>
-              <section className="kpi-grid fade-in">
-                <article className="kpi-card">
-                  <p className="kpi-title">Sandbox 服务</p>
-                  <p className="kpi-value">{sandboxApi?.online ? '在线' : '离线'}</p>
-                  <p className="kpi-meta">{sandboxApi?.service || '-'}</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">暂停中</p>
-                  <p className="kpi-value">{summary?.paused ?? 0}</p>
-                  <p className="kpi-meta">不计费状态</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">待归档</p>
-                  <p className="kpi-value">{summary?.pendingArchive ?? 0}</p>
-                  <p className="kpi-meta">待归档更新</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">高风险 Sandbox</p>
-                  <p className="kpi-value">{summary?.risky ?? 0}</p>
-                  <p className="kpi-meta">需人工排查</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">归档失败</p>
-                  <p className="kpi-value">{summary?.archiveFailed ?? 0}</p>
-                  <p className="kpi-meta">归档失败</p>
-                </article>
-              </section>
-
-              <section className="chart-grid fade-in">
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>执行器分布</h2>
-                    <span className="panel-caption">按执行器统计</span>
-                  </div>
-                  <div className="compact-list">
-                    {executorDistribution.map((item) => (
-                      <div key={item.label} className="compact-item">
-                        <strong>{item.label}</strong>
-                        <span className="session-status">{item.value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-
-                <article className="panel">
-                  <div className="panel-header">
-                    <h2>风险关注</h2>
-                    <span className="panel-caption">按状态和原因筛选</span>
-                  </div>
-                  <div className="compact-list">
-                    {riskyItems.length === 0 ? (
-                      <p className="empty">当前没有高风险 Sandbox。</p>
-                    ) : (
-                      riskyItems.map((item) => (
-                        <div key={item.sandboxId} className="compact-item">
-                          <div>
-                            <strong>{item.taskSessionId || item.sandboxId}</strong>
-                            <p className="session-meta">{item.riskTags.map((risk) => sandboxRiskLabel(risk)).join(' / ')}</p>
-                          </div>
-                          <button type="button" className="secondary-btn" onClick={() => void openSandboxDetail(item.sandboxId)}>
-                            查看
-                          </button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-              </section>
-            </>
-          ) : null}
-
-          {sandboxTab === 'runtime' ? (
+        <main className="content-stack sandbox-page viewport-lock-page sandbox-page-runtime">
             <section className="sandbox-runtime-layout fade-in">
               <article className="panel sandbox-runtime-main">
                 <div className="panel-header">
@@ -8948,31 +9135,43 @@ export default function App() {
                         : `已加载 ${loadedRuntimeCount} 条，当前筛选命中 ${runtimeItems.length} 条`}
                     </span>
                   </div>
-                  <span className="session-status sandbox-live-count">
-                    E2B 当前 live：{sandboxLiveSummary?.total ?? '-'}
-                  </span>
+                  <div className="sandbox-list-header-actions">
+                    <div className="session-status sandbox-live-count" aria-live="polite">
+                      <span className="sandbox-live-metric sandbox-live-metric-total">
+                        <span>全部</span>
+                        <strong>{sandboxLiveSummary?.total ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-metric sandbox-live-metric-paused">
+                        <span>暂停</span>
+                        <strong>{sandboxLiveSummary?.paused ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-metric sandbox-live-metric-running">
+                        <span>运行</span>
+                        <strong>{sandboxLiveSummary?.running ?? '-'}</strong>
+                      </span>
+                      <span className="sandbox-live-age" title={formatDateTime(sandboxLiveSummary?.countedAt)}>
+                        {liveSummaryAge}
+                      </span>
+                      <button
+                        type="button"
+                        className={`sandbox-live-refresh-btn ${sandboxLiveSummaryRefreshing ? 'is-refreshing' : ''}`}
+                        onClick={refreshSandboxLiveSummary}
+                        disabled={sandboxLiveSummaryRefreshing}
+                        aria-label="刷新 E2B live 数量"
+                      >
+                        ↻
+                      </button>
+                    </div>
+                    {renderSandboxToolbarActions()}
+                  </div>
                 </div>
-                <div className="runtime-quick-filters">
-                  {runtimeQuickStatusFilters.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      className={`toggle-btn runtime-quick-filter runtime-status-group-item ${sandboxStatusFilter === item.value ? 'active' : ''}`}
-                      onClick={() => setSandboxStatusFilter(item.value)}
-                    >
-                      <span className="runtime-status-group-main">{item.label}</span>
-                      <span className="runtime-status-group-meta">{item.meta}</span>
-                      <span className="session-status runtime-status-group-count">{item.count}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="runtime-filter-grid">
+                <div className="runtime-filter-grid sandbox-runtime-filter-grid">
                   <label className="state-filter-field">
                     <span>搜索 Sandbox</span>
                     <input
                       type="text"
                       value={sandboxRuntimeQuery}
-                      placeholder="sessionId / sandboxId / template"
+                      placeholder="sessionId / sandboxId"
                       onChange={(event) => setSandboxRuntimeQuery(event.target.value)}
                     />
                   </label>
@@ -9009,6 +9208,13 @@ export default function App() {
                       ))}
                     </select>
                   </label>
+                  <button
+                    type="button"
+                    className="secondary-btn sandbox-filter-reset-btn"
+                    onClick={resetSandboxRuntimeFilters}
+                  >
+                    重置筛选
+                  </button>
                 </div>
                 {runtimeItems.length === 0 ? (
                   <p className="empty runtime-empty-state">当前筛选条件下没有 Sandbox 记录</p>
@@ -9016,11 +9222,10 @@ export default function App() {
                 <div className="table-wrap table-wrap-runtime" aria-busy={sandboxRegistryLoadingMore}>
                   <table className="runtime-table">
                     <colgroup>
-                      <col style={{ width: `${runtimeColumnWidths.task_session}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.sandbox}px` }} />
+                      <col style={{ width: `${runtimeColumnWidths.task_session}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.executor}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.status}px` }} />
-                      <col style={{ width: `${runtimeColumnWidths.risk}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.last_active}px` }} />
                       <col style={{ width: `${runtimeColumnWidths.actions}px` }} />
                     </colgroup>
@@ -9028,20 +9233,20 @@ export default function App() {
                       <tr>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'task_session' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('task_session')}>
-                              会话 ID
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'task_session' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'sandbox' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('sandbox')}>
+                              ID
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'sandbox' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                             </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('task_session', event)} />
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('sandbox', event)} />
                           </div>
                         </th>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'sandbox' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('sandbox')}>
-                              Sandbox
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'sandbox' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'task_session' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('task_session')}>
+                              会话
+                              <span className="runtime-sort-indicator">{runtimeSort.key === 'task_session' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
                             </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('sandbox', event)} />
+                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('task_session', event)} />
                           </div>
                         </th>
                         <th>
@@ -9064,15 +9269,6 @@ export default function App() {
                         </th>
                         <th>
                           <div className="runtime-th-wrap">
-                            <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'risk' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('risk')}>
-                              风险摘要
-                              <span className="runtime-sort-indicator">{runtimeSort.key === 'risk' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
-                            </button>
-                            <span className="runtime-col-resize-handle" onMouseDown={(event) => beginRuntimeColumnResize('risk', event)} />
-                          </div>
-                        </th>
-                        <th>
-                          <div className="runtime-th-wrap">
                             <button type="button" className={`runtime-sort-btn ${runtimeSort.key === 'last_active' ? 'active' : ''}`} onClick={() => toggleRuntimeSort('last_active')}>
                               最近活跃
                               <span className="runtime-sort-indicator">{runtimeSort.key === 'last_active' ? (runtimeSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
@@ -9091,7 +9287,7 @@ export default function App() {
                     <tbody>
                       {runtimeItems.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="empty">
+                          <td colSpan={6} className="empty">
                             {sandboxRegistryLoadingMore ? '正在扩展已加载范围，请稍候...' : '当前筛选条件下没有 Sandbox 记录'}
                           </td>
                         </tr>
@@ -9101,33 +9297,31 @@ export default function App() {
                             <td>
                               <div className="runtime-primary-cell">
                                 <div className="runtime-id-row">
-                                  {item.taskSessionId ? (
-                                    <button
-                                      type="button"
-                                      className="link-btn sandbox-jump-btn mono"
-                                      title={item.taskSessionId}
-                                      onClick={() => openConversationSessionFromSandbox(item.taskSessionId)}
-                                    >
-                                      {truncateMiddle(item.taskSessionId, 8, 6)}
-                                    </button>
-                                  ) : (
-                                    <strong title="-">-</strong>
-                                  )}
+                                  <button
+                                    type="button"
+                                    className="link-btn sandbox-jump-btn mono"
+                                    title={item.sandboxId}
+                                    onClick={() => void openSandboxDetail(item.sandboxId)}
+                                  >
+                                    {truncateMiddle(item.sandboxId, 8, 6)}
+                                  </button>
                                 </div>
-                                <p className="session-meta">{item.taskTitle || item.taskStatus || '-'}</p>
                               </div>
                             </td>
                             <td>
                               <div className="runtime-primary-cell">
                                 <div className="runtime-id-row">
-                                  <span className="mono mono-truncate" title={item.sandboxId}>{truncateMiddle(item.sandboxId, 8, 6)}</span>
+                                  <span className="mono mono-truncate" title={item.taskSessionId || '-'}>
+                                    {item.taskSessionId ? truncateMiddle(item.taskSessionId, 8, 6) : '-'}
+                                  </span>
                                 </div>
-                                <p className="session-meta" title={item.template || '-'}>{item.template || '-'}</p>
+                                {item.taskTitle ? <p className="session-meta">{item.taskTitle}</p> : null}
                               </div>
                             </td>
                             <td>
-                              <strong>{executorLabel(item.executor)}</strong>
-                              <p className="session-meta">{item.codexExecutionMode || '-'}</p>
+                              <strong className="runtime-one-line" title={item.codexExecutionMode || executorLabel(item.executor)}>
+                                {executorLabel(item.executor)}
+                              </strong>
                             </td>
                             <td>
                               <div className="runtime-status-stack">
@@ -9138,57 +9332,12 @@ export default function App() {
                                     <span className="session-status session-status-governance">已处理</span>
                                   ) : null}
                                 </div>
-                                <p className="session-meta">
-                                  归档 {archiveStatusLabel(item.archiveStatus || 'none')}
-                                  {item.pendingArchiveUpdate ? ' · 有待同步变更' : ''}
-                                </p>
-                                {item.status === 'closed' && (item.dedupeReplacementSandboxId || item.dedupeReplacedAt) ? (
-                                  <div className="runtime-governance-note">
-                                    <p className="session-meta">{sandboxDedupeReasonLabel(item.dedupeReason)}</p>
-                                    <p className="session-meta">
-                                      {item.dedupeReplacementSandboxId ? (
-                                        <>
-                                          已由{' '}
-                                          <button
-                                            type="button"
-                                            className="link-btn sandbox-jump-btn"
-                                            onClick={() => {
-                                              const replacementSandboxId = item.dedupeReplacementSandboxId;
-                                              if (!replacementSandboxId) return;
-                                              void openSandboxDetail(replacementSandboxId);
-                                            }}
-                                          >
-                                            {sandboxJumpLabel(item.dedupeReplacementSandboxId)}
-                                          </button>{' '}
-                                          接管
-                                        </>
-                                      ) : (
-                                        '已由同任务的新 Sandbox 接管'
-                                      )}
-                                      {item.dedupeReplacedAt ? ` · ${formatDateTime(item.dedupeReplacedAt)}` : ''}
-                                    </p>
-                                  </div>
-                                ) : null}
                               </div>
                             </td>
                             <td>
-                              {item.riskTags.length === 0 ? (
-                                <span className="session-status">正常</span>
-                              ) : (
-                                <div className="runtime-risk-cell">
-                                  <div className="runtime-risk-list">
-                                    {item.riskTags.slice(0, 2).map((risk) => (
-                                      <span key={risk} className="session-status">{sandboxRiskLabel(risk)}</span>
-                                    ))}
-                                    {item.riskTags.length > 2 ? <span className="session-status">+{item.riskTags.length - 2}</span> : null}
-                                  </div>
-                                  <p className="session-meta">{item.riskTags.length} 个风险标签</p>
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <div>{formatDateTime(item.lastActiveAt || item.updatedAt)}</div>
-                              <p className="session-meta">{item.lastActiveReason || '-'}</p>
+                              <div className="runtime-one-line runtime-last-active" title={item.lastActiveReason || formatDateTime(item.lastActiveAt || item.updatedAt)}>
+                                {formatDateTime(item.lastActiveAt || item.updatedAt)}
+                              </div>
                             </td>
                             <td className="runtime-col-actions">
                               <div className="action-inline runtime-actions">
@@ -9288,7 +9437,6 @@ export default function App() {
                           <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-chip" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
-                          <td><span className="runtime-skeleton runtime-skeleton-text" /></td>
                           <td><span className="runtime-skeleton runtime-skeleton-button" /></td>
                         </tr>
                       ))}
@@ -9320,113 +9468,10 @@ export default function App() {
                     </p>
                     {sandboxRegistryLoadMoreError ? <p className="runtime-load-error" role="status">加载更多失败，请重试。{sandboxRegistryLoadMoreError}</p> : null}
                   </div>
-                ) : runtimeReachedLoadLimit ? (
-                  <p className="session-meta runtime-load-feedback" aria-live="polite">
-                    已加载管理后台单次最多 {SANDBOX_RUNTIME_MAX_PAGE_SIZE} 条 Sandbox 记录，更早记录暂不在当前列表范围内。
-                  </p>
                 ) : null}
               </article>
 
             </section>
-          ) : null}
-
-          {sandboxTab === 'templates' ? (
-            <>
-              <section className="kpi-grid fade-in">
-                <article className="kpi-card">
-                  <p className="kpi-title">模板总数</p>
-                  <p className="kpi-value">{templateSummary.total}</p>
-                  <p className="kpi-meta">来自 E2B</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">已设置别名</p>
-                  <p className="kpi-value">{templateSummary.aliased}</p>
-                  <p className="kpi-meta">可直接识别的模板数量</p>
-                </article>
-                <article className="kpi-card">
-                  <p className="kpi-title">最近更新时间</p>
-                  <p className="kpi-value">{formatDateTime(templateSummary.lastUpdatedAt)}</p>
-                  <p className="kpi-meta">模板治理优先看最近改动</p>
-                </article>
-              </section>
-
-              <section className="panel fade-in">
-                <div className="panel-header">
-                  <h2>模板列表</h2>
-                  <span className="panel-caption">模板列表</span>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>模板 ID</th>
-                        <th>别名/名称</th>
-                        <th>状态</th>
-                        <th>更新时间</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {templates.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="empty">
-                            暂无模板记录
-                          </td>
-                        </tr>
-                      ) : (
-                        templates.map((item, idx) => {
-                          const templateId = (item as any).templateID ?? (item as any).templateId ?? `template-${idx}`;
-                          const name = item.alias || (item as any).name || '-';
-                          return (
-                            <tr key={templateId}>
-                              <td className="mono">{templateId}</td>
-                              <td>{name}</td>
-                              <td>{templateStatusLabel((item as any).status ?? '-')}</td>
-                              <td>{formatDateTime((item as any).updatedAt ?? (item as any).createdAt)}</td>
-                              <td>
-                                <div className="action-inline">
-                                  <button type="button" className="table-btn" onClick={() => void openTemplateDetail(templateId)}>
-                                    查看
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              <section className="panel fade-in">
-                <div className="panel-header">
-                  <h2>模板动作</h2>
-                  <span className="panel-caption">创建模板与批量标签维护</span>
-                </div>
-                <div className="form-stack">
-                  <p className="muted">使用 JSON 触发创建、批量分配标签或删除标签。别名设置已收进模板详情。</p>
-                  <textarea
-                    className="input-area"
-                    rows={6}
-                    value={templateActionPayload}
-                    onChange={(event) => setTemplateActionPayload(event.target.value)}
-                  />
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('create')}>
-                      创建模板
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-assign')}>
-                      分配标签
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('tags-delete')}>
-                      删除标签
-                    </button>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : null}
         </main>
 
         {sandboxModalOpen && sandboxRuntimeDetail ? (
@@ -10445,159 +10490,258 @@ export default function App() {
           </div>
         ) : null}
 
-        {templateModalOpen && templateDetail ? (
+        {templateModalOpen ? (
           <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closeTemplateDetail}>
             <div
-              className="modal-card"
+              className="modal-card template-workbench-modal"
               onClick={(event) => {
                 event.stopPropagation();
               }}
             >
               <div className="modal-header">
                 <div>
-                  <p className="section-tag">模板详情</p>
-                  <h2>{currentTemplateAlias || currentTemplateId || '模板详情'}</h2>
+                  <p className="section-tag">模板工作台</p>
+                  <h2>{templateWorkbenchTitle}</h2>
+                  <p className="panel-caption">{templateWorkbenchCaption}</p>
                 </div>
                 <button type="button" className="secondary-btn" onClick={closeTemplateDetail}>
                   关闭
                 </button>
               </div>
-              <div className="detail-grid modal-grid">
-                <article className="sub-panel">
-                  <p className="kpi-title">模板摘要</p>
-                  <div className="validation-result">
-                    <div>模板 ID: {currentTemplateId || '-'}</div>
-                    <div>当前别名: {currentTemplateAlias || '未设置'}</div>
-                    <div>状态: {templateStatusLabel(String((templateDetail as any).status ?? '-'))}</div>
-                    <div>更新时间: {formatDateTime((templateDetail as any).updatedAt ?? (templateDetail as any).createdAt)}</div>
-                  </div>
-                  <details className="template-raw-details">
-                    <summary>查看原始详情</summary>
-                    <pre className="json-block">{toJsonText(templateDetail)}</pre>
-                  </details>
-                </article>
-                <article className="sub-panel">
-                  <p className="kpi-title">别名设置</p>
-                  <label className="form-field">
-                    <span>模板别名</span>
-                    <input
-                      className="control-input"
-                      placeholder="例如：opencode-playwright-min"
-                      value={templateAliasDraft}
-                      onChange={(event) => {
-                        setTemplateAliasDraft(event.target.value);
-                        setTemplateAliasResult(null);
-                      }}
-                    />
-                  </label>
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" disabled={!templateAliasDraft.trim()} onClick={() => void checkAlias()}>
-                      检查是否可用
-                    </button>
+              <div className="template-workbench-layout">
+                <aside className="template-workbench-sidebar">
+                  <div className="template-workbench-sidebar-head">
+                    <div className="template-workbench-sidebar-head-meta">
+                      <strong>模板列表</strong>
+                      <span>{templates.length} 个</span>
+                    </div>
                     <button
                       type="button"
-                      className="primary-btn"
-                      disabled={!templateAliasDraft.trim() || templateAliasDraft.trim() === currentTemplateAlias}
-                      onClick={() => void saveTemplateAlias()}
+                      className="secondary-btn template-workbench-create-trigger"
+                      onClick={openTemplateCreateWorkbench}
                     >
-                      保存别名
+                      新建模板
                     </button>
                   </div>
-                  {templateAliasResult ? (
-                    <div className={`alias-check-card ${templateAliasCheck.state}`}>
-                      <strong>{templateAliasCheck.message}</strong>
-                      <span>
-                        {templateAliasDraft.trim() || '-'}
-                        {templateAliasCheck.targetTemplateId ? ` · ${templateAliasCheck.targetTemplateId}` : ''}
-                      </span>
+                  <div className="template-workbench-list">
+                    {templates.length === 0 ? (
+                      <p className="empty template-workbench-empty-text">暂无模板记录</p>
+                    ) : (
+                      templates.map((item, idx) => {
+                        const templateId = (item as any).templateID ?? (item as any).templateId ?? `template-${idx}`;
+                        const alias = item.alias || (item as any).name || '未设置';
+                        const updatedAt = item.updatedAt || item.createdAt || null;
+                        const isActive = currentTemplateId === templateId;
+                        return (
+                          <button
+                            key={templateId}
+                            type="button"
+                            className={`template-workbench-item ${isActive ? 'active' : ''}`}
+                            onClick={() => void openTemplateDetail(templateId)}
+                          >
+                            <div className="template-workbench-item-head">
+                              <strong title={templateId}>{truncateMiddle(templateId, 10, 8)}</strong>
+                              <span>{templateStatusLabel(String(item.status ?? '-'))}</span>
+                            </div>
+                            <span className="template-workbench-item-alias" title={alias}>
+                              {alias}
+                            </span>
+                            <span className="template-workbench-item-meta" title={updatedAt ? formatDateTime(updatedAt) : undefined}>
+                              {updatedAt ? `更新于 ${formatRelativeTime(updatedAt)}` : '等待更新'}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </aside>
+
+                <div className="template-workbench-main">
+                  {templateWorkbenchMode === 'create' ? (
+                    <div className="template-workbench-detail-stack">
+                      <article className="sub-panel template-workbench-create-panel">
+                        <div className="template-workbench-create-head">
+                          <div>
+                            <p className="kpi-title">新建模板</p>
+                            <p className="panel-caption">填写模板创建 payload JSON，创建完成后自动切到新模板详情。</p>
+                          </div>
+                          {templateDetail ? (
+                            <button
+                              type="button"
+                              className="secondary-btn"
+                              onClick={() => setTemplateWorkbenchMode('detail')}
+                            >
+                              返回当前模板
+                            </button>
+                          ) : null}
+                        </div>
+                        <textarea
+                          className="input-area template-workbench-create-input"
+                          rows={14}
+                          placeholder="填写 E2B TemplateBuildRequest JSON"
+                          value={templateActionPayload}
+                          onChange={(event) => setTemplateActionPayload(event.target.value)}
+                        />
+                        <div className="button-grid">
+                          <button type="button" className="secondary-btn" onClick={() => setTemplateActionPayload('{}')}>
+                            重置
+                          </button>
+                          <button type="button" className="primary-btn" onClick={() => void runTemplateAction('create')}>
+                            创建模板
+                          </button>
+                        </div>
+                        <p className="panel-caption">这里直接复用现有模板创建接口；成功后会刷新左侧模板列表并切到详情视图。</p>
+                      </article>
+                    </div>
+                  ) : templateDetail ? (
+                    <div className="template-workbench-detail-stack">
+                      <div className="detail-grid modal-grid template-workbench-detail-grid">
+                        <article className="sub-panel">
+                          <p className="kpi-title">模板摘要</p>
+                          <div className="validation-result">
+                            <div>模板 ID: {currentTemplateId || '-'}</div>
+                            <div>当前别名: {currentTemplateAlias || '未设置'}</div>
+                            <div>状态: {templateStatusLabel(String((templateDetail as any).status ?? '-'))}</div>
+                            <div>更新时间: {formatDateTime((templateDetail as any).updatedAt ?? (templateDetail as any).createdAt)}</div>
+                          </div>
+                          <details className="template-raw-details">
+                            <summary>查看原始详情</summary>
+                            <pre className="json-block">{toJsonText(templateDetail)}</pre>
+                          </details>
+                        </article>
+                        <article className="sub-panel">
+                          <p className="kpi-title">别名设置</p>
+                          <label className="form-field">
+                            <span>模板别名</span>
+                            <input
+                              className="control-input"
+                              placeholder="例如：opencode-playwright-min"
+                              value={templateAliasDraft}
+                              onChange={(event) => {
+                                setTemplateAliasDraft(event.target.value);
+                                setTemplateAliasResult(null);
+                              }}
+                            />
+                          </label>
+                          <div className="button-grid">
+                            <button type="button" className="secondary-btn" disabled={!templateAliasDraft.trim()} onClick={() => void checkAlias()}>
+                              检查是否可用
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-btn"
+                              disabled={!templateAliasDraft.trim() || templateAliasDraft.trim() === currentTemplateAlias}
+                              onClick={() => void saveTemplateAlias()}
+                            >
+                              保存别名
+                            </button>
+                          </div>
+                          {templateAliasResult ? (
+                            <div className={`alias-check-card ${templateAliasCheck.state}`}>
+                              <strong>{templateAliasCheck.message}</strong>
+                              <span>
+                                {templateAliasDraft.trim() || '-'}
+                                {templateAliasCheck.targetTemplateId ? ` · ${templateAliasCheck.targetTemplateId}` : ''}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className="panel-caption">别名检测已从模板首页移除，收敛到详情内作为辅助动作。</p>
+                          )}
+                        </article>
+                      </div>
+
+                      <article className="sub-panel">
+                        <p className="kpi-title">模板操作</p>
+                        <textarea
+                          className="input-area"
+                          rows={4}
+                          value={templateActionPayload}
+                          onChange={(event) => setTemplateActionPayload(event.target.value)}
+                        />
+                        <div className="button-grid">
+                          <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('update')}>
+                            更新模板
+                          </button>
+                          <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
+                            重建模板
+                          </button>
+                        </div>
+                        <div className="danger-zone">
+                          <p className="panel-caption">危险操作单独放置，避免与别名设置和常规维护混用。</p>
+                          <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
+                            删除模板
+                          </button>
+                        </div>
+                      </article>
+
+                      {(templateDetail as any)?.builds ? (
+                        <div className="panel template-workbench-build-panel">
+                          <div className="panel-header">
+                            <h2>构建记录</h2>
+                            <span className="panel-caption">用于查看当前模板最近构建状态</span>
+                          </div>
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>构建 ID</th>
+                                  <th>状态</th>
+                                  <th>创建时间</th>
+                                  <th>操作</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(templateDetail as any).builds.map((build: any) => (
+                                  <tr key={build.buildID || build.buildId}>
+                                    <td className="mono">{build.buildID || build.buildId}</td>
+                                    <td>{templateStatusLabel(build.status || '-')}</td>
+                                    <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
+                                    <td>
+                                      <div className="action-inline">
+                                        <button
+                                          type="button"
+                                          className="table-btn"
+                                          onClick={() =>
+                                            void loadTemplateBuildLogs(
+                                              (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                              build.buildID || build.buildId
+                                            )
+                                          }
+                                        >
+                                          日志
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="table-btn"
+                                          onClick={() =>
+                                            void loadTemplateBuildStatus(
+                                              (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
+                                              build.buildID || build.buildId
+                                            )
+                                          }
+                                        >
+                                          状态
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {templateBuildLogs ? <pre className="json-block">{toJsonText(templateBuildLogs)}</pre> : null}
+                          {templateBuildStatus ? <pre className="json-block">{toJsonText(templateBuildStatus)}</pre> : null}
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
-                    <p className="panel-caption">别名检测已从模板首页移除，收敛到详情内作为辅助动作。</p>
+                    <article className="sub-panel template-workbench-empty">
+                      <p className="kpi-title">模板详情</p>
+                      <p className="panel-caption">从左侧选择模板后查看摘要、别名设置和构建记录。</p>
+                    </article>
                   )}
-                </article>
-                <article className="sub-panel">
-                  <p className="kpi-title">模板操作</p>
-                  <textarea
-                    className="input-area"
-                    rows={4}
-                    value={templateActionPayload}
-                    onChange={(event) => setTemplateActionPayload(event.target.value)}
-                  />
-                  <div className="button-grid">
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('update')}>
-                      更新模板
-                    </button>
-                    <button type="button" className="secondary-btn" onClick={() => void runTemplateAction('rebuild')}>
-                      重建模板
-                    </button>
-                  </div>
-                  <div className="danger-zone">
-                    <p className="panel-caption">危险操作单独放置，避免与别名设置和常规维护混用。</p>
-                    <button type="button" className="table-btn danger" onClick={() => void runTemplateAction('delete')}>
-                      删除模板
-                    </button>
-                  </div>
-                </article>
-              </div>
-              {(templateDetail as any)?.builds ? (
-                <div className="panel">
-                  <div className="panel-header">
-                    <h2>构建记录</h2>
-                    <span className="panel-caption">用于查看当前模板最近构建状态</span>
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>构建 ID</th>
-                          <th>状态</th>
-                          <th>创建时间</th>
-                          <th>操作</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(templateDetail as any).builds.map((build: any) => (
-                          <tr key={build.buildID || build.buildId}>
-                            <td className="mono">{build.buildID || build.buildId}</td>
-                            <td>{templateStatusLabel(build.status || '-')}</td>
-                            <td>{formatDateTime(build.createdAt || build.startedAt)}</td>
-                            <td>
-                              <div className="action-inline">
-                                <button
-                                  type="button"
-                                  className="table-btn"
-                                  onClick={() =>
-                                    void loadTemplateBuildLogs(
-                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-                                      build.buildID || build.buildId
-                                    )
-                                  }
-                                >
-                                  日志
-                                </button>
-                                <button
-                                  type="button"
-                                  className="table-btn"
-                                  onClick={() =>
-                                    void loadTemplateBuildStatus(
-                                      (templateDetail as any).templateID ?? (templateDetail as any).templateId ?? '',
-                                      build.buildID || build.buildId
-                                    )
-                                  }
-                                >
-                                  状态
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {templateBuildLogs ? <pre className="json-block">{toJsonText(templateBuildLogs)}</pre> : null}
-                  {templateBuildStatus ? <pre className="json-block">{toJsonText(templateBuildStatus)}</pre> : null}
                 </div>
-              ) : null}
+              </div>
             </div>
           </div>
         ) : null}
@@ -10670,30 +10814,55 @@ export default function App() {
     </div>
   );
 
-  const renderAuditSection = () => (
+  const renderAuditSection = () => {
+    const auditDetailSubject = auditDetail
+      ? auditDetail.entry.targetVmId || auditDetail.entry.sessionId || auditDetail.entry.id
+      : '-';
+    const sortedAuditRelatedEntries = auditDetail
+      ? [...auditDetail.relatedEntries].sort((left, right) => {
+          const delta = toTimestamp(right.timestamp) - toTimestamp(left.timestamp);
+          if (delta !== 0) return delta;
+          return right.id.localeCompare(left.id, 'zh-Hans-CN', { sensitivity: 'base' });
+        })
+      : [];
+
+    return (
     <>
       <main className="content-stack viewport-lock-page audit-page">
         <section className="fade-in">
           <article className="panel hero-panel">
-            <div className="panel-header panel-header-stack">
+            <div className="panel-header audit-hero-header">
               <div>
                 <p className="section-tag">审计摘要</p>
                 <h2>管理动作与失败排查</h2>
               </div>
-              <span className="service-state ok">按时间倒序展示</span>
-            </div>
-            <div className="hero-metrics">
-              <div>
-                <span className="hero-metric-label">筛选结果</span>
-                <strong>{auditSummary.total}</strong>
-              </div>
-              <div>
-                <span className="hero-metric-label">成功</span>
-                <strong>{auditSummary.success}</strong>
-              </div>
-              <div>
-                <span className="hero-metric-label">失败</span>
-                <strong>{auditSummary.failed}</strong>
+              <div className="sandbox-list-header-actions audit-hero-actions">
+                <div className="audit-live-summary-strip session-status sandbox-live-count" aria-label="审计日志摘要">
+                  <span className="sandbox-live-metric sandbox-live-metric-total">
+                    <span>全部</span>
+                    <strong>{auditSummary.total}</strong>
+                  </span>
+                  <span className="sandbox-live-metric sandbox-live-metric-running">
+                    <span>成功</span>
+                    <strong>{auditSummary.success}</strong>
+                  </span>
+                  <span className="sandbox-live-metric audit-live-metric-failed">
+                    <span>失败</span>
+                    <strong>{auditSummary.failed}</strong>
+                  </span>
+                  <span className="sandbox-live-age" title={formatDateTime(auditSummaryFetchedAt)}>
+                    {auditSummaryAge}
+                  </span>
+                  <button
+                    type="button"
+                    className={`sandbox-live-refresh-btn ${auditSummaryRefreshing ? 'is-refreshing' : ''}`}
+                    onClick={() => void refreshAuditSummary()}
+                    disabled={auditSummaryRefreshing}
+                    aria-label="刷新审计日志"
+                  >
+                    ↻
+                  </button>
+                </div>
               </div>
             </div>
           </article>
@@ -10704,31 +10873,17 @@ export default function App() {
             <div className="audit-filter-toolbar-copy">
               <p className="section-tag">筛选条件</p>
               <h2>筛选条件</h2>
-              <span className="panel-caption">按操作人、动作、结果、实例和时间快速定位。</span>
-            </div>
-            <div className="audit-filter-toolbar-meta">
-              <span className="audit-filter-meta-pill">当前 {auditEntries.length} 条</span>
-              <span className="audit-filter-meta-pill">
-                {auditActiveFilterCount > 0 ? `已生效 ${auditActiveFilterCount} 项` : '未启用筛选'}
-              </span>
-              <div className="action-inline audit-filter-actions">
-                <button type="button" className="primary-btn" onClick={() => void applyAuditFilters()}>
-                  应用筛选
-                </button>
-                <button type="button" className="secondary-btn" onClick={() => void resetAuditFilters()}>
-                  重置
-                </button>
-              </div>
+              <span className="panel-caption">按关键词、操作人、动作、结果和时间快速定位。</span>
             </div>
           </div>
-          <div className="audit-filter-grid">
-            <label className="audit-filter-field audit-filter-field-wide">
+          <div className="audit-filter-grid audit-filter-grid-compact">
+            <label className="audit-filter-field">
               <span>搜索</span>
               <input
                 className="control-input"
                 placeholder="日志 ID、详情、实例、会话"
                 value={auditFilters.query}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, query: event.target.value }))}
               />
             </label>
             <label className="audit-filter-field">
@@ -10736,7 +10891,7 @@ export default function App() {
               <select
                 className="control-input"
                 value={auditFilters.operator}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, operator: event.target.value }))}
               >
                 <option value="all">全部操作人</option>
                 {auditOperatorOptions.map((item) => (
@@ -10751,7 +10906,7 @@ export default function App() {
               <select
                 className="control-input"
                 value={auditFilters.action}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, action: event.target.value }))}
               >
                 <option value="all">全部动作</option>
                 {auditActionOptions.map((item) => (
@@ -10766,7 +10921,7 @@ export default function App() {
               <select
                 className="control-input"
                 value={auditFilters.result}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, result: event.target.value }))}
               >
                 <option value="all">全部结果</option>
                 <option value="success">成功</option>
@@ -10774,30 +10929,12 @@ export default function App() {
               </select>
             </label>
             <label className="audit-filter-field">
-              <span>会话</span>
-              <input
-                className="control-input"
-                placeholder="会话 ID"
-                value={auditFilters.sessionId}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, sessionId: event.target.value }))}
-              />
-            </label>
-            <label className="audit-filter-field">
-              <span>实例</span>
-              <input
-                className="control-input"
-                placeholder="目标实例 ID"
-                value={auditFilters.targetVmId}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, targetVmId: event.target.value }))}
-              />
-            </label>
-            <label className="audit-filter-field">
               <span>开始时间</span>
               <input
                 className="control-input"
                 type="datetime-local"
                 value={auditFilters.from}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, from: event.target.value }))}
               />
             </label>
             <label className="audit-filter-field">
@@ -10806,9 +10943,14 @@ export default function App() {
                 className="control-input"
                 type="datetime-local"
                 value={auditFilters.to}
-                onChange={(event) => setAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
+                onChange={(event) => updateAuditFilters((previous) => ({ ...previous, to: event.target.value }))}
               />
             </label>
+            <div className="audit-filter-actions">
+              <button type="button" className="secondary-btn" onClick={resetAuditFilters}>
+                重置筛选
+              </button>
+            </div>
           </div>
         </section>
 
@@ -10823,13 +10965,48 @@ export default function App() {
             <table className="audit-table">
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th>动作</th>
-                  <th>结果</th>
-                  <th>操作人</th>
-                  <th>目标实例</th>
-                  <th>会话</th>
-                  <th>详情</th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'id' ? 'active' : ''}`} onClick={() => toggleAuditSort('id')}>
+                      日志 ID
+                      <span className="runtime-sort-indicator">{auditSort.key === 'id' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'time' ? 'active' : ''}`} onClick={() => toggleAuditSort('time')}>
+                      时间
+                      <span className="runtime-sort-indicator">{auditSort.key === 'time' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'action' ? 'active' : ''}`} onClick={() => toggleAuditSort('action')}>
+                      动作
+                      <span className="runtime-sort-indicator">{auditSort.key === 'action' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'result' ? 'active' : ''}`} onClick={() => toggleAuditSort('result')}>
+                      结果
+                      <span className="runtime-sort-indicator">{auditSort.key === 'result' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'operator' ? 'active' : ''}`} onClick={() => toggleAuditSort('operator')}>
+                      操作人
+                      <span className="runtime-sort-indicator">{auditSort.key === 'operator' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'target' ? 'active' : ''}`} onClick={() => toggleAuditSort('target')}>
+                      目标实例
+                      <span className="runtime-sort-indicator">{auditSort.key === 'target' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className={`runtime-sort-btn ${auditSort.key === 'session' ? 'active' : ''}`} onClick={() => toggleAuditSort('session')}>
+                      会话
+                      <span className="runtime-sort-indicator">{auditSort.key === 'session' ? (auditSort.direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+                    </button>
+                  </th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -10841,8 +11018,18 @@ export default function App() {
                     </td>
                   </tr>
                 ) : (
-                  auditEntries.map((entry) => (
+                  sortedAuditEntries.map((entry) => (
                     <tr key={entry.id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="link-btn sandbox-jump-btn mono audit-id-link"
+                          title={entry.id}
+                          onClick={() => void openAuditDetail(entry.id)}
+                        >
+                          {truncateMiddle(entry.id, 10, 8)}
+                        </button>
+                      </td>
                       <td>{formatDateTime(entry.timestamp)}</td>
                       <td>{auditActionLabel(entry.action)}</td>
                       <td>
@@ -10850,18 +11037,33 @@ export default function App() {
                       </td>
                       <td>{entry.operator}</td>
                       <td>
-                        <div className="audit-linked-cell">
-                          <span className="mono">{entry.targetVmId}</span>
-                          {entry.targetVmId ? renderAuditEntryActions({ ...entry, sessionId: undefined }) : null}
-                        </div>
+                        {entry.targetVmId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.targetVmId}
+                            onClick={() => openSandboxFromAudit(entry)}
+                          >
+                            {truncateMiddle(entry.targetVmId, 10, 8)}
+                          </button>
+                        ) : (
+                          <span className="mono">-</span>
+                        )}
                       </td>
                       <td>
-                        <div className="audit-linked-cell">
-                          <span className="mono">{entry.sessionId || '-'}</span>
-                          {entry.sessionId ? renderAuditEntryActions({ ...entry, targetVmId: '' }) : null}
-                        </div>
+                        {entry.sessionId ? (
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.sessionId}
+                            onClick={() => openConversationFromAudit(entry)}
+                          >
+                            {truncateMiddle(entry.sessionId, 10, 8)}
+                          </button>
+                        ) : (
+                          <span className="mono">-</span>
+                        )}
                       </td>
-                      <td>{entry.detail || '-'}</td>
                       <td>
                         <button type="button" className="table-btn" onClick={() => void openAuditDetail(entry.id)}>
                           查看详情
@@ -10879,71 +11081,177 @@ export default function App() {
       {auditDetail ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={() => setAuditDetail(null)}>
           <div
-            className="modal-card"
+            className="modal-card audit-detail-modal"
             onClick={(event) => {
               event.stopPropagation();
             }}
           >
-            <div className="modal-header">
+            <div className="modal-header audit-detail-modal-header">
               <div>
                 <p className="section-tag">审计详情</p>
-                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetail.entry.targetVmId}</h2>
+                <h2>{auditActionLabel(auditDetail.entry.action)} · {auditDetailSubject}</h2>
+                <p className="panel-caption">
+                  日志 {auditDetail.entry.id} · {formatDateTime(auditDetail.entry.timestamp)}
+                </p>
               </div>
-              <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
-                关闭
-              </button>
-            </div>
-            <div className={`detail-grid modal-grid audit-detail-grid ${auditDetail.relatedEntries.length === 0 ? 'audit-detail-grid-single' : ''}`}>
-              <article className="sub-panel">
-                <p className="kpi-title">当前记录</p>
-                <div className="validation-result">
-                  <div>日志 ID: {auditDetail.entry.id}</div>
-                  <div>时间: {formatDateTime(auditDetail.entry.timestamp)}</div>
-                  <div>动作: {auditActionLabel(auditDetail.entry.action)}</div>
-                  <div>结果: {auditResultLabel(auditDetail.entry.result)}</div>
-                  <div>操作人: {auditDetail.entry.operator}</div>
-                  <div>目标实例: {auditDetail.entry.targetVmId}</div>
-                  <div>会话 ID: {auditDetail.entry.sessionId || '-'}</div>
-                  <div>关联记录: {auditDetail.relatedEntries.length || 0}</div>
-                </div>
-                {(auditDetail.entry.sessionId || auditDetail.entry.targetVmId) ? (
-                  <div className="action-inline audit-detail-actions">
-                    {auditDetail.entry.sessionId ? (
-                      <button type="button" className="secondary-btn" onClick={() => openConversationFromAudit(auditDetail.entry)}>
-                        查看对应对话
-                      </button>
-                    ) : null}
-                    {auditDetail.entry.targetVmId ? (
-                      <button type="button" className="secondary-btn" onClick={() => openSandboxFromAudit(auditDetail.entry)}>
-                        查看对应 Sandbox
-                      </button>
-                    ) : null}
-                  </div>
+              <div className="audit-detail-header-actions">
+                {auditDetail.entry.sessionId ? (
+                  <button type="button" className="secondary-btn" onClick={() => openConversationFromAudit(auditDetail.entry)}>
+                    打开对话
+                  </button>
                 ) : null}
-                <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
+                {auditDetail.entry.targetVmId ? (
+                  <button type="button" className="secondary-btn" onClick={() => openSandboxFromAudit(auditDetail.entry)}>
+                    打开 Sandbox
+                  </button>
+                ) : null}
+                <button type="button" className="secondary-btn" onClick={() => setAuditDetail(null)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="audit-detail-summary-strip">
+              <span className={resultClassName(auditDetail.entry.result)}>{auditResultLabel(auditDetail.entry.result)}</span>
+              <span className="audit-detail-meta-pill">{auditActionLabel(auditDetail.entry.action)}</span>
+              <span className="audit-detail-meta-pill">{auditDetail.entry.operator || '-'}</span>
+              <span className="audit-detail-meta-pill">{auditDetail.relatedEntries.length} 条关联</span>
+            </div>
+            <div className="detail-grid modal-grid audit-detail-grid">
+              <article className="sub-panel audit-detail-primary-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>当前记录</h3>
+                    <p className="cell-subtle">先看当前动作与结果，再决定是否继续跳转或展开原始记录。</p>
+                  </div>
+                </div>
+                <div className="audit-detail-fact-grid">
+                  <div className="audit-detail-fact">
+                    <span>日志 ID</span>
+                    <strong className="mono">{auditDetail.entry.id}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>时间</span>
+                    <strong>{formatDateTime(auditDetail.entry.timestamp)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>动作</span>
+                    <strong>{auditActionLabel(auditDetail.entry.action)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>结果</span>
+                    <strong>{auditResultLabel(auditDetail.entry.result)}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>操作人</span>
+                    <strong>{auditDetail.entry.operator || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>目标实例</span>
+                    <strong className="mono">{auditDetail.entry.targetVmId || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>会话 ID</span>
+                    <strong className="mono">{auditDetail.entry.sessionId || '-'}</strong>
+                  </div>
+                  <div className="audit-detail-fact">
+                    <span>关联记录</span>
+                    <strong>{auditDetail.relatedEntries.length}</strong>
+                  </div>
+                </div>
+
+                <div className={`audit-detail-note-card ${auditDetail.entry.detail ? '' : 'is-empty'}`}>
+                  <span>说明</span>
+                  <p>{auditDetail.entry.detail || '没有额外说明。'}</p>
+                </div>
+
+                <details className="audit-detail-json-panel">
+                  <summary>查看原始记录</summary>
+                  <pre className="json-block">{toJsonText(auditDetail.entry)}</pre>
+                </details>
               </article>
-              {auditDetail.relatedEntries.length > 0 ? (
-                <article className="sub-panel">
-                  <p className="kpi-title">关联记录</p>
+
+              <article className="sub-panel audit-detail-sidebar-panel">
+                <div className="editor-header">
+                  <div>
+                    <h3>关联上下文</h3>
+                    <p className="cell-subtle">直接打开对应资源，或继续查看关联日志。</p>
+                  </div>
+                </div>
+                <div className="audit-detail-context-grid">
+                  <div className="audit-detail-context-card">
+                    <span>日志 ID</span>
+                    <strong className="mono">{auditDetail.entry.id}</strong>
+                  </div>
+                  {auditDetail.entry.targetVmId ? (
+                    <div className="audit-detail-context-card">
+                      <span>Sandbox</span>
+                      <button
+                        type="button"
+                        className="link-btn sandbox-jump-btn mono audit-id-link"
+                        title={auditDetail.entry.targetVmId}
+                        onClick={() => openSandboxFromAudit(auditDetail.entry)}
+                      >
+                        {truncateMiddle(auditDetail.entry.targetVmId, 10, 8)}
+                      </button>
+                    </div>
+                  ) : null}
+                  {auditDetail.entry.sessionId ? (
+                    <div className="audit-detail-context-card">
+                      <span>对话</span>
+                      <button
+                        type="button"
+                        className="link-btn sandbox-jump-btn mono audit-id-link"
+                        title={auditDetail.entry.sessionId}
+                        onClick={() => openConversationFromAudit(auditDetail.entry)}
+                      >
+                        {truncateMiddle(auditDetail.entry.sessionId, 10, 8)}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="editor-header audit-detail-section-head">
+                  <div>
+                    <h3>关联记录</h3>
+                    <p className="cell-subtle">按时间倒序展示，点击日志 ID 可继续查看细节。</p>
+                  </div>
+                </div>
+                {sortedAuditRelatedEntries.length > 0 ? (
                   <div className="audit-related-list">
-                    {auditDetail.relatedEntries.map((entry) => (
+                    {sortedAuditRelatedEntries.map((entry) => (
                       <article key={entry.id} className="audit-related-item">
-                        <strong>{auditActionLabel(entry.action)} · {auditResultLabel(entry.result)}</strong>
-                        <span>{formatDateTime(entry.timestamp)}</span>
-                        <span className="mono">{entry.sessionId || entry.targetVmId}</span>
+                        <div className="audit-related-head">
+                          <button
+                            type="button"
+                            className="link-btn sandbox-jump-btn mono audit-id-link"
+                            title={entry.id}
+                            onClick={() => void openAuditDetail(entry.id)}
+                          >
+                            {truncateMiddle(entry.id, 10, 8)}
+                          </button>
+                          <span className={resultClassName(entry.result)}>{auditResultLabel(entry.result)}</span>
+                        </div>
+                        <div className="audit-related-meta">
+                          <span>{auditActionLabel(entry.action)}</span>
+                          <span>{formatDateTime(entry.timestamp)}</span>
+                          <span>{entry.operator || '-'}</span>
+                        </div>
                         {(entry.sessionId || entry.targetVmId) ? renderAuditEntryActions(entry) : null}
-                        {entry.detail ? <p>{entry.detail}</p> : null}
+                        {entry.detail ? <p className="audit-related-detail">{entry.detail}</p> : null}
                       </article>
                     ))}
                   </div>
-                </article>
-              ) : null}
+                ) : (
+                  <p className="empty">没有其他关联记录。</p>
+                )}
+              </article>
             </div>
           </div>
         </div>
       ) : null}
     </>
   );
+  };
 
   const handleSidebarSectionOpen = (nextSection: SectionKey) => {
     sectionRefreshHandlerRef.current = null;
@@ -10973,6 +11281,99 @@ export default function App() {
 
   const renderContent = () => {
     if (loading) {
+      if (activeSection === 'sandbox') {
+        const completedCount = SANDBOX_LOAD_STEPS.filter((step) => sandboxLoadProgress.completed[step.key]).length;
+        const firstPendingIndex = SANDBOX_LOAD_STEPS.findIndex((step) => !sandboxLoadProgress.completed[step.key]);
+        const activeStep =
+          SANDBOX_LOAD_STEPS[firstPendingIndex >= 0 ? firstPendingIndex : SANDBOX_LOAD_STEPS.length - 1];
+        const elapsedSeconds = sandboxLoadProgress.startedAt
+          ? Math.max(1, Math.floor((sandboxLoadProgressClock - sandboxLoadProgress.startedAt) / 1000))
+          : 0;
+        const progressPercent =
+          completedCount === SANDBOX_LOAD_STEPS.length
+            ? 100
+            : Math.max(8, Math.round((completedCount / SANDBOX_LOAD_STEPS.length) * 100));
+
+        return (
+          <main className="content-stack sandbox-loading-page">
+            <section className="fade-in">
+              <article className="panel sandbox-loading-panel">
+                <div className="sandbox-loading-head">
+                  <div className="sandbox-loading-copy">
+                    <p className="section-tag">Sandbox 管理</p>
+                    <h2>正在同步 Sandbox 列表</h2>
+                    <p className="panel-caption">{activeStep.detail}</p>
+                  </div>
+                  <div className="sandbox-loading-status" aria-live="polite">
+                    <span className="sandbox-loading-status-dot" aria-hidden="true" />
+                    <strong>{completedCount}/{SANDBOX_LOAD_STEPS.length}</strong>
+                    <span>{elapsedSeconds > 0 ? `${elapsedSeconds}秒` : '准备中'}</span>
+                  </div>
+                </div>
+
+                <div
+                  className="sandbox-loading-progress-bar"
+                  role="progressbar"
+                  aria-label="Sandbox 数据加载进度"
+                  aria-valuemin={0}
+                  aria-valuemax={SANDBOX_LOAD_STEPS.length}
+                  aria-valuenow={completedCount}
+                >
+                  <span className="sandbox-loading-progress-fill" style={{ width: `${progressPercent}%` }} />
+                </div>
+
+                <div className="sandbox-loading-step-strip" aria-live="polite">
+                  {SANDBOX_LOAD_STEPS.map((step, index) => {
+                    const isDone = sandboxLoadProgress.completed[step.key];
+                    const isActive = !isDone && index === firstPendingIndex;
+                    return (
+                      <span
+                        key={step.key}
+                        className={`sandbox-loading-step${isDone ? ' is-done' : isActive ? ' is-active' : ''}`}
+                      >
+                        {step.label}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="sandbox-loading-preview" aria-hidden="true">
+                  <div className="sandbox-loading-live-preview">
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-pill">
+                      <span className="runtime-skeleton sandbox-loading-pill-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-live-age">
+                      <span className="runtime-skeleton sandbox-loading-age-skeleton" />
+                    </span>
+                    <span className="sandbox-loading-refresh">
+                      <span className="runtime-skeleton sandbox-loading-refresh-skeleton" />
+                    </span>
+                  </div>
+
+                  <div className="sandbox-loading-table-preview">
+                    {Array.from({ length: 6 }, (_, index) => (
+                      <div key={`sandbox-loading-row-${index}`} className="sandbox-loading-row-preview">
+                        <span className="runtime-skeleton sandbox-loading-skeleton-id" />
+                        <span className="runtime-skeleton sandbox-loading-skeleton-session" />
+                        <span className="runtime-skeleton runtime-skeleton-chip" />
+                        <span className="runtime-skeleton runtime-skeleton-chip" />
+                        <span className="runtime-skeleton sandbox-loading-skeleton-time" />
+                        <span className="runtime-skeleton runtime-skeleton-button" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </article>
+            </section>
+          </main>
+        );
+      }
       return <main className="loading-state">正在加载 {breadcrumbTitle} ...</main>;
     }
 

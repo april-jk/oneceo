@@ -242,11 +242,11 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   const getManagerTypeLabel = (type: Manager['type']) => {
     const labels = {
-      development: '开发',
-      operations: '运营',
-      maintenance: '运维',
-      research: '市场调研',
-      design: '设计',
+      development: t('projectDetail.managerTypes.development'),
+      operations: t('projectDetail.managerTypes.operations'),
+      maintenance: t('projectDetail.managerTypes.maintenance'),
+      research: t('projectDetail.managerTypes.research'),
+      design: t('projectDetail.managerTypes.design'),
       qa: 'QA',
     };
     return labels[type];
@@ -254,7 +254,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   const getManagerTypeColor = (type: Manager['type']) => {
     const colors = {
-      development: 'bg-blue-100 text-blue-700',
+      development: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       operations: 'bg-green-100 text-green-700',
       maintenance: 'bg-yellow-100 text-yellow-700',
       research: 'bg-purple-100 text-purple-700',
@@ -275,9 +275,9 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   const getPriorityLabel = (priority: Task['priority']) => {
     const labels = {
-      low: '低',
-      medium: '中',
-      high: '高',
+      low: t('projectDetail.priority.low'),
+      medium: t('projectDetail.priority.medium'),
+      high: t('projectDetail.priority.high'),
     };
     return labels[priority];
   };
@@ -287,7 +287,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
       case 'completed':
         return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'in-progress':
-        return <Clock className="w-4 h-4 text-blue-600" />;
+        return <Clock className="h-4 w-4 text-[var(--brand-link)]" />;
       case 'pending':
         return <Clock className="w-4 h-4 text-muted-foreground" />;
     }
@@ -295,9 +295,9 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
 
   const getStatusLabel = (status: Task['status']) => {
     const labels = {
-      pending: '待开始',
-      'in-progress': '进行中',
-      completed: '已完成',
+      pending: t('projectDetail.status.pending'),
+      'in-progress': t('projectDetail.status.inProgress'),
+      completed: t('projectDetail.status.completed'),
     };
     return labels[status];
   };
@@ -307,14 +307,14 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
     
     const styles = {
       perfect: 'bg-green-100 text-green-700',
-      acceptable: 'bg-blue-100 text-blue-700',
+      acceptable: 'border border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]',
       rejected: 'bg-red-100 text-red-700',
     };
     
     const labels = {
-      perfect: '完美',
-      acceptable: '可接受',
-      rejected: '不可接受',
+      perfect: t('projectDetail.evaluation.perfect'),
+      acceptable: t('projectDetail.evaluation.acceptable'),
+      rejected: t('projectDetail.evaluation.rejected'),
     };
     
     return (
@@ -333,71 +333,71 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
               {onBack && (
                 <Button variant="ghost" size="sm" onClick={onBack} className="gap-2 mb-3">
                   <ArrowLeft className="w-4 h-4" />
-                  返回项目列表
+                  {t('projectDetail.backToProjects')}
                 </Button>
               )}
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                <span>项目</span>
+                <span>{t('projectDetail.breadcrumbProjects')}</span>
                 <ChevronRight className="w-3 h-3" />
-                <span className="text-foreground font-medium">项目 {projectId}</span>
+                <span className="text-foreground font-medium">{t('projectDetail.projectNumber', { projectId })}</span>
               </div>
               <h1 className="text-2xl font-semibold text-foreground">
-                项目详情
+                {t('projectDetail.title')}
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                查看经理的任务分配和员工协作情况
+                {t('projectDetail.subtitle')}
               </p>
             </div>
             <Dialog open={createManagerOpen} onOpenChange={setCreateManagerOpen}>
               <DialogTrigger asChild>
                 <Button className="gap-2">
                   <Plus className="w-4 h-4" />
-                  创建经理
+                  {t('projectDetail.createManager')}
                 </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>创建新经理</DialogTitle>
+                  <DialogTitle>{t('projectDetail.createManagerTitle')}</DialogTitle>
                   <DialogDescription>
-                    为项目添加一个新的经理来管理特定模块
+                    {t('projectDetail.createManagerDescription')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="manager-name">经理名称</Label>
-                    <Input id="manager-name" placeholder="例如：开发经理" />
+                    <Label htmlFor="manager-name">{t('projectDetail.managerNameLabel')}</Label>
+                    <Input id="manager-name" placeholder={t('projectDetail.managerNamePlaceholder')} />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="manager-type">经理类型</Label>
+                    <Label htmlFor="manager-type">{t('projectDetail.managerTypeLabel')}</Label>
                     <Select>
                       <SelectTrigger>
-                        <SelectValue placeholder="选择经理类型" />
+                        <SelectValue placeholder={t('projectDetail.managerTypePlaceholder')} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="development">开发</SelectItem>
-                        <SelectItem value="operations">运营</SelectItem>
-                        <SelectItem value="maintenance">运维</SelectItem>
-                        <SelectItem value="research">市场调研</SelectItem>
-                        <SelectItem value="design">设计</SelectItem>
+                        <SelectItem value="development">{t('projectDetail.managerTypes.development')}</SelectItem>
+                        <SelectItem value="operations">{t('projectDetail.managerTypes.operations')}</SelectItem>
+                        <SelectItem value="maintenance">{t('projectDetail.managerTypes.maintenance')}</SelectItem>
+                        <SelectItem value="research">{t('projectDetail.managerTypes.research')}</SelectItem>
+                        <SelectItem value="design">{t('projectDetail.managerTypes.design')}</SelectItem>
                         <SelectItem value="qa">QA</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="manager-description">职责描述</Label>
+                    <Label htmlFor="manager-description">{t('projectDetail.managerDescriptionLabel')}</Label>
                     <Textarea
                       id="manager-description"
-                      placeholder="描述经理的主要职责..."
+                      placeholder={t('projectDetail.managerDescriptionPlaceholder')}
                       rows={3}
                     />
                   </div>
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="outline" onClick={() => setCreateManagerOpen(false)}>
-                    取消
+                    {t('common.cancel')}
                   </Button>
                   <Button onClick={() => setCreateManagerOpen(false)}>
-                    创建经理
+                    {t('projectDetail.createManager')}
                   </Button>
                 </div>
               </DialogContent>
@@ -443,7 +443,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                       <div className="flex items-center gap-4 text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
                           <Briefcase className="w-4 h-4" />
-                          <span>{manager.tasks.length} 个任务</span>
+                          <span>{t('projectDetail.taskCount', { count: manager.tasks.length })}</span>
                         </div>
                       </div>
                     </div>
@@ -460,7 +460,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                         <CardContent className="pt-0 space-y-3">
                           {manager.tasks.length === 0 ? (
                             <div className="text-center py-8 text-muted-foreground">
-                              暂无任务
+                              {t('projectDetail.noTasks')}
                             </div>
                           ) : (
                             manager.tasks.map((task) => (
@@ -495,7 +495,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                     <div className="flex items-center gap-4 text-sm text-muted-foreground flex-shrink-0 ml-4">
                                       <div className="flex items-center gap-1">
                                         <Users className="w-4 h-4" />
-                                        <span>{task.assignedEmployees.length} 名员工</span>
+                                        <span>{t('projectDetail.employeeCount', { count: task.assignedEmployees.length })}</span>
                                       </div>
                                       <div className="flex items-center gap-1">
                                         <Clock className="w-4 h-4" />
@@ -511,7 +511,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                         }}
                                       >
                                         <FolderOpen className="w-4 h-4" />
-                                        查看全部文档
+                                        {t('projectDetail.viewAllDocuments')}
                                       </Button>
                                     </div>
                                   </div>
@@ -530,7 +530,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                         <div className="space-y-2">
                                           <h4 className="text-sm font-medium text-foreground flex items-center gap-2">
                                             <Users className="w-4 h-4" />
-                                            协作员工
+                                            {t('projectDetail.collaborators')}
                                           </h4>
                                           {task.assignedEmployees.map((assignment) => (
                                             <div
@@ -565,7 +565,7 @@ export default function ProjectDetail({ projectId: propProjectId, onBack }: Proj
                                                   onClick={() => viewDeliverable(assignment.deliverable)}
                                                 >
                                                   <FileText className="w-4 h-4" />
-                                                  查看交付文档
+                                                  {t('projectDetail.viewDeliverable')}
                                                 </Button>
                                               )}
                                             </div>

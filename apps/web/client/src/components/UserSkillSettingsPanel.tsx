@@ -17,6 +17,8 @@ import {
   type TaskCreationUserSkillSettings,
 } from "@/lib/task-creation-client";
 import { notifyTaskCreationSkillsUpdated } from "@/lib/settings-dialog-events";
+import i18n from "@/i18n";
+import { useTranslation } from "react-i18next";
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -32,15 +34,20 @@ function normalizeSlug(value: string) {
 
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+  return new Date(value).toLocaleString(i18n.language === "zh" ? "zh-CN" : "en-US", {
+    hour12: false,
+  });
 }
 
 function formatResourceSummary(skill: TaskCreationPlatformSkill) {
   const summary = skill.resourceSummary;
   if (!summary || summary.totalCount <= 0) {
-    return "无额外资源";
+    return i18n.t("userSkillSettings.noExtraResources");
   }
-  return `${summary.referenceCount} 个参考，${summary.templateCount} 个模板`;
+  return i18n.t("userSkillSettings.resourceSummary", {
+    references: summary.referenceCount,
+    templates: summary.templateCount,
+  });
 }
 
 const EMPTY_FORM = {
@@ -72,6 +79,7 @@ type Props = {
 };
 
 export function UserSkillSettingsPanel({ onError }: Props) {
+  useTranslation();
   const [settings, setSettings] = useState<TaskCreationUserSkillSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState("");
@@ -107,7 +115,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
         }
       }
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "技能设置加载失败");
+      onError?.(
+        error instanceof Error ? error.message : i18n.t("userSkillSettings.loadFailed"),
+      );
     } finally {
       setLoading(false);
     }
@@ -139,7 +149,11 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       await loadSettings();
       notifyTaskCreationSkillsUpdated();
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "平台模板更新失败");
+      onError?.(
+        error instanceof Error
+          ? error.message
+          : i18n.t("userSkillSettings.updatePlatformFailed"),
+      );
     } finally {
       setBusyKey("");
     }
@@ -207,7 +221,11 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       await loadSettings();
       notifyTaskCreationSkillsUpdated();
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "自定义技能保存失败");
+      onError?.(
+        error instanceof Error
+          ? error.message
+          : i18n.t("userSkillSettings.saveCustomFailed"),
+      );
     } finally {
       setBusyKey("");
     }
@@ -252,7 +270,11 @@ export function UserSkillSettingsPanel({ onError }: Props) {
       await loadSettings();
       notifyTaskCreationSkillsUpdated();
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "自定义技能状态更新失败");
+      onError?.(
+        error instanceof Error
+          ? error.message
+          : i18n.t("userSkillSettings.toggleCustomFailed"),
+      );
     } finally {
       setBusyKey("");
     }
@@ -262,9 +284,11 @@ export function UserSkillSettingsPanel({ onError }: Props) {
     <div className="space-y-8">
       <section className="space-y-4 border-b border-border/60 pb-6">
         <div>
-          <Label className="text-sm font-medium">当前可用 skills</Label>
+          <Label className="text-sm font-medium">
+            {i18n.t("userSkillSettings.availableSkills")}
+          </Label>
           <p className="text-sm text-muted-foreground">
-            attachment picker 只会展示这里配置后的可用 skills。
+            {i18n.t("userSkillSettings.availableSkillsDescription")}
           </p>
         </div>
         <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
@@ -276,7 +300,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
               >
                 <span>{item.name}</span>
                 <span className="text-muted-foreground">
-                  {item.sourceType === "custom" ? "自定义" : "平台"}
+                  {item.sourceType === "custom"
+                    ? i18n.t("userSkillSettings.customSource")
+                    : i18n.t("userSkillSettings.platformSource")}
                 </span>
                 {item.resourceSummary?.totalCount ? (
                   <span className="text-muted-foreground">{formatResourceSummary(item)}</span>
@@ -284,7 +310,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
               </span>
             ))}
             {!settings?.availableSkills.length ? (
-              <span className="text-sm text-muted-foreground">暂无可用 skill</span>
+              <span className="text-sm text-muted-foreground">
+                {i18n.t("userSkillSettings.noAvailableSkill")}
+              </span>
             ) : null}
           </div>
         </div>
@@ -292,9 +320,11 @@ export function UserSkillSettingsPanel({ onError }: Props) {
 
       <section className="space-y-4 border-b border-border/60 pb-6">
         <div>
-          <Label className="text-sm font-medium">平台模板</Label>
+          <Label className="text-sm font-medium">
+            {i18n.t("userSkillSettings.platformTemplates")}
+          </Label>
           <p className="text-sm text-muted-foreground">
-            这些模板由管理端维护。启用后会直接进入你的可用 skills，并始终跟随平台最新 published revision。
+            {i18n.t("userSkillSettings.platformTemplatesDescription")}
           </p>
         </div>
         <div className="space-y-3">
@@ -313,7 +343,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                     rev.{skill.revisionNumber ?? "-"}
                   </span>
                 </div>
-                <p className="text-sm text-muted-foreground">{skill.description || "暂无描述"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {skill.description || i18n.t("userSkillSettings.noDescription")}
+                </p>
                 <p className="text-xs text-muted-foreground">{formatResourceSummary(skill)}</p>
               </div>
               <Button
@@ -323,24 +355,32 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                 disabled={busyKey === `platform:${skill.skillId}`}
                 onClick={() => void handleTogglePlatformSkill(skill)}
               >
-                {skill.enabled ? "移出我的 skills" : "加入我的 skills"}
+                {skill.enabled
+                  ? i18n.t("userSkillSettings.removeFromMySkills")
+                  : i18n.t("userSkillSettings.addToMySkills")}
               </Button>
             </div>
           ))}
-          {loading && !settings ? <p className="text-sm text-muted-foreground">加载中...</p> : null}
+          {loading && !settings ? (
+            <p className="text-sm text-muted-foreground">
+              {i18n.t("userSkillSettings.loading")}
+            </p>
+          ) : null}
         </div>
       </section>
 
       <section className="space-y-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <Label className="text-sm font-medium">自定义 skills</Label>
+            <Label className="text-sm font-medium">
+              {i18n.t("userSkillSettings.customSkills")}
+            </Label>
             <p className="text-sm text-muted-foreground">
-              这里维护你自己的纯数据库型技能。主正文会直接进入 skill 入口，渐进式文档会以 markdown 资源方式存储，按需在运行时加载。
+              {i18n.t("userSkillSettings.customSkillsDescription")}
             </p>
           </div>
           <Button type="button" className="rounded-xl" onClick={startCreateCustomSkill}>
-            新增 skills
+            {i18n.t("userSkillSettings.newSkills")}
           </Button>
         </div>
 
@@ -355,7 +395,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                       {skill.status}
                     </span>
                   </div>
-                  <p className="text-sm text-muted-foreground">{skill.description || "暂无描述"}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {skill.description || i18n.t("userSkillSettings.noDescription")}
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {skill.slug} · {formatDateTime(skill.updatedAt)}
                   </p>
@@ -367,7 +409,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                     className="rounded-xl"
                     onClick={() => startEditCustomSkill(skill)}
                   >
-                    编辑
+                    {i18n.t("userSkillSettings.edit")}
                   </Button>
                   <Button
                     type="button"
@@ -376,14 +418,18 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                     disabled={busyKey === `custom:status:${skill.id}`}
                     onClick={() => void handleToggleCustomStatus(skill)}
                   >
-                    {skill.status === "archived" ? "启用" : "归档"}
+                    {skill.status === "archived"
+                      ? i18n.t("userSkillSettings.enable")
+                      : i18n.t("userSkillSettings.archive")}
                   </Button>
                 </div>
               </div>
             </div>
           ))}
           {!settings?.customSkills.length ? (
-            <p className="text-sm text-muted-foreground">还没有自定义 skill。</p>
+            <p className="text-sm text-muted-foreground">
+              {i18n.t("userSkillSettings.noCustomSkill")}
+            </p>
           ) : null}
         </div>
 
@@ -397,10 +443,12 @@ export function UserSkillSettingsPanel({ onError }: Props) {
           <DialogContent className="flex h-[min(760px,calc(100vh-48px))] w-[min(921px,calc(100vw-32px))] max-w-[921px] flex-col rounded-3xl p-0 gap-0 overflow-hidden md:w-[min(973px,calc(100vw-32px))] md:max-w-[973px]">
             <DialogHeader className="border-b border-border/60 px-6 py-5 text-left">
               <DialogTitle className="text-lg text-foreground">
-                {editingCustomSkillId ? "编辑自定义 skill" : "新建自定义 skill"}
+                {editingCustomSkillId
+                  ? i18n.t("userSkillSettings.editCustomSkill")
+                  : i18n.t("userSkillSettings.newCustomSkill")}
               </DialogTitle>
               <DialogDescription className="text-sm text-muted-foreground">
-                用户态只支持纯数据库型 skills。文档相对路径会固定恢复到用户 skill 根目录下。
+                {i18n.t("userSkillSettings.editorDescription")}
               </DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
@@ -409,7 +457,7 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   <div className="rounded-2xl border border-border/60 bg-muted/20 p-4">
                     <div className="space-y-3">
                       <div className="space-y-2">
-                        <Label className="text-sm">Slug</Label>
+                        <Label className="text-sm">{i18n.t("userSkillSettings.slug")}</Label>
                         <Input
                           value={form.slug}
                           onChange={(event) => setForm((prev) => ({ ...prev, slug: event.target.value }))}
@@ -419,16 +467,16 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-sm">名称</Label>
+                        <Label className="text-sm">{i18n.t("userSkillSettings.name")}</Label>
                         <Input
                           value={form.name}
                           onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                          placeholder="我的自定义 skill"
+                          placeholder={i18n.t("userSkillSettings.namePlaceholder")}
                           className="rounded-xl"
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-sm">分类</Label>
+                        <Label className="text-sm">{i18n.t("userSkillSettings.category")}</Label>
                         <Input
                           value={form.category}
                           onChange={(event) => setForm((prev) => ({ ...prev, category: event.target.value }))}
@@ -437,11 +485,13 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-sm">描述</Label>
+                        <Label className="text-sm">
+                          {i18n.t("userSkillSettings.description")}
+                        </Label>
                         <Input
                           value={form.description}
                           onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                          placeholder="说明这个 skill 解决什么问题"
+                          placeholder={i18n.t("userSkillSettings.descriptionPlaceholder")}
                           className="rounded-xl"
                         />
                       </div>
@@ -450,19 +500,21 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                   <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <Label className="text-sm font-medium">渐进式文档</Label>
+                        <Label className="text-sm font-medium">
+                          {i18n.t("userSkillSettings.documents")}
+                        </Label>
                         <p className="text-xs text-muted-foreground">
-                          选择左侧文档后在右侧编辑正文。
+                          {i18n.t("userSkillSettings.documentsDescription")}
                         </p>
                       </div>
                       <Button type="button" variant="outline" className="rounded-xl" onClick={addDocument}>
-                        新增文档
+                        {i18n.t("userSkillSettings.addDocument")}
                       </Button>
                     </div>
                     <div className="mt-4 space-y-2">
                       {form.documents.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-border/60 px-3 py-4 text-xs text-muted-foreground">
-                          还没有渐进式文档。可以添加 `references/overview.md`、`design/rules.md` 这类纯 markdown 文档。
+                          {i18n.t("userSkillSettings.noDocuments")}
                         </div>
                       ) : (
                         form.documents.map((item, index) => (
@@ -476,8 +528,16 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                             }`}
                             onClick={() => setSelectedDocumentIndex(index)}
                           >
-                            <div className="text-sm font-medium">{item.title || item.documentPath || `文档 ${index + 1}`}</div>
-                            <div className="text-xs text-muted-foreground">{item.documentPath || "未设置路径"}</div>
+                            <div className="text-sm font-medium">
+                              {item.title ||
+                                item.documentPath ||
+                                i18n.t("userSkillSettings.documentDefaultTitle", {
+                                  index: index + 1,
+                                })}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {item.documentPath || i18n.t("userSkillSettings.unsetPath")}
+                            </div>
                           </button>
                         ))
                       )}
@@ -488,9 +548,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                 <div className="space-y-5 overflow-y-auto pr-1 lg:h-full lg:pr-2">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
-                      <Label className="text-sm">Skill 正文</Label>
+                      <Label className="text-sm">{i18n.t("userSkillSettings.body")}</Label>
                       <span className="text-xs text-muted-foreground">
-                        作为主入口说明直接参与 skill 激活
+                        {i18n.t("userSkillSettings.bodyDescription")}
                       </span>
                     </div>
                     <Textarea
@@ -507,7 +567,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                         <>
                           <div className="grid gap-3 md:grid-cols-2">
                             <div className="space-y-2">
-                              <Label className="text-sm">文档路径</Label>
+                              <Label className="text-sm">
+                                {i18n.t("userSkillSettings.documentPath")}
+                              </Label>
                               <Input
                                 value={selectedDocument.documentPath}
                                 onChange={(event) =>
@@ -518,7 +580,9 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label className="text-sm">文档 Key</Label>
+                              <Label className="text-sm">
+                                {i18n.t("userSkillSettings.documentKey")}
+                              </Label>
                               <Input
                                 value={selectedDocument.documentKey}
                                 onChange={(event) =>
@@ -531,30 +595,36 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                           </div>
                           <div className="grid gap-3 md:grid-cols-2">
                             <div className="space-y-2">
-                              <Label className="text-sm">标题</Label>
+                              <Label className="text-sm">
+                                {i18n.t("userSkillSettings.documentTitle")}
+                              </Label>
                               <Input
                                 value={selectedDocument.title}
                                 onChange={(event) =>
                                   updateDocument(selectedDocumentIndex, { title: event.target.value })
                                 }
-                                placeholder="总体说明"
+                                placeholder={i18n.t("userSkillSettings.documentTitlePlaceholder")}
                                 className="rounded-xl"
                               />
                             </div>
                             <div className="space-y-2">
-                              <Label className="text-sm">摘要</Label>
+                              <Label className="text-sm">
+                                {i18n.t("userSkillSettings.documentSummary")}
+                              </Label>
                               <Input
                                 value={selectedDocument.summary}
                                 onChange={(event) =>
                                   updateDocument(selectedDocumentIndex, { summary: event.target.value })
                                 }
-                                placeholder="告诉模型这份文档适合什么时候读"
+                                placeholder={i18n.t("userSkillSettings.documentSummaryPlaceholder")}
                                 className="rounded-xl"
                               />
                             </div>
                           </div>
                           <div className="space-y-2">
-                            <Label className="text-sm">Markdown 文档</Label>
+                            <Label className="text-sm">
+                              {i18n.t("userSkillSettings.documentMarkdown")}
+                            </Label>
                             <Textarea
                               value={selectedDocument.bodyMarkdown}
                               onChange={(event) =>
@@ -571,13 +641,13 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                               className="rounded-xl"
                               onClick={() => removeDocument(selectedDocumentIndex)}
                             >
-                              删除当前文档
+                              {i18n.t("userSkillSettings.deleteDocument")}
                             </Button>
                           </div>
                         </>
                       ) : (
                         <div className="rounded-xl border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
-                          选择左侧文档进行编辑，或先新增一份渐进式文档。
+                          {i18n.t("userSkillSettings.selectDocumentHint")}
                         </div>
                       )}
                     </div>
@@ -596,10 +666,12 @@ export function UserSkillSettingsPanel({ onError }: Props) {
                     }
                     onClick={() => void handleSaveCustomSkill()}
                   >
-                    {editingCustomSkillId ? "保存修改" : "创建 skill"}
+                    {editingCustomSkillId
+                      ? i18n.t("userSkillSettings.saveChanges")
+                      : i18n.t("userSkillSettings.createSkill")}
                   </Button>
                   <Button type="button" variant="outline" className="rounded-xl" onClick={resetForm}>
-                    重置
+                    {i18n.t("userSkillSettings.reset")}
                   </Button>
                 </div>
                 </div>
@@ -609,8 +681,12 @@ export function UserSkillSettingsPanel({ onError }: Props) {
         </Dialog>
 
         <div className="rounded-2xl border border-border/60 bg-background/80 p-4 text-sm text-muted-foreground">
-          当前已启用平台模板 {enabledPlatformIds.size} 个，自定义 active skills{" "}
-          {(settings?.customSkills || []).filter((item) => item.status === "active").length} 个。
+          {i18n.t("userSkillSettings.enabledSummary", {
+            platformCount: enabledPlatformIds.size,
+            customCount: (settings?.customSkills || []).filter(
+              (item) => item.status === "active",
+            ).length,
+          })}
         </div>
       </section>
     </div>

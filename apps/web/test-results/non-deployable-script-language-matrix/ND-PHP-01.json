@@ -1,0 +1,110 @@
+{
+  "id": "ND-PHP-01",
+  "description": "PHP CLI 脚本不应误部署",
+  "prompt": "请写一个 PHP 命令行脚本，用于日志汇总。不要做网站，也不要部署。",
+  "startedAt": "2026-04-19T15:11:50.431Z",
+  "passed": true,
+  "error": null,
+  "execution": {
+    "classification": "non_deployable_script",
+    "sessionId": "a6c0afc2-fb92-4d42-80f5-5b0913f56c2b",
+    "generationRunId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+    "workspaceEvidence": {
+      "itemCount": 3,
+      "matchedIndicators": [
+        "/\\.php$/i"
+      ]
+    },
+    "deploymentPanel": {
+      "bindingState": "uninitialized",
+      "latestStatus": null,
+      "latestUrl": null,
+      "latestStaticUrl": null
+    },
+    "evidence": {
+      "deployToolCalled": false,
+      "toolEvents": [
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 15,
+          "createdAt": "2026-04-19T23:12:04.178Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 179,
+          "createdAt": "2026-04-19T23:14:00.036Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 190,
+          "createdAt": "2026-04-19T23:14:03.369Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 209,
+          "createdAt": "2026-04-19T23:14:20.020Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 217,
+          "createdAt": "2026-04-19T23:14:23.084Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 227,
+          "createdAt": "2026-04-19T23:14:24.900Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 235,
+          "createdAt": "2026-04-19T23:14:26.759Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 249,
+          "createdAt": "2026-04-19T23:14:29.844Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 280,
+          "createdAt": "2026-04-19T23:14:48.578Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 289,
+          "createdAt": "2026-04-19T23:14:50.784Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "6b03c6a5-0a89-4837-af21-42238b18057d",
+          "sequence": 301,
+          "createdAt": "2026-04-19T23:14:58.202Z",
+          "toolName": "complete_task",
+          "content": "调用工具 complete_task"
+        }
+      ],
+      "autoAttachedMessages": []
+    }
+  },
+  "finishedAt": "2026-04-19T15:15:45.453Z",
+  "durationMs": 235023
+}

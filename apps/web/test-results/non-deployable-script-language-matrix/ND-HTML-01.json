@@ -1,0 +1,47 @@
+{
+  "id": "ND-HTML-01",
+  "description": "HTML 邮件模板不应误部署",
+  "prompt": "请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。",
+  "startedAt": "2026-04-19T14:59:03.215Z",
+  "passed": true,
+  "error": null,
+  "execution": {
+    "classification": "non_deployable_script",
+    "sessionId": "8eb73583-3008-4990-9d1e-34e9bfec77fd",
+    "generationRunId": "ec4cd1b6-79d6-4d2d-8c60-75bde9c60671",
+    "workspaceEvidence": {
+      "itemCount": 1,
+      "matchedIndicators": [
+        "/\\.(html?)$/i"
+      ]
+    },
+    "deploymentPanel": {
+      "bindingState": "uninitialized",
+      "latestStatus": null,
+      "latestUrl": null,
+      "latestStaticUrl": null
+    },
+    "evidence": {
+      "deployToolCalled": false,
+      "toolEvents": [
+        {
+          "runId": "ec4cd1b6-79d6-4d2d-8c60-75bde9c60671",
+          "sequence": 36,
+          "createdAt": "2026-04-19T22:59:42.510Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "ec4cd1b6-79d6-4d2d-8c60-75bde9c60671",
+          "sequence": 45,
+          "createdAt": "2026-04-19T22:59:47.099Z",
+          "toolName": "complete_task",
+          "content": "调用工具 complete_task"
+        }
+      ],
+      "autoAttachedMessages": []
+    }
+  },
+  "finishedAt": "2026-04-19T15:00:38.697Z",
+  "durationMs": 95482
+}

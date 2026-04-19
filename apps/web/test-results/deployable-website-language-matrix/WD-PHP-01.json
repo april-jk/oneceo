@@ -1,0 +1,277 @@
+{
+  "id": "WD-PHP-01",
+  "description": "PHP 网站应可部署",
+  "prompt": "请用 PHP 开发一个展示型企业网站，包含首页、产品页、公司介绍和联系页，只完成代码。",
+  "startedAt": "2026-04-19T14:51:02.225Z",
+  "passed": true,
+  "error": null,
+  "execution": {
+    "classification": "deployable_website",
+    "sessionId": "70c854ae-82f4-48c9-a2b2-9aee454da1c7",
+    "generationRunId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+    "deployRunId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+    "deployedUrl": "https://app-0998a585-7ac-6bc082-app-0998a585-7ac-6bc082.up.railway.app",
+    "workspaceEvidence": {
+      "itemCount": 14,
+      "matchedIndicators": [
+        "/(index|home|contact)\\.php/i"
+      ]
+    },
+    "deploymentPanel": {
+      "bindingState": "ready",
+      "latestStatus": "SUCCESS",
+      "latestUrl": null,
+      "latestStaticUrl": "https://app-0998a585-7ac-6bc082-app-0998a585-7ac-6bc082.up.railway.app"
+    },
+    "publicPage": {
+      "status": 200,
+      "excerpt": "<!DOCTYPE html> <html lang=\"zh-CN\"> <head> <meta charset=\"UTF-8\"> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"> <title>工业科技集团 - 首页</title> <link rel=\"stylesheet\" href=\"css/style.css\"> <link rel=\"stylesheet\" href=\"css/home.css\"> </head> <body> <!-- 导航栏 --> <header class=\"navbar\"> <div class=\"container\"> <div class=\"logo\"> <a href=\"index.html\">工业科技集团</a> </div> <nav class=\"nav-menu\"> <ul> <li><a href=\"index.html\" class=\"active\">首页</a></li> <li><a href=\"products.html\">产品中心<..."
+    },
+    "evidence": {
+      "deployToolCalled": true,
+      "toolEvents": [
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 13,
+          "createdAt": "2026-04-19T22:51:18.241Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 24,
+          "createdAt": "2026-04-19T22:51:20.362Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 94,
+          "createdAt": "2026-04-19T22:52:02.547Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 119,
+          "createdAt": "2026-04-19T22:52:11.659Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 135,
+          "createdAt": "2026-04-19T22:52:19.200Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 156,
+          "createdAt": "2026-04-19T22:52:29.786Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 175,
+          "createdAt": "2026-04-19T22:52:37.880Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 237,
+          "createdAt": "2026-04-19T22:53:08.652Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 308,
+          "createdAt": "2026-04-19T22:53:45.125Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 385,
+          "createdAt": "2026-04-19T22:54:43.727Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 442,
+          "createdAt": "2026-04-19T22:55:12.670Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 453,
+          "createdAt": "2026-04-19T22:55:16.833Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 466,
+          "createdAt": "2026-04-19T22:55:22.513Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 477,
+          "createdAt": "2026-04-19T22:55:26.126Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 490,
+          "createdAt": "2026-04-19T22:55:29.809Z",
+          "toolName": "list_directory",
+          "content": "调用工具 list_directory"
+        },
+        {
+          "runId": "daffc06c-2124-4e6c-8a78-7e8a61127026",
+          "sequence": 513,
+          "createdAt": "2026-04-19T22:55:44.142Z",
+          "toolName": "complete_task",
+          "content": "调用工具 complete_task"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 9,
+          "createdAt": "2026-04-19T22:55:50.072Z",
+          "toolName": "deploy_application",
+          "content": "正在准备发布应用"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 15,
+          "createdAt": "2026-04-19T22:55:51.798Z",
+          "toolName": "read_file",
+          "content": "调用工具 read_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 21,
+          "createdAt": "2026-04-19T22:55:53.568Z",
+          "toolName": "read_file",
+          "content": "调用工具 read_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 42,
+          "createdAt": "2026-04-19T22:56:06.952Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 49,
+          "createdAt": "2026-04-19T22:56:10.605Z",
+          "toolName": "deploy_application",
+          "content": "正在准备发布应用"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 55,
+          "createdAt": "2026-04-19T22:56:12.333Z",
+          "toolName": "read_file",
+          "content": "调用工具 read_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 67,
+          "createdAt": "2026-04-19T22:56:18.037Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 75,
+          "createdAt": "2026-04-19T22:56:22.391Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 95,
+          "createdAt": "2026-04-19T22:56:33.691Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 102,
+          "createdAt": "2026-04-19T22:56:36.184Z",
+          "toolName": "deploy_application",
+          "content": "正在准备发布应用"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 109,
+          "createdAt": "2026-04-19T22:56:38.282Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 136,
+          "createdAt": "2026-04-19T22:56:53.847Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 143,
+          "createdAt": "2026-04-19T22:56:57.327Z",
+          "toolName": "deploy_application",
+          "content": "正在准备发布应用"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 149,
+          "createdAt": "2026-04-19T22:56:59.414Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 155,
+          "createdAt": "2026-04-19T22:57:01.147Z",
+          "toolName": "shell_execute",
+          "content": "调用工具 shell_execute"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 172,
+          "createdAt": "2026-04-19T22:57:10.582Z",
+          "toolName": "write_file",
+          "content": "调用工具 write_file"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 179,
+          "createdAt": "2026-04-19T22:57:13.638Z",
+          "toolName": "deploy_application",
+          "content": "正在准备发布应用"
+        },
+        {
+          "runId": "b45992b8-5d15-4f5d-8c7d-c85625c7f7ab",
+          "sequence": 190,
+          "createdAt": "2026-04-19T22:58:04.860Z",
+          "toolName": "complete_task",
+          "content": "调用工具 complete_task"
+        }
+      ],
+      "autoAttachedMessages": []
+    }
+  },
+  "finishedAt": "2026-04-19T14:58:42.418Z",
+  "durationMs": 460194
+}

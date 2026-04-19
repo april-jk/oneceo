@@ -634,8 +634,8 @@ export const api = {
     request<AgentManagementOverview>('/api/agent-management/overview'),
   getSandboxManagementOverview: (limit = 50) =>
     request<SandboxManagementOverview>(`/api/sandbox-management/overview?limit=${limit}`),
-  getSandboxLiveSummary: () =>
-    request<SandboxLiveSummary>('/api/sandbox-management/live-summary', {
+  getSandboxLiveSummary: (options?: { forceRefresh?: boolean }) =>
+    request<SandboxLiveSummary>(`/api/sandbox-management/live-summary${options?.forceRefresh ? '?refresh=1' : ''}`, {
       timeoutMs: 30000,
       abortMessage: '加载 E2B Sandbox 数量超时，请稍后重试',
     }),

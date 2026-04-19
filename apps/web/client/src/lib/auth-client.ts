@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { getApiBaseUrl } from "@/lib/runtime-config";
 
 export type AppAuthUser = {
@@ -15,6 +16,11 @@ type AuthEnvelope<T> = {
 
 type AuthPayload = {
   user?: AppAuthUser;
+};
+
+type RegisterCodePayload = {
+  cooldownSeconds?: number;
+  expiresInSeconds?: number;
 };
 
 function resolveErrorMessage(payload: AuthEnvelope<unknown> | null, fallback: string) {
@@ -74,7 +80,7 @@ export async function loginAppUser(input: {
     body: JSON.stringify(input),
   });
   if (!result.user) {
-    throw new Error("登录返回缺少用户信息");
+    throw new Error(i18n.t("auth.missingLoginUser"));
   }
   return result.user;
 }
@@ -83,15 +89,25 @@ export async function registerAppUser(input: {
   email: string;
   password: string;
   displayName: string;
+  verificationCode: string;
 }): Promise<AppAuthUser> {
   const result = await requestAuth<AuthPayload>("/api/auth/register", {
     method: "POST",
     body: JSON.stringify(input),
   });
   if (!result.user) {
-    throw new Error("注册返回缺少用户信息");
+    throw new Error(i18n.t("auth.missingRegisterUser"));
   }
   return result.user;
+}
+
+export async function sendRegisterVerificationCode(input: {
+  email: string;
+}): Promise<RegisterCodePayload> {
+  return await requestAuth<RegisterCodePayload>("/api/auth/register/send-code", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function logoutAppUser(): Promise<void> {

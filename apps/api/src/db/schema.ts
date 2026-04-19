@@ -68,6 +68,25 @@ export const appUserSessions = pgTable(
   })
 );
 
+export const appUserEmailVerifications = pgTable(
+  'app_user_email_verifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull(),
+    purpose: text('purpose').notNull().default('register'),
+    codeHash: text('code_hash').notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+    consumedAt: timestamp('consumed_at'),
+    lastSentAt: timestamp('last_sent_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    emailPurposeUnique: uniqueIndex('idx_app_user_email_verifications_email_purpose').on(table.email, table.purpose),
+    expiresAtIdx: index('idx_app_user_email_verifications_expires_at').on(table.expiresAt),
+  })
+);
+
 export const adminUsers = pgTable(
   'admin_users',
   {
@@ -970,6 +989,37 @@ export const taskSessionMcpRecoveryJobs = pgTable(
   })
 );
 
+export const taskSessionDeploymentSyncJobs = pgTable(
+  'task_session_deployment_sync_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    taskSessionId: text('task_session_id').notNull(),
+    orchestratorSessionId: text('orchestrator_session_id').notNull(),
+    syncKey: text('sync_key').notNull(),
+    jobType: text('job_type').notNull().default('deployment_panel_sync'),
+    status: text('status').notNull().default('pending'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastError: text('last_error'),
+    payloadJson: jsonb('payload_json'),
+    nextRetryAt: timestamp('next_retry_at'),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    syncKeyUnique: uniqueIndex('idx_task_session_deployment_sync_jobs_sync_key').on(table.syncKey),
+    sessionStatusIdx: index('idx_task_session_deployment_sync_jobs_session_status').on(
+      table.taskSessionId,
+      table.status
+    ),
+    orchestratorIdx: index('idx_task_session_deployment_sync_jobs_orchestrator_session_id').on(
+      table.orchestratorSessionId
+    ),
+    nextRetryIdx: index('idx_task_session_deployment_sync_jobs_next_retry_at').on(table.nextRetryAt),
+  })
+);
+
 export const platformRuntimeArtifactReleases = pgTable(
   'platform_runtime_artifact_releases',
   {
@@ -1148,6 +1198,8 @@ export type TaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$infer
 export type NewTaskSessionConnectorGuide = typeof taskSessionConnectorGuides.$inferInsert;
 export type TaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferSelect;
 export type NewTaskSessionMcpRecoveryJob = typeof taskSessionMcpRecoveryJobs.$inferInsert;
+export type TaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferSelect;
+export type NewTaskSessionDeploymentSyncJob = typeof taskSessionDeploymentSyncJobs.$inferInsert;
 
 export type PlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferSelect;
 export type NewPlatformRuntimeArtifactRelease = typeof platformRuntimeArtifactReleases.$inferInsert;

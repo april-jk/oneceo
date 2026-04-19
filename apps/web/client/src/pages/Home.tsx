@@ -5,7 +5,15 @@
  * - 支持对话模式和任务创建智能体
  */
 
-import { useState, useRef, useEffect, useMemo, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -117,6 +125,8 @@ import {
 } from "@/lib/task-session-deployment-prompts";
 import { normalizeWorkspaceRelativePath } from "@/lib/workspace-path";
 import { resolveUserMessageReferences } from "@/lib/message-reference-parser";
+import { readAltusMode } from "@/lib/altus-settings";
+import i18n from "@/i18n";
 import { useLocation, useSearch } from "wouter";
 import { Streamdown } from "streamdown";
 
@@ -162,15 +172,6 @@ function escapeMessageKeySelector(value: string): string {
     return CSS.escape(value);
   }
   return value.replace(/["\\]/g, "\\$&");
-}
-
-function readAltusMode(): "sandbox" | "managed" {
-  if (typeof window === "undefined") return "sandbox";
-  try {
-    return window.localStorage.getItem("altus_mode") === "managed" ? "managed" : "sandbox";
-  } catch {
-    return "sandbox";
-  }
 }
 
 function readPersistedScrollAnchor(
@@ -257,6 +258,7 @@ function readPersistedPreviewState(
 }
 
 export default function Home() {
+  const { t } = useTranslation();
   const MESSAGE_SCROLL_CACHE_PREFIX = "task_creation_history_scroll:";
   const PREVIEW_STATE_CACHE_PREFIX = "task_creation_preview_state:";
   const [location] = useLocation();
@@ -275,12 +277,12 @@ export default function Home() {
   >([]);
   const [slashMcpCatalog, setSlashMcpCatalog] = useState<
     Array<{ key: string; name: string; category: string }>
-  >(
-    [],
-  );
+  >([]);
   const [slashCatalogLoaded, setSlashCatalogLoaded] = useState(false);
   const [slashCatalogLoading, setSlashCatalogLoading] = useState(false);
-  const [slashCatalogError, setSlashCatalogError] = useState<string | null>(null);
+  const [slashCatalogError, setSlashCatalogError] = useState<string | null>(
+    null,
+  );
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [showRuntimeDrawer, setShowRuntimeDrawer] = useState(false);
   const [altusReplayOpen, setAltusReplayOpen] = useState(false);
@@ -288,12 +290,14 @@ export default function Home() {
   const [altusReplayIndex, setAltusReplayIndex] = useState(0);
   const [pendingAltusReplayToolCallId, setPendingAltusReplayToolCallId] =
     useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
+    "pro",
+  );
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMaximized, setPreviewMaximized] = useState(false);
-  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<string | null>(
-    null,
-  );
+  const [previewWorkspacePath, setPreviewWorkspacePath] = useState<
+    string | null
+  >(null);
   const [previewTab, setPreviewTab] = useState<
     "files" | "changes" | "debug" | "deployment"
   >("files");
@@ -460,7 +464,9 @@ export default function Home() {
         const accounts = Array.isArray(connectorAccounts.accounts)
           ? connectorAccounts.accounts.filter(
               (item): item is (typeof connectorAccounts.accounts)[number] =>
-                Boolean(item && typeof item === "object" && "connectorKey" in item),
+                Boolean(
+                  item && typeof item === "object" && "connectorKey" in item,
+                ),
             )
           : [];
         const catalogByKey = new Map(
@@ -470,11 +476,15 @@ export default function Home() {
           .filter((item) => {
             if (item.authStatus !== "authorized") return false;
             const catalogItem = catalogByKey.get(item.connectorKey);
-            return Boolean(catalogItem?.available) && catalogItem?.category === "custom_mcp";
+            return (
+              Boolean(catalogItem?.available) &&
+              catalogItem?.category === "custom_mcp"
+            );
           })
           .map((item) => ({
             key: item.connectorKey,
-            name: catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
+            name:
+              catalogByKey.get(item.connectorKey)?.name || item.connectorKey,
             category: "custom_mcp",
           }));
         setSlashSkillCatalog(nextSkills);
@@ -488,7 +498,7 @@ export default function Home() {
         setSlashCatalogError(
           error instanceof Error && error.message
             ? error.message
-            : "引用项加载失败",
+            : t("homeWorkspace.referenceLoadFailed"),
         );
       } finally {
         if (cancelled) return;
@@ -511,7 +521,8 @@ export default function Home() {
       for (const skill of slashSkillCatalog) {
         const name = (skill.name || "").toLowerCase();
         const slug = (skill.slug || "").toLowerCase();
-        if (keyword && !name.includes(keyword) && !slug.includes(keyword)) continue;
+        if (keyword && !name.includes(keyword) && !slug.includes(keyword))
+          continue;
         const id = `skill:${skill.skillId}:${skill.revisionId}`;
         list.push({
           id,
@@ -533,7 +544,8 @@ export default function Home() {
       for (const item of slashMcpCatalog) {
         const name = (item.name || "").toLowerCase();
         const key = (item.key || "").toLowerCase();
-        if (keyword && !name.includes(keyword) && !key.includes(keyword)) continue;
+        if (keyword && !name.includes(keyword) && !key.includes(keyword))
+          continue;
         const id = `mcp:${item.key}`;
         list.push({
           id,
@@ -766,8 +778,13 @@ export default function Home() {
   };
 
   const removeComposerReference = (token: ComposerReferenceToken) => {
-    setComposerReferences((prev) => prev.filter((item) => item.id !== token.id));
-    setMessage((prev) => `${prev}${prev.endsWith(" ") || !prev ? "" : " "}${token.queryText} `);
+    setComposerReferences((prev) =>
+      prev.filter((item) => item.id !== token.id),
+    );
+    setMessage(
+      (prev) =>
+        `${prev}${prev.endsWith(" ") || !prev ? "" : " "}${token.queryText} `,
+    );
   };
 
   const applySlashSuggestion = (suggestion: SlashSuggestion) => {
@@ -805,7 +822,9 @@ export default function Home() {
       if (event.key === "ArrowUp") {
         event.preventDefault();
         setSlashActiveIndex((prev) =>
-          suggestionCount > 0 ? (prev - 1 + suggestionCount) % suggestionCount : 0,
+          suggestionCount > 0
+            ? (prev - 1 + suggestionCount) % suggestionCount
+            : 0,
         );
         return;
       }
@@ -825,7 +844,11 @@ export default function Home() {
       }
     }
 
-    if (event.key === "Backspace" && !message && composerReferences.length > 0) {
+    if (
+      event.key === "Backspace" &&
+      !message &&
+      composerReferences.length > 0
+    ) {
       event.preventDefault();
       const last = composerReferences[composerReferences.length - 1];
       if (last) {
@@ -910,13 +933,17 @@ export default function Home() {
     const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
     const hasReferences = referenceDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments || hasReferences ? "已添加引用" : "");
+    const displayText =
+      trimmed ||
+      (hasAttachments || hasReferences
+        ? t("homeWorkspace.referencesAdded")
+        : "");
     const baseText =
       trimmed ||
       (hasAttachments
         ? DEFAULT_ATTACHMENT_PROMPT
         : hasReferences
-          ? "请基于我刚刚引用的能力继续处理。"
+          ? t("homeWorkspace.processReferencedAbilities")
           : "");
     if (!baseText) return;
     const altusMode = readAltusMode();
@@ -972,8 +999,14 @@ export default function Home() {
           category: item.category,
         }));
       let activeSessionId = (sessionId || "").trim();
-      if (altusMode !== "managed" && uploadableAttachments.length > 0 && !activeSessionId) {
-        activeSessionId = await ensureSession(displayText || "新建任务会话");
+      if (
+        altusMode !== "managed" &&
+        uploadableAttachments.length > 0 &&
+        !activeSessionId
+      ) {
+        activeSessionId = await ensureSession(
+          displayText || t("homeWorkspace.newTaskSession"),
+        );
       }
 
       let uploadedAttachments: UploadedTaskAttachment[] = [];
@@ -987,43 +1020,45 @@ export default function Home() {
 
       exitHistoryView();
       if (altusMode === "managed") {
-        await sendChatInput(
-          baseText,
-          {
-            sessionId: activeSessionId || undefined,
-            metadata: hasAttachments
+        await sendChatInput(baseText, {
+          sessionId: activeSessionId || undefined,
+          metadata: hasAttachments
+            ? {
+                ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
+                originalInput: displayText,
+              }
+            : selectedMcp.length
               ? {
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
+                  mcpReferences: selectedMcp,
                   originalInput: displayText,
                 }
-              : selectedMcp.length
-                ? {
-                    mcpReferences: selectedMcp,
-                    originalInput: displayText,
-                  }
-                : undefined,
-            files: uploadableAttachments.map((item) => item.file),
-          },
-        );
+              : undefined,
+          files: uploadableAttachments.map((item) => item.file),
+        });
       } else {
         await sendChatInput(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId || undefined,
-            metadata: uploadedAttachments.length || mergedSkills.length
-              ? {
-                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                  originalInput: displayText,
-                }
-              : selectedMcp.length
+            metadata:
+              uploadedAttachments.length || mergedSkills.length
                 ? {
-                    mcpReferences: selectedMcp,
+                    ...(uploadedAttachments.length
+                      ? { attachments: uploadedAttachments }
+                      : {}),
+                    ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                    ...(selectedMcp.length
+                      ? { mcpReferences: selectedMcp }
+                      : {}),
                     originalInput: displayText,
                   }
-                : undefined,
+                : selectedMcp.length
+                  ? {
+                      mcpReferences: selectedMcp,
+                      originalInput: displayText,
+                    }
+                  : undefined,
           },
         );
       }
@@ -1032,21 +1067,35 @@ export default function Home() {
         const draftFiles = attachmentDrafts
           .filter((item) => item.kind === "file")
           .map((item) => item.file);
-        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        const draftSkills = attachmentDrafts.filter(
+          (item) => item.kind === "skill",
+        );
         setAttachments((current) => {
-          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          const mergedFiles = mergePendingAttachments(
+            current,
+            draftFiles,
+          ).attachments;
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
       }
       if (hasReferences) {
         setComposerReferences(referenceDrafts);
       }
-      toast.error(error instanceof Error ? error.message : "附件发送失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.attachmentSendFailed"),
+      );
     }
   }
 
   const handleSend = () => {
-    if (!message.trim() && attachments.length === 0 && composerReferences.length === 0) return;
+    if (
+      !message.trim() &&
+      attachments.length === 0 &&
+      composerReferences.length === 0
+    )
+      return;
     setMode("chat");
     void submitPrompt(message);
     setMessage("");
@@ -1059,7 +1108,7 @@ export default function Home() {
       if (/signal:\s*terminated/i.test(text) || /terminated/i.test(text)) {
         return;
       }
-      toast.error(text || "停止执行失败");
+      toast.error(text || t("homeWorkspace.stopExecutionFailed"));
     });
   };
 
@@ -1075,13 +1124,17 @@ export default function Home() {
     const referenceDrafts = [...composerReferences];
     const hasAttachments = attachmentDrafts.length > 0;
     const hasReferences = referenceDrafts.length > 0;
-    const displayText = trimmed || (hasAttachments || hasReferences ? "已添加引用" : "");
+    const displayText =
+      trimmed ||
+      (hasAttachments || hasReferences
+        ? t("homeWorkspace.referencesAdded")
+        : "");
     const baseText =
       trimmed ||
       (hasAttachments
         ? DEFAULT_ATTACHMENT_PROMPT
         : hasReferences
-          ? "请基于我刚刚引用的能力继续处理。"
+          ? t("homeWorkspace.processReferencedAbilities")
           : "");
     if (!baseText) return;
 
@@ -1139,7 +1192,11 @@ export default function Home() {
           category: item.category,
         }));
       let uploadedAttachments: UploadedTaskAttachment[] = [];
-      if (altusMode !== "managed" && uploadableAttachments.length > 0 && activeSessionId) {
+      if (
+        altusMode !== "managed" &&
+        uploadableAttachments.length > 0 &&
+        activeSessionId
+      ) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
             uploadTaskCreationAttachment(activeSessionId, item.file),
@@ -1172,19 +1229,24 @@ export default function Home() {
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
             sessionId: activeSessionId,
-            metadata: uploadedAttachments.length || mergedSkills.length
-              ? {
-                  ...(uploadedAttachments.length ? { attachments: uploadedAttachments } : {}),
-                  ...(mergedSkills.length ? { skills: mergedSkills } : {}),
-                  ...(selectedMcp.length ? { mcpReferences: selectedMcp } : {}),
-                  originalInput: displayText,
-                }
-              : selectedMcp.length
+            metadata:
+              uploadedAttachments.length || mergedSkills.length
                 ? {
-                    mcpReferences: selectedMcp,
+                    ...(uploadedAttachments.length
+                      ? { attachments: uploadedAttachments }
+                      : {}),
+                    ...(mergedSkills.length ? { skills: mergedSkills } : {}),
+                    ...(selectedMcp.length
+                      ? { mcpReferences: selectedMcp }
+                      : {}),
                     originalInput: displayText,
                   }
-                : undefined,
+                : selectedMcp.length
+                  ? {
+                      mcpReferences: selectedMcp,
+                      originalInput: displayText,
+                    }
+                  : undefined,
           },
         );
       }
@@ -1193,16 +1255,25 @@ export default function Home() {
         const draftFiles = attachmentDrafts
           .filter((item) => item.kind === "file")
           .map((item) => item.file);
-        const draftSkills = attachmentDrafts.filter((item) => item.kind === "skill");
+        const draftSkills = attachmentDrafts.filter(
+          (item) => item.kind === "skill",
+        );
         setAttachments((current) => {
-          const mergedFiles = mergePendingAttachments(current, draftFiles).attachments;
+          const mergedFiles = mergePendingAttachments(
+            current,
+            draftFiles,
+          ).attachments;
           return mergePendingPlatformSkills(mergedFiles, draftSkills);
         });
       }
       if (hasReferences) {
         setComposerReferences(referenceDrafts);
       }
-      toast.error(error instanceof Error ? error.message : "附件发送失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.attachmentSendFailed"),
+      );
     }
   }
 
@@ -1210,21 +1281,29 @@ export default function Home() {
     void submitQuestionAnswer(answer);
   };
 
+  const quickActionLabels = t("homeWorkspace.quickActions", {
+    returnObjects: true,
+  }) as string[];
   const quickActions = [
-    { label: "我想做一个Python开发行业的市场调研", icon: "📊" },
-    { label: "帮我分析竞争对手的产品策略", icon: "📄" },
-    { label: "创建一个新产品的营销计划", icon: "🎨" },
-    { label: "生成季度业务报告", icon: "💻" },
+    { label: quickActionLabels[0] || "", icon: "📊" },
+    { label: quickActionLabels[1] || "", icon: "📄" },
+    { label: quickActionLabels[2] || "", icon: "🎨" },
+    { label: quickActionLabels[3] || "", icon: "💻" },
   ];
 
-  const chatItems = useMemo(() => collapseRepeatedChatAuthors(buildChatItems(messages)), [messages]);
+  const chatItems = useMemo(
+    () => collapseRepeatedChatAuthors(buildChatItems(messages)),
+    [messages],
+  );
   const managedReplayByRun = useMemo(
     () => buildManagedReplayData(messages),
     [messages],
   );
   const { diffItems } = useMemo(() => buildPreviewItems(messages), [messages]);
   const hasSendDraft =
-    Boolean(message.trim()) || attachments.length > 0 || composerReferences.length > 0;
+    Boolean(message.trim()) ||
+    attachments.length > 0 ||
+    composerReferences.length > 0;
   const showStopButton = isProcessing && !currentQuestion && !hasSendDraft;
   const slashSkillSuggestions = useMemo(
     () => slashSuggestions.filter((item) => item.kind === "skill"),
@@ -1286,8 +1365,12 @@ export default function Home() {
                     <Terminal className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{item.label}</span>
-                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                    <span className="block truncate font-semibold">
+                      {item.label}
+                    </span>
+                    <span className="block truncate text-xs opacity-80">
+                      {item.subLabel}
+                    </span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
                 </button>
@@ -1320,8 +1403,12 @@ export default function Home() {
                     <Plug className="h-4 w-4" />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-semibold">{item.label}</span>
-                    <span className="block truncate text-xs opacity-80">{item.subLabel}</span>
+                    <span className="block truncate font-semibold">
+                      {item.label}
+                    </span>
+                    <span className="block truncate text-xs opacity-80">
+                      {item.subLabel}
+                    </span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 opacity-70" />
                 </button>
@@ -1333,10 +1420,15 @@ export default function Home() {
     ) : (
       <div className="px-1.5 py-1 text-xs text-[#64748B]">
         {slashCatalogLoading
-          ? "正在加载引用项..."
+          ? t("homeWorkspace.loadingReferences")
           : slashCatalogError
-            ? `引用项加载失败：${slashCatalogError}`
-            : `未找到可引用项（skills: ${slashSkillCatalog.length}，connectors: ${slashMcpCatalog.length}），试试 /xxx-skills 或先在连接器里完成 MCP 授权`}
+            ? t("homeWorkspace.referenceLoadFailedWithReason", {
+                reason: slashCatalogError,
+              })
+            : t("homeWorkspace.noReferencesFound", {
+                skills: slashSkillCatalog.length,
+                connectors: slashMcpCatalog.length,
+              })}
       </div>
     )
   ) : null;
@@ -1438,7 +1530,10 @@ export default function Home() {
     const target = resolveDiffTarget(options);
     if (
       !target &&
-      (options?.diffId || options?.filePath || options?.messageKey || options?.messageIndex !== undefined)
+      (options?.diffId ||
+        options?.filePath ||
+        options?.messageKey ||
+        options?.messageIndex !== undefined)
     ) {
       setPendingDiffTarget({
         diffId: options?.diffId || null,
@@ -1468,7 +1563,7 @@ export default function Home() {
     action: TaskSessionDeploymentPromptAction,
   ) => {
     if (!sessionId) {
-      toast.error("缺少会话信息");
+      toast.error(t("homeWorkspace.missingSession"));
       return;
     }
 
@@ -1481,9 +1576,13 @@ export default function Home() {
   const deployFromArtifactCard = async (_path: string) => {
     try {
       await submitDeploymentPrompt("deploy");
-      toast.success("已提交发布请求");
+      toast.success(t("homeWorkspace.deploySubmitted"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "触发发布失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("homeWorkspace.deployFailed"),
+      );
       throw error;
     }
   };
@@ -1493,9 +1592,7 @@ export default function Home() {
     const current = diffItems.find((item) => item.id === selectedDiffId);
     if (!current) return;
     const nextMessageKey =
-      current.eventMessageKey ||
-      current.relatedMessageKeys?.[0] ||
-      null;
+      current.eventMessageKey || current.relatedMessageKeys?.[0] || null;
     if (!nextMessageKey || nextMessageKey === selectedDiffMessageKey) {
       return;
     }
@@ -1522,8 +1619,9 @@ export default function Home() {
 
   const showDesktopPreview = previewOpen && !isMobile;
   const showMobilePreview = previewOpen && isMobile;
-  const activeAltusReplay =
-    altusReplayRunId ? managedReplayByRun.get(altusReplayRunId) || null : null;
+  const activeAltusReplay = altusReplayRunId
+    ? managedReplayByRun.get(altusReplayRunId) || null
+    : null;
   const activeAltusReplayIndex =
     activeAltusReplay && activeAltusReplay.actions.length > 0
       ? Math.min(
@@ -1575,11 +1673,7 @@ export default function Home() {
     if (altusReplayIndex > maxIndex) {
       setAltusReplayIndex(maxIndex);
     }
-  }, [
-    activeAltusReplay,
-    altusReplayIndex,
-    pendingAltusReplayToolCallId,
-  ]);
+  }, [activeAltusReplay, altusReplayIndex, pendingAltusReplayToolCallId]);
 
   useEffect(() => {
     if (!previewOpen && previewMaximized) {
@@ -1607,7 +1701,7 @@ export default function Home() {
         runtimeStarting={runtime.starting}
         onEnsureRuntime={runtime.ensure}
         onRequestStartDebugByMessage={() => {
-          void submitPrompt("启动网站调试功能");
+          void submitPrompt(t("homeWorkspace.startDebugPrompt"));
         }}
         onRequestDeployByMessage={() => {
           void submitDeploymentPrompt("deploy");
@@ -1626,20 +1720,22 @@ export default function Home() {
 
   const chatPanel = (
     <section className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-white shadow-sm">
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
           <div className="min-w-0 space-y-1">
             <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-              Dialogue
+              {t("homeWorkspace.dialogueLabel")}
             </div>
             <div className="truncate text-sm font-semibold text-foreground">
-              对话
+              {t("homeWorkspace.dialogueTitle")}
             </div>
           </div>
           <div className="flex min-w-0 items-center gap-2">
             {runtime.orchestratorSessionId && runtime.ready ? (
               <span className="truncate text-xs text-muted-foreground">
-                执行环境 · {runtime.orchestratorSessionId}
+                {t("homeWorkspace.runtimeAttached", {
+                  sessionId: runtime.orchestratorSessionId,
+                })}
               </span>
             ) : null}
             <Button
@@ -1656,7 +1752,9 @@ export default function Home() {
                 });
               }}
             >
-              {previewOpen ? "收起预览" : "显示预览"}
+              {previewOpen
+                ? t("homeWorkspace.hidePreview")
+                : t("homeWorkspace.showPreview")}
             </Button>
             <Button
               type="button"
@@ -1666,7 +1764,7 @@ export default function Home() {
               onClick={() => setShowRuntimeDrawer(true)}
               disabled={!runtime.orchestratorSessionId}
             >
-              执行日志
+              {t("homeWorkspace.runtimeLogs")}
             </Button>
           </div>
         </div>
@@ -1693,7 +1791,7 @@ export default function Home() {
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                text="正在加载更早历史..."
+                text={t("homeWorkspace.loadingOlderHistory")}
               />
             )}
 
@@ -1701,7 +1799,7 @@ export default function Home() {
               <NoticeMessage
                 tone="warning"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                text="正在连接智能体..."
+                text={t("homeWorkspace.connectingAgent")}
               />
             )}
 
@@ -1713,7 +1811,9 @@ export default function Home() {
                     className={`w-4 h-4 ${runtime.syncing ? "animate-spin" : ""}`}
                   />
                 }
-                text={`执行环境已接入（${runtime.orchestratorSessionId}）`}
+                text={t("homeWorkspace.runtimeConnected", {
+                  sessionId: runtime.orchestratorSessionId,
+                })}
               />
             )}
 
@@ -1734,7 +1834,7 @@ export default function Home() {
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
-                text="智能体正在处理..."
+                text={t("homeWorkspace.agentProcessing")}
               />
             )}
 
@@ -1754,13 +1854,17 @@ export default function Home() {
         >
           <div className="px-6 py-3">
             {slashSuggestionPanel ? (
-              <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+              <div className="mx-auto mb-2 w-[92%] max-w-full">
+                {slashSuggestionPanel}
+              </div>
             ) : null}
-            <div className="w-full rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)]">
+            <div className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
               <div className="space-y-3 p-4">
                 <Textarea
                   placeholder={
-                    currentQuestion ? "请输入问题回答..." : "继续对话..."
+                    currentQuestion
+                      ? t("homeWorkspace.answerPlaceholder")
+                      : t("homeWorkspace.continuePlaceholder")
                   }
                   value={message}
                   onChange={(e) => handleComposerInputChange(e.target.value)}
@@ -1778,7 +1882,7 @@ export default function Home() {
                       },
                     })
                   }
-                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0"
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
                   rows={2}
                 />
                 {composerReferenceTokens}
@@ -1805,47 +1909,53 @@ export default function Home() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-[#F1F5F9]"
+                                className="h-9 gap-2 rounded-xl px-3 transition-colors hover:bg-accent"
                               >
                                 <Sparkles className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm text-muted-foreground">
-                                  {selectedModel}
+                                  {t(`homePage.models.${selectedModel}`)}
                                 </span>
                               </Button>
                             </DropdownMenuTrigger>
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>Select AI model</p>
+                            <p>{t("homePage.selectModel")}</p>
                           </TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="start" className="w-40">
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Lite")}
+                            onClick={() => setSelectedModel("lite")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">Agent Lite</span>
+                              <span className="font-medium">
+                                {t("homePage.models.lite")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
-                                Fast & efficient
+                                {t("ceoView.modelLiteHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Pro")}
+                            onClick={() => setSelectedModel("pro")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">Agent Pro</span>
+                              <span className="font-medium">
+                                {t("homePage.models.pro")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
-                                Balanced performance
+                                {t("ceoView.modelProHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => setSelectedModel("Agent Max")}
+                            onClick={() => setSelectedModel("max")}
                           >
                             <div className="flex flex-col">
-                              <span className="font-medium">Agent Max</span>
+                              <span className="font-medium">
+                                {t("homePage.models.max")}
+                              </span>
                               <span className="text-xs text-muted-foreground">
-                                Maximum capability
+                                {t("ceoView.modelMaxHint")}
                               </span>
                             </div>
                           </DropdownMenuItem>
@@ -1859,13 +1969,13 @@ export default function Home() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 rounded-full transition-colors hover:bg-[#F1F5F9]"
+                            className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
                           >
                             <Mic className="w-4 h-4 text-muted-foreground" />
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Voice input</p>
+                          <p>{t("homePage.voiceInput")}</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -1891,7 +2001,7 @@ export default function Home() {
                                   : !message.trim() && attachments.length === 0)
                             }
                             size="icon"
-                            className="h-9 w-9 rounded-full bg-[#0F172A] transition-colors hover:bg-[#1E293B] disabled:opacity-50"
+                            className="h-9 w-9 rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
                           >
                             {showStopButton ? (
                               <Square className="w-4 h-4" />
@@ -1901,7 +2011,11 @@ export default function Home() {
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{showStopButton ? "停止执行" : "Send message"}</p>
+                          <p>
+                            {showStopButton
+                              ? t("homeWorkspace.stopExecution")
+                              : t("homePage.sendMessage")}
+                          </p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -1965,7 +2079,7 @@ export default function Home() {
                         </span>
                       </div>
                       <h1 className="text-3xl font-semibold text-foreground tracking-tight">
-                        AI Agent
+                        {t("homePage.title")}
                       </h1>
                     </motion.div>
                     <motion.p
@@ -1974,7 +2088,7 @@ export default function Home() {
                       transition={{ delay: 0.2, duration: 0.4 }}
                       className="text-muted-foreground text-lg"
                     >
-                      What can I help you with today?
+                      {t("homePage.subtitle")}
                     </motion.p>
                   </div>
 
@@ -1986,21 +2100,25 @@ export default function Home() {
                     className="relative"
                   >
                     {slashSuggestionPanel ? (
-                      <div className="mx-auto mb-2 w-[92%] max-w-full">{slashSuggestionPanel}</div>
+                      <div className="mx-auto mb-2 w-[92%] max-w-full">
+                        {slashSuggestionPanel}
+                      </div>
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div className="rounded-[2rem] border border-[#CBD5E1] bg-[#FFFFFF] p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-[#94A3B8] focus-within:border-[#2563EB] focus-within:shadow-[0_0_0_4px_rgba(37,99,235,0.18),0_12px_40px_rgba(15,23,42,0.08)] space-y-3">
+                    <div className="space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
                       {/* Textarea */}
                       <Textarea
-                        placeholder="Type your message here..."
+                        placeholder={t("homePage.textareaPlaceholder")}
                         value={message}
-                        onChange={(e) => handleComposerInputChange(e.target.value)}
+                        onChange={(e) =>
+                          handleComposerInputChange(e.target.value)
+                        }
                         onKeyDown={(e) =>
                           handleComposerKeyDown(e, {
                             submit: () => handleSend(),
                           })
                         }
-                        className="border-0 bg-transparent text-[#0F172A] placeholder:text-[#94A3B8] focus-visible:ring-0 text-base resize-none min-h-[100px] px-0 py-0"
+                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
                         rows={4}
                       />
                       {composerReferenceTokens}
@@ -2030,17 +2148,17 @@ export default function Home() {
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      className="h-9 px-3 rounded-xl hover:bg-[#F1F5F9] transition-colors gap-2"
+                                      className="h-9 gap-2 rounded-xl transition-colors hover:bg-accent"
                                     >
                                       <Sparkles className="w-4 h-4 text-muted-foreground" />
                                       <span className="text-sm text-muted-foreground">
-                                        {selectedModel}
+                                        {t(`homePage.models.${selectedModel}`)}
                                       </span>
                                     </Button>
                                   </DropdownMenuTrigger>
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p>Select AI model</p>
+                                  <p>{t("homePage.selectModel")}</p>
                                 </TooltipContent>
                               </Tooltip>
                               <DropdownMenuContent
@@ -2048,38 +2166,38 @@ export default function Home() {
                                 className="w-40"
                               >
                                 <DropdownMenuItem
-                                  onClick={() => setSelectedModel("Agent Lite")}
+                                  onClick={() => setSelectedModel("lite")}
                                 >
                                   <div className="flex flex-col">
                                     <span className="font-medium">
-                                      Agent Lite
+                                      {t("homePage.models.lite")}
                                     </span>
                                     <span className="text-xs text-muted-foreground">
-                                      Fast & efficient
+                                      {t("ceoView.modelLiteHint")}
                                     </span>
                                   </div>
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => setSelectedModel("Agent Pro")}
+                                  onClick={() => setSelectedModel("pro")}
                                 >
                                   <div className="flex flex-col">
                                     <span className="font-medium">
-                                      Agent Pro
+                                      {t("homePage.models.pro")}
                                     </span>
                                     <span className="text-xs text-muted-foreground">
-                                      Balanced performance
+                                      {t("ceoView.modelProHint")}
                                     </span>
                                   </div>
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => setSelectedModel("Agent Max")}
+                                  onClick={() => setSelectedModel("max")}
                                 >
                                   <div className="flex flex-col">
                                     <span className="font-medium">
-                                      Agent Max
+                                      {t("homePage.models.max")}
                                     </span>
                                     <span className="text-xs text-muted-foreground">
-                                      Maximum capability
+                                      {t("ceoView.modelMaxHint")}
                                     </span>
                                   </div>
                                 </DropdownMenuItem>
@@ -2095,13 +2213,13 @@ export default function Home() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-9 w-9 rounded-full hover:bg-[#F1F5F9] transition-colors"
+                                  className="h-9 w-9 rounded-full transition-colors hover:bg-accent"
                                 >
                                   <Mic className="w-4 h-4 text-muted-foreground" />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>
-                                <p>Voice input</p>
+                                <p>{t("homePage.voiceInput")}</p>
                               </TooltipContent>
                             </Tooltip>
 
@@ -2116,13 +2234,13 @@ export default function Home() {
                                     composerReferences.length === 0
                                   }
                                   size="icon"
-                                  className="h-9 w-9 rounded-full bg-[#0F172A] hover:bg-[#1E293B] transition-colors disabled:opacity-50"
+                                  className="h-9 w-9 rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                                 >
                                   <Send className="w-4 h-4" />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>
-                                <p>Send message</p>
+                                <p>{t("homePage.sendMessage")}</p>
                               </TooltipContent>
                             </Tooltip>
                           </div>
@@ -2164,7 +2282,9 @@ export default function Home() {
                 {showDesktopPreview ? (
                   previewMaximized ? (
                     <div className="flex h-full min-h-0 flex-1 overflow-hidden">
-                      <div className="h-full min-h-0 w-full">{previewPanel}</div>
+                      <div className="h-full min-h-0 w-full">
+                        {previewPanel}
+                      </div>
                     </div>
                   ) : (
                     <ResizablePanelGroup
@@ -2179,8 +2299,14 @@ export default function Home() {
                         withHandle
                         className="w-1.5 bg-transparent after:w-1.5 after:rounded-full after:bg-transparent hover:after:bg-transparent data-[resize-handle-active]:after:bg-transparent [&>div]:hidden"
                       />
-                      <ResizablePanel defaultSize={34} minSize={30} maxSize={48}>
-                        <div className="h-full min-h-0 pl-2">{previewPanel}</div>
+                      <ResizablePanel
+                        defaultSize={34}
+                        minSize={30}
+                        maxSize={48}
+                      >
+                        <div className="h-full min-h-0 pl-2">
+                          {previewPanel}
+                        </div>
                       </ResizablePanel>
                     </ResizablePanelGroup>
                   )
@@ -2218,21 +2344,23 @@ export default function Home() {
           onOpenChange={setAltusReplayOpen}
           sessionId={sessionId}
           runId={activeAltusReplay.runId}
-          runTitle="Altus Actions"
+          runTitle={t("homeWorkspace.altusActions")}
           actions={activeAltusReplay.actions}
           files={activeAltusReplay.files}
           currentIndex={activeAltusReplayIndex}
           latestIndex={Math.max(0, activeAltusReplay.actions.length - 1)}
           onSelectIndex={setAltusReplayIndex}
           onJumpToLatest={() =>
-            setAltusReplayIndex(Math.max(0, activeAltusReplay.actions.length - 1))
+            setAltusReplayIndex(
+              Math.max(0, activeAltusReplay.actions.length - 1),
+            )
           }
           diffItems={diffItems}
           runtimeReady={runtime.ready}
           runtimeStarting={runtime.starting}
           onEnsureRuntime={runtime.ensure}
           onRequestStartDebugByMessage={() => {
-            void submitPrompt("启动网站调试功能");
+            void submitPrompt(t("homeWorkspace.startDebugPrompt"));
           }}
           onRequestDeployByMessage={() => {
             void submitDeploymentPrompt("deploy");
@@ -2288,7 +2416,13 @@ export type ChatItem =
       attachments?: UploadedTaskAttachment[];
       messageKey?: string;
     }
-  | { kind: "agent"; markdown: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent";
+      markdown: string;
+      author?: string;
+      messageKey?: string;
+      showAuthor?: boolean;
+    }
   | {
       kind: "clarification_notice";
       text: string;
@@ -2304,7 +2438,13 @@ export type ChatItem =
       active?: boolean;
       showAuthor?: boolean;
     }
-  | { kind: "agent_plain"; text: string; author?: string; messageKey?: string; showAuthor?: boolean }
+  | {
+      kind: "agent_plain";
+      text: string;
+      author?: string;
+      messageKey?: string;
+      showAuthor?: boolean;
+    }
   | {
       kind: "capsule";
       label: string;
@@ -2406,6 +2546,160 @@ type CapsuleTone =
   | "execution"
   | "review"
   | "error";
+
+type ProgressStatusDefinition = {
+  patterns: string[];
+  tone: CapsuleTone;
+  loading: boolean;
+};
+
+type FallbackLabelDefinition = {
+  pattern: string;
+  tone: CapsuleTone;
+};
+
+const PROGRESS_STATUS_DEFINITIONS: ProgressStatusDefinition[] = [
+  {
+    patterns: ["构思阶段", "Ideation stage"],
+    tone: "system",
+    loading: true,
+  },
+  {
+    patterns: ["分析阶段", "Analysis stage"],
+    tone: "intent",
+    loading: true,
+  },
+  {
+    patterns: ["开发阶段", "Development stage"],
+    tone: "execution",
+    loading: true,
+  },
+  {
+    patterns: ["测试阶段", "Testing stage"],
+    tone: "review",
+    loading: true,
+  },
+  {
+    patterns: ["修复阶段", "Fix stage"],
+    tone: "execution",
+    loading: true,
+  },
+  {
+    patterns: ["交付阶段", "Delivery stage"],
+    tone: "planning",
+    loading: true,
+  },
+  {
+    patterns: ["正在分析您的任务需求", "Analyzing your task requirements"],
+    tone: "intent",
+    loading: true,
+  },
+  {
+    patterns: [
+      "正在分析您的任务需求...",
+      "Analyzing your task requirements...",
+    ],
+    tone: "intent",
+    loading: true,
+  },
+  {
+    patterns: ["已识别任务类型", "Task type identified"],
+    tone: "intent",
+    loading: false,
+  },
+  {
+    patterns: ["正在规划任务详情", "Planning task details"],
+    tone: "planning",
+    loading: true,
+  },
+  {
+    patterns: ["正在规划任务详情...", "Planning task details..."],
+    tone: "planning",
+    loading: true,
+  },
+  {
+    patterns: ["任务规划完成", "Task planning completed"],
+    tone: "planning",
+    loading: false,
+  },
+  {
+    patterns: ["任务规划完成：", "Task planning completed:"],
+    tone: "planning",
+    loading: false,
+  },
+  {
+    patterns: ["正在生成执行计划", "Generating execution plan"],
+    tone: "planning",
+    loading: true,
+  },
+  {
+    patterns: ["正在生成执行计划...", "Generating execution plan..."],
+    tone: "planning",
+    loading: true,
+  },
+  {
+    patterns: ["执行计划已生成", "Execution plan generated"],
+    tone: "planning",
+    loading: false,
+  },
+  {
+    patterns: ["正在启动执行环境", "Starting execution environment"],
+    tone: "execution",
+    loading: true,
+  },
+  {
+    patterns: ["执行环境已就绪", "Execution environment ready"],
+    tone: "execution",
+    loading: false,
+  },
+];
+
+const CAPSULE_FALLBACK_LABELS: FallbackLabelDefinition[] = [
+  {
+    pattern: "意图识别",
+    tone: "intent",
+  },
+  {
+    pattern: "任务规划",
+    tone: "planning",
+  },
+  {
+    pattern: "执行计划",
+    tone: "planning",
+  },
+  {
+    pattern: "系统",
+    tone: "system",
+  },
+  {
+    pattern: "错误",
+    tone: "error",
+  },
+];
+
+function findProgressStatusDefinition(
+  label: string,
+): ProgressStatusDefinition | null {
+  const text = label.trim();
+  if (!text) return null;
+  return (
+    PROGRESS_STATUS_DEFINITIONS.find((definition) =>
+      definition.patterns.some((pattern) => text.includes(pattern)),
+    ) || null
+  );
+}
+
+function findFallbackCapsuleLabel(
+  label: string,
+): FallbackLabelDefinition | null {
+  const text = label.trim();
+  if (!text) return null;
+  return (
+    CAPSULE_FALLBACK_LABELS.find((definition) =>
+      text.startsWith(definition.pattern),
+    ) || null
+  );
+}
 
 function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
@@ -2621,7 +2915,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       .split("\n")
       .map((line) => cleanHeadingText(line))
       .find(Boolean);
-    return firstLine || "思考中";
+    return firstLine || i18n.t("homeWorkspace.thinking");
   };
 
   const extractCodexPlanCollapsedMarkdown = (markdown: string) => {
@@ -2697,14 +2991,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   };
 
   const pushProgress = (
-    label: string,
+    rawLabel: string,
+    displayLabel: string,
     tone: CapsuleTone,
     messageKey?: string,
   ) => {
     progressBuffer = {
-      label,
+      label: displayLabel,
       tone,
-      loading: isProgressLoadingLabel(label),
+      loading: isProgressLoadingLabel(rawLabel),
       messageKey,
     };
   };
@@ -2741,6 +3036,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       if (parsed) {
         if (isProgressStatusLabel(parsed.label) && !parsed.rest.trim()) {
           pushProgress(
+            parsed.label,
             parsed.label,
             getCapsuleTone(parsed.label),
             message.messageKey,
@@ -2782,18 +3078,18 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         flushProgress();
         items.push(managedCompletionCard);
       }
-      const label = message.content || "状态更新";
-      if (isCodexControlStatusLabel(label)) {
+      const rawLabel = message.content || "状态更新";
+      if (isCodexControlStatusLabel(rawLabel)) {
         continue;
       }
-      const tone = message.tone || getCapsuleTone(label);
-      if (isProgressStatusLabel(label)) {
-        pushProgress(label, tone, message.messageKey);
+      const tone = message.tone || getCapsuleTone(rawLabel);
+      if (isProgressStatusLabel(rawLabel)) {
+        pushProgress(rawLabel, rawLabel, tone, message.messageKey);
       } else {
         flushProgress();
         items.push({
           kind: "capsule",
-          label,
+          label: rawLabel,
           tone,
           messageKey: message.messageKey,
         });
@@ -2811,7 +3107,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           asText(metadata.toolCallId) ||
           message.messageKey ||
           `${managedRunId}:${managedToolName}:${index}`;
-        const artifactPath = extractManagedArtifactPath(managedToolName, metadata);
+        const artifactPath = extractManagedArtifactPath(
+          managedToolName,
+          metadata,
+        );
         if (
           managedEventType === "tool_call_completed" &&
           managedRunId &&
@@ -2856,7 +3155,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "capsule",
-            label: asText(metadata.content) || "产物已更新",
+            label:
+              asText(metadata.content) ||
+              i18n.t("homeWorkspace.artifactUpdated"),
             tone: "review",
             messageKey: message.messageKey,
           });
@@ -2878,7 +3179,13 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         (message.content || "").trim();
 
       if (eventType === "turn.started") {
-        pushProgress(`${executorLabel} 开始执行`, "execution", message.messageKey);
+        const progressLabel = `${executorLabel} ${i18n.t("homeWorkspace.executionStarted")}`;
+        pushProgress(
+          progressLabel,
+          progressLabel,
+          "execution",
+          message.messageKey,
+        );
         continue;
       }
 
@@ -2889,7 +3196,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           flushProgress();
           items.push({
             kind: "capsule",
-            label: errorMessage || `${executorLabel} 执行失败`,
+            label:
+              errorMessage ||
+              `${executorLabel} ${i18n.t("homeWorkspace.executionFailed")}`,
             tone: "error",
             messageKey: message.messageKey,
           });
@@ -2898,7 +3207,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         flushProgress();
         items.push({
           kind: "capsule",
-          label: `${executorLabel} 执行完成`,
+          label: `${executorLabel} ${i18n.t("homeWorkspace.executionCompleted")}`,
           tone: "execution",
           messageKey: message.messageKey,
         });
@@ -2911,7 +3220,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           kind: "capsule",
           label:
             content ||
-            (eventType === "turn.interrupted" ? `${executorLabel} 执行已中断` : `${executorLabel} 执行失败`),
+            (eventType === "turn.interrupted"
+              ? `${executorLabel} ${i18n.t("homeWorkspace.executionInterrupted")}`
+              : `${executorLabel} ${i18n.t("homeWorkspace.executionFailed")}`),
           tone: "error",
           messageKey: message.messageKey,
         });
@@ -2941,17 +3252,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const commandText =
           asText(metadata.command) ||
           asText(item.command) ||
-          "Shell 命令";
+          i18n.t("homeWorkspace.shellCommand");
         const commandCard = getCodexCommandCardCopy(commandText);
         const targetPath =
-          asText(metadata.targetPath) || extractCodexCommandTargetPath(commandText);
+          asText(metadata.targetPath) ||
+          extractCodexCommandTargetPath(commandText);
         const outputPreview =
-          asText(metadata.outputPreview) ||
-          asText(item.aggregated_output);
+          asText(metadata.outputPreview) || asText(item.aggregated_output);
         const exitCodeValue =
-          metadata.exitCode ??
-          item.exit_code ??
-          item.exitCode;
+          metadata.exitCode ?? item.exit_code ?? item.exitCode;
         const exitCode =
           typeof exitCodeValue === "number" && Number.isFinite(exitCodeValue)
             ? exitCodeValue
@@ -3015,9 +3324,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const filePaths = Array.isArray(metadata.filePaths)
           ? metadata.filePaths.map((value) => asText(value)).filter(Boolean)
           : [];
-        const turnPaths = turnId
-          ? (codexTurnFilePaths.get(turnId) || [])
-          : [];
+        const turnPaths = turnId ? codexTurnFilePaths.get(turnId) || [] : [];
         const effectivePaths = filePaths.length > 0 ? filePaths : turnPaths;
         const effectiveFiles =
           fileChanges.length > 0
@@ -3034,7 +3341,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
             properties: {
               file: primaryPath,
               path: primaryPath,
-              label: "变更 Diff",
+              label: i18n.t("homeWorkspace.changeDiff"),
               files: effectiveFiles,
               diff: asText(metadata.diff) || undefined,
               status: "completed",
@@ -3042,10 +3349,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           },
           content:
             fileCount > 1
-              ? `变更 Diff · ${fileCount} 个文件`
+              ? `${i18n.t("homeWorkspace.changeDiff")} · ${fileCount} ${i18n.t("homeWorkspace.filesUnit")}`
               : primaryPath
-                ? `变更 Diff · ${getFilename(primaryPath)}`
-                : "变更 Diff",
+                ? `${i18n.t("homeWorkspace.changeDiff")} · ${getFilename(primaryPath)}`
+                : i18n.t("homeWorkspace.changeDiff"),
           metadata: {
             ...metadata,
             eventType: "file.changed",
@@ -3054,7 +3361,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
               properties: {
                 file: primaryPath,
                 path: primaryPath,
-                label: "变更 Diff",
+                label: i18n.t("homeWorkspace.changeDiff"),
                 files: effectiveFiles,
                 diff: asText(metadata.diff) || undefined,
                 status: "completed",
@@ -3077,8 +3384,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const primaryLabel = mapCodexFileChangeLabel(primary?.kind || "");
         const contentLabel =
           fileChanges.length > 1
-            ? `${primaryLabel} · ${fileChanges.length} 个文件`
-            : `${primaryLabel} · ${getFilename(primaryPath) || "文件"}`;
+            ? `${primaryLabel} · ${fileChanges.length} ${i18n.t("homeWorkspace.filesUnit")}`
+            : `${primaryLabel} · ${getFilename(primaryPath) || i18n.t("homeWorkspace.file")}`;
 
         items.push({
           kind: "opencode_tool",
@@ -3124,10 +3431,10 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         const approvalText =
           asText(metadata.approvalText) ||
           content ||
-          `${executorLabel} 需要进一步授权后才能继续执行。`;
+          `${executorLabel} ${i18n.t("homeWorkspace.authorizationNeededMessage")}`;
         items.push({
           kind: "capsule",
-          label: "需要授权",
+          label: i18n.t("homeWorkspace.authorizationNeeded"),
           tone: "system",
           messageKey: message.messageKey,
         });
@@ -3147,7 +3454,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
               properties: {
                 file: primary?.path || "",
                 path: primary?.path || "",
-                label: "变更草案",
+                label: i18n.t("homeWorkspace.changeDraft"),
                 files: fileChanges,
                 status:
                   asText(metadata.itemStatus) ||
@@ -3155,7 +3462,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
                   "completed",
               },
             },
-            content: primary?.path ? `变更草案 · ${getFilename(primary.path)}` : "变更草案",
+            content: primary?.path
+              ? `${i18n.t("homeWorkspace.changeDraft")} · ${getFilename(primary.path)}`
+              : i18n.t("homeWorkspace.changeDraft"),
             metadata: {
               ...metadata,
               eventType: "file.changed",
@@ -3164,7 +3473,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
                 properties: {
                   file: primary?.path || "",
                   path: primary?.path || "",
-                  label: "变更草案",
+                  label: i18n.t("homeWorkspace.changeDraft"),
                   files: fileChanges,
                   status:
                     asText(metadata.itemStatus) ||
@@ -3289,7 +3598,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (message.type === "error") {
       flushProgress();
       pushAgentMarkdown(
-        `**错误**\n\n> ${message.message || "请求失败，请稍后重试"}`,
+        `**${i18n.t("homeWorkspace.errorTitle")}**\n\n> ${message.message || i18n.t("homeWorkspace.requestFailedRetry")}`,
         message.messageKey,
       );
       continue;
@@ -3297,7 +3606,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
 
     if (message.type === "clarification_request") {
       flushProgress();
-      const question = message.question || "请补充更多信息";
+      const question =
+        message.question || i18n.t("homeWorkspace.provideMoreInfo");
       const previousMessage = index > 0 ? messages[index - 1] : null;
       const previousContent =
         previousMessage?.type === "agent_message"
@@ -3318,7 +3628,8 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         previousMessage?.type === "agent_message"
           ? asText(toRecord(previousMessage.metadata).runId)
           : "";
-      const isSameRun = !currentRunId || !previousRunId || currentRunId === previousRunId;
+      const isSameRun =
+        !currentRunId || !previousRunId || currentRunId === previousRunId;
       if (
         previousMessage?.type === "agent_message" &&
         isSameRun &&
@@ -3329,7 +3640,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       ) {
         items.push({
           kind: "clarification_notice",
-          text: "Altus 将在你回复后继续工作",
+          text: i18n.t("homeWorkspace.altusContinueAfterReply"),
           messageKey: message.messageKey,
         });
         continue;
@@ -3339,7 +3650,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
           ? `\n\n${message.options.map((opt) => `- ${opt}`).join("\n")}`
           : "";
       pushAgentMarkdown(
-        `**需要补充信息**\n\n${question}${optionLines}`,
+        `**${i18n.t("homeWorkspace.clarificationNeeded")}**\n\n${question}${optionLines}`,
         message.messageKey,
       );
       continue;
@@ -3348,7 +3659,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (message.type === "plan_generated") {
       flushProgress();
       pushAgentMarkdown(
-        `**执行计划已生成**\n\n项目：${message.plan?.project?.title || "未命名项目"}`,
+        `**${i18n.t("homeWorkspace.planGenerated")}**\n\n${i18n.t("homeWorkspace.projectLabel")}：${message.plan?.project?.title || i18n.t("homeWorkspace.unnamedProject")}`,
         message.messageKey,
       );
     }
@@ -3506,9 +3817,7 @@ function countDirectMarkdownLines(value: string) {
 function isLongDirectMarkdown(value: string) {
   const normalized = value.trim();
   if (!normalized) return false;
-  return (
-    countDirectMarkdownLines(normalized) >= 14 || normalized.length >= 600
-  );
+  return countDirectMarkdownLines(normalized) >= 14 || normalized.length >= 600;
 }
 
 function buildDirectMarkdownFoldSummary(
@@ -3521,7 +3830,7 @@ function buildDirectMarkdownFoldSummary(
     kind: "foldable" as const,
     markdown,
     lineCount,
-    summary: `${label} · ${lineCount} 行`,
+    summary: `${label} · ${lineCount} ${i18n.t("homeWorkspace.linesUnit")}`,
   };
 }
 
@@ -3543,13 +3852,13 @@ function buildFencedCodeFoldSegment(
   }
   if (language) {
     return buildDirectMarkdownFoldSummary(
-      `${language} 代码`,
+      `${language} ${i18n.t("homeWorkspace.codeLabel")}`,
       fullMatch,
       countDirectMarkdownLines(body.trimEnd()),
     );
   }
   return buildDirectMarkdownFoldSummary(
-    "代码块",
+    i18n.t("homeWorkspace.codeBlock"),
     fullMatch,
     countDirectMarkdownLines(body.trimEnd()),
   );
@@ -3567,7 +3876,10 @@ function buildRawMarkdownFoldSegment(
     /^diff --git\b/m.test(trimmed) ||
     (/^@@/m.test(trimmed) && /^[-+ ]/m.test(trimmed))
   ) {
-    return buildDirectMarkdownFoldSummary("补丁", trimmed);
+    return buildDirectMarkdownFoldSummary(
+      i18n.t("homeWorkspace.patchLabel"),
+      trimmed,
+    );
   }
   return null;
 }
@@ -3668,7 +3980,11 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     return turn;
   };
 
-  const upsertTurnPart = (turn: DirectTurnDraft, key: string, part: OpencodeTurnPart) => {
+  const upsertTurnPart = (
+    turn: DirectTurnDraft,
+    key: string,
+    part: OpencodeTurnPart,
+  ) => {
     const existingIndex = turn.assistantPartIndex.get(key);
     if (existingIndex === undefined) {
       turn.assistantPartIndex.set(key, turn.assistantParts.length);
@@ -3700,7 +4016,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     if (message.type === "error") {
       fallbackItems.push({
         kind: "agent",
-        markdown: `**错误**\n\n> ${message.message || message.content || "请求失败，请稍后重试"}`,
+        markdown: `**${i18n.t("homeWorkspace.errorTitle")}**\n\n> ${message.message || message.content || i18n.t("homeWorkspace.requestFailedRetry")}`,
         messageKey: message.messageKey,
       });
       continue;
@@ -3741,7 +4057,9 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       }
       const turn = ensureTurnForMessage(messageId);
       turn.messageKey = turn.messageKey || message.messageKey;
-      const completedAt = asText(toRecord(toRecord(eventInfo.properties.info).time).completed);
+      const completedAt = asText(
+        toRecord(toRecord(eventInfo.properties.info).time).completed,
+      );
       if (completedAt) {
         turn.working = false;
       }
@@ -3756,7 +4074,8 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     turn.messageKey = turn.messageKey || message.messageKey;
 
     if (eventType === "message.final") {
-      const partId = asText(eventInfo.part.id) || asText(metadata.partId) || "final";
+      const partId =
+        asText(eventInfo.part.id) || asText(metadata.partId) || "final";
       if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
         continue;
       }
@@ -3770,11 +4089,17 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       continue;
     }
 
-    if (eventType !== "message.part.updated" && eventType !== "message.part.delta") {
+    if (
+      eventType !== "message.part.updated" &&
+      eventType !== "message.part.delta"
+    ) {
       continue;
     }
 
-    const partId = asText(eventInfo.part.id) || asText(metadata.partId) || `${eventInfo.partType || "part"}-${index}`;
+    const partId =
+      asText(eventInfo.part.id) ||
+      asText(metadata.partId) ||
+      `${eventInfo.partType || "part"}-${index}`;
     const partType = eventInfo.partType;
     if (partType === "text") {
       if (normalizeDirectText(content) === normalizeDirectText(turn.userText)) {
@@ -3820,7 +4145,8 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
         }
         seenDiffSignatures.add(signature);
       }
-      const diffId = message.messageKey || `${messageId || "assistant"}:${partId}`;
+      const diffId =
+        message.messageKey || `${messageId || "assistant"}:${partId}`;
       upsertTurnPart(turn, `tool:${messageId || "assistant"}:${partId}`, {
         kind: "tool",
         eventType,
@@ -3832,7 +4158,9 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
         messageKey: message.messageKey,
         partId,
       });
-      const toolStatus = asText(toRecord(eventInfo.part.state).status).toLowerCase();
+      const toolStatus = asText(
+        toRecord(eventInfo.part.state).status,
+      ).toLowerCase();
       if (toolStatus === "pending" || toolStatus === "running") {
         turn.working = true;
       }
@@ -3864,11 +4192,15 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
     });
   }
 
-  return items.length > 0 ? [...fallbackItems, ...items] : buildLegacyChatItems(messages);
+  return items.length > 0
+    ? [...fallbackItems, ...items]
+    : buildLegacyChatItems(messages);
 }
 
 export function buildChatItems(messages: AgentMessage[]): ChatItem[] {
-  const hasOpencodeEvents = messages.some((message) => message.type === "opencode_event");
+  const hasOpencodeEvents = messages.some(
+    (message) => message.type === "opencode_event",
+  );
   if (!hasOpencodeEvents) {
     return buildLegacyChatItems(messages);
   }
@@ -3935,7 +4267,7 @@ function DirectFoldableMarkdownBlock({
         )}
         <span>{segment.summary}</span>
         <span className="ml-auto text-[11px] text-muted-foreground">
-          {open ? "收起" : "展开"}
+          {open ? i18n.t("common.collapse") : i18n.t("common.expand")}
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent className="border-t border-border/60 px-3 py-3">
@@ -3976,10 +4308,7 @@ function DirectMarkdownMessage({
             muted={muted}
           />
         ) : (
-          <div
-            key={`markdown-${index}`}
-            className={bodyClassName}
-          >
+          <div key={`markdown-${index}`} className={bodyClassName}>
             <Streamdown>{segment.markdown}</Streamdown>
           </div>
         ),
@@ -4017,9 +4346,7 @@ function CodexExplanationMessage({
               {author}
             </div>
           ) : null}
-          <div className="text-sm leading-7 text-foreground">
-            {heading}
-          </div>
+          <div className="text-sm leading-7 text-foreground">{heading}</div>
           {collapsedMarkdown ? (
             <div className="max-w-none text-sm leading-7 text-foreground [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold">
               <Streamdown>{collapsedMarkdown}</Streamdown>
@@ -4043,9 +4370,9 @@ function CodexExplanationMessage({
             {author}
           </div>
         ) : null}
-        <div className="relative overflow-hidden rounded-xl border border-slate-200/80 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.14),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm">
-          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-slate-500 to-transparent" />
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+        <div className="relative overflow-hidden rounded-xl border border-border/70 bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.12),_transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.92),rgba(248,250,252,0.94))] px-4 py-3 shadow-sm dark:bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.12),_transparent_58%),linear-gradient(180deg,rgba(24,24,27,0.96),rgba(17,17,20,0.96))]">
+          <div className="absolute inset-y-3 right-3 w-px animate-pulse bg-gradient-to-b from-transparent via-muted-foreground to-transparent" />
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
             {heading}
           </div>
           <div className="pr-4">
@@ -4090,7 +4417,10 @@ function MessageBubble({
         className="w-full space-y-4"
         data-message-key={item.messageKey}
       >
-        <div className="w-full flex justify-end" data-message-key={item.userMessageKey}>
+        <div
+          className="w-full flex justify-end"
+          data-message-key={item.userMessageKey}
+        >
           <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
             {item.skills?.length || item.attachments?.length ? (
               <MessageAttachmentReference
@@ -4100,7 +4430,9 @@ function MessageBubble({
               />
             ) : null}
             {item.userText ? (
-              <span className="whitespace-pre-wrap break-words">{item.userText}</span>
+              <span className="whitespace-pre-wrap break-words">
+                {item.userText}
+              </span>
             ) : null}
           </div>
         </div>
@@ -4138,10 +4470,12 @@ function MessageBubble({
           {item.working ? (
             <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-foreground/80">
               <span className="bg-gradient-to-r from-slate-500 via-slate-900 to-slate-500 bg-[length:200%_100%] animate-shimmer text-transparent bg-clip-text">
-                思考中
+                {i18n.t("homeWorkspace.thinking")}
               </span>
               {item.thinkingLabel ? (
-                <span className="text-muted-foreground">{item.thinkingLabel}</span>
+                <span className="text-muted-foreground">
+                  {item.thinkingLabel}
+                </span>
               ) : null}
             </div>
           ) : null}
@@ -4216,7 +4550,13 @@ function MessageBubble({
           className="flex items-center gap-[6px] py-1.5 text-sm font-medium"
           style={{ color: "var(--function-warning, rgb(217 119 6))" }}
         >
-          <svg height="16" width="16" fill="none" viewBox="0 0 16 16" aria-hidden="true">
+          <svg
+            height="16"
+            width="16"
+            fill="none"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
             <circle
               cx="8"
               cy="8"
@@ -4360,38 +4700,19 @@ function extractCapsule(
   }
 
   // 纯状态消息，直接渲染胶囊，不再下沉为正文
-  const statusCapsules = [
-    "构思阶段",
-    "分析阶段",
-    "开发阶段",
-    "测试阶段",
-    "修复阶段",
-    "交付阶段",
-    "正在分析您的任务需求",
-    "正在分析您的任务需求...",
-    "已识别任务类型",
-    "正在规划任务详情",
-    "正在规划任务详情...",
-    "任务规划完成",
-    "任务规划完成：",
-    "正在生成执行计划",
-    "正在生成执行计划...",
-    "执行计划已生成",
-  ];
-  for (const status of statusCapsules) {
-    if (text.includes(status)) {
+  for (const definition of PROGRESS_STATUS_DEFINITIONS) {
+    if (definition.patterns.some((pattern) => text.includes(pattern))) {
       return { label: text, rest: "" };
     }
   }
 
   // 兼容后端未加 {标签} 的阶段文本
-  const fallbackLabels = ["意图识别", "任务规划", "执行计划", "系统", "错误"];
-  for (const label of fallbackLabels) {
-    if (text.startsWith(label)) {
+  for (const fallback of CAPSULE_FALLBACK_LABELS) {
+    if (text.startsWith(fallback.pattern)) {
       return {
-        label,
+        label: fallback.pattern,
         rest: text
-          .slice(label.length)
+          .slice(fallback.pattern.length)
           .replace(/^[:：\-\s]+/, "")
           .trim(),
       };
@@ -4406,31 +4727,12 @@ function isProgressStatusLabel(label: string): boolean {
   if (
     text.includes("错误") ||
     text.includes("失败") ||
+    text.toLowerCase().includes("failed") ||
     text.toLowerCase().includes("error")
   ) {
     return false;
   }
-  const keywords = [
-    "构思阶段",
-    "分析阶段",
-    "开发阶段",
-    "测试阶段",
-    "修复阶段",
-    "交付阶段",
-    "正在分析您的任务需求",
-    "正在分析您的任务需求...",
-    "已识别任务类型",
-    "正在规划任务详情",
-    "正在规划任务详情...",
-    "任务规划完成",
-    "任务规划完成：",
-    "正在生成执行计划",
-    "正在生成执行计划...",
-    "执行计划已生成",
-    "正在启动执行环境",
-    "执行环境已就绪",
-  ];
-  return keywords.some((keyword) => text.includes(keyword));
+  return Boolean(findProgressStatusDefinition(text));
 }
 
 function isProgressLoadingLabel(label: string): boolean {
@@ -4439,29 +4741,52 @@ function isProgressLoadingLabel(label: string): boolean {
   if (
     text.includes("错误") ||
     text.includes("失败") ||
+    text.toLowerCase().includes("failed") ||
     text.toLowerCase().includes("error")
   ) {
     return false;
   }
-  const completeKeywords = ["完成", "已生成", "已就绪", "已接入", "成功"];
-  if (completeKeywords.some((keyword) => text.includes(keyword))) {
-    return false;
+  const progressStatus = findProgressStatusDefinition(text);
+  if (progressStatus) {
+    return progressStatus.loading;
   }
-  return true;
+  const completeKeywords = [
+    "完成",
+    "已生成",
+    "已就绪",
+    "已接入",
+    "成功",
+    "completed",
+    "generated",
+    "ready",
+    "attached",
+    "success",
+  ];
+  return !completeKeywords.some((keyword) =>
+    text.toLowerCase().includes(keyword.toLowerCase()),
+  );
 }
 
 function getCapsuleTone(label: string): CapsuleTone {
-  const lower = label.toLowerCase();
-  if (lower.includes("错误") || lower.includes("error")) return "error";
-  if (lower.includes("构思")) return "system";
-  if (lower.includes("分析")) return "intent";
-  if (lower.includes("开发")) return "execution";
-  if (lower.includes("测试")) return "review";
-  if (lower.includes("修复")) return "execution";
-  if (lower.includes("交付")) return "planning";
-  if (lower.includes("意图")) return "intent";
-  if (lower.includes("规划") || lower.includes("计划")) return "planning";
-  if (lower.includes("执行")) return "execution";
+  const text = label.trim();
+  const lower = text.toLowerCase();
+  if (
+    lower.includes("错误") ||
+    lower.includes("失败") ||
+    lower.includes("error") ||
+    lower.includes("failed")
+  ) {
+    return "error";
+  }
+  const progressStatus = findProgressStatusDefinition(text);
+  if (progressStatus) return progressStatus.tone;
+  const fallbackLabel = findFallbackCapsuleLabel(text);
+  if (fallbackLabel) return fallbackLabel.tone;
+  if (lower.includes("analysis")) return "intent";
+  if (lower.includes("develop") || lower.includes("execution"))
+    return "execution";
+  if (lower.includes("test")) return "review";
+  if (lower.includes("plan")) return "planning";
   return "system";
 }
 
@@ -4489,11 +4814,13 @@ function isLikelyMarkdownText(value: string): boolean {
 }
 
 function formatOpencodeEventLabel(eventType: string, stream: boolean): string {
-  if (stream) return "OpenCode · 实时输出";
+  if (stream) return i18n.t("homeWorkspace.opencodeLiveOutput");
   if (!eventType) return "OpenCode";
-  if (eventType === "message.final") return "OpenCode · 最终产出";
-  if (eventType === "session.idle") return "OpenCode · 空闲";
-  if (eventType === "session.status") return "OpenCode · 状态";
+  if (eventType === "message.final")
+    return i18n.t("homeWorkspace.opencodeFinalOutput");
+  if (eventType === "session.idle") return i18n.t("homeWorkspace.opencodeIdle");
+  if (eventType === "session.status")
+    return i18n.t("homeWorkspace.opencodeStatus");
   return `OpenCode · ${eventType}`;
 }
 
@@ -4583,8 +4910,11 @@ function getOpencodeEventInfo(
     part,
     partType,
     toolName,
-    role:
-      (asText(message.role) || asText(properties.role) || asText(part.role)).toLowerCase(),
+    role: (
+      asText(message.role) ||
+      asText(properties.role) ||
+      asText(part.role)
+    ).toLowerCase(),
   };
 }
 
@@ -4619,12 +4949,7 @@ function getDirectory(path: string | undefined) {
   return normalized.slice(0, idx + 1);
 }
 
-type CodexCommandCategory =
-  | "list"
-  | "search"
-  | "read"
-  | "write"
-  | "command";
+type CodexCommandCategory = "list" | "search" | "read" | "write" | "command";
 
 function normalizeShellCommand(command: string): string {
   const trimmed = command.trim();
@@ -4691,7 +5016,9 @@ function extractCodexCommandTargetPath(command: string): string {
 
   const heredocMatch = normalized.match(/(?:^|\s)>\s*([^\n]+)/);
   if (heredocMatch?.[1]) {
-    const token = stripShellQuotes(heredocMatch[1].trim().split(/\s+/)[0] || "");
+    const token = stripShellQuotes(
+      heredocMatch[1].trim().split(/\s+/)[0] || "",
+    );
     if (token) return token;
   }
 
@@ -4748,28 +5075,48 @@ function extractCodexWritePayloadPreview(command: string): {
 
 function inferCodexWriteLabel(command: string): string {
   const normalized = normalizeShellCommand(command).toLowerCase();
-  if (normalized.startsWith("mv ")) return "移动文件";
-  if (normalized.startsWith("cp ")) return "复制文件";
-  if (normalized.includes(">>")) return "追加文件";
-  if (normalized.includes("cat <<") || normalized.includes(">") || normalized.includes("tee ")) {
-    return "文件修改";
+  if (normalized.startsWith("mv ")) return i18n.t("homeWorkspace.moveFile");
+  if (normalized.startsWith("cp ")) return i18n.t("homeWorkspace.copyFile");
+  if (normalized.includes(">>")) return i18n.t("homeWorkspace.appendFile");
+  if (
+    normalized.includes("cat <<") ||
+    normalized.includes(">") ||
+    normalized.includes("tee ")
+  ) {
+    return i18n.t("homeWorkspace.fileEdit");
   }
-  return "文件修改";
+  return i18n.t("homeWorkspace.fileEdit");
 }
 
 function getCodexCommandCardCopy(command: string) {
   const category = inferCodexCommandCategory(command);
   switch (category) {
     case "list":
-      return { category, title: "目录检查", icon: FolderSearch2 };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.directoryCheck"),
+        icon: FolderSearch2,
+      };
     case "search":
-      return { category, title: "搜索", icon: Search };
+      return { category, title: i18n.t("homeWorkspace.search"), icon: Search };
     case "read":
-      return { category, title: "文件查看", icon: FileSearch };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.fileView"),
+        icon: FileSearch,
+      };
     case "write":
-      return { category, title: "文件修改", icon: FilePenLine };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.fileEdit"),
+        icon: FilePenLine,
+      };
     default:
-      return { category, title: "Shell 执行", icon: Terminal };
+      return {
+        category,
+        title: i18n.t("homeWorkspace.shellExecution"),
+        icon: Terminal,
+      };
   }
 }
 
@@ -4798,8 +5145,12 @@ function extractCodexFileChanges(
 
 function mapCodexFileChangeLabel(kind: string): string {
   const normalized = kind.trim().toLowerCase();
-  if (normalized === "add" || normalized === "create" || normalized === "created") {
-    return "新建文件";
+  if (
+    normalized === "add" ||
+    normalized === "create" ||
+    normalized === "created"
+  ) {
+    return i18n.t("homeWorkspace.createFile");
   }
   if (
     normalized === "delete" ||
@@ -4807,49 +5158,70 @@ function mapCodexFileChangeLabel(kind: string): string {
     normalized === "remove" ||
     normalized === "removed"
   ) {
-    return "删除文件";
+    return i18n.t("homeWorkspace.deleteFile");
   }
-  return "更新文件";
+  return i18n.t("homeWorkspace.updateFile");
 }
 
 function getToolInfo(tool: string, input: Record<string, unknown>) {
   const lower = tool.toLowerCase();
   switch (lower) {
     case "read":
-      return { title: "读取", subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("homeWorkspace.readAction"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "list":
       return {
-        title: "列出",
+        title: i18n.t("homeWorkspace.listAction"),
         subtitle: getDirectory(asText(input.path) || "/"),
       };
     case "glob":
-      return { title: "匹配", subtitle: asText(input.pattern) };
+      return {
+        title: i18n.t("homeWorkspace.matchAction"),
+        subtitle: asText(input.pattern),
+      };
     case "grep":
-      return { title: "搜索", subtitle: asText(input.pattern) };
+      return {
+        title: i18n.t("homeWorkspace.search"),
+        subtitle: asText(input.pattern),
+      };
     case "webfetch":
-      return { title: "抓取", subtitle: asText(input.url) };
+      return {
+        title: i18n.t("homeWorkspace.fetchAction"),
+        subtitle: asText(input.url),
+      };
     case "task":
-      return { title: "子任务", subtitle: asText(input.description) };
+      return {
+        title: i18n.t("homeWorkspace.subtaskAction"),
+        subtitle: asText(input.description),
+      };
     case "bash":
       return {
         title: "Shell",
         subtitle: asText(input.description) || asText(input.command),
       };
     case "edit":
-      return { title: "编辑", subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("common.edit"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "write":
-      return { title: "写入", subtitle: getFilename(asText(input.filePath)) };
+      return {
+        title: i18n.t("homeWorkspace.writeAction"),
+        subtitle: getFilename(asText(input.filePath)),
+      };
     case "apply_patch":
       return {
-        title: "补丁",
+        title: i18n.t("homeWorkspace.patchLabel"),
         subtitle: Array.isArray(input.files)
-          ? `${input.files.length} 文件`
+          ? `${input.files.length} ${i18n.t("homeWorkspace.file")}`
           : "",
       };
     case "todowrite":
-      return { title: "待办" };
+      return { title: i18n.t("homeWorkspace.todo") };
     case "question":
-      return { title: "待确认" };
+      return { title: i18n.t("homeWorkspace.pendingConfirmation") };
     default:
       return { title: tool || "Tool" };
   }
@@ -4877,11 +5249,17 @@ function summarizeTooltipLines(lines: Array<string | null | undefined>) {
     .join("\n");
 }
 
-function buildDetailPreview(value: string, maxLines = 3, maxCharsPerLine = 120) {
+function buildDetailPreview(
+  value: string,
+  maxLines = 3,
+  maxCharsPerLine = 120,
+) {
   const lines = value
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
-    .filter((line, index, arr) => line || arr.length === 1 || index < arr.length - 1);
+    .filter(
+      (line, index, arr) => line || arr.length === 1 || index < arr.length - 1,
+    );
   const normalizedLines = lines.length > 0 ? lines : [value.trim()];
   const previewLines = normalizedLines.slice(0, maxLines).map((line) => {
     if (line.length <= maxCharsPerLine) return line;
@@ -4936,7 +5314,9 @@ export function buildOpencodeAtomicTooltip(input: {
   const pattern = asText(toolInput.pattern) || asText(properties.pattern);
   const url = asText(toolInput.url) || asText(properties.url);
   const shortOutput = truncateText(output, 240).text;
-  const toolLabel = input.toolName ? `工具: ${input.toolName}` : "";
+  const toolLabel = input.toolName
+    ? `${i18n.t("homeWorkspace.toolLabel")}: ${input.toolName}`
+    : "";
   const fileList = Array.isArray((properties as Record<string, unknown>).files)
     ? ((properties as Record<string, unknown>).files as unknown[])
         .map((item) => toRecord(item))
@@ -4950,60 +5330,68 @@ export function buildOpencodeAtomicTooltip(input: {
   if (toolKey === "bash" || input.eventType === "command.executed") {
     return summarizeTooltipLines([
       toolLabel,
-      baseCommand ? `命令: ${baseCommand}` : "",
-      cwd ? `目录: ${cwd}` : "",
-      shortOutput ? `输出摘要: ${shortOutput}` : "",
+      baseCommand
+        ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}`
+        : "",
+      cwd ? `${i18n.t("homeWorkspace.directoryLabel")}: ${cwd}` : "",
+      shortOutput
+        ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}`
+        : "",
     ]);
   }
 
   if (toolKey === "read") {
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `读取文件: ${filePath}` : "",
+      filePath ? `${i18n.t("homeWorkspace.readFileLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "write") {
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `写入文件: ${filePath}` : "",
+      filePath ? `${i18n.t("homeWorkspace.writeFileLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "edit") {
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `编辑文件: ${filePath}` : "",
+      filePath ? `${i18n.t("homeWorkspace.editFileLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "grep") {
     return summarizeTooltipLines([
       toolLabel,
-      pattern ? `搜索模式: ${pattern}` : "",
-      filePath ? `范围: ${filePath}` : "",
+      pattern
+        ? `${i18n.t("homeWorkspace.searchPatternLabel")}: ${pattern}`
+        : "",
+      filePath ? `${i18n.t("homeWorkspace.scopeLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "glob") {
     return summarizeTooltipLines([
       toolLabel,
-      pattern ? `匹配模式: ${pattern}` : "",
-      filePath ? `范围: ${filePath}` : "",
+      pattern ? `${i18n.t("homeWorkspace.matchPatternLabel")}: ${pattern}` : "",
+      filePath ? `${i18n.t("homeWorkspace.scopeLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "list") {
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `列出目录: ${filePath}` : "",
+      filePath
+        ? `${i18n.t("homeWorkspace.listDirectoryLabel")}: ${filePath}`
+        : "",
     ]);
   }
 
   if (toolKey === "webfetch") {
     return summarizeTooltipLines([
       toolLabel,
-      url ? `抓取地址: ${url}` : "",
+      url ? `${i18n.t("homeWorkspace.fetchUrlLabel")}: ${url}` : "",
     ]);
   }
 
@@ -5016,45 +5404,59 @@ export function buildOpencodeAtomicTooltip(input: {
           ? collectPatchTargetFilesFromText(diffPayload.text)
           : collectPatchTargetFilesFromText(output);
     if (files.length === 0) {
-      return "应用补丁";
+      return i18n.t("homeWorkspace.applyPatch");
     }
     return summarizeTooltipLines([
       toolLabel,
-      "补丁目标文件:",
+      i18n.t("homeWorkspace.patchTargetFiles"),
       ...files.slice(0, 6).map((file) => `- ${file}`),
-      files.length > 6 ? `- 以及另外 ${files.length - 6} 个文件` : "",
+      files.length > 6
+        ? `- ${i18n.t("homeWorkspace.otherFiles", { count: files.length - 6 })}`
+        : "",
     ]);
   }
 
-  if (input.eventType.startsWith("file.") || input.eventType === "file.changed") {
+  if (
+    input.eventType.startsWith("file.") ||
+    input.eventType === "file.changed"
+  ) {
     if (fileList.length > 0) {
       return summarizeTooltipLines([
         toolLabel,
         ...fileList
           .slice(0, 6)
           .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`),
-        fileList.length > 6 ? `以及另外 ${fileList.length - 6} 个文件` : "",
+        fileList.length > 6
+          ? i18n.t("homeWorkspace.otherFiles", { count: fileList.length - 6 })
+          : "",
       ]);
     }
     return summarizeTooltipLines([
       toolLabel,
-      filePath ? `文件路径: ${filePath}` : "",
+      filePath ? `${i18n.t("homeWorkspace.filePathLabel")}: ${filePath}` : "",
     ]);
   }
 
   if (toolKey === "task") {
-    const description = asText(toolInput.description) || asText(properties.description);
+    const description =
+      asText(toolInput.description) || asText(properties.description);
     return summarizeTooltipLines([
       toolLabel,
-      description ? `子任务: ${description}` : "",
+      description
+        ? `${i18n.t("homeWorkspace.subtaskLabel")}: ${description}`
+        : "",
     ]);
   }
 
   return summarizeTooltipLines([
     toolLabel,
-    baseCommand ? `命令: ${baseCommand}` : "",
-    filePath ? `路径: ${filePath}` : "",
-    shortOutput ? `输出摘要: ${shortOutput}` : "",
+    baseCommand
+      ? `${i18n.t("homeWorkspace.commandLabel")}: ${baseCommand}`
+      : "",
+    filePath ? `${i18n.t("homeWorkspace.pathLabel")}: ${filePath}` : "",
+    shortOutput
+      ? `${i18n.t("homeWorkspace.outputSummaryLabel")}: ${shortOutput}`
+      : "",
   ]);
 }
 
@@ -5136,7 +5538,7 @@ function OpencodeToolCard({
                 setDetailOpen(true);
               }}
             >
-              展示更多
+              {i18n.t("homeWorkspace.showMore")}
             </button>
           ) : null}
         </TooltipContent>
@@ -5179,7 +5581,10 @@ function OpencodeToolCard({
     if (eventType.startsWith("file.")) {
       const filePath = asText(properties.file) || asText(properties.path);
       info = {
-        title: eventType === "file.watcher.updated" ? "文件监听" : "文件更新",
+        title:
+          eventType === "file.watcher.updated"
+            ? i18n.t("homeWorkspace.fileWatch")
+            : i18n.t("homeWorkspace.fileUpdate"),
         subtitle: getFilename(filePath),
       };
     } else if (eventType === "command.executed") {
@@ -5187,14 +5592,14 @@ function OpencodeToolCard({
       info = {
         title:
           category === "list"
-            ? "目录检查"
+            ? i18n.t("homeWorkspace.directoryCheck")
             : category === "search"
-              ? "搜索"
+              ? i18n.t("homeWorkspace.search")
               : category === "read"
-                ? "文件查看"
+                ? i18n.t("homeWorkspace.fileView")
                 : category === "write"
-                  ? "文件修改"
-                  : "命令执行",
+                  ? i18n.t("homeWorkspace.fileEdit")
+                  : i18n.t("homeWorkspace.commandExecution"),
         subtitle: asText(properties.command),
       };
     } else if (eventType === "file.changed") {
@@ -5210,12 +5615,12 @@ function OpencodeToolCard({
           mapCodexFileChangeLabel(asText(first.kind)),
         subtitle:
           files.length > 1
-            ? `${files.length} 个文件`
+            ? `${files.length} ${i18n.t("homeWorkspace.filesUnit")}`
             : getFilename(asText(first.path) || asText(first.file)),
       };
     } else if (eventType.startsWith("pty.")) {
       info = {
-        title: "终端",
+        title: i18n.t("homeWorkspace.terminal"),
         subtitle: eventType.replace("pty.", ""),
       };
     }
@@ -5250,7 +5655,9 @@ function OpencodeToolCard({
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>{detailTitle}</DialogTitle>
-            <DialogDescription>工具原子消息完整信息</DialogDescription>
+            <DialogDescription>
+              {i18n.t("homeWorkspace.toolDetailDescription")}
+            </DialogDescription>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-auto rounded-md bg-slate-950 px-4 py-3 font-mono text-xs leading-6 text-slate-100 whitespace-pre-wrap break-all">
             {detailBodyText}
@@ -5281,11 +5688,11 @@ function OpencodeToolCard({
         >
           <EventCapsule
             icon={FileDiff}
-            text="Diff · 点击查看更改"
+            text={i18n.t("homeWorkspace.diffClickToView")}
             title={explanationText || undefined}
           />
         </button>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5423,42 +5830,43 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            待办
+        <div className="rounded-xl border border-border/70 bg-card px-4 py-3 text-sm text-foreground shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {i18n.t("homeWorkspace.todo")}
           </div>
           {todos.length > 0 ? (
             <div className="mt-3 space-y-2">
               {todos.map((todo, index) => {
-                const content = asText(todo.content) || "待办事项";
+                const content =
+                  asText(todo.content) || i18n.t("homeWorkspace.todoItem");
                 const statusText = asText(todo.status) || "pending";
                 const priority = asText(todo.priority);
                 const statusLabel =
                   statusText === "completed"
-                    ? "已完成"
+                    ? i18n.t("homeWorkspace.completed")
                     : statusText === "in_progress"
-                      ? "进行中"
-                      : "待处理";
+                      ? i18n.t("homeWorkspace.inProgress")
+                      : i18n.t("homeWorkspace.pending");
                 const statusTone =
                   statusText === "completed"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
                     : statusText === "in_progress"
-                      ? "bg-blue-50 text-blue-700 border-blue-200"
-                      : "bg-slate-50 text-slate-600 border-slate-200";
+                      ? "border-[var(--brand-border)] bg-[var(--brand-soft)] text-[var(--brand-soft-foreground)]"
+                      : "border-border bg-muted/50 text-muted-foreground";
                 return (
                   <div
                     key={`${content}-${index}`}
                     className="flex items-center justify-between gap-3"
                   >
-                    <div className="text-sm text-slate-800">{content}</div>
+                    <div className="text-sm text-foreground">{content}</div>
                     <div className="flex items-center gap-2">
                       {priority ? (
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
                           {priority === "high"
-                            ? "高优先级"
+                            ? i18n.t("homeWorkspace.priorityHigh")
                             : priority === "medium"
-                              ? "中优先级"
-                              : "低优先级"}
+                              ? i18n.t("homeWorkspace.priorityMedium")
+                              : i18n.t("homeWorkspace.priorityLow")}
                         </span>
                       ) : null}
                       <span
@@ -5473,7 +5881,7 @@ function OpencodeToolCard({
             </div>
           ) : null}
         </div>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5488,9 +5896,9 @@ function OpencodeToolCard({
         transition={{ duration: 0.2 }}
         className="w-full"
       >
-        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            待确认
+        <div className="rounded-xl border border-border/70 bg-card px-4 py-3 text-sm text-foreground shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {i18n.t("homeWorkspace.pendingConfirmation")}
           </div>
           <div className="mt-3 space-y-3">
             {questions.map((question, index) => (
@@ -5499,15 +5907,15 @@ function OpencodeToolCard({
                 className="space-y-1.5"
               >
                 {question.header ? (
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {question.header}
                   </div>
                 ) : null}
-                <div className="text-sm text-slate-800">
+                <div className="text-sm text-foreground">
                   {question.question}
                 </div>
                 {question.options.length > 0 ? (
-                  <ul className="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                  <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
                     {question.options.map((option, optionIndex) => (
                       <li key={`${option}-${optionIndex}`}>{option}</li>
                     ))}
@@ -5515,8 +5923,8 @@ function OpencodeToolCard({
                 ) : null}
               </div>
             ))}
-            <div className="text-xs text-slate-500">
-              请直接在输入框回复你的选择或补充信息。
+            <div className="text-xs text-muted-foreground">
+              {i18n.t("homeWorkspace.replyInComposer")}
             </div>
           </div>
         </div>
@@ -5530,8 +5938,11 @@ function OpencodeToolCard({
       asText(input.path) ||
       asText(properties.file) ||
       asText(properties.path);
-    const label = toolKey === "write" ? "写入文件" : "编辑文件";
-    const fileName = getFilename(filePath) || "文件";
+    const label =
+      toolKey === "write"
+        ? i18n.t("homeWorkspace.writeFile")
+        : i18n.t("homeWorkspace.editFile");
+    const fileName = getFilename(filePath) || i18n.t("homeWorkspace.file");
     const capsuleText = `${label} · ${fileName}`;
     return (
       <motion.div
@@ -5593,34 +6004,48 @@ function OpencodeToolCard({
     const statusText = asText(properties.status).toLowerCase();
     const statusLabel =
       statusText === "failed" || error || exitCodeText === "127"
-        ? "失败"
+        ? i18n.t("homeWorkspace.failedShort")
         : statusText === "completed" || exitCodeText === "0"
-          ? "成功"
-          : "执行";
+          ? i18n.t("homeWorkspace.successShort")
+          : i18n.t("homeWorkspace.executionShort");
     const capsuleText =
       writeLike && targetPath
         ? `${inferCodexWriteLabel(commandText)} · ${getFilename(targetPath) || targetPath}`
         : `${commandCard.title} · ${statusLabel}`;
     const inlineSummary =
       writeLike && targetPath
-        ? `通过 shell ${inferCodexWriteLabel(commandText)}：${targetPath}`
+        ? i18n.t("homeWorkspace.shellWriteSummary", {
+            action: inferCodexWriteLabel(commandText),
+            path: targetPath,
+          })
         : "";
     if (isCodexExecutor && writeLike) {
       const resolvedLabel = inferCodexWriteLabel(commandText);
       const resolvedPath = targetPath || "";
-      const resolvedFileName = getFilename(resolvedPath) || "文件";
+      const resolvedFileName =
+        getFilename(resolvedPath) || i18n.t("homeWorkspace.file");
       const writePayloadPreview = extractCodexWritePayloadPreview(commandText);
       const commandPreview = truncateText(commandText || "", 2400);
       detailTitle = `${resolvedLabel} · ${resolvedFileName}`;
       detailBodyText = [
-        `操作: ${resolvedLabel}`,
-        resolvedPath ? `目标文件: ${resolvedPath}` : "",
-        writePayloadPreview ? "写入内容预览:" : commandText ? "命令摘要:" : "",
-        writePayloadPreview ? writePayloadPreview.text : commandText ? commandPreview.text : "",
+        `${i18n.t("homeWorkspace.operationLabel")}: ${resolvedLabel}`,
+        resolvedPath
+          ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${resolvedPath}`
+          : "",
+        writePayloadPreview
+          ? i18n.t("homeWorkspace.writeContentPreviewLabel")
+          : commandText
+            ? i18n.t("homeWorkspace.commandSummaryLabel")
+            : "",
+        writePayloadPreview
+          ? writePayloadPreview.text
+          : commandText
+            ? commandPreview.text
+            : "",
         writePayloadPreview?.truncated
-          ? "写入内容已截断，请结合工作区文件预览查看完整结果。"
+          ? i18n.t("homeWorkspace.writeContentTruncated")
           : commandText && commandPreview.truncated
-            ? "命令内容已截断，请结合工作区文件预览查看完整结果。"
+            ? i18n.t("homeWorkspace.commandContentTruncated")
             : "",
         !commandText && explanationText ? explanationText : "",
       ]
@@ -5641,7 +6066,7 @@ function OpencodeToolCard({
             title={explanationText || commandHint || undefined}
           />
           {writeLike && inlineSummary ? (
-            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+            <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
               {inlineSummary}
             </div>
           ) : null}
@@ -5651,7 +6076,7 @@ function OpencodeToolCard({
             </div>
           ) : null}
           {compactOutput && previewText ? (
-            <div className="text-[11px] text-slate-500 whitespace-pre-wrap break-words">
+            <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
               {previewText}
             </div>
           ) : null}
@@ -5661,12 +6086,12 @@ function OpencodeToolCard({
             </div>
           ) : null}
           {!compactOutput && truncated ? (
-            <div className="text-[11px] text-slate-500">
-              输出已截断，请查看日志
+            <div className="text-[11px] text-muted-foreground">
+              {i18n.t("homeWorkspace.outputTruncated")}
             </div>
           ) : null}
         </div>
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5687,27 +6112,31 @@ function OpencodeToolCard({
       asText(properties.label) || mapCodexFileChangeLabel(primary?.kind || "");
     const text =
       files.length > 1
-        ? `${label || "文件变更"} · ${files.length} 个文件`
-        : `${label || "文件变更"} · ${getFilename(primaryPath) || "文件"}`;
+        ? `${label || i18n.t("homeWorkspace.fileChange")} · ${files.length} ${i18n.t("homeWorkspace.filesUnit")}`
+        : `${label || i18n.t("homeWorkspace.fileChange")} · ${getFilename(primaryPath) || i18n.t("homeWorkspace.file")}`;
     const icon =
-      label === "新建文件"
+      label === i18n.t("homeWorkspace.createFile")
         ? FilePlus
-        : label === "删除文件"
+        : label === i18n.t("homeWorkspace.deleteFile")
           ? Trash2
           : FilePenLine;
     detailTitle =
       files.length > 1
-        ? `${label || "文件变更"} · ${files.length} 个文件`
-        : `${label || "文件变更"} · ${getFilename(primaryPath) || "文件"}`;
+        ? `${label || i18n.t("homeWorkspace.fileChange")} · ${files.length} ${i18n.t("homeWorkspace.filesUnit")}`
+        : `${label || i18n.t("homeWorkspace.fileChange")} · ${getFilename(primaryPath) || i18n.t("homeWorkspace.file")}`;
     detailBodyText = [
-      `操作: ${label || "文件变更"}`,
-      primaryPath ? `目标文件: ${primaryPath}` : "",
+      `${i18n.t("homeWorkspace.operationLabel")}: ${label || i18n.t("homeWorkspace.fileChange")}`,
+      primaryPath
+        ? `${i18n.t("homeWorkspace.targetFileLabel")}: ${primaryPath}`
+        : "",
       files.length > 1
-        ? `涉及文件:\n${files
-            .map((item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`)
+        ? `${i18n.t("homeWorkspace.affectedFilesLabel")}:\n${files
+            .map(
+              (item) => `${mapCodexFileChangeLabel(item.kind)}: ${item.path}`,
+            )
             .join("\n")}`
         : "",
-      asText(properties.diff) ? "原生 Diff 已同步到内容预览面板，可点击卡片查看。" : "",
+      asText(properties.diff) ? i18n.t("homeWorkspace.nativeDiffSynced") : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -5730,19 +6159,29 @@ function OpencodeToolCard({
             }
             className="text-left"
           >
-            <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+            <EventCapsule
+              icon={icon}
+              text={text}
+              title={explanationText || undefined}
+            />
           </button>
         ) : (
-          <EventCapsule icon={icon} text={text} title={explanationText || undefined} />
+          <EventCapsule
+            icon={icon}
+            text={text}
+            title={explanationText || undefined}
+          />
         )}
-      </motion.div>
+      </motion.div>,
     );
   }
 
   if (eventType.startsWith("file.")) {
     const filePath = asText(properties.file) || asText(properties.path);
     const label =
-      eventType === "file.watcher.updated" ? "文件监听" : "文件更新";
+      eventType === "file.watcher.updated"
+        ? i18n.t("homeWorkspace.fileWatch")
+        : i18n.t("homeWorkspace.fileUpdate");
     return wrapWithDetailDialog(
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -5764,18 +6203,18 @@ function OpencodeToolCard({
           >
             <EventCapsule
               icon={FileText}
-              text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+              text={`${label} · ${getFilename(filePath) || i18n.t("homeWorkspace.fileUpdated")}`}
               title={explanationText || undefined}
             />
           </button>
         ) : (
           <EventCapsule
             icon={FileText}
-            text={`${label} · ${getFilename(filePath) || "文件已更新"}`}
+            text={`${label} · ${getFilename(filePath) || i18n.t("homeWorkspace.fileUpdated")}`}
             title={explanationText || undefined}
           />
         )}
-      </motion.div>
+      </motion.div>,
     );
   }
 
@@ -5789,10 +6228,54 @@ function OpencodeToolCard({
       <EventCapsule
         icon={toolKey === "bash" ? Terminal : FileText}
         text={`${info.title}${summaryText ? ` · ${summaryText}` : ""}`}
-        title={explanationText || (toolKey === "bash" ? commandHint || undefined : undefined)}
+        title={
+          explanationText ||
+          (toolKey === "bash" ? commandHint || undefined : undefined)
+        }
       />
-    </motion.div>
+    </motion.div>,
   );
+}
+
+function getManagedToolStatusPresentation(status: string) {
+  if (status === "failed") {
+    return {
+      iconClass:
+        "border border-[var(--tool-error-border)] bg-[var(--tool-error-surface)] text-[var(--tool-error-foreground)]",
+      badgeClass:
+        "border-[var(--tool-error-border)] bg-[var(--tool-error-surface-strong)] text-[var(--tool-error-foreground)]",
+      hoverHeaderClass:
+        "border-b border-[var(--tool-error-border)] bg-[var(--tool-error-surface)]",
+      previewClass:
+        "border border-[var(--tool-error-border)] bg-[var(--tool-error-surface)] text-foreground",
+      detailClass: "text-foreground/82",
+      hintClass: "text-[var(--tool-error-foreground)]/80",
+    } as const;
+  }
+
+  if (status === "completed") {
+    return {
+      iconClass:
+        "border border-[var(--tool-success-border)] bg-[var(--tool-success-surface)] text-[var(--tool-success-foreground)]",
+      badgeClass:
+        "border-[var(--tool-success-border)] bg-[var(--tool-success-surface-strong)] text-[var(--tool-success-foreground)]",
+      hoverHeaderClass:
+        "border-b border-[var(--tool-success-border)] bg-[var(--tool-success-surface)]",
+      previewClass:
+        "border border-[var(--tool-success-border)] bg-[var(--tool-success-surface)] text-foreground",
+      detailClass: "text-foreground/82",
+      hintClass: "text-[var(--tool-success-foreground)]/80",
+    } as const;
+  }
+
+  return {
+    iconClass: "border border-border/70 bg-background/85 text-foreground/75",
+    badgeClass: "border-border/70 bg-background/90 text-foreground/75",
+    hoverHeaderClass: "border-b border-border/70 bg-muted/25",
+    previewClass: "border border-border/70 bg-background/70 text-foreground",
+    detailClass: "text-foreground/80",
+    hintClass: "text-muted-foreground",
+  } as const;
 }
 
 function ManagedToolCard({
@@ -5818,50 +6301,44 @@ function ManagedToolCard({
                 ? Sparkles
                 : FileSearch;
   const Icon = icon;
-  const toneClass =
-    item.status === "failed"
-      ? "border-rose-200 bg-rose-50 text-rose-700"
-        : item.status === "completed"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-border/70 bg-muted/50 text-foreground/85";
   const statusLabel =
     item.status === "failed"
-      ? "失败"
+      ? i18n.t("homeWorkspace.failedShort")
       : item.status === "completed"
-        ? "已完成"
-        : "进行中";
-  const hoverPreview = buildDetailPreview(item.detail || item.summary || item.toolName, 5, 96);
+        ? i18n.t("homeWorkspace.completed")
+        : i18n.t("homeWorkspace.inProgress");
+  const hoverPreview = buildDetailPreview(
+    item.detail || item.summary || item.toolName,
+    5,
+    96,
+  );
   const summaryText = item.summary?.trim();
   const previewText =
     formatManagedToolPreview(item.toolName, item.metadata) ||
     hoverPreview.preview ||
     summaryText ||
     "";
-  const statusToneClass =
-    item.status === "failed"
-      ? "border-rose-300/60 bg-rose-100/80 text-rose-700"
-      : item.status === "completed"
-        ? "border-emerald-300/60 bg-emerald-100/80 text-emerald-700"
-        : "border-border/70 bg-background/90 text-foreground/75";
+  const statusUi = getManagedToolStatusPresentation(item.status);
   const chipToneClass =
-    item.status === "failed"
-      ? "border-rose-200/80 bg-rose-50/80 text-rose-700 hover:bg-rose-50"
-      : item.status === "completed"
-        ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-50"
-        : "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
+    "border-border/70 bg-card/90 text-foreground/85 hover:bg-muted/40";
   const writeFileProgress = readManagedWriteFileProgress(item.metadata);
-  const isWriteFileExpanded =
-    shouldExpandManagedWriteFileCard({
-      toolName: item.toolName,
-      status: item.status,
-      metadata: item.metadata,
-    });
-  const writeFilePath = writeFileProgress.path || summaryText || "写入文件";
+  const isWriteFileExpanded = shouldExpandManagedWriteFileCard({
+    toolName: item.toolName,
+    status: item.status,
+    metadata: item.metadata,
+  });
+  const writeFilePath =
+    writeFileProgress.path || summaryText || i18n.t("homeWorkspace.writeFile");
   const writeFileGeneratedLabel =
     writeFileProgress.generatedChars > 0
-      ? `已生成 ${writeFileProgress.generatedChars} 字符`
-      : "正在生成代码";
-  const writeFilePreview = writeFileProgress.preview || previewText || "正在生成代码片段...";
+      ? i18n.t("homeWorkspace.generatedCharsLabel", {
+          count: writeFileProgress.generatedChars,
+        })
+      : i18n.t("homeWorkspace.generatingCode");
+  const writeFilePreview =
+    writeFileProgress.preview ||
+    previewText ||
+    i18n.t("homeWorkspace.generatingCodeSnippet");
   const writeFilePreviewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -5887,7 +6364,9 @@ function ManagedToolCard({
                 onOpenReplay(item.runId, item.toolCallId);
               }
             }}
-            data-managed-tool-layout={isWriteFileExpanded ? "expanded" : "compact"}
+            data-managed-tool-layout={
+              isWriteFileExpanded ? "expanded" : "compact"
+            }
             className={
               isWriteFileExpanded
                 ? `group w-full max-w-full lg:max-w-[min(86vw,720px)] rounded-2xl border p-0 text-left transition ${chipToneClass}`
@@ -5899,12 +6378,14 @@ function ManagedToolCard({
                 <div className="flex h-[190px] w-full flex-col lg:h-[220px]">
                   <div className="flex items-center justify-between gap-3 border-b border-current/15 px-3 py-2">
                     <div className="min-w-0 flex items-center gap-2">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                      <span
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
+                      >
                         <Icon className="h-3.5 w-3.5" />
                       </span>
                       <div className="min-w-0">
                         <div className="text-[12px] font-medium leading-5">
-                          写入文件
+                          {i18n.t("homeWorkspace.writeFile")}
                         </div>
                         <div className="truncate text-[11px] leading-5 opacity-75">
                           {writeFilePath}
@@ -5912,7 +6393,9 @@ function ManagedToolCard({
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                      <span
+                        className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
+                      >
                         {statusLabel}
                       </span>
                       <div className="mt-1 text-[10px] leading-4 opacity-75">
@@ -5932,14 +6415,18 @@ function ManagedToolCard({
               </div>
             ) : (
               <>
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background/85 shadow-sm">
+                <span
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
+                >
                   <Icon className="h-3.5 w-3.5" />
                 </span>
                 <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                   <span className="shrink-0 text-[11px] font-medium leading-5">
                     {displayName}
                   </span>
-                  <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                  <span
+                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
+                  >
                     {statusLabel}
                   </span>
                   {summaryText ? (
@@ -5955,11 +6442,13 @@ function ManagedToolCard({
         <HoverCardContent
           align="start"
           side="top"
-          className={`w-[380px] rounded-2xl border p-0 shadow-[0px_12px_32px_rgba(15,23,42,0.18)] ${toneClass}`}
+          className="w-[380px] rounded-2xl border border-border/80 bg-popover p-0 text-popover-foreground shadow-[0_18px_48px_rgba(0,0,0,0.32)]"
         >
-          <div className="space-y-0 border-b border-current/10 px-4 py-3">
+          <div className={`space-y-0 px-4 py-3 ${statusUi.hoverHeaderClass}`}>
             <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/85 shadow-sm">
+              <div
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm ${statusUi.iconClass}`}
+              >
                 <Icon className="h-4 w-4" />
               </div>
               <div className="min-w-0">
@@ -5967,7 +6456,9 @@ function ManagedToolCard({
                   <span className="text-sm font-medium leading-5">
                     {displayName}
                   </span>
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusToneClass}`}>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
+                  >
                     {statusLabel}
                   </span>
                 </div>
@@ -5985,22 +6476,26 @@ function ManagedToolCard({
           <div className="space-y-3 px-4 py-3">
             <div className="space-y-1">
               <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
-                结果摘要
+                {i18n.t("homeWorkspace.toolResultSummary")}
               </div>
-              <p className="whitespace-pre-wrap break-all rounded-xl bg-background/70 px-3 py-2 font-mono text-[11px] leading-5">
+              <p
+                className={`whitespace-pre-wrap break-all rounded-xl px-3 py-2 font-mono text-[11px] leading-5 ${statusUi.previewClass}`}
+              >
                 {previewText}
               </p>
             </div>
             <div className="space-y-1">
               <div className="text-[11px] font-medium uppercase tracking-[0.18em] opacity-55">
-                更多信息
+                {i18n.t("homeWorkspace.moreInfo")}
               </div>
-              <p className="whitespace-pre-wrap break-all text-[12px] leading-5 opacity-80">
+              <p
+                className={`whitespace-pre-wrap break-all text-[12px] leading-5 ${statusUi.detailClass}`}
+              >
                 {hoverPreview.preview}
               </p>
             </div>
-            <div className="text-[11px] leading-5 opacity-60">
-              点击消息可查看回放与文件
+            <div className={`text-[11px] leading-5 ${statusUi.hintClass}`}>
+              {i18n.t("homeWorkspace.clickMessageForReplay")}
             </div>
           </div>
         </HoverCardContent>
@@ -6014,13 +6509,13 @@ function ManagedToolCard({
  */
 function getAgentName(agent?: string) {
   const nameMap: Record<string, string> = {
-    system: "系统",
+    system: i18n.t("homeWorkspace.systemAgent"),
     altus: "Altus",
-    intent_recognition: "意图识别",
-    planning: "任务规划",
-    execution_plan: "执行计划",
+    intent_recognition: i18n.t("homeWorkspace.intentRecognition"),
+    planning: i18n.t("homeWorkspace.taskPlanning"),
+    execution_plan: i18n.t("homeWorkspace.executionPlan"),
   };
-  return agent ? nameMap[agent] || agent : "智能体";
+  return agent ? nameMap[agent] || agent : i18n.t("homeWorkspace.agentLabel");
 }
 
 function getExecutorDisplayName(metadataRaw: unknown) {
@@ -6030,7 +6525,7 @@ function getExecutorDisplayName(metadataRaw: unknown) {
   if (executor === "altus") return "Altus";
   if (executor === "claudecode") return "ClaudeCode";
   if (executor === "opencode") return "OpenCode";
-  return "执行器";
+  return i18n.t("homeWorkspace.executorLabel");
 }
 
 function isManagedExecutionEvent(metadataRaw: unknown) {
@@ -6077,10 +6572,16 @@ function collectManagedWebArtifacts(input: {
   managedArtifacts: AltusArtifactFile[];
 }): AltusArtifactFile[] {
   const unique = new Map<string, AltusArtifactFile>();
-  const pushArtifact = (pathRaw: string, previewType?: AltusArtifactFile["previewType"]) => {
-    const path = String(pathRaw || "").trim().replace(/\\/g, "/");
+  const pushArtifact = (
+    pathRaw: string,
+    previewType?: AltusArtifactFile["previewType"],
+  ) => {
+    const path = String(pathRaw || "")
+      .trim()
+      .replace(/\\/g, "/");
     if (!path) return;
-    const resolvedPreviewType = previewType || inferManagedArtifactPreviewType(path);
+    const resolvedPreviewType =
+      previewType || inferManagedArtifactPreviewType(path);
     if (resolvedPreviewType !== "web") return;
     if (unique.has(path)) return;
     unique.set(path, {
@@ -6104,7 +6605,8 @@ export function buildManagedCompletionCardItem(input: {
   managedArtifactsByRun: Map<string, AltusArtifactFile[]>;
   emittedManagedCompletionRuns: Set<string>;
 }): ChatItem | null {
-  const { message, managedArtifactsByRun, emittedManagedCompletionRuns } = input;
+  const { message, managedArtifactsByRun, emittedManagedCompletionRuns } =
+    input;
   const metadata = toRecord(message.metadata);
   if (!isManagedExecutionEvent(metadata)) {
     return null;
@@ -6124,8 +6626,12 @@ export function buildManagedCompletionCardItem(input: {
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
-  const isRunCompletedContext = message.type === "status_update" && eventType === "run_completed";
-  if ((shouldEmitFromDeliverablesContext || isRunCompletedContext) && webArtifacts.length > 0) {
+  const isRunCompletedContext =
+    message.type === "status_update" && eventType === "run_completed";
+  if (
+    (shouldEmitFromDeliverablesContext || isRunCompletedContext) &&
+    webArtifacts.length > 0
+  ) {
     emittedManagedCompletionRuns.add(runId);
     return {
       kind: "managed_artifact_card",
@@ -6165,7 +6671,9 @@ export function buildManagedCompletionCardItem(input: {
   };
 }
 
-function parseManagedToolOutputPreview(outputPreviewRaw: unknown): Record<string, unknown> {
+function parseManagedToolOutputPreview(
+  outputPreviewRaw: unknown,
+): Record<string, unknown> {
   if (!outputPreviewRaw) return {};
   if (typeof outputPreviewRaw === "string") {
     const trimmed = outputPreviewRaw.trim();
@@ -6211,8 +6719,12 @@ function collectManagedReplayArtifactPaths(
     pushPath(output.path);
   }
 
-  if (toolName === "complete_task" && Array.isArray((args as { attachments?: unknown[] }).attachments)) {
-    for (const item of (args as { attachments?: unknown[] }).attachments || []) {
+  if (
+    toolName === "complete_task" &&
+    Array.isArray((args as { attachments?: unknown[] }).attachments)
+  ) {
+    for (const item of (args as { attachments?: unknown[] }).attachments ||
+      []) {
       const record = toRecord(item);
       pushPath(record.path);
       pushPath(record.filePath);
@@ -6319,7 +6831,8 @@ function buildManagedReplayData(messages: AgentMessage[]) {
               : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
-        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
+        internalDetail:
+          formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       });
     } else {
@@ -6336,7 +6849,8 @@ function buildManagedReplayData(messages: AgentMessage[]) {
                 : "running",
         summary: formatManagedToolSummary(toolName, metadata),
         detail: formatManagedToolDetail(toolName, metadata),
-        internalDetail: formatManagedToolInternalDetail(toolName, metadata) || undefined,
+        internalDetail:
+          formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
       };
     }
@@ -6359,7 +6873,9 @@ function buildManagedReplayData(messages: AgentMessage[]) {
   );
 }
 
-function inferManagedArtifactPreviewType(path: string): AltusArtifactFile["previewType"] {
+function inferManagedArtifactPreviewType(
+  path: string,
+): AltusArtifactFile["previewType"] {
   return /\.(html?)$/i.test(path) ? "web" : "code";
 }
 
@@ -6388,7 +6904,10 @@ function readManagedDeploymentToolOutput(metadataRaw: unknown) {
   };
 }
 
-function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): string {
+function extractManagedArtifactPath(
+  toolName: string,
+  metadataRaw: unknown,
+): string {
   if (toolName !== "write_file") return "";
   const metadata = toRecord(metadataRaw);
   const args = toRecord(metadata.arguments);
@@ -6399,29 +6918,29 @@ function extractManagedArtifactPath(toolName: string, metadataRaw: unknown): str
 function getManagedToolDisplayName(toolName: string) {
   switch (toolName) {
     case "shell_execute":
-      return "命令执行";
+      return i18n.t("homeWorkspace.commandExecution");
     case "write_file":
-      return "写入文件";
+      return i18n.t("homeWorkspace.writeFile");
     case "read_file":
-      return "读取文件";
+      return i18n.t("homeWorkspace.readFile");
     case "list_directory":
-      return "列出目录";
+      return i18n.t("homeWorkspace.listDirectory");
     case "search_code":
-      return "代码搜索";
+      return i18n.t("homeWorkspace.codeSearch");
     case "ask_user":
-      return "请求澄清";
+      return i18n.t("homeWorkspace.requestClarification");
     case "deploy_application":
-      return "发布应用";
+      return i18n.t("homeWorkspace.deployApplication");
     case "redeploy_application":
-      return "重新发布";
+      return i18n.t("homeWorkspace.redeployApplication");
     case "rollback_application_deployment":
-      return "回滚部署";
+      return i18n.t("homeWorkspace.rollbackDeployment");
     case "get_application_deployment_status":
-      return "查询部署状态";
+      return i18n.t("homeWorkspace.deploymentStatus");
     case "complete_task":
-      return "完成任务";
+      return i18n.t("homeWorkspace.completeTask");
     default:
-      return toolName || "工具调用";
+      return toolName || i18n.t("homeWorkspace.toolCall");
   }
 }
 
@@ -6472,22 +6991,27 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
   const projectedView = readManagedToolViewProjection(metadata);
   if (toolName === "shell_execute") {
-    return asText(args.command) || "执行 shell 命令";
+    return asText(args.command) || i18n.t("homeWorkspace.executeShellCommand");
   }
   if (toolName === "write_file") {
     const path = asText(args.path) || writeFileProgress.path;
     if (writeFileProgress.generatedChars > 0) {
-      return [path || "写入文件", `生成中 ${writeFileProgress.generatedChars} 字符`]
+      return [
+        path || i18n.t("homeWorkspace.writeFile"),
+        i18n.t("homeWorkspace.generatingCharsLabel", {
+          count: writeFileProgress.generatedChars,
+        }),
+      ]
         .filter(Boolean)
         .join(" · ");
     }
-    return path || "写入文件";
+    return path || i18n.t("homeWorkspace.writeFile");
   }
   if (toolName === "read_file") {
-    return asText(args.path) || "读取文件";
+    return asText(args.path) || i18n.t("homeWorkspace.readFile");
   }
   if (toolName === "list_directory") {
-    return asText(args.path) || "列出目录";
+    return asText(args.path) || i18n.t("homeWorkspace.listDirectory");
   }
   if (toolName === "search_code") {
     const query = asText(args.query);
@@ -6495,31 +7019,35 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
   }
   if (toolName === "ask_user") {
-    return asText(args.question) || "请求用户澄清";
+    return (
+      asText(args.question) || i18n.t("homeWorkspace.requestUserClarification")
+    );
   }
   if (isManagedDeploymentTool(toolName)) {
     if (projectedView.userSummary) {
       return projectedView.userSummary;
     }
     if (deploymentOutput.status === "retryable_repair_required") {
-      return "正在修复发布配置";
+      return i18n.t("homeWorkspace.fixingDeploymentConfig");
     }
     if (deploymentOutput.summary) {
       return deploymentOutput.summary;
     }
     if (toolName === "deploy_application") {
-      return "准备发布应用";
+      return i18n.t("homeWorkspace.preparingDeployment");
     }
     if (toolName === "redeploy_application") {
-      return "准备重新发布";
+      return i18n.t("homeWorkspace.preparingRedeployment");
     }
     if (toolName === "rollback_application_deployment") {
-      return "准备回滚部署";
+      return i18n.t("homeWorkspace.preparingRollback");
     }
-    return "查询部署状态";
+    return i18n.t("homeWorkspace.checkDeploymentStatus");
   }
   if (toolName === "complete_task") {
-    return asText(args.summary) || "输出最终完成总结";
+    return (
+      asText(args.summary) || i18n.t("homeWorkspace.finalCompletionSummary")
+    );
   }
   return asText(metadata.content) || toolName;
 }
@@ -6535,7 +7063,10 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
 
   if (error) {
     if (isManagedDeploymentTool(toolName)) {
-      return projectedView.userPreview || "发布暂未完成，内部调试信息已记录。";
+      return (
+        projectedView.userPreview ||
+        i18n.t("homeWorkspace.deploymentNotFinished")
+      );
     }
     return error;
   }
@@ -6543,7 +7074,12 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   if (toolName === "shell_execute") {
     const stdout = asText(output.stdout);
     const stderr = asText(output.stderr);
-    return stdout || stderr || asText(args.command) || "执行命令";
+    return (
+      stdout ||
+      stderr ||
+      asText(args.command) ||
+      i18n.t("homeWorkspace.executeCommand")
+    );
   }
 
   if (toolName === "write_file") {
@@ -6551,19 +7087,33 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
       return writeFileProgress.preview;
     }
     const bytes = asText(output.bytes);
-    return bytes ? `写入 ${bytes} bytes` : asText(output.path) || "已写入目标文件";
+    return bytes
+      ? i18n.t("homeWorkspace.wroteBytes", { bytes })
+      : asText(output.path) || i18n.t("homeWorkspace.wroteTargetFile");
   }
 
   if (toolName === "read_file") {
-    return asText(output.content) || asText(output.path) || "已读取目标文件";
+    return (
+      asText(output.content) ||
+      asText(output.path) ||
+      i18n.t("homeWorkspace.readTargetFile")
+    );
   }
 
   if (toolName === "list_directory") {
-    return asText(output.output) || asText(output.path) || "已返回目录内容";
+    return (
+      asText(output.output) ||
+      asText(output.path) ||
+      i18n.t("homeWorkspace.returnedDirectoryContent")
+    );
   }
 
   if (toolName === "search_code") {
-    return asText(output.output) || asText(args.query) || "已返回搜索结果";
+    return (
+      asText(output.output) ||
+      asText(args.query) ||
+      i18n.t("homeWorkspace.returnedSearchResults")
+    );
   }
 
   if (isManagedDeploymentTool(toolName)) {
@@ -6571,28 +7121,31 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
       return projectedView.userPreview;
     }
     if (deploymentOutput.status === "retryable_repair_required") {
-      return "已识别到发布配置问题，Altus 正在自动修复后重试。";
+      return i18n.t("homeWorkspace.deploymentConfigIssueRetrying");
     }
     if (deploymentOutput.url) {
-      return `访问地址 ${deploymentOutput.url}`;
+      return i18n.t("homeWorkspace.visitUrl", { url: deploymentOutput.url });
     }
     if (deploymentOutput.summary) {
       return deploymentOutput.summary;
     }
     if (toolName === "get_application_deployment_status") {
-      return "已返回当前部署状态。";
+      return i18n.t("homeWorkspace.returnedDeploymentStatus");
     }
-    return "平台正在处理当前部署请求。";
+    return i18n.t("homeWorkspace.platformProcessingDeployment");
   }
 
   if (toolName === "complete_task") {
-    return asText(args.summary) || "任务已完成";
+    return asText(args.summary) || i18n.t("homeWorkspace.taskDone");
   }
 
   return asText(metadata.outputPreview) || asText(metadata.content);
 }
 
-function formatManagedToolInternalDetail(toolName: string, metadataRaw: unknown) {
+function formatManagedToolInternalDetail(
+  toolName: string,
+  metadataRaw: unknown,
+) {
   if (!isManagedDeploymentTool(toolName)) return "";
   const projectedView = readManagedToolViewProjection(metadataRaw);
   return projectedView.internalDetail;
@@ -6614,72 +7167,117 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
     }
   };
 
-  lines.push(`工具: ${getManagedToolDisplayName(toolName)} (${toolName})`);
+  lines.push(
+    `${i18n.t("homeWorkspace.toolLabel")}: ${getManagedToolDisplayName(toolName)} (${toolName})`,
+  );
 
   if (toolName === "shell_execute") {
-    pushLine("命令", args.command);
-    pushLine("目录", output.cwd || args.cwd);
-    pushLine("退出码", output.exitCode);
-    pushLine("输出", output.stdout);
-    pushLine("错误输出", output.stderr);
+    pushLine(i18n.t("homeWorkspace.commandLabel"), args.command);
+    pushLine(i18n.t("homeWorkspace.directoryLabel"), output.cwd || args.cwd);
+    pushLine(i18n.t("homeWorkspace.exitCodeLabel"), output.exitCode);
+    pushLine(i18n.t("homeWorkspace.outputLabel"), output.stdout);
+    pushLine(i18n.t("homeWorkspace.errorOutputLabel"), output.stderr);
   } else if (toolName === "write_file") {
-    pushLine("目标文件", args.path || output.path || writeFileProgress.path);
-    pushLine("已生成字符", writeFileProgress.generatedChars > 0 ? String(writeFileProgress.generatedChars) : "");
-    pushLine("代码预览", writeFileProgress.preview);
-    pushLine("写入大小", output.bytes);
+    pushLine(
+      i18n.t("homeWorkspace.targetFileLabel"),
+      args.path || output.path || writeFileProgress.path,
+    );
+    pushLine(
+      i18n.t("homeWorkspace.generatedCharsField"),
+      writeFileProgress.generatedChars > 0
+        ? String(writeFileProgress.generatedChars)
+        : "",
+    );
+    pushLine(
+      i18n.t("homeWorkspace.codePreviewLabel"),
+      writeFileProgress.preview,
+    );
+    pushLine(i18n.t("homeWorkspace.writeSizeLabel"), output.bytes);
   } else if (toolName === "read_file") {
-    pushLine("目标文件", args.path || output.path);
-    pushLine("内容预览", output.content);
+    pushLine(i18n.t("homeWorkspace.targetFileLabel"), args.path || output.path);
+    pushLine(i18n.t("homeWorkspace.contentPreviewLabel"), output.content);
   } else if (toolName === "list_directory") {
-    pushLine("目标目录", args.path || output.path);
-    pushLine("递归深度", output.depth || args.depth);
-    pushLine("结果预览", output.output);
+    pushLine(
+      i18n.t("homeWorkspace.targetDirectoryLabel"),
+      args.path || output.path,
+    );
+    pushLine(
+      i18n.t("homeWorkspace.recursionDepthLabel"),
+      output.depth || args.depth,
+    );
+    pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
   } else if (toolName === "search_code") {
-    pushLine("搜索词", args.query);
-    pushLine("搜索范围", args.path || output.path);
-    pushLine("结果预览", output.output);
+    pushLine(i18n.t("homeWorkspace.searchQueryLabel"), args.query);
+    pushLine(
+      i18n.t("homeWorkspace.searchScopeLabel"),
+      args.path || output.path,
+    );
+    pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
   } else if (isManagedDeploymentTool(toolName)) {
     if (projectedView.userDetail) {
       return projectedView.userDetail;
     }
-    pushLine("阶段", deploymentOutput.phase || (error ? "failed" : "running"));
-    pushLine("状态", deploymentOutput.status || deploymentOutput.deploymentStatus);
-    pushLine("摘要", deploymentOutput.summary);
-    pushLine("访问地址", deploymentOutput.url);
-    pushLine("部署 ID", deploymentOutput.deploymentId);
+    pushLine(
+      i18n.t("homeWorkspace.phaseLabel"),
+      deploymentOutput.phase || (error ? "failed" : "running"),
+    );
+    pushLine(
+      i18n.t("homeWorkspace.statusLabel"),
+      deploymentOutput.status || deploymentOutput.deploymentStatus,
+    );
+    pushLine(i18n.t("homeWorkspace.summaryLabel"), deploymentOutput.summary);
+    pushLine(i18n.t("homeWorkspace.accessUrlLabel"), deploymentOutput.url);
+    pushLine(
+      i18n.t("homeWorkspace.deploymentIdLabel"),
+      deploymentOutput.deploymentId,
+    );
     if (deploymentOutput.status === "retryable_repair_required") {
-      pushLine("处理", "Altus 正在按平台部署基线自动修复后重试");
+      pushLine(
+        i18n.t("homeWorkspace.handlingLabel"),
+        i18n.t("homeWorkspace.altusRetryingRepair"),
+      );
     } else if (error || deploymentOutput.status === "fatal_error") {
-      pushLine("处理", "内部调试信息已记录，主界面不展示底层供应商错误");
+      pushLine(
+        i18n.t("homeWorkspace.handlingLabel"),
+        i18n.t("homeWorkspace.internalDebugLogged"),
+      );
     }
   } else if (toolName === "ask_user") {
-    pushLine("问题", args.question);
+    pushLine(i18n.t("homeWorkspace.questionLabel"), args.question);
     if (Array.isArray(args.options)) {
       const options = (args.options as unknown[])
         .map((item) => asText(item))
         .filter(Boolean)
         .join(" / ");
-      pushLine("建议选项", options);
+      pushLine(i18n.t("homeWorkspace.suggestedOptionsLabel"), options);
     }
   } else if (toolName === "complete_task") {
-    pushLine("完成摘要", args.summary);
+    pushLine(i18n.t("homeWorkspace.completionSummaryLabel"), args.summary);
     if (Array.isArray(args.verification)) {
       const checks = (args.verification as unknown[])
         .map((item) => asText(item))
         .filter(Boolean)
         .join(" / ");
-      pushLine("验证", checks);
+      pushLine(i18n.t("homeWorkspace.verificationLabel"), checks);
     }
   } else {
-    pushLine("摘要", asText(metadata.content));
+    pushLine(i18n.t("homeWorkspace.summaryLabel"), asText(metadata.content));
   }
 
   if (error) {
-    pushLine("失败原因", isManagedDeploymentTool(toolName) ? "发布暂未完成" : error);
+    pushLine(
+      i18n.t("homeWorkspace.failureReasonLabel"),
+      isManagedDeploymentTool(toolName)
+        ? i18n.t("homeWorkspace.deploymentPending")
+        : error,
+    );
   }
 
   if (lines.length === 1) {
-    pushLine("摘要", formatManagedToolSummary(toolName, metadata));
+    pushLine(
+      i18n.t("homeWorkspace.summaryLabel"),
+      formatManagedToolSummary(toolName, metadata),
+    );
   }
 
   return lines.join("\n");

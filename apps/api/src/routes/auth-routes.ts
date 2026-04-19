@@ -17,6 +17,7 @@ router.post('/register', async (req, res) => {
         email: req.body?.email,
         password: req.body?.password,
         displayName: req.body?.displayName,
+        verificationCode: req.body?.verificationCode,
       },
       req
     );
@@ -34,6 +35,23 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({
       success: false,
       error: getPublicErrorMessage(error?.message || '注册失败'),
+    });
+  }
+});
+
+router.post('/register/send-code', async (req, res) => {
+  try {
+    const result = await appAuthService.sendRegisterVerificationCode({
+      email: req.body?.email,
+    });
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '验证码发送失败'),
     });
   }
 });

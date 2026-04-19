@@ -1,0 +1,1254 @@
+{
+  "startedAt": "2026-04-18T14:48:15.474Z",
+  "webBaseUrl": "http://oneceo.ai:3000",
+  "apiBaseUrl": "http://oneceo.ai:3000",
+  "prompt": "帮我写个外贸的网站，做亚克力产品出口，需要有产品介绍、公司介绍等页面。请直接生成完整可运行项目，不要先提问。",
+  "deployPrompt": "帮我部署当前项目",
+  "userEmail": "test@test.com",
+  "sessionId": "1237c9bc-7943-47c1-b77f-2aaa9a435360",
+  "generationRunId": "ac875e93-7724-4439-96e6-0b0079883f50",
+  "deployRunId": null,
+  "deployedUrl": null,
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of \"text/html\". Strict MIME type checking is enforced for module scripts per HTML spec.",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "[Sidebar] failed to load sessions: Error: request failed: 500\n    at fetchJson (http://oneceo.ai:3000/src/lib/task-creation-client.ts:24:11)\n    at async listTaskCreationSessions (http://oneceo.ai:3000/src/lib/task-creation-client.ts:43:18)\n    at async load (http://oneceo.ai:3000/src/components/Sidebar.tsx:208:22)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "[Sidebar] failed to load sessions: Error: request failed: 500\n    at fetchJson (http://oneceo.ai:3000/src/lib/task-creation-client.ts:24:11)\n    at async listTaskCreationSessions (http://oneceo.ai:3000/src/lib/task-creation-client.ts:43:18)\n    at async load (http://oneceo.ai:3000/src/components/Sidebar.tsx:208:22)",
+    "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "[Sidebar] failed to load sessions: Error: request failed: 500\n    at fetchJson (http://oneceo.ai:3000/src/lib/task-creation-client.ts:24:11)\n    at async listTaskCreationSessions (http://oneceo.ai:3000/src/lib/task-creation-client.ts:43:18)\n    at async load (http://oneceo.ai:3000/src/components/Sidebar.tsx:208:22)"
+  ],
+  "pageErrors": [],
+  "requestFailures": [
+    "GET http://oneceo.ai:3000/api/altus-managed/runs/ac875e93-7724-4439-96e6-0b0079883f50/stream?clientId=sse_client_1776523697690_wbr9u96u&userId=c2f3b1e7-fcea-4585-a37d-b7aa6490addc :: net::ERR_ABORTED",
+    "GET http://oneceo.ai:3000/api/altus-managed/runs/ac875e93-7724-4439-96e6-0b0079883f50/stream?clientId=sse_client_1776523697690_wbr9u96u&userId=c2f3b1e7-fcea-4585-a37d-b7aa6490addc :: net::ERR_ABORTED",
+    "HEAD http://oneceo.ai:3000/api/task-creation/sessions/1237c9bc-7943-47c1-b77f-2aaa9a435360/workspace/raw/index.html :: net::ERR_ABORTED",
+    "GET http://oneceo.ai:3000/api/task-creation/sessions?limit=all :: net::ERR_ABORTED",
+    "GET http://oneceo.ai:3000/api/task-creation/sessions?limit=all :: net::ERR_ABORTED",
+    "GET http://oneceo.ai:3000/api/task-creation/sessions?limit=all :: net::ERR_ABORTED"
+  ],
+  "deployedPageConsoleErrors": [],
+  "deployedPageErrors": [],
+  "workspaceEvidence": {
+    "tree": {
+      "root": "/home/user/opencode/workspaces/1237c9bc-7943-47c1-b77f-2aaa9a435360",
+      "items": [
+        {
+          "path": "dist",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules",
+          "type": "dir"
+        },
+        {
+          "path": "src",
+          "type": "dir"
+        },
+        {
+          "path": "index.html",
+          "type": "file"
+        },
+        {
+          "path": "oneceo.manifest.json",
+          "type": "file"
+        },
+        {
+          "path": "package-lock.json",
+          "type": "file"
+        },
+        {
+          "path": "package.json",
+          "type": "file"
+        },
+        {
+          "path": "server.js",
+          "type": "file"
+        },
+        {
+          "path": "vite.config.js",
+          "type": "file"
+        },
+        {
+          "path": "dist/assets",
+          "type": "dir"
+        },
+        {
+          "path": "dist/index.html",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@esbuild",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@nodelib",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@rollup",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@types",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/accepts",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/acorn",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/array-flatten",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/async",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/balanced-match",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/body-parser",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/boolbase",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/brace-expansion",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/braces",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/buffer-from",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/bytes",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/call-bind-apply-helpers",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/call-bound",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/camel-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/clean-css",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/colorette",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/commander",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/connect-history-api-fallback",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/consola",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/content-disposition",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/content-type",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/cookie",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/cookie-signature",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/css-select",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/css-what",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/debug",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/depd",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/destroy",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/dom-serializer",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/domelementtype",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/domhandler",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/domutils",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/dot-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/dotenv",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/dotenv-expand",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/dunder-proto",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/ee-first",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/ejs",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/encodeurl",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/entities",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/es-define-property",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/es-errors",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/es-object-atoms",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/esbuild",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/escape-html",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/estree-walker",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/etag",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/express",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/fast-glob",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/fastq",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/filelist",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/fill-range",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/finalhandler",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/forwarded",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/fresh",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/fs-extra",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/function-bind",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/get-intrinsic",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/get-proto",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/glob-parent",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/gopd",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/graceful-fs",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/has-symbols",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/hasown",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/he",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/html-minifier-terser",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/http-errors",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/iconv-lite",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/inherits",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/ipaddr.js",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/is-extglob",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/is-glob",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/is-number",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/jake",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/jsonfile",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/lower-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/math-intrinsics",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/media-typer",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/merge-descriptors",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/merge2",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/methods",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/micromatch",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/mime",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/mime-db",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/mime-types",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/minimatch",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/ms",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/nanoid",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/negotiator",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/no-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/node-html-parser",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/nth-check",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/object-inspect",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/on-finished",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/param-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/parseurl",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/pascal-case",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/path-to-regexp",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/pathe",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/picocolors",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/picomatch",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/postcss",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/proxy-addr",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/qs",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/queue-microtask",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/range-parser",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/raw-body",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/relateurl",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/reusify",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/rollup",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/run-parallel",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/safe-buffer",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/safer-buffer",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/send",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/serve-static",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/setprototypeof",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/side-channel",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/side-channel-list",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/side-channel-map",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/side-channel-weakmap",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/source-map",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/source-map-js",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/source-map-support",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/statuses",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/terser",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/to-regex-range",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/toidentifier",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/tslib",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/type-is",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/universalify",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/unpipe",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/utils-merge",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/vary",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/vite",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/vite-plugin-html",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/.package-lock.json",
+          "type": "file"
+        },
+        {
+          "path": "src/scripts",
+          "type": "dir"
+        },
+        {
+          "path": "src/styles",
+          "type": "dir"
+        },
+        {
+          "path": "dist/assets/index-BrVJjO43.js",
+          "type": "file"
+        },
+        {
+          "path": "dist/assets/index-BrVJjO43.js.map",
+          "type": "file"
+        },
+        {
+          "path": "dist/assets/index-kUVNIUlb.css",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/acorn",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/ejs",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/esbuild",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/he",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/html-minifier-terser",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/jake",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/mime",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/nanoid",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/rollup",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/terser",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/.bin/vite",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/@esbuild/linux-x64",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell/gen-mapping",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell/resolve-uri",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell/source-map",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell/sourcemap-codec",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@jridgewell/trace-mapping",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@nodelib/fs.scandir",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@nodelib/fs.stat",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@nodelib/fs.walk",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@rollup/pluginutils",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@rollup/rollup-linux-x64-gnu",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@rollup/rollup-linux-x64-musl",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/@types/estree",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/accepts/HISTORY.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/accepts/index.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/accepts/LICENSE",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/accepts/package.json",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/accepts/README.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/acorn/bin",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/acorn/dist",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/acorn/CHANGELOG.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/acorn/LICENSE",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/acorn/package.json",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/acorn/README.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/array-flatten/array-flatten.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/array-flatten/LICENSE",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/array-flatten/package.json",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/array-flatten/README.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/dist",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/async/internal",
+          "type": "dir"
+        },
+        {
+          "path": "node_modules/async/all.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/allLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/allSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/any.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/anyLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/anySeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/apply.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/applyEach.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/applyEachSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/asyncify.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/auto.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/autoInject.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/bower.json",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/cargo.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/cargoQueue.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/CHANGELOG.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/compose.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/concat.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/concatLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/concatSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/constant.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/detect.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/detectLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/detectSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/dir.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/doDuring.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/doUntil.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/doWhilst.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/during.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/each.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/eachLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/eachOf.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/eachOfLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/eachOfSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/eachSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/ensureAsync.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/every.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/everyLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/everySeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/filter.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/filterLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/filterSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/find.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/findLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/findSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/flatMap.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/flatMapLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/flatMapSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/foldl.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/foldr.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEach.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEachLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEachOf.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEachOfLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEachOfSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forEachSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/forever.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/groupBy.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/groupByLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/groupBySeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/index.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/inject.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/LICENSE",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/log.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/map.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/mapLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/mapSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/mapValues.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/mapValuesLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/mapValuesSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/memoize.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/nextTick.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/package.json",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/parallel.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/parallelLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/priorityQueue.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/queue.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/race.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/README.md",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/reduce.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/reduceRight.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/reflect.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/reflectAll.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/reject.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/rejectLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/rejectSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/retry.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/retryable.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/select.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/selectLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/selectSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/seq.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/series.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/setImmediate.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/some.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/someLimit.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/someSeries.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/sortBy.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/timeout.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/times.js",
+          "type": "file"
+        },
+        {
+          "path": "node_modules/async/timesLimit.js",
+          "type": "file"
+        }
+      ]
+    },
+    "containsIndex": true,
+    "containsPublicIndex": false,
+    "containsPackageJson": true
+  },
+  "deploymentPanel": null,
+  "publicPage": null,
+  "evidence": null,
+  "uiStartFallbackUsed": false,
+  "uiDeployFallbackUsed": false,
+  "passed": false,
+  "testAccountFile": "/Users/watson/codingProj/oneceo/apps/web/e2e/playwright-test-account.json",
+  "testUserId": "c2f3b1e7-fcea-4585-a37d-b7aa6490addc",
+  "finishedAt": "2026-04-18T15:04:12.126Z"
+}

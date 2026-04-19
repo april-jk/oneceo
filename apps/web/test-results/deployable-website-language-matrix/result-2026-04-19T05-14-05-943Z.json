@@ -1,0 +1,36 @@
+{
+  "matrixId": "deployable-website-language-matrix",
+  "classification": "deployable_website",
+  "startedAt": "2026-04-19T05:14:07.289Z",
+  "webBaseUrl": "http://oneceo.ai:3000",
+  "apiBaseUrl": "http://127.0.0.1:4000",
+  "caseFilter": "WD-HTML-01",
+  "cases": [
+    {
+      "id": "WD-HTML-01",
+      "description": "纯静态 HTML 多页面网站应可部署",
+      "prompt": "请用纯 HTML、CSS 和少量原生 JavaScript 开发一个工业企业官网，包含首页、产品页、公司介绍页和联系页。不要使用后端框架。先完成完整网站代码，再继续帮我部署当前项目。",
+      "startedAt": "2026-04-19T05:14:10.061Z",
+      "passed": false,
+      "error": "Error: failed to collect evidence: apps/web | WARN The field \"pnpm.patchedDependencies\" was found in /Users/watson/codingProj/oneceo/apps/web/package.json. This will not take effect. You should configure \"pnpm.patchedDependencies\" at the root of the workspace instead. apps/web | WARN The field \"pnpm.overrides\" was found in /Users/watson/codingProj/oneceo/apps/web/package.json. This will not take effect. You should configure \"pnpm.overrides\" at the root of the workspace instead. { \"ok\": true, \"sessionId\": \"dabcb6b5-1dcd-4bad-8e5a-e1e3269abbd3\", \"session\": { \"id\": \"dabcb6b5-1dcd-4bad-8e5a-e1e3269abbd3\", \"status\": \"completed\", \"updatedAt\": \"2026-04-19T05:33:02.759Z\" }, \"latestRun\": { \"id\": \"0e848241-69e2-427f-9409-3c1e19beb23e\", \"status\": \"completed\", \"mode\": \"managed\", \"createdAt\": \"2026-04-19T13:32:41.860Z\", \"completedAt\": \"2026-04-19T05:33:02.634Z\" }, \"runs\": [ { \"id\": \"0e848241-69e2-427f-9409-3c1e19beb23e\", \"status\": \"completed\", \"mode\": \"managed\", \"createdAt\": \"2026-04-19T13:32:41.860Z\", \"completedAt\": \"2026-04-19T05:33:02.634Z\" }, { \"id\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"status\": \"completed\", \"mode\": \"managed\", \"createdAt\": \"2026-04-19T13:14:10.520Z\", \"completedAt\": \"2026-04-19T05:32:15.942Z\" } ], \"toolEvents\": [ { \"runId\": \"0e848241-69e2-427f-9409-3c1e19beb23e\", \"sequence\": 7, \"createdAt\": \"2026-04-19T13:32:45.116Z\", \"toolName\": \"get_application_deployment_status\", \"content\": \"正在查询部署状态\" }, { \"runId\": \"0e848241-69e2-427f-9409-3c1e19beb23e\", \"sequence\": 44, \"createdAt\": \"2026-04-19T13:33:02.518Z\", \"toolName\": \"complete_task\", \"content\": \"调用工具 complete_task\" }, { \"runId\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"sequence\": 1328, \"createdAt\": \"2026-04-19T13:31:32.774Z\", \"toolName\": \"get_application_deployment_status\", \"content\": \"正在查询部署状态\" }, { \"runId\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"sequence\": 1339, \"createdAt\": \"2026-04-19T13:31:40.581Z\", \"toolName\": \"get_application_deployment_status\", \"content\": \"正在查询部署状态\" }, { \"runId\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"sequence\": 1348, \"createdAt\": \"2026-04-19T13:31:47.996Z\", \"toolName\": \"get_application_deployment_status\", \"content\": \"正在查询部署状态\" }, { \"runId\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"sequence\": 1361, \"createdAt\": \"2026-04-19T13:31:56.774Z\", \"toolName\": \"shell_execute\", \"content\": \"调用工具 shell_execute\" }, { \"runId\": \"bfc8e24f-62c9-4b58-98c3-b092052b8f65\", \"sequence\": 1385, \"createdAt\": \"2026-04-19T13:32:15.645Z\", \"toolName\": \"complete_task\", \"content\": \"调用工具 complete_task\" } ], \"autoAttachedMessages\": [], \"recentMessages\": [ { \"role\": \"agent\", \"messageType\": \"executor_event\", \"messageKey\": \"managed:bfc8e24f-62c9-4b58-98c3-b092052b8f65:tool:call_a9b41486bc3e4f1297f9edef\", \"content\": \"部署状态查询已完成\", \"createdAt\": \"2026-04-19T13:31:32.774Z\", \"metadata\": { \"eventType\": \"tool_call_completed\", \"toolName\": \"get_application_deployment_status\", \"skillSlugs\": [] } }, { \"role\": \"agent\", \"messageType\": \"executor_event\", \"messageKey\": \"managed:bfc8e24f-62c9-4b58-98c3-b092052b8f65:tool:call_080a31de8a2148fb9c4a9d1d\", \"content\": \"部署状态查询已完成\", \"createdAt\": \"2026-04-19T13:31:40.581Z\", \"metadata\": { \"eventType\": \"tool_call_completed\", \"toolName\": \"get_application_deployment_status\", \"skillSlugs\": [] } }, { \"role\": \"agent\", \"messageType\": \"executor_event\", \"messageKey\": \"managed:bfc8e24f-62c9-4b58-98c3-b092052b8f65:tool:call_4fb7ebc9164b4fca861ea5a7\", \"content\": \"部署状态查询已完成\", \"createdAt\": \"2026-04-19T13:31:47.996Z\", \"metadata\": { \"eventType\": \"tool_call_completed\", \"toolName\": \"get_application_deployment_status\", \"skillSlugs\": [] } }, { \"role\": \"agent\", \"messageType\": \"executor_event\", \"messageKey\": \"managed:bfc8e24f-62c9-4b58-98c3-b092052b8f65:tool:call_ad79470611b94401af7797b3\", \"content\": \"工具 shell_execute 已完成\", \"createdAt\": \"2026-04-19T13:31:56.774Z\", \"metadata\": { \"eventType\": \"tool_call_completed\", \"toolName\": \"shell_execute\", \"skillSlugs\": [] } }, { \"role\": \"agent\", \"messageType\": \"executor_event\", \"messageKey\": \"managed:bfc8e24f-62c9-4b58-98c3-b092052b8f65:tool:call_...",
+      "finishedAt": "2026-04-19T05:33:35.026Z",
+      "durationMs": 1164966
+    }
+  ],
+  "passed": false,
+  "error": null,
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: net::ERR_CONNECTION_CLOSED",
+    "Failed to load resource: net::ERR_CONNECTION_CLOSED"
+  ],
+  "pageErrors": [],
+  "requestFailures": [
+    "GET http://oneceo.ai:3000/api/altus-managed/runs/bfc8e24f-62c9-4b58-98c3-b092052b8f65/stream?afterSequence=2&clientId=sse_client_1776575650883_8c39b54m&userId=3f290763-8bf3-4ef5-b441-4d8de5f7a30e :: net::ERR_ABORTED",
+    "HEAD http://oneceo.ai:3000/api/task-creation/sessions/dabcb6b5-1dcd-4bad-8e5a-e1e3269abbd3/workspace/raw/index.html :: net::ERR_ABORTED",
+    "GET https://via.placeholder.com/500x300/2c3e50/ffffff?text=%E5%B7%A5%E5%8E%82%E5%AE%9E%E6%99%AF :: net::ERR_CONNECTION_CLOSED",
+    "GET https://via.placeholder.com/1920x600/2c3e50/ffffff?text=%E5%B7%A5%E4%B8%9A%E8%87%AA%E5%8A%A8%E5%8C%96 :: net::ERR_CONNECTION_CLOSED"
+  ],
+  "finishedAt": "2026-04-19T05:33:35.028Z"
+}

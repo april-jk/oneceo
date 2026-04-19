@@ -1,0 +1,33 @@
+{
+  "matrixId": "non-deployable-script-language-matrix",
+  "classification": "non_deployable_script",
+  "startedAt": "2026-04-19T12:57:12.148Z",
+  "webBaseUrl": "http://oneceo.ai:3000",
+  "apiBaseUrl": "http://127.0.0.1:4000",
+  "caseFilter": "ND-HTML-01",
+  "cases": [
+    {
+      "id": "ND-HTML-01",
+      "description": "HTML 邮件模板不应误部署",
+      "prompt": "请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。",
+      "startedAt": "2026-04-19T12:57:15.361Z",
+      "passed": false,
+      "error": "Error: ND-HTML-01 workspace indicators not satisfied at runNonDeployableCase (file:///Users/watson/codingProj/oneceo/apps/web/e2e/language-matrix-runner.mjs:505:11) at process.processTicksAndRejections (node:internal/process/task_queues:103:5) at async runLanguageMatrix (file:///Users/watson/codingProj/oneceo/apps/web/e2e/language-matrix-runner.mjs:622:15)",
+      "finishedAt": "2026-04-19T12:58:12.197Z",
+      "durationMs": 56836
+    }
+  ],
+  "passed": false,
+  "error": null,
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "pageErrors": [],
+  "requestFailures": [
+    "HEAD http://oneceo.ai:3000/api/task-creation/sessions/44658630-208d-43ef-9a96-af5be326e302/workspace/raw/quote_notification_email.html :: net::ERR_ABORTED",
+    "GET http://oneceo.ai:3000/api/altus-managed/runs/03674726-bcd2-4fc2-b4cc-44a6a8122d9f/stream?afterSequence=2&clientId=sse_client_1776603436217_lr8h1t4k&userId=3f290763-8bf3-4ef5-b441-4d8de5f7a30e :: net::ERR_ABORTED"
+  ],
+  "finishedAt": "2026-04-19T12:58:12.199Z"
+}

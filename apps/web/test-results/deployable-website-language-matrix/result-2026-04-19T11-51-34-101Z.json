@@ -1,0 +1,853 @@
+{
+  "matrixId": "deployable-website-language-matrix",
+  "classification": "deployable_website",
+  "startedAt": "2026-04-19T11:51:35.690Z",
+  "webBaseUrl": "http://oneceo.ai:3000",
+  "apiBaseUrl": "http://127.0.0.1:4000",
+  "caseFilter": "WD-JAVA-01",
+  "cases": [
+    {
+      "id": "WD-JAVA-01",
+      "description": "Java 网站应可部署",
+      "prompt": "请用 Java 开发一个企业官网，优先使用 Spring Boot 或其他 Java Web 方案，页面需要有产品介绍、公司介绍和联系信息，只完成代码。",
+      "startedAt": "2026-04-19T11:51:38.688Z",
+      "passed": true,
+      "error": null,
+      "execution": {
+        "classification": "deployable_website",
+        "sessionId": "8ce882f3-9983-465d-ac7b-2a6b02f79b5e",
+        "generationRunId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+        "deployRunId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+        "deployedUrl": "https://app-8ce882f3-998-b68d87-app-8ce882f3-998-b68d87.up.railway.app",
+        "workspaceEvidence": {
+          "itemCount": 19,
+          "matchedIndicators": [
+            "/(pom\\.xml|build\\.gradle)/i",
+            "/src\\/main\\/java/i"
+          ]
+        },
+        "deploymentPanel": {
+          "bindingState": "ready",
+          "latestStatus": "SUCCESS",
+          "latestUrl": null,
+          "latestStaticUrl": "https://app-8ce882f3-998-b68d87-app-8ce882f3-998-b68d87.up.railway.app"
+        },
+        "publicPage": {
+          "status": 200,
+          "excerpt": "<!DOCTYPE html> <html> <head> <meta charset=\"UTF-8\"> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"> <title>企业官网</title> <link href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css\" rel=\"stylesheet\"> <style> .navbar-brand { font-weight: bold; font-size: 1.5rem; } .hero-section { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 4rem 0; margin-bottom: 2rem; } .footer { background-color: #f8f9fa; padding: 2rem 0; ma..."
+        },
+        "evidence": {
+          "deployToolCalled": true,
+          "toolEvents": [
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 13,
+              "createdAt": "2026-04-19T19:51:52.163Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 42,
+              "createdAt": "2026-04-19T19:52:06.329Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 54,
+              "createdAt": "2026-04-19T19:52:10.922Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 71,
+              "createdAt": "2026-04-19T19:52:17.504Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 105,
+              "createdAt": "2026-04-19T19:52:34.182Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 132,
+              "createdAt": "2026-04-19T19:52:49.336Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 159,
+              "createdAt": "2026-04-19T19:53:03.778Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 186,
+              "createdAt": "2026-04-19T19:53:17.901Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 221,
+              "createdAt": "2026-04-19T19:53:36.392Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 264,
+              "createdAt": "2026-04-19T19:53:58.360Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 277,
+              "createdAt": "2026-04-19T19:54:05.368Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 293,
+              "createdAt": "2026-04-19T19:54:12.591Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 303,
+              "createdAt": "2026-04-19T19:54:15.123Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 312,
+              "createdAt": "2026-04-19T19:54:17.413Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 321,
+              "createdAt": "2026-04-19T19:54:19.447Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 335,
+              "createdAt": "2026-04-19T19:54:21.926Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 341,
+              "createdAt": "2026-04-19T19:54:24.777Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "ea2ed260-775c-4a07-8f7d-b982911581a9",
+              "sequence": 421,
+              "createdAt": "2026-04-19T19:54:43.054Z",
+              "toolName": "complete_task",
+              "content": "调用工具 complete_task"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 9,
+              "createdAt": "2026-04-19T19:54:55.599Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 15,
+              "createdAt": "2026-04-19T19:54:58.296Z",
+              "toolName": "read_file",
+              "content": "调用工具 read_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 21,
+              "createdAt": "2026-04-19T19:54:59.998Z",
+              "toolName": "read_file",
+              "content": "调用工具 read_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 51,
+              "createdAt": "2026-04-19T19:55:17.260Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 58,
+              "createdAt": "2026-04-19T19:55:19.790Z",
+              "toolName": "read_file",
+              "content": "调用工具 read_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 73,
+              "createdAt": "2026-04-19T19:55:25.384Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 79,
+              "createdAt": "2026-04-19T19:55:27.543Z",
+              "toolName": "read_file",
+              "content": "调用工具 read_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 92,
+              "createdAt": "2026-04-19T19:55:33.522Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 99,
+              "createdAt": "2026-04-19T19:55:35.944Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 109,
+              "createdAt": "2026-04-19T19:55:41.018Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 138,
+              "createdAt": "2026-04-19T19:55:57.963Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 145,
+              "createdAt": "2026-04-19T19:56:00.675Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 150,
+              "createdAt": "2026-04-19T19:56:02.876Z",
+              "toolName": "list_directory",
+              "content": "调用工具 list_directory"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 200,
+              "createdAt": "2026-04-19T19:56:31.144Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 207,
+              "createdAt": "2026-04-19T19:56:34.017Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 256,
+              "createdAt": "2026-04-19T19:57:02.774Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 263,
+              "createdAt": "2026-04-19T19:57:06.059Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 273,
+              "createdAt": "2026-04-19T19:57:10.924Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 279,
+              "createdAt": "2026-04-19T19:57:14.046Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 285,
+              "createdAt": "2026-04-19T19:57:15.676Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 291,
+              "createdAt": "2026-04-19T19:57:17.930Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 297,
+              "createdAt": "2026-04-19T19:57:19.468Z",
+              "toolName": "shell_execute",
+              "content": "调用工具 shell_execute"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 305,
+              "createdAt": "2026-04-19T19:57:21.983Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 315,
+              "createdAt": "2026-04-19T19:57:28.124Z",
+              "toolName": "write_file",
+              "content": "调用工具 write_file"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 322,
+              "createdAt": "2026-04-19T19:57:30.629Z",
+              "toolName": "deploy_application",
+              "content": "正在准备发布应用"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 328,
+              "createdAt": "2026-04-19T19:59:37.860Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 334,
+              "createdAt": "2026-04-19T19:59:44.267Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 340,
+              "createdAt": "2026-04-19T19:59:50.592Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 345,
+              "createdAt": "2026-04-19T19:59:56.999Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 350,
+              "createdAt": "2026-04-19T20:00:14.330Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 355,
+              "createdAt": "2026-04-19T20:00:20.959Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 360,
+              "createdAt": "2026-04-19T20:00:29.002Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 365,
+              "createdAt": "2026-04-19T20:00:36.074Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 371,
+              "createdAt": "2026-04-19T20:00:42.122Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 377,
+              "createdAt": "2026-04-19T20:00:48.570Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 383,
+              "createdAt": "2026-04-19T20:00:54.853Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 388,
+              "createdAt": "2026-04-19T20:01:02.084Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 393,
+              "createdAt": "2026-04-19T20:01:10.213Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 399,
+              "createdAt": "2026-04-19T20:01:16.248Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 404,
+              "createdAt": "2026-04-19T20:01:22.664Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 410,
+              "createdAt": "2026-04-19T20:01:28.862Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 416,
+              "createdAt": "2026-04-19T20:01:37.899Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 422,
+              "createdAt": "2026-04-19T20:01:44.307Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 428,
+              "createdAt": "2026-04-19T20:01:51.534Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 433,
+              "createdAt": "2026-04-19T20:01:59.165Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 439,
+              "createdAt": "2026-04-19T20:02:05.468Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 445,
+              "createdAt": "2026-04-19T20:02:12.054Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 450,
+              "createdAt": "2026-04-19T20:02:19.296Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 456,
+              "createdAt": "2026-04-19T20:02:25.142Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 461,
+              "createdAt": "2026-04-19T20:02:32.979Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 467,
+              "createdAt": "2026-04-19T20:02:39.412Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 472,
+              "createdAt": "2026-04-19T20:02:46.154Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 477,
+              "createdAt": "2026-04-19T20:02:53.969Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 483,
+              "createdAt": "2026-04-19T20:03:01.065Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 489,
+              "createdAt": "2026-04-19T20:03:07.775Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 494,
+              "createdAt": "2026-04-19T20:03:14.016Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 499,
+              "createdAt": "2026-04-19T20:03:20.096Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 505,
+              "createdAt": "2026-04-19T20:03:25.853Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 511,
+              "createdAt": "2026-04-19T20:03:32.521Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 516,
+              "createdAt": "2026-04-19T20:03:39.270Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 521,
+              "createdAt": "2026-04-19T20:03:47.546Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 527,
+              "createdAt": "2026-04-19T20:03:54.916Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 533,
+              "createdAt": "2026-04-19T20:04:01.501Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 539,
+              "createdAt": "2026-04-19T20:04:09.917Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 545,
+              "createdAt": "2026-04-19T20:04:17.345Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 551,
+              "createdAt": "2026-04-19T20:04:24.841Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 557,
+              "createdAt": "2026-04-19T20:04:32.726Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 562,
+              "createdAt": "2026-04-19T20:04:40.114Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 567,
+              "createdAt": "2026-04-19T20:04:47.081Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 572,
+              "createdAt": "2026-04-19T20:04:54.004Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 577,
+              "createdAt": "2026-04-19T20:04:59.910Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 582,
+              "createdAt": "2026-04-19T20:05:06.007Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 587,
+              "createdAt": "2026-04-19T20:05:12.679Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 593,
+              "createdAt": "2026-04-19T20:05:19.070Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 598,
+              "createdAt": "2026-04-19T20:05:26.182Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 603,
+              "createdAt": "2026-04-19T20:05:34.177Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 608,
+              "createdAt": "2026-04-19T20:05:40.970Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 613,
+              "createdAt": "2026-04-19T20:05:48.898Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 618,
+              "createdAt": "2026-04-19T20:05:56.201Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 624,
+              "createdAt": "2026-04-19T20:06:03.781Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 629,
+              "createdAt": "2026-04-19T20:06:10.761Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 634,
+              "createdAt": "2026-04-19T20:06:18.094Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 640,
+              "createdAt": "2026-04-19T20:06:24.613Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 645,
+              "createdAt": "2026-04-19T20:06:31.206Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 650,
+              "createdAt": "2026-04-19T20:06:37.623Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 656,
+              "createdAt": "2026-04-19T20:06:43.985Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 661,
+              "createdAt": "2026-04-19T20:06:52.392Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 666,
+              "createdAt": "2026-04-19T20:07:01.411Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 671,
+              "createdAt": "2026-04-19T20:07:09.908Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 676,
+              "createdAt": "2026-04-19T20:07:16.803Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 681,
+              "createdAt": "2026-04-19T20:07:22.624Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 686,
+              "createdAt": "2026-04-19T20:07:28.867Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 691,
+              "createdAt": "2026-04-19T20:07:35.510Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 696,
+              "createdAt": "2026-04-19T20:07:44.013Z",
+              "toolName": "get_application_deployment_status",
+              "content": "正在查询部署状态"
+            },
+            {
+              "runId": "3b79a773-643c-4cc9-a8a2-a106dc16d669",
+              "sequence": 708,
+              "createdAt": "2026-04-19T20:07:57.897Z",
+              "toolName": "complete_task",
+              "content": "调用工具 complete_task"
+            }
+          ],
+          "autoAttachedMessages": []
+        }
+      },
+      "finishedAt": "2026-04-19T12:08:32.169Z",
+      "durationMs": 1013481
+    }
+  ],
+  "passed": true,
+  "error": null,
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 400 ()",
+    "Failed to load resource: the server responded with a status of 400 ()"
+  ],
+  "pageErrors": [],
+  "requestFailures": [
+    "GET http://oneceo.ai:3000/api/altus-managed/runs/ea2ed260-775c-4a07-8f7d-b982911581a9/stream?afterSequence=2&clientId=sse_client_1776599499482_u9djvpol&userId=3f290763-8bf3-4ef5-b441-4d8de5f7a30e :: net::ERR_ABORTED",
+    "HEAD http://oneceo.ai:3000/api/task-creation/sessions/8ce882f3-9983-465d-ac7b-2a6b02f79b5e/workspace/raw/src/main/resources/templates/layout/header.html :: net::ERR_ABORTED"
+  ],
+  "finishedAt": "2026-04-19T12:08:32.170Z"
+}

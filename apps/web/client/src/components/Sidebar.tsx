@@ -78,6 +78,7 @@ import {
   type TaskCreationSessionSummary,
 } from "@/lib/task-creation-client";
 import { openSettingsDialog } from "@/lib/settings-dialog-events";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface SidebarProps {
   className?: string;
@@ -111,24 +112,27 @@ function WaitingUserIcon({ className = "h-3.5 w-3.5" }: { className?: string }) 
   );
 }
 
-export function getSessionStatusVisual(status: string) {
+export function getSessionStatusVisual(
+  status: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+) {
   const normalized = (status || "").trim().toLowerCase();
   if (normalized === "completed") {
     return {
-      label: "完成",
+      label: t("sidebar.statusCompleted"),
       labelClassName: "text-muted-foreground",
       waitingUser: false,
     } as const;
   }
   if (normalized === "waiting_user") {
     return {
-      label: "待补充",
+      label: t("sidebar.statusWaitingUser"),
       labelClassName: WAITING_USER_TEXT_CLASS,
       waitingUser: true,
     } as const;
   }
   return {
-    label: "进行中",
+    label: t("sidebar.statusInProgress"),
     labelClassName: "text-muted-foreground",
     waitingUser: false,
   } as const;
@@ -155,6 +159,7 @@ export default function Sidebar({
   const SESSION_PREVIEW_COUNT = 3;
   const [location, setLocation] = useLocation();
   const { t } = useTranslation();
+  const { user } = useAuth();
   const [expandedProjects, setExpandedProjects] = React.useState<string[]>([]);
   const [expandedManagers, setExpandedManagers] = React.useState<string[]>([]);
   const [tasksDialogOpen, setTasksDialogOpen] = React.useState(false);
@@ -175,7 +180,7 @@ export default function Sidebar({
   const mapSessionTask = React.useCallback(
     (session: TaskCreationSessionSummary | any, index: number): SessionTask & { originalIndex: number } => ({
       sessionId: session.id,
-      title: session.title || `任务会话 ${String(session.id).slice(-6)}`,
+      title: session.title || t("sidebar.sessionFallbackTitle", { suffix: String(session.id).slice(-6) }),
       status: session.status || "in_progress",
       updatedAt:
         typeof session.updatedAt === "string" && session.updatedAt.trim()
@@ -235,14 +240,14 @@ export default function Sidebar({
         setSessionTasks(mapped);
         lastListFetchRef.current = Date.now();
       } catch (error) {
-        console.error("[Sidebar] 会话列表加载失败:", error);
+        console.error("[Sidebar] failed to load sessions:", error);
         const now = Date.now();
         if (now - lastListErrorToastAtRef.current > 8000) {
           lastListErrorToastAtRef.current = now;
           const message =
             error instanceof Error && error.message.trim()
               ? error.message.trim()
-              : "会话列表加载失败，请稍后重试";
+              : t("sidebar.loadSessionsFailed");
           toast.error(message);
         }
       } finally {
@@ -332,7 +337,7 @@ export default function Sidebar({
         onSessionUpdated,
       );
     };
-  }, [mapSessionTask, sortSessionTasks]);
+  }, [mapSessionTask, sortSessionTasks, t]);
 
   const toggleProject = (projectId: string) => {
     setExpandedProjects((prev) =>
@@ -496,13 +501,13 @@ export default function Sidebar({
       });
       setRenameDialogOpen(false);
       setRenameTarget(null);
-      toast.success("任务标题已更新");
+      toast.success(t("sidebar.renameSuccess"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "重命名失败");
+      toast.error(error instanceof Error ? error.message : t("sidebar.renameFailed"));
     } finally {
       setRenameSubmitting(false);
     }
-  }, [dispatchSessionUpdate, patchSessionTask, renameTarget, renameValue]);
+  }, [dispatchSessionUpdate, patchSessionTask, renameTarget, renameValue, t]);
 
   const handleFavoriteToggle = React.useCallback(async (session: SessionTask) => {
     const nextFavorite = !Boolean(session.isFavorite);
@@ -514,11 +519,11 @@ export default function Sidebar({
         sessionId: session.sessionId,
         isFavorite: appliedFavorite,
       });
-      toast.success(appliedFavorite ? "已添加到收藏" : "已取消收藏");
+      toast.success(appliedFavorite ? t("sidebar.favoriteAdded") : t("sidebar.favoriteRemoved"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新收藏状态失败");
+      toast.error(error instanceof Error ? error.message : t("sidebar.favoriteUpdateFailed"));
     }
-  }, [dispatchSessionUpdate, patchSessionTask]);
+  }, [dispatchSessionUpdate, patchSessionTask, t]);
 
   const openDeleteDialog = React.useCallback((session: SessionTask) => {
     setDeleteTarget(session);
@@ -537,19 +542,19 @@ export default function Sidebar({
       }
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
-      toast.success("会话已删除");
+      toast.success(t("sidebar.sessionDeleted"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "删除会话失败");
+      toast.error(error instanceof Error ? error.message : t("sidebar.sessionDeleteFailed"));
     } finally {
       setDeleteSubmitting(false);
     }
-  }, [activeSessionId, deleteTarget, setLocation]);
+  }, [activeSessionId, deleteTarget, setLocation, t]);
 
   const renderSessionTaskItem = React.useCallback(
     (session: SessionTask, options?: { compact?: boolean; onNavigate?: () => void }) => {
       const compact = Boolean(options?.compact);
-      const statusVisual = getSessionStatusVisual(session.status);
-      const favoriteLabel = session.isFavorite ? "取消收藏" : "添加到收藏";
+      const statusVisual = getSessionStatusVisual(session.status, t);
+      const favoriteLabel = session.isFavorite ? t("sidebar.favoriteRemove") : t("sidebar.favoriteAdd");
       const leadingIcon = statusVisual.waitingUser ? (
         <WaitingUserIcon
           className={`${compact ? "h-3.5 w-3.5" : "w-4 h-4 shrink-0"} ${WAITING_USER_TEXT_CLASS}`}
@@ -601,11 +606,11 @@ export default function Sidebar({
           <ContextMenuContent className="w-52">
             <ContextMenuItem disabled>
               <Share2 className="h-4 w-4" />
-              <span>分享（待实现）</span>
+              <span>{t("sidebar.sharePending")}</span>
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => openRenameDialog(session)}>
               <Pencil className="h-4 w-4" />
-              <span>重命名</span>
+              <span>{t("sidebar.renameAction")}</span>
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => void handleFavoriteToggle(session)}>
               <Star className={`h-4 w-4 ${session.isFavorite ? "fill-current text-amber-500" : ""}`} />
@@ -613,18 +618,18 @@ export default function Sidebar({
             </ContextMenuItem>
             <ContextMenuItem disabled>
               <FolderInput className="h-4 w-4" />
-              <span>移动到项目（待实现）</span>
+              <span>{t("sidebar.moveToProjectPending")}</span>
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem variant="destructive" onSelect={() => openDeleteDialog(session)}>
               <Trash2 className="h-4 w-4" />
-              <span>删除</span>
+              <span>{t("common.delete")}</span>
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
       );
     },
-    [handleFavoriteToggle, openDeleteDialog, openRenameDialog],
+    [handleFavoriteToggle, openDeleteDialog, openRenameDialog, t],
   );
 
   return (
@@ -911,15 +916,18 @@ export default function Sidebar({
             <div className="p-4 border-b border-border">
               <div className="flex items-center gap-3 mb-3">
                 <Avatar className="h-12 w-12">
-                  <AvatarImage src="https://avatar.vercel.sh/user" alt="User" />
-                  <AvatarFallback>U</AvatarFallback>
+                  <AvatarImage
+                    src={user?.email ? `https://avatar.vercel.sh/${encodeURIComponent(user.email)}` : undefined}
+                    alt={user?.displayName || user?.email || t("account.title")}
+                  />
+                  <AvatarFallback>{(user?.displayName || user?.email || "U").slice(0, 1).toUpperCase()}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm text-foreground truncate">
-                    John Doe
+                    {user?.displayName || user?.email || t("userMenu.guestName")}
                   </div>
                   <div className="text-xs text-muted-foreground truncate">
-                    john.doe@example.com
+                    {user?.email || t("userMenu.guestSubtitle")}
                   </div>
                 </div>
               </div>
@@ -928,7 +936,7 @@ export default function Sidebar({
                   <div className="flex items-center gap-2">
                     <Coins className="w-4 h-4 text-amber-500" />
                     <span className="text-sm font-medium text-foreground">
-                      Credits
+                      {t("sidebar.credits")}
                     </span>
                   </div>
                   <span className="text-sm font-bold text-foreground">
@@ -938,7 +946,7 @@ export default function Sidebar({
                 <div className="flex items-center gap-2">
                   <Crown className="w-4 h-4 text-purple-500" />
                   <span className="text-xs text-muted-foreground">
-                    Pro Member
+                    {t("sidebar.proMember")}
                   </span>
                 </div>
               </div>
@@ -946,14 +954,14 @@ export default function Sidebar({
             <div className="p-2">
               <DropdownMenuItem className="rounded-lg py-2.5 px-3">
                 <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">通知</span>
+                <span className="text-sm">{t("sidebar.notifications")}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="rounded-lg py-2.5 px-3"
                 onSelect={() => openSettingsDialog({ tab: "settings" })}
               >
                 <Settings className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">设置</span>
+                <span className="text-sm">{t("sidebar.settings")}</span>
               </DropdownMenuItem>
             </div>
           </DropdownMenuContent>
@@ -965,13 +973,13 @@ export default function Sidebar({
           <DialogHeader className="px-6 pt-6 pb-4 border-b">
             <DialogTitle>{t("sidebar.allTasks")}</DialogTitle>
             <DialogDescription>
-              {`共 ${orderedSessionTasks.length} 个任务会话`}
+              {t("sidebar.allTasksCount", { count: orderedSessionTasks.length })}
             </DialogDescription>
           </DialogHeader>
           <ScrollArea className="flex-1 min-h-0 px-4 py-4 pr-6">
             {orderedSessionTasks.length === 0 ? (
               <div className="text-sm text-muted-foreground px-2 py-6 text-center">
-                暂无任务会话
+                {t("sidebar.noTasks")}
               </div>
             ) : (
               <div className="space-y-2">
@@ -989,14 +997,14 @@ export default function Sidebar({
       <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>重命名任务</DialogTitle>
-            <DialogDescription>更新该会话在侧边栏中的显示标题。</DialogDescription>
+            <DialogTitle>{t("sidebar.renameTitle")}</DialogTitle>
+            <DialogDescription>{t("sidebar.renameDescription")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Input
               value={renameValue}
               onChange={(event) => setRenameValue(event.target.value)}
-              placeholder="输入新的任务标题"
+              placeholder={t("sidebar.renamePlaceholder")}
               maxLength={80}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
@@ -1014,13 +1022,13 @@ export default function Sidebar({
                 setRenameTarget(null);
               }}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               onClick={() => void handleRenameSubmit()}
               disabled={renameSubmitting || !renameValue.trim()}
             >
-              {renameSubmitting ? "保存中..." : "保存"}
+              {renameSubmitting ? t("sidebar.saving") : t("common.save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1029,11 +1037,11 @@ export default function Sidebar({
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除任务会话？</AlertDialogTitle>
+            <AlertDialogTitle>{t("sidebar.deleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget?.title
-                ? `删除后将无法恢复「${deleteTarget.title}」的侧边栏入口和历史会话数据。`
-                : "删除后将无法恢复该任务会话。"}
+                ? t("sidebar.deleteDescriptionWithTitle", { title: deleteTarget.title })
+                : t("sidebar.deleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1043,7 +1051,7 @@ export default function Sidebar({
                 setDeleteTarget(null);
               }}
             >
-              取消
+              {t("common.cancel")}
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={(event) => {
@@ -1052,7 +1060,7 @@ export default function Sidebar({
               }}
               disabled={deleteSubmitting}
             >
-              {deleteSubmitting ? "删除中..." : "删除"}
+              {deleteSubmitting ? t("sidebar.deleting") : t("common.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

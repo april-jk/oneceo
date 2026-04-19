@@ -243,6 +243,8 @@ async function detectAnalyticsEntry(sourceDir: string): Promise<boolean> {
     join(sourceDir, 'src/main.ts'),
     join(sourceDir, 'client/index.html'),
     join(sourceDir, 'index.html'),
+    join(sourceDir, 'templates/index.html'),
+    join(sourceDir, 'app/templates/index.html'),
   ];
   const contents = await Promise.all(candidates.map((file) => readTextIfExists(file)));
   return contents.some(
@@ -261,28 +263,71 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   const errors: string[] = [];
 
   const packageJson = await readJsonFile(packageJsonPath);
-  if (!packageJson) {
-    throw new Error('部署前检查失败：缺少 package.json');
-  }
-
-  const scripts = asObject(packageJson.scripts);
-  const buildCommandDetected = Boolean(asText(scripts.build));
-  const startCommandDetected = Boolean(asText(scripts.start));
-  if (!buildCommandDetected) {
-    errors.push('缺少 package.json scripts.build，当前项目不具备标准构建入口');
-  }
-  if (!startCommandDetected) {
-    errors.push('缺少 package.json scripts.start，当前项目不具备标准启动入口');
-  }
-
   const healthcheckPath = await inferHealthcheckPath(sourceDir);
-  const fallbackManifest = buildDefaultManifest({
-    packageJson,
-    healthcheckPath,
-  });
   const existingManifest = await readJsonFile(manifestPath);
+  if (!packageJson && !existingManifest) {
+    throw new Error('部署前检查失败：缺少 package.json 或 oneceo.manifest.json');
+  }
+
+  const fallbackManifest = packageJson
+    ? buildDefaultManifest({
+        packageJson,
+        healthcheckPath,
+      })
+    : normalizeManifest(
+        existingManifest || {},
+        {
+          templateVersion: '1.0.0',
+          appType: 'web_app',
+          stack: 'generic_script_http_api_dbless',
+          build: {
+            command: 'echo "oneceo app ready"',
+            outputDir: '.',
+          },
+          start: {
+            command: '',
+            portEnv: 'PORT',
+          },
+          healthcheck: {
+            path: healthcheckPath,
+          },
+          features: {
+            analytics: true,
+            userTracking: true,
+            database: false,
+            auth: 'optional',
+            objectStorage: false,
+          },
+          runtime: {
+            framework: 'generic',
+            transport: 'http',
+          },
+        }
+      );
   const generatedManifest = !existingManifest;
   const manifest = normalizeManifest(existingManifest || {}, fallbackManifest);
+
+  const scripts = asObject(packageJson?.scripts);
+  const buildCommandDetected = packageJson
+    ? Boolean(asText(scripts.build))
+    : Boolean(asText(manifest.build.command));
+  const startCommandDetected = packageJson
+    ? Boolean(asText(scripts.start))
+    : Boolean(asText(manifest.start.command));
+  if (!buildCommandDetected) {
+    errors.push(
+      packageJson
+        ? '缺少 package.json scripts.build，当前项目不具备标准构建入口'
+        : '缺少可推导的 build command，当前项目不具备标准构建入口'
+    );
+  }
+  if (!startCommandDetected) {
+    errors.push(
+      packageJson
+        ? '缺少 package.json scripts.start，当前项目不具备标准启动入口'
+        : '缺少可推导的 start command，当前项目不具备标准启动入口'
+    );
+  }
 
   if (generatedManifest) {
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
@@ -290,10 +335,15 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
   }
 
   if (manifest.features.database === 'railway_postgres') {
-    const databaseDependencyDetected =
-      hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm');
+    const databaseDependencyDetected = packageJson
+      ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+      : null;
     if (!databaseDependencyDetected) {
-      errors.push('manifest 声明 database=railway_postgres，但项目未检测到 pg / drizzle-orm 依赖');
+      errors.push(
+        packageJson
+          ? 'manifest 声明 database=railway_postgres，但项目未检测到 pg / drizzle-orm 依赖'
+          : 'manifest 声明 database=railway_postgres，但当前无 package.json 可校验数据库依赖'
+      );
     }
   }
 
@@ -319,7 +369,9 @@ export async function ensureTemplateCompliance(sourceDir: string): Promise<Templ
       healthcheckRouteDetected: healthcheckSourceDetected,
       databaseDependencyDetected:
         manifest.features.database === 'railway_postgres'
-          ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+          ? packageJson
+            ? hasDependency(packageJson, 'pg') || hasDependency(packageJson, 'drizzle-orm')
+            : null
           : null,
     },
     warnings,

@@ -112,6 +112,10 @@ function requireEnv(name: string): string {
   return value;
 }
 
+function isRailwayProjectNotFoundError(message: string) {
+  return asText(message).toLowerCase().includes('project not found');
+}
+
 function sanitizeNameSegment(value: string, maxLength: number) {
   return (
     value
@@ -338,6 +342,33 @@ async function createUserRailwayProject(adminToken: string, userId: string) {
     projectId,
     projectName: asText(result.projectCreate?.name) || projectName,
     workspaceId,
+  };
+}
+
+async function getProjectById(adminToken: string, projectId: string) {
+  const result = await executeRailwayGraphql<{
+    project?: {
+      id?: string;
+      name?: string;
+    } | null;
+  }>(
+    adminToken,
+    `
+      query GetPlatformProjectById($id: String!) {
+        project(id: $id) {
+          id
+          name
+        }
+      }
+    `,
+    {
+      id: projectId,
+    }
+  );
+
+  return {
+    id: asText(result.project?.id),
+    name: asText(result.project?.name),
   };
 }
 
@@ -1329,7 +1360,34 @@ export class PlatformDeploymentAccountService {
 
     const existing = await this.getUserProject(normalizedUserId);
     if (existing?.projectId) {
-      return existing;
+      const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+      try {
+        const remoteProject = await getProjectById(adminToken, existing.projectId);
+        if (remoteProject.id) {
+          if (
+            remoteProject.name &&
+            remoteProject.name !== existing.projectName
+          ) {
+            await this.persistUserProjectRow(normalizedUserId, {
+              provider: 'platform_managed',
+              supplier: 'railway',
+              projectId: remoteProject.id,
+              projectName: remoteProject.name,
+              workspaceId: existing.workspaceId || requireEnv('RAILWAY_WORKSPACE_ID'),
+              createdAt: existing.createdAt || new Date().toISOString(),
+            });
+            return {
+              ...existing,
+              projectName: remoteProject.name,
+            };
+          }
+          return existing;
+        }
+      } catch (error: any) {
+        if (!isRailwayProjectNotFoundError(error?.message || '')) {
+          throw error;
+        }
+      }
     }
 
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
@@ -1575,6 +1633,11 @@ export class PlatformDeploymentAccountService {
 
     const repo = await ensureManagedDeploymentRepository(userId, normalizedProjectKey);
     const adminToken = requireEnv('RAILWAY_ADMIN_TOKEN');
+    const environment = await ensureProjectEnvironment(
+      adminToken,
+      config.projectId,
+      normalizedProjectKey
+    );
     const service = await createService(
       adminToken,
       config.projectId,
@@ -1583,11 +1646,11 @@ export class PlatformDeploymentAccountService {
       normalizedProjectKey
     );
     await connectServiceSource(adminToken, service.serviceId, repo.fullName, repo.defaultBranch);
-    await configureServiceInstance(adminToken, config.environmentId, service.serviceId);
+    await configureServiceInstance(adminToken, environment.environmentId, service.serviceId);
     await ensureDeploymentTrigger(
       adminToken,
       config.projectId,
-      config.environmentId,
+      environment.environmentId,
       service.serviceId,
       repo.fullName,
       repo.defaultBranch
@@ -1595,7 +1658,7 @@ export class PlatformDeploymentAccountService {
     const serviceDomain = await ensureServiceDomain(
       adminToken,
       config.projectId,
-      config.environmentId,
+      environment.environmentId,
       service.serviceId
     );
 
@@ -1608,7 +1671,7 @@ export class PlatformDeploymentAccountService {
         adminToken,
         userId,
         config.projectId,
-        config.environmentId,
+        environment.environmentId,
         normalizedProjectKey
       );
       tokenId = projectToken.tokenId;
@@ -1627,8 +1690,8 @@ export class PlatformDeploymentAccountService {
         projectKey: normalizedProjectKey,
         projectId: config.projectId,
         projectName: config.projectName,
-        environmentId: config.environmentId,
-        environmentName: config.environmentName,
+        environmentId: environment.environmentId,
+        environmentName: environment.environmentName,
         serviceId: service.serviceId,
         serviceName: service.serviceName,
         serviceDomain,

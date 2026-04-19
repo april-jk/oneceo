@@ -26,6 +26,10 @@ import { osacLlmProxyBridgeService } from './services/osac-llm-proxy-bridge';
 import { osacPersistentRecoveryService } from './services/osac-persistent-recovery-service';
 import { sessionMcpRecoveryService } from './services/session-mcp-recovery-service';
 import { startSandboxArchiveJob, stopSandboxArchiveJob } from './services/sandbox-archive-job';
+import {
+  startTaskSessionDeploymentSyncJob,
+  stopTaskSessionDeploymentSyncJob,
+} from './services/task-session-deployment-runtime-service';
 import { connectorStorageBootstrap } from './services/connector-storage-bootstrap';
 import { connectorGuideService } from './services/connector-guide-service';
 import { isConnectorGuideStartupRecomputeEnabled } from './services/connector-guide-startup-config';
@@ -273,8 +277,9 @@ async function shutdown(signal: string, exitCode = 0) {
       listenRetryTimer = null;
     }
     stopSandboxArchiveJob();
+    stopTaskSessionDeploymentSyncJob();
   } catch (error) {
-    console.warn('[API] stopSandboxArchiveJob failed:', error);
+    console.warn('[API] stop background jobs failed:', error);
   }
 
   try {
@@ -379,6 +384,8 @@ async function startServer() {
     }
     // 启动 Sandbox 空闲归档任务
     startSandboxArchiveJob();
+    // 启动部署状态后台同步任务
+    startTaskSessionDeploymentSyncJob();
     
     console.log('');
   });

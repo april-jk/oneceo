@@ -452,7 +452,11 @@ export class AltusRunCoordinator {
       const publicLines: string[] = [];
       if (summary) publicLines.push(summary);
       if (status === 'retryable_repair_required') {
-        publicLines.push('Altus 正在按平台部署基线自动修复后重试。');
+        publicLines.push(
+          repairCategory === 'resource_binding'
+            ? 'Altus 正在优先修复平台部署资源绑定，并将在资源恢复后重试发布。'
+            : 'Altus 正在按平台部署基线自动修复后重试。'
+        );
       } else if (deploymentStatus) {
         publicLines.push(`当前状态：${deploymentStatus}`);
       }
@@ -463,7 +467,9 @@ export class AltusRunCoordinator {
       const publicPreview = url
         ? `访问地址 ${url}`
         : status === 'retryable_repair_required'
-          ? '已识别到发布配置问题，Altus 正在自动修复后重试。'
+          ? repairCategory === 'resource_binding'
+            ? '已识别到平台部署资源问题，Altus 正在修复绑定后重试。'
+            : '已识别到发布配置问题，Altus 正在自动修复后重试。'
           : summary || this.buildToolEventContent(toolName, 'completed');
 
       const internalLines: string[] = [];

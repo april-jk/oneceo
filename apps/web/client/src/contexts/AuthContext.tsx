@@ -6,6 +6,7 @@ import {
   loginAppUser,
   logoutAppUser,
   registerAppUser,
+  sendRegisterVerificationCode,
 } from "@/lib/auth-client";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
@@ -14,7 +15,13 @@ type AuthContextValue = {
   user: AppAuthUser | null;
   status: AuthStatus;
   login: (input: { email: string; password: string }) => Promise<AppAuthUser>;
-  register: (input: { email: string; password: string; displayName: string }) => Promise<AppAuthUser>;
+  sendRegisterCode: (input: { email: string }) => Promise<{ cooldownSeconds?: number; expiresInSeconds?: number }>;
+  register: (input: {
+    email: string;
+    password: string;
+    displayName: string;
+    verificationCode: string;
+  }) => Promise<AppAuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<AppAuthUser | null>;
 };
@@ -53,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("authenticated");
       return nextUser;
     },
+    sendRegisterCode: async (input) => await sendRegisterVerificationCode(input),
     register: async (input) => {
       const nextUser = await registerAppUser(input);
       setUser(nextUser);

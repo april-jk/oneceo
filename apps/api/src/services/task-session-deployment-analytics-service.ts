@@ -11,7 +11,7 @@ import type { DeploymentAnalyticsPanelData } from './railway-deployment-service'
 
 type AnalyticsMetadata = {
   provider: 'umami';
-  status: 'ready' | 'pending' | 'unconfigured' | 'error';
+  status: 'bound' | 'tracking' | 'pending' | 'pending_domain' | 'unconfigured' | 'error';
   host?: string;
   websiteId?: string;
   websiteName?: string;
@@ -69,7 +69,7 @@ function pickAnalyticsMetadata(metadataRaw: unknown): AnalyticsMetadata | null {
     provider: 'umami',
     status:
       (asText(record.status) as AnalyticsMetadata['status']) ||
-      (asText(record.websiteId) ? 'ready' : 'pending'),
+      (asText(record.websiteId) ? 'bound' : 'pending_domain'),
     host: asText(record.host) || undefined,
     websiteId: asText(record.websiteId) || undefined,
     websiteName: asText(record.websiteName) || undefined,
@@ -94,7 +94,7 @@ function buildMetadataFromWebsite(input: {
 }): AnalyticsMetadata {
   return {
     provider: 'umami',
-    status: 'ready',
+    status: 'bound',
     host: asText(input.host) || undefined,
     websiteId: input.website.id,
     websiteName: input.website.name || undefined,
@@ -103,6 +103,22 @@ function buildMetadataFromWebsite(input: {
     updatedAt: new Date().toISOString(),
     lastError: asText(input.lastError) || undefined,
   };
+}
+
+function hasTrackingEvidence(metrics: {
+  pageviews?: number;
+  visits?: number;
+  visitors?: number;
+  events?: number;
+  activeVisitors?: number;
+} | null | undefined) {
+  return [
+    metrics?.pageviews,
+    metrics?.visits,
+    metrics?.visitors,
+    metrics?.events,
+    metrics?.activeVisitors,
+  ].some((value) => typeof value === 'number' && value > 0);
 }
 
 export async function prepareTaskSessionAnalyticsBinding(input: {
@@ -131,7 +147,7 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
       provider: 'umami',
       configured: true,
       enabled: false,
-      status: 'pending',
+      status: 'pending_domain',
       host: umamiAnalyticsService.getTrackerHost(),
       message: '当前还没有稳定站点域名，暂不创建统计站点',
     };
@@ -178,7 +194,7 @@ export async function prepareTaskSessionAnalyticsBinding(input: {
     provider: 'umami',
     configured: true,
     enabled: true,
-    status: 'ready',
+    status: 'bound',
     host: nextMetadata.host,
     websiteId: nextMetadata.websiteId,
     websiteName: nextMetadata.websiteName,
@@ -226,25 +242,26 @@ export async function buildTaskSessionAnalyticsPanel(
       provider: 'umami',
       configured: umamiAnalyticsService.isConfigured('deployment'),
       enabled: false,
-      status: umamiAnalyticsService.isConfigured('deployment') ? 'pending' : 'unconfigured',
+      status: umamiAnalyticsService.isConfigured('deployment') ? 'pending_domain' : 'unconfigured',
       host: existing?.host || umamiAnalyticsService.getTrackerHost(),
       domain: existing?.domain,
       tag: existing?.tag,
       updatedAt: existing?.updatedAt,
       error: existing?.lastError,
       message: existing?.domain
-        ? '站点已记录，但还没有完成 website 绑定'
+        ? '站点域名已记录，等待平台完成 Umami website 绑定'
         : '等待首次部署后绑定 Umami website',
     };
   }
 
   try {
     const metrics = await umamiAnalyticsService.getWebsiteMetrics(existing.websiteId);
+    const tracking = hasTrackingEvidence(metrics);
     return {
       provider: 'umami',
       configured: true,
       enabled: true,
-      status: 'ready',
+      status: tracking ? 'tracking' : 'bound',
       host: existing.host || umamiAnalyticsService.getTrackerHost(),
       websiteId: existing.websiteId,
       websiteName: existing.websiteName,
@@ -256,7 +273,9 @@ export async function buildTaskSessionAnalyticsPanel(
       events: metrics?.events,
       activeVisitors: metrics?.activeVisitors,
       updatedAt: metrics?.updatedAt || existing.updatedAt,
-      message: '展示近 30 天聚合数据与当前在线访客',
+      message: tracking
+        ? '已验证线上站点存在 Umami 访问数据'
+        : '已完成 Umami website 绑定，等待线上站点产生首批访问数据',
     };
   } catch (error: any) {
     return {

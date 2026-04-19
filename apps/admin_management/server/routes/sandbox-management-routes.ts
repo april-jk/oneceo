@@ -45,11 +45,20 @@ export function createSandboxManagementRoutes(service: SandboxManagementService)
   const router = Router();
 
   router.get(
+    '/live-summary',
+    asyncHandler(async (req, res) => {
+      const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+      const result = await service.getLiveSummary({ forceRefresh: refresh });
+      return ok(res, result);
+    })
+  );
+
+  router.get(
     '/runtime-registry',
     asyncHandler(async (req, res) => {
       const limit = req.query.limit === undefined
         ? undefined
-        : z.coerce.number().int().min(1).max(300).parse(req.query.limit);
+        : z.coerce.number().int().min(1).parse(req.query.limit);
       const result = await service.getRuntimeRegistry(limit ?? 100);
       return ok(res, result);
     })

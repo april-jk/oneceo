@@ -890,6 +890,14 @@ export interface SandboxManagementOverview {
   sandboxes: E2bSandboxItem[];
 }
 
+export interface SandboxLiveSummary {
+  total: number;
+  running: number;
+  paused: number;
+  pagesScanned: number;
+  countedAt: string;
+}
+
 export interface SandboxRuntimeRegistryItem {
   sandboxId: string;
   orchestratorSessionId: string;

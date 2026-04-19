@@ -10,6 +10,11 @@ import type {
   SkillSummary,
   SkillValidationResult,
 } from '../types';
+import {
+  DEFAULT_SKILL_MANAGEMENT_FILTERS,
+  DEFAULT_SKILL_MANAGEMENT_VIEW_STATE,
+} from './adminViewState';
+import type { SkillManagementViewState, SkillViewFilter } from './adminViewState';
 
 type EditorState = {
   slug: string;
@@ -41,7 +46,6 @@ type ImportedFolderPayload = {
 };
 
 type ImportFileStatus = 'pending' | 'success' | 'failed';
-type SkillViewFilter = 'all' | 'active' | 'archived' | 'published' | 'unpublished';
 
 const EMPTY_EDITOR: EditorState = {
   slug: '',
@@ -66,6 +70,7 @@ const EMPTY_GOVERNANCE_OPTIONS: SkillGovernanceOptions = {
   autoActivationTriggers: [],
   toolNames: [],
 };
+const DEFAULT_FILTERS = DEFAULT_SKILL_MANAGEMENT_FILTERS;
 
 function toEditorState(detail: SkillDetail): EditorState {
   return {
@@ -260,27 +265,34 @@ async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativeP
 
 type Props = {
   onError: (message: string | null) => void;
+  onUpdatedAtChange?: (value: string | null) => void;
+  onRegisterRefresh?: (handler: (() => Promise<void>) | null) => void;
+  persistedState?: SkillManagementViewState | null;
+  onStateChange?: (state: SkillManagementViewState) => void;
 };
 
-export function SkillManagementSection({ onError }: Props) {
+export function SkillManagementSection({
+  onError,
+  onUpdatedAtChange,
+  onRegisterRefresh,
+  persistedState,
+  onStateChange,
+}: Props) {
+  const initialState = persistedState || DEFAULT_SKILL_MANAGEMENT_VIEW_STATE;
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [governanceOptions, setGovernanceOptions] = useState<SkillGovernanceOptions>(EMPTY_GOVERNANCE_OPTIONS);
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(initialState.selectedSkillId);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
-  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(initialState.selectedRevisionId);
   const [revisionResources, setRevisionResources] = useState<SkillRevisionResources | null>(null);
-  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(null);
+  const [selectedResourcePath, setSelectedResourcePath] = useState<string | null>(initialState.selectedResourcePath);
   const [validationResult, setValidationResult] = useState<SkillValidationResult | null>(null);
   const [validationSessionId, setValidationSessionId] = useState('');
-  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>('editor');
-  const [skillView, setSkillView] = useState<SkillViewFilter>('all');
-  const [filters, setFilters] = useState({
-    query: '',
-    status: 'all',
-    category: '',
-  });
+  const [detailDialogOpen, setDetailDialogOpen] = useState(initialState.detailDialogOpen);
+  const [detailTab, setDetailTab] = useState<'editor' | 'resources' | 'validation'>(initialState.detailTab);
+  const [skillView, setSkillView] = useState<SkillViewFilter>(initialState.skillView);
+  const [filters, setFilters] = useState(initialState.filters);
   const [editor, setEditor] = useState<EditorState>(EMPTY_EDITOR);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [isCreating, setIsCreating] = useState(false);
@@ -292,6 +304,7 @@ export function SkillManagementSection({ onError }: Props) {
   const [importJobId, setImportJobId] = useState<string | null>(null);
   const [importJobStatus, setImportJobStatus] = useState<'pending' | 'running' | 'completed' | 'failed' | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedRevisionIdRef = useRef<string | null>(initialState.selectedRevisionId);
 
   const resetImportState = useCallback(() => {
     setImportPreview(null);
@@ -323,6 +336,9 @@ export function SkillManagementSection({ onError }: Props) {
     const next = await api.getSkillGovernanceOptions();
     setGovernanceOptions(next);
   }, []);
+  useEffect(() => {
+    selectedRevisionIdRef.current = selectedRevisionId;
+  }, [selectedRevisionId]);
 
   const loadSkills = useCallback(async () => {
     const next = await api.listSkills({
@@ -359,7 +375,11 @@ export function SkillManagementSection({ onError }: Props) {
       setSelectedDocumentIndex(0);
       const publishedRevision =
         nextRevisions.find((item) => item.isPublished) || nextRevisions[0] || null;
-      const nextRevisionId = publishedRevision?.id || null;
+      const currentSelectedRevisionId = selectedRevisionIdRef.current;
+      const nextRevisionId =
+        currentSelectedRevisionId && nextRevisions.some((item) => item.id === currentSelectedRevisionId)
+          ? currentSelectedRevisionId
+          : publishedRevision?.id || null;
       setSelectedRevisionId(nextRevisionId);
       setValidationResult(null);
       onError(null);
@@ -472,11 +492,50 @@ export function SkillManagementSection({ onError }: Props) {
     };
   }, [importDialogOpen, importJobId, loadSkills, onError]);
 
+  useEffect(() => {
+    onUpdatedAtChange?.(
+      validationResult?.syncedAt
+      || detail?.updatedAt
+      || skills[0]?.updatedAt
+      || null
+    );
+  }, [detail?.updatedAt, onUpdatedAtChange, skills, validationResult?.syncedAt]);
+
+  const handleExternalRefresh = useCallback(async () => {
+    await loadSkills();
+    if (selectedSkillId) {
+      await loadSkillDetail(selectedSkillId);
+    }
+  }, [loadSkillDetail, loadSkills, selectedSkillId]);
+
+  useEffect(() => {
+    onRegisterRefresh?.(handleExternalRefresh);
+    return () => {
+      onRegisterRefresh?.(null);
+    };
+  }, [handleExternalRefresh, onRegisterRefresh]);
+
+  useEffect(() => {
+    onStateChange?.({
+      filters,
+      skillView,
+      selectedSkillId,
+      detailDialogOpen,
+      detailTab,
+      selectedRevisionId,
+      selectedResourcePath,
+    });
+  }, [detailDialogOpen, detailTab, filters, onStateChange, selectedResourcePath, selectedRevisionId, selectedSkillId, skillView]);
+
   const handleRefreshSkills = useCallback(() => {
-    void loadSkills().catch((error) => {
+    void handleExternalRefresh().catch((error) => {
       onError(error instanceof Error ? error.message : '技能列表加载失败');
     });
-  }, [loadSkills, onError]);
+  }, [handleExternalRefresh, onError]);
+
+  const handleResetFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, []);
 
   const openCreateDialog = () => {
     setIsCreating(true);
@@ -784,11 +843,10 @@ export function SkillManagementSection({ onError }: Props) {
   return (
     <main className="content-stack viewport-lock-page skill-management-page">
       <section className="panel fade-in skill-management-panel">
-        <div className="section-heading">
-          <div>
+        <div className="section-heading skill-management-heading">
+          <div className="skill-management-heading-copy">
             <p className="eyebrow">技能总览</p>
             <h2>技能管理</h2>
-            <p className="subtitle">维护平台技能、版本记录、资源文档与沙箱校验。</p>
           </div>
           <div className="section-actions skill-management-actions">
             <button
@@ -799,7 +857,6 @@ export function SkillManagementSection({ onError }: Props) {
               <span className="skill-action-btn-icon" aria-hidden="true">+</span>
               <span className="skill-action-btn-copy">
                 <span className="skill-action-btn-label">新建技能</span>
-                <span className="skill-action-btn-support">从空白版本开始</span>
               </span>
             </button>
             <input
@@ -884,7 +941,6 @@ export function SkillManagementSection({ onError }: Props) {
               <span className="skill-action-btn-icon" aria-hidden="true">↥</span>
               <span className="skill-action-btn-copy">
                 <span className="skill-action-btn-label">导入技能文件夹</span>
-                <span className="skill-action-btn-support">把目录转成版本</span>
               </span>
             </button>
             <button
@@ -895,8 +951,7 @@ export function SkillManagementSection({ onError }: Props) {
             >
               <span className="skill-action-btn-icon" aria-hidden="true">↻</span>
               <span className="skill-action-btn-copy">
-                <span className="skill-action-btn-label">刷新技能</span>
-                <span className="skill-action-btn-support">同步最新列表</span>
+                <span className="skill-action-btn-label">同步列表</span>
               </span>
             </button>
           </div>
@@ -930,28 +985,9 @@ export function SkillManagementSection({ onError }: Props) {
                 </option>
               ))}
             </select>
-          <button type="button" className="ghost-btn" onClick={handleRefreshSkills} disabled={busy}>
-            应用筛选
+          <button type="button" className="secondary-btn" onClick={handleResetFilters} disabled={busy}>
+            重置筛选
           </button>
-        </div>
-
-        <div className="skill-overview-strip">
-          <div>
-            <span>技能总数</span>
-            <strong>{skillOverview.total}</strong>
-          </div>
-          <div>
-            <span>已启用</span>
-            <strong>{skillOverview.active}</strong>
-          </div>
-          <div>
-            <span>已发布</span>
-            <strong>{skillOverview.published}</strong>
-          </div>
-          <div>
-            <span>待发布</span>
-            <strong>{skillOverview.unpublished}</strong>
-          </div>
         </div>
 
         <div className="skill-secondary-menu" role="tablist" aria-label="技能二级筛选">
@@ -993,10 +1029,15 @@ export function SkillManagementSection({ onError }: Props) {
                   <tr
                     key={item.id}
                     className={selectedSkillId === item.id && detailDialogOpen ? 'selected' : ''}
-                    onClick={() => openDetailDialog(item.id)}
                   >
                     <td>
-                      <strong>{item.name}</strong>
+                      <button
+                        type="button"
+                        className="management-title-link"
+                        onClick={() => openDetailDialog(item.id)}
+                      >
+                        {item.name}
+                      </button>
                       <div className="cell-subtle">{item.slug}</div>
                     </td>
                     <td>{skillCategoryLabel(item.category)}</td>

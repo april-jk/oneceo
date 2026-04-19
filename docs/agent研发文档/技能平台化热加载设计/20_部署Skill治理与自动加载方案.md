@@ -138,6 +138,10 @@ deployment skill 在列表中应有明显标识，例如：
    - rollback
    - status
 
+实现约束补充：
+
+1. 管理后台 `SkillManagementSection` 中的治理选项加载与视图状态持久化都属于既有主流程能力，后续合并或重构时必须同时保留，不能以其中一侧覆盖另一侧。
+
 ### 6.3 风险操作限制
 
 对 deployment skill 应增加限制：

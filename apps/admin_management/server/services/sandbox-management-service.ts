@@ -78,7 +78,7 @@ type RuntimeRegistryResponse = {
   items: RuntimeRegistryItem[];
 };
 
-const RUNTIME_REGISTRY_MAX_LIMIT = 200;
+const LIVE_SANDBOX_CACHE_WARM_LIMIT = 200;
 const LIVE_SUMMARY_CACHE_MS = 60000;
 const LIVE_SANDBOX_LIST_CACHE_MS = 30000;
 
@@ -547,7 +547,7 @@ export class SandboxManagementService {
     }
   ) {
     if (!config.e2bApiKey) return [] as E2bSandboxListItem[];
-    const fetchLimit = Math.max(limit, RUNTIME_REGISTRY_MAX_LIMIT);
+    const fetchLimit = Math.max(limit, LIVE_SANDBOX_CACHE_WARM_LIMIT);
     const cacheKey = createLiveSandboxListCacheKey(query);
     const now = Date.now();
     const cached = this.liveSandboxListCache.get(cacheKey);
@@ -635,7 +635,7 @@ export class SandboxManagementService {
     }
   }
 
-  async getLiveSummary(): Promise<LiveSummaryResponse> {
+  async getLiveSummary(options: { forceRefresh?: boolean } = {}): Promise<LiveSummaryResponse> {
     if (!config.e2bApiKey) {
       return {
         total: 0,
@@ -646,7 +646,7 @@ export class SandboxManagementService {
       };
     }
     const now = Date.now();
-    if (this.liveSummaryCache && this.liveSummaryCache.expiresAt > now) {
+    if (!options.forceRefresh && this.liveSummaryCache && this.liveSummaryCache.expiresAt > now) {
       return this.liveSummaryCache.data;
     }
     const data = await e2bConnector.summarizeLiveSandboxes();
@@ -658,8 +658,8 @@ export class SandboxManagementService {
   }
 
   async getRuntimeRegistry(limit = 80): Promise<RuntimeRegistryResponse> {
-    const fetchLimit = Math.min(Math.max(1, limit), RUNTIME_REGISTRY_MAX_LIMIT);
-    const queryLimit = fetchLimit >= RUNTIME_REGISTRY_MAX_LIMIT ? fetchLimit : fetchLimit + 1;
+    const fetchLimit = Math.max(1, limit);
+    const queryLimit = fetchLimit + 1;
     const [trackedEnvironments, taskSessions, liveSandboxes] = await Promise.all([
       this.listTrackedEnvironments(queryLimit),
       this.listTaskSessions(queryLimit),

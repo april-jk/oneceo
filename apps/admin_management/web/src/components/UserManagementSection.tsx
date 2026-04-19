@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type * as React from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type {
   AppUserConversationSummary,
@@ -63,6 +62,23 @@ const SORT_LABEL_MAP: Record<UserManagementSortKey, string> = {
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
+function toTimestamp(value?: string | null) {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCompactRelativeTime(value?: string | null, now = Date.now()) {
+  const timestamp = toTimestamp(value);
+  if (!timestamp) return '-';
+  const deltaMs = Math.max(0, now - timestamp);
+  if (deltaMs < 60 * 1000) return `${Math.max(1, Math.floor(deltaMs / 1000))}秒前`;
+  if (deltaMs < 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 1000))}分钟前`;
+  if (deltaMs < 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (60 * 60 * 1000))}小时前`;
+  if (deltaMs < 30 * 24 * 60 * 60 * 1000) return `${Math.floor(deltaMs / (24 * 60 * 60 * 1000))}天前`;
+  return formatDateTime(value);
 }
 
 function userStatusLabel(value?: string | null) {
@@ -157,54 +173,8 @@ function filterQuery(filters: UserManagementFilters, sort: UserManagementSort) {
   };
 }
 
-function SummaryValue({ label, value, hint }: { label: string; value: string | number; hint: string }) {
-  return (
-    <article className="user-management-summary-card">
-      <div className="user-management-summary-head">
-        <span>{label}</span>
-        <small>{hint}</small>
-      </div>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
 function DetailListEmpty({ title }: { title: string }) {
   return <p className="user-management-empty">{title}</p>;
-}
-
-function SessionItem({ item }: { item: AppUserSessionSummary }) {
-  const isOnline = Boolean(item.isOnline && !item.revokedAt);
-
-  return (
-    <article className="user-management-record-item">
-      <div className="user-management-record-head">
-        <strong>{sessionStateLabel(item)}</strong>
-        <span className={`state-chip ${isOnline ? 'status-running' : 'status-stopped'}`}>
-          {isOnline ? '在线' : '离线'}
-        </span>
-      </div>
-      <dl className="user-management-record-grid">
-        <div>
-          <dt>会话 ID</dt>
-          <dd>{item.id}</dd>
-        </div>
-        <div>
-          <dt>最近访问</dt>
-          <dd>{formatDateTime(item.lastSeenAt)}</dd>
-        </div>
-        <div>
-          <dt>来源 IP</dt>
-          <dd>{item.ipAddress || '-'}</dd>
-        </div>
-        <div>
-          <dt>过期时间</dt>
-          <dd>{formatDateTime(item.expiresAt)}</dd>
-        </div>
-      </dl>
-      <p className="user-management-record-note">{compactUserAgent(item.userAgent)}</p>
-    </article>
-  );
 }
 
 function ConversationItem({
@@ -304,7 +274,6 @@ export function UserManagementSection({
 }: Props) {
   const initialState = persistedState || DEFAULT_USER_MANAGEMENT_VIEW_STATE;
   const [filters, setFilters] = useState<UserManagementFilters>(initialState.filters);
-  const [appliedFilters, setAppliedFilters] = useState<UserManagementFilters>(initialState.appliedFilters);
   const [sort, setSort] = useState<UserManagementSort>(initialState.sort);
   const [response, setResponse] = useState<AppUserListResponse | null>(null);
   const [detail, setDetail] = useState<AppUserDetailResponse | null>(null);
@@ -315,6 +284,10 @@ export function UserManagementSection({
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState<'status' | null>(null);
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  const [summaryFetchedAt, setSummaryFetchedAt] = useState<string | null>(null);
+  const [summaryClock, setSummaryClock] = useState(() => Date.now());
+  const loadUsersRequestVersionRef = useRef(0);
 
   const users = response?.items || [];
   const selectedListItem = useMemo(
@@ -323,21 +296,29 @@ export function UserManagementSection({
   );
 
   const loadUsers = useCallback(
-    async (nextFilters: UserManagementFilters = appliedFilters, nextSort: UserManagementSort = sort) => {
+    async (nextFilters: UserManagementFilters = filters, nextSort: UserManagementSort = sort) => {
+      const requestVersion = ++loadUsersRequestVersionRef.current;
       setLoading(true);
       try {
         const next = await api.listAppUsers(filterQuery(nextFilters, nextSort));
+        if (requestVersion !== loadUsersRequestVersionRef.current) return;
         setResponse(next);
-        onUpdatedAtChange?.(next.summary.generatedAt || null);
+        const generatedAt = next.summary.generatedAt || new Date().toISOString();
+        setSummaryFetchedAt(generatedAt);
+        setSummaryClock(Date.now());
+        onUpdatedAtChange?.(generatedAt);
         onError(null);
       } catch (error) {
+        if (requestVersion !== loadUsersRequestVersionRef.current) return;
         onUpdatedAtChange?.(null);
         onError(error instanceof Error ? error.message : '用户列表加载失败');
       } finally {
-        setLoading(false);
+        if (requestVersion === loadUsersRequestVersionRef.current) {
+          setLoading(false);
+        }
       }
     },
-    [appliedFilters, onError, onUpdatedAtChange, sort]
+    [filters, onError, onUpdatedAtChange, sort]
   );
 
   const loadDetail = useCallback(
@@ -359,20 +340,19 @@ export function UserManagementSection({
   );
 
   useEffect(() => {
-    void loadUsers(appliedFilters, sort);
-  }, [appliedFilters, loadUsers, sort]);
+    void loadUsers(filters, sort);
+  }, [filters, loadUsers, sort]);
 
   useEffect(() => {
     onStateChange?.({
       filters,
-      appliedFilters,
       sort,
       selectedUserId,
       selectedUserLabel,
       drawerOpen,
       detailTab,
     });
-  }, [appliedFilters, detailTab, drawerOpen, filters, onStateChange, selectedUserId, selectedUserLabel, sort]);
+  }, [detailTab, drawerOpen, filters, onStateChange, selectedUserId, selectedUserLabel, sort]);
 
   useEffect(() => {
     if (!selectedUserId) return;
@@ -401,12 +381,22 @@ export function UserManagementSection({
     }
   }, [detail?.user, selectedListItem, selectedUserId]);
 
+  useEffect(() => {
+    if (!summaryFetchedAt) return;
+    const timer = window.setInterval(() => {
+      setSummaryClock(Date.now());
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [summaryFetchedAt]);
+
   const handleExternalRefresh = useCallback(async () => {
-    await loadUsers(appliedFilters, sort);
+    await loadUsers(filters, sort);
     if (drawerOpen && selectedUserId) {
       await loadDetail(selectedUserId);
     }
-  }, [appliedFilters, drawerOpen, loadDetail, loadUsers, selectedUserId, sort]);
+  }, [drawerOpen, filters, loadDetail, loadUsers, selectedUserId, sort]);
 
   useEffect(() => {
     onRegisterRefresh?.(handleExternalRefresh);
@@ -427,15 +417,18 @@ export function UserManagementSection({
     [users]
   );
 
-  const handleApplyFilters = useCallback((event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setAppliedFilters(filters);
-  }, [filters]);
-
   const handleResetFilters = useCallback(() => {
     setFilters(DEFAULT_FILTERS);
-    setAppliedFilters(DEFAULT_FILTERS);
   }, []);
+
+  const handleSummaryRefresh = useCallback(async () => {
+    setSummaryRefreshing(true);
+    try {
+      await handleExternalRefresh();
+    } finally {
+      setSummaryRefreshing(false);
+    }
+  }, [handleExternalRefresh]);
 
   const handleSortToggle = useCallback((key: UserManagementSortKey) => {
     setSort((current) => {
@@ -461,19 +454,21 @@ export function UserManagementSection({
     try {
       const next = await api.updateAppUserStatus(userId, nextStatus);
       setDetail(next);
-      await loadUsers(appliedFilters);
+      await loadUsers(filters);
       onError(null);
     } catch (error) {
       onError(error instanceof Error ? error.message : '用户状态更新失败');
     } finally {
       setActionBusy(null);
     }
-  }, [appliedFilters, detail?.user?.id, detail?.user?.status, loadUsers, onError, selectedUserId]);
+  }, [detail?.user?.id, detail?.user?.status, filters, loadUsers, onError, selectedUserId]);
 
   const summary = response?.summary;
+  const summaryAge = formatCompactRelativeTime(summaryFetchedAt, summaryClock);
   const detailUser = detail?.user || selectedListItem;
   const currentSortLabel = SORT_LABEL_MAP[sort.key] || '上次登录';
   const latestSessionRecord = detail?.recentSessions[0] || null;
+  const recentSessions = detail?.recentSessions || [];
   const detailJumpOrigin = detailUser
     ? {
         section: 'user' as const,
@@ -489,12 +484,34 @@ export function UserManagementSection({
             <p className="section-tag">普通用户</p>
             <h2>用户管理</h2>
           </div>
-        </section>
-
-        <section className="user-management-summary-strip">
-          <SummaryValue label="全部用户" value={summary?.totalUsers ?? '-'} hint="账号总量" />
-          <SummaryValue label="7 天活跃" value={summary?.activeUsers7d ?? '-'} hint="最近有登录" />
-          <SummaryValue label="已禁用" value={summary?.disabledUsers ?? '-'} hint="当前停用" />
+          <div className="sandbox-list-header-actions user-management-hero-actions">
+            <section className="user-management-summary-strip user-management-live-summary session-status sandbox-live-count" aria-label="用户管理摘要">
+              <span className="sandbox-live-metric sandbox-live-metric-total">
+                <span>全部</span>
+                <strong>{summary?.totalUsers ?? '-'}</strong>
+              </span>
+              <span className="sandbox-live-metric sandbox-live-metric-running">
+                <span>7天活跃</span>
+                <strong>{summary?.activeUsers7d ?? '-'}</strong>
+              </span>
+              <span className="sandbox-live-metric user-management-live-metric-disabled">
+                <span>已禁用</span>
+                <strong>{summary?.disabledUsers ?? '-'}</strong>
+              </span>
+              <span className="sandbox-live-age" title={formatDateTime(summaryFetchedAt)}>
+                {summaryAge}
+              </span>
+              <button
+                type="button"
+                className={`sandbox-live-refresh-btn ${summaryRefreshing ? 'is-refreshing' : ''}`}
+                onClick={() => void handleSummaryRefresh()}
+                disabled={summaryRefreshing || loading}
+                aria-label="刷新用户列表"
+              >
+                ↻
+              </button>
+            </section>
+          </div>
         </section>
 
         <section className="sub-panel user-management-filter-panel">
@@ -504,7 +521,7 @@ export function UserManagementSection({
             </div>
             <span className="panel-caption">当前 {users.length} 条</span>
           </div>
-          <form className="user-management-filter-grid" onSubmit={handleApplyFilters}>
+          <div className="user-management-filter-grid">
             <label>
               <span>用户</span>
               <input
@@ -547,14 +564,11 @@ export function UserManagementSection({
               </select>
             </label>
             <div className="user-management-filter-actions">
-              <button type="submit" className="primary-btn" disabled={loading}>
-                应用筛选
-              </button>
               <button type="button" className="secondary-btn" onClick={handleResetFilters} disabled={loading}>
-                重置
+                重置筛选
               </button>
             </div>
-          </form>
+          </div>
         </section>
 
         <section className="sub-panel user-management-list-panel">
@@ -615,20 +629,18 @@ export function UserManagementSection({
                         <tr
                           key={item.id}
                           className={isSelected ? 'selected-row' : ''}
-                          onClick={() => void openDetail(item.id)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              void openDetail(item.id);
-                            }
-                          }}
-                          tabIndex={0}
                           aria-selected={isSelected}
                         >
                           <td>
                             <div className="user-management-table-user">
                               <div className="user-management-table-user-head">
-                                <strong>{item.displayName}</strong>
+                                <button
+                                  type="button"
+                                  className="management-title-link user-management-name-link"
+                                  onClick={() => void openDetail(item.id)}
+                                >
+                                  {item.displayName}
+                                </button>
                               </div>
                               <p>{item.email}</p>
                               <small title={item.id}>{truncateMiddle(item.id, 10, 8)}</small>
@@ -672,15 +684,12 @@ export function UserManagementSection({
                             <div className="user-management-table-actions">
                               <button
                                 type="button"
-                                className="icon-btn user-management-open-btn"
-                                aria-label={`查看 ${item.displayName}`}
-                                title={`查看 ${item.displayName}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
+                                className="table-btn"
+                                onClick={() => {
                                   void openDetail(item.id);
                                 }}
                               >
-                                <span aria-hidden="true">↗</span>
+                                查看详情
                               </button>
                             </div>
                           </td>
@@ -751,7 +760,7 @@ export function UserManagementSection({
                     <div className="user-management-overview-top">
                       <div>
                         <p className="section-tag">账号摘要</p>
-                        <p className="panel-caption user-management-overview-copy">聚焦当前状态、登录和来源信息。</p>
+                        <p className="panel-caption user-management-overview-copy">聚焦当前状态、登录与最近访问。</p>
                       </div>
                       <div>
                         <div className="user-management-overview-badges">
@@ -808,20 +817,46 @@ export function UserManagementSection({
                         {loginStatusHint({ activeSessionCount: detail.stats.activeSessionCount, lastLoginAt: detail.user?.lastLoginAt })}
                       </p>
                     )}
-                  </article>
 
-                  <div className="user-management-overview-records">
-                    <div className="user-management-overview-head">
-                      <div>
-                        <p className="section-tag">登录记录</p>
-                        <p className="panel-caption">最近的登录与访问记录。</p>
+                    <div className="user-management-overview-login-compact">
+                      <div className="user-management-overview-login-head">
+                        <div>
+                          <p className="section-tag">登录摘要</p>
+                          <p className="panel-caption">最近登录与访问信息已合并到账号摘要。</p>
+                        </div>
+                        <span className="user-management-overview-record-count">最近 {detail.recentSessions.length} 条</span>
                       </div>
-                      <span className="user-management-overview-record-count">最近 {detail.recentSessions.length} 条</span>
+                      {recentSessions.length > 0 ? (
+                        <div className="user-management-overview-login-list">
+                          {recentSessions.map((item) => {
+                            const isOnline = Boolean(item.isOnline && !item.revokedAt);
+
+                            return (
+                              <article key={item.id} className="user-management-overview-login-item">
+                                <div className="user-management-overview-login-row">
+                                  <div className="user-management-overview-login-main">
+                                    <strong>{sessionStateLabel(item)}</strong>
+                                    <span>{formatDateTime(item.lastSeenAt)}</span>
+                                  </div>
+                                  <span className={`state-chip ${isOnline ? 'status-running' : 'status-stopped'}`}>
+                                    {isOnline ? '在线' : '离线'}
+                                  </span>
+                                </div>
+                                <div className="user-management-overview-login-meta">
+                                  <span className="mono">{truncateMiddle(item.id, 8, 6)}</span>
+                                  <span>{item.ipAddress || '-'}</span>
+                                  <span>过期 {formatDateTime(item.expiresAt)}</span>
+                                </div>
+                                <p className="user-management-record-note">{compactUserAgent(item.userAgent)}</p>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="user-management-empty user-management-overview-inline-empty">当前用户暂无登录记录</p>
+                      )}
                     </div>
-                    {detail.recentSessions.length > 0
-                      ? detail.recentSessions.map((item) => <SessionItem key={item.id} item={item} />)
-                      : <DetailListEmpty title="当前用户暂无登录记录" />}
-                  </div>
+                  </article>
                 </div>
               ) : null}
 

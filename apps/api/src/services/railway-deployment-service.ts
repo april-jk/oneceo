@@ -837,15 +837,46 @@ function buildPublicProbeUrls(baseUrl: string, healthPath?: string): string[] {
   return [...new Set(candidates)];
 }
 
-async function probePublicUrl(url: string): Promise<number> {
+function buildPublicRootUrl(baseUrl: string): string {
+  const normalizedBase = toPublicUrl(baseUrl)?.replace(/\/+$/, '');
+  return normalizedBase ? `${normalizedBase}/` : '';
+}
+
+function containsPublicErrorMarker(input: string): boolean {
+  const normalized = asText(input).toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('internal server error') ||
+    normalized.includes('服务器内部错误') ||
+    normalized.includes('application error') ||
+    normalized.includes('application failed to respond') ||
+    normalized.includes('bad gateway') ||
+    normalized.includes('502 bad gateway') ||
+    normalized.includes('503 service unavailable')
+  );
+}
+
+async function probePublicUrlDetailed(
+  url: string,
+): Promise<{ status: number; excerpt?: string }> {
   try {
     const response = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
     });
-    return response.status;
+    const contentType = asText(response.headers.get('content-type'));
+    const shouldReadBody =
+      contentType.includes('text/') ||
+      contentType.includes('json') ||
+      contentType.includes('html');
+    const body = shouldReadBody ? await response.text().catch(() => '') : '';
+    const excerpt = asText(body).replace(/\s+/g, ' ').slice(0, 240) || undefined;
+    return {
+      status: response.status,
+      excerpt,
+    };
   } catch {
-    return 0;
+    return { status: 0 };
   }
 }
 
@@ -859,7 +890,9 @@ export async function waitForRailwayDeploymentPublicReachability(
     pollIntervalMs?: number;
   }
 ): Promise<{ url: string; status: number }> {
-  const probeUrls = buildPublicProbeUrls(asText(input.baseUrl), input.healthPath);
+  const baseUrl = asText(input.baseUrl);
+  const probeUrls = buildPublicProbeUrls(baseUrl, input.healthPath);
+  const rootUrl = buildPublicRootUrl(baseUrl);
   if (probeUrls.length === 0) {
     throw new Error('部署已完成，但未返回公网访问地址');
   }
@@ -867,22 +900,37 @@ export async function waitForRailwayDeploymentPublicReachability(
   const timeoutMs = Math.max(5_000, options?.timeoutMs || 90_000);
   const pollIntervalMs = Math.max(1_000, options?.pollIntervalMs || 5_000);
   const deadline = Date.now() + timeoutMs;
-  let lastStatuses: Array<{ url: string; status: number }> = [];
+  let lastStatuses: Array<{ url: string; status: number; excerpt?: string }> = [];
 
   while (Date.now() < deadline) {
     lastStatuses = [];
     for (const url of probeUrls) {
-      const status = await probePublicUrl(url);
-      lastStatuses.push({ url, status });
-      if (status >= 200 && status < 400) {
-        return { url, status };
-      }
+      const result = await probePublicUrlDetailed(url);
+      lastStatuses.push({ url, ...result });
+    }
+
+    const rootProbe =
+      lastStatuses.find((item) => item.url === rootUrl) ||
+      lastStatuses.find((item) => item.url.endsWith('/'));
+    if (
+      rootProbe &&
+      rootProbe.status >= 200 &&
+      rootProbe.status < 400 &&
+      !containsPublicErrorMarker(rootProbe.excerpt || '')
+    ) {
+      return { url: rootProbe.url, status: rootProbe.status };
     }
     await sleep(pollIntervalMs);
   }
 
   const summary = lastStatuses
-    .map((item) => `${item.url} -> ${item.status || 'unreachable'}`)
+    .map((item) => {
+      const statusText = `${item.url} -> ${item.status || 'unreachable'}`;
+      if (!item.excerpt) {
+        return statusText;
+      }
+      return `${statusText} (${item.excerpt})`;
+    })
     .join(', ');
   throw new Error(`部署已完成，但公网地址尚未就绪: ${summary || 'no probe results'}`);
 }

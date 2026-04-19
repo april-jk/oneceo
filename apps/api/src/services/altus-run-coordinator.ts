@@ -1,6 +1,9 @@
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
 import { AltusManagedToolRuntime } from './altus-managed-tool-runtime';
-import { altusManagedPromptService } from './altus-managed-prompt-service';
+import {
+  altusManagedPromptService,
+  type AltusManagedTaskIntentProfile,
+} from './altus-managed-prompt-service';
 import { connectorGuideService } from './connector-guide-service';
 import {
   asText,
@@ -321,7 +324,17 @@ export class AltusRunCoordinator {
     return `${reminder.join(' ')} Latest plain assistant text: ${excerpt}`;
   }
 
-  private resolveDeploymentCompletionIntent(userInput: string): DeploymentCompletionIntent {
+  private resolveDeploymentCompletionIntent(
+    userInput: string,
+    taskIntentProfile?: AltusManagedTaskIntentProfile
+  ): DeploymentCompletionIntent {
+    if (taskIntentProfile?.mode === 'non_deployable_artifact') {
+      return {
+        mode: 'none',
+        acceptedToolNames: [],
+        requiresManagedSuccess: false,
+      };
+    }
     const normalized = asText(userInput).toLowerCase();
     if (!normalized) {
       return {
@@ -332,6 +345,28 @@ export class AltusRunCoordinator {
     }
 
     const includesAny = (keywords: string[]) => keywords.some((keyword) => normalized.includes(keyword));
+    if (
+      includesAny([
+        '不要部署',
+        '不需要部署',
+        '无需部署',
+        '不要发布',
+        '不需要发布',
+        '无需发布',
+        '不要上线',
+        '无需上线',
+        'do not deploy',
+        "don't deploy",
+        'no deploy',
+        'do not publish',
+      ])
+    ) {
+      return {
+        mode: 'none',
+        acceptedToolNames: [],
+        requiresManagedSuccess: false,
+      };
+    }
 
     if (
       includesAny([
@@ -570,6 +605,9 @@ export class AltusRunCoordinator {
   private sanitizeToolEventError(toolName: string, errorMessage: string) {
     if (errorMessage.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)) {
       return '线上部署尚未完成，Altus 将继续修复并重试发布。';
+    }
+    if (errorMessage.startsWith('deployment_tool_not_allowed_non_web_task')) {
+      return '当前任务是非网站类交付，Altus 已阻止误部署并将继续按源码交付处理。';
     }
     if (!this.isDeploymentTool(toolName)) {
       return errorMessage;
@@ -906,6 +944,8 @@ export class AltusRunCoordinator {
       userId: state.input.userId,
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
+      userInput: state.input.userInput,
+      taskIntentProfile: state.input.taskIntentProfile,
       availableSkills: state.input.skillCatalog,
       activeSkills: state.input.skills,
       mcpProviders: state.input.mcpProviders,
@@ -916,6 +956,7 @@ export class AltusRunCoordinator {
       sessionTitle: state.input.sessionTitle,
       workspaceRoot: state.workspaceRoot,
       connectors: state.input.connectors as any,
+      taskIntentProfile: state.input.taskIntentProfile,
       connectorGuideSections,
     });
     writeConnectorDebugLog('[ALTUS_RUN_PROMPT_READY]', {
@@ -936,7 +977,8 @@ export class AltusRunCoordinator {
     let plainTextRecoveryUsed = false;
     const assistantStreamMessageKey = `managed:${state.input.runId}:assistant`;
     const deploymentCompletionIntent = this.resolveDeploymentCompletionIntent(
-      state.input.userInput
+      state.input.userInput,
+      state.input.taskIntentProfile
     );
     let deploymentCompletionUnlocked = !deploymentCompletionIntent.requiresManagedSuccess;
     let lastDeploymentEvidence: DeploymentCompletionEvidence | null = null;

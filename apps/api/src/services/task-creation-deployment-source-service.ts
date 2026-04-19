@@ -436,6 +436,10 @@ export type DeploymentWorkspacePublishReport = {
   baseline: DeploymentTemplateBaselineData;
 };
 
+export type RailwayWorkspaceUploadResult = DeploymentWorkspacePublishReport & {
+  deploymentId?: string;
+};
+
 export function buildDeploymentTemplateBaseline(input: {
   workspaceDetected: boolean;
   bootstrap?: DeploymentTemplateBootstrapReport | null;
@@ -1047,6 +1051,121 @@ export async function publishTaskSessionWorkspaceToRepository(input: {
         bootstrap,
         compliance,
       }),
+    };
+  } finally {
+    await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function runRailwayUpFromDirectory(input: {
+  sourceDir: string;
+  token: string;
+  projectId: string;
+  environmentId: string;
+  serviceId: string;
+  message?: string;
+}) {
+  const railwayBinary = process.env.RAILWAY_CLI_PATH || 'railway';
+  const args = [
+    'up',
+    '-d',
+    '--json',
+    '-p',
+    input.projectId,
+    '-e',
+    input.environmentId,
+    '-s',
+    input.serviceId,
+    '--path-as-root',
+    '.',
+  ];
+  const message = asText(input.message);
+  if (message) {
+    args.push('-m', message);
+  }
+
+  try {
+    const { stdout } = await execFile(railwayBinary, args, {
+      cwd: input.sourceDir,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CI: 'true',
+        RAILWAY_TOKEN: input.token,
+      },
+    });
+    const payload = JSON.parse(stdout || '{}') as {
+      deploymentId?: unknown;
+    };
+    return asText(payload.deploymentId) || undefined;
+  } catch (error: any) {
+    const stdout = typeof error?.stdout === 'string' ? error.stdout.trim() : '';
+    const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+    const raw = stderr || stdout || error?.message || 'Railway 直传部署失败';
+    throw new Error(raw);
+  }
+}
+
+export async function uploadTaskSessionWorkspaceToRailway(input: {
+  orchestratorSessionId: string;
+  workspaceRoot: string;
+  sessionId: string;
+  railway: {
+    token: string;
+    projectId: string;
+    environmentId: string;
+    serviceId: string;
+    message?: string;
+  };
+  analyticsConfig?: DeploymentTemplateAnalyticsConfig;
+}): Promise<RailwayWorkspaceUploadResult> {
+  const sourceDir = await exportWorkspaceToLocalDirectory(input.orchestratorSessionId, input.workspaceRoot);
+  try {
+    await normalizeDeploymentSourceDirectoryForPublish(sourceDir);
+    const bootstrap = await ensureDeploymentTemplateBootstrap(sourceDir, {
+      analyticsConfig: input.analyticsConfig,
+    });
+    if (bootstrap.warnings.length > 0) {
+      console.warn('[DEPLOYMENT_TEMPLATE_BOOTSTRAP_WARNINGS]', {
+        sessionId: input.sessionId,
+        warnings: bootstrap.warnings,
+        analyticsTargetPath: bootstrap.analyticsTargetPath,
+      });
+    }
+    if (bootstrap.errors.length > 0) {
+      throw new Error(`部署模板注入失败：${bootstrap.errors.join('；')}`);
+    }
+    const compliance = await ensureTemplateCompliance(sourceDir);
+    await ensureRailwayConfigFile(sourceDir, compliance.manifest, { force: true });
+    if (compliance.warnings.length > 0) {
+      console.warn('[DEPLOYMENT_TEMPLATE_COMPLIANCE_WARNINGS]', {
+        sessionId: input.sessionId,
+        warnings: compliance.warnings,
+        manifestPath: compliance.manifestPath,
+        generatedManifest: compliance.generatedManifest,
+      });
+    }
+    if (!compliance.ok) {
+      throw new Error(`部署前检查失败：${compliance.errors.join('；')}`);
+    }
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      bootstrap,
+      compliance,
+    });
+    const deploymentId = await runRailwayUpFromDirectory({
+      sourceDir,
+      token: input.railway.token,
+      projectId: input.railway.projectId,
+      environmentId: input.railway.environmentId,
+      serviceId: input.railway.serviceId,
+      message: input.railway.message,
+    });
+    return {
+      bootstrap,
+      compliance,
+      baseline,
+      deploymentId,
     };
   } finally {
     await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);

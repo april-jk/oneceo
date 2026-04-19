@@ -6,6 +6,7 @@ import {
   classifyRailwayDeploymentError,
   isRailwayBindingNotFoundError,
   resolveRailwaySelectedDeploymentId,
+  waitForRailwayDeploymentPublicReachability,
   type RailwayDeploymentListItem,
 } from '../src/services/railway-deployment-service';
 
@@ -123,4 +124,102 @@ test('classifyRailwayDeploymentError returns repairable classification for repo 
 
   assert.equal(result.code, 'railway_repo_access_denied');
   assert.equal(result.bindingState, 'repair_required');
+});
+
+test('waitForRailwayDeploymentPublicReachability rejects persistent 500 responses', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response('服务器内部错误', {
+        status: 500,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      })) as typeof fetch;
+
+    await assert.rejects(
+      () =>
+        waitForRailwayDeploymentPublicReachability(
+          {
+            baseUrl: 'https://example.com',
+          },
+          {
+            timeoutMs: 5_000,
+            pollIntervalMs: 1_000,
+          },
+        ),
+      /公网地址尚未就绪|服务器内部错误/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('waitForRailwayDeploymentPublicReachability rejects 200 error pages with internal error marker', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response('<html><body>Internal Server Error</body></html>', {
+        status: 200,
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+        },
+      })) as typeof fetch;
+
+    await assert.rejects(
+      () =>
+        waitForRailwayDeploymentPublicReachability(
+          {
+            baseUrl: 'https://example.com',
+          },
+          {
+            timeoutMs: 5_000,
+            pollIntervalMs: 1_000,
+          },
+        ),
+      /公网地址尚未就绪|Internal Server Error/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('waitForRailwayDeploymentPublicReachability requires the public root page to succeed', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/system/health')) {
+        return new Response('ok', {
+          status: 200,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+          },
+        });
+      }
+      return new Response('Internal Server Error', {
+        status: 500,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      });
+    }) as typeof fetch;
+
+    await assert.rejects(
+      () =>
+        waitForRailwayDeploymentPublicReachability(
+          {
+            baseUrl: 'https://example.com',
+            healthPath: '/api/system/health',
+          },
+          {
+            timeoutMs: 5_000,
+            pollIntervalMs: 1_000,
+          },
+        ),
+      /Internal Server Error|公网地址尚未就绪/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

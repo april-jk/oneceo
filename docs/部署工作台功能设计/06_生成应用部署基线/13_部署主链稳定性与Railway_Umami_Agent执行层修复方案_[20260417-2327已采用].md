@@ -10,6 +10,7 @@
 2. Umami 模板注入与 website 绑定要稳定落到真实部署产物，而不是只在检查面“看起来已接入”。
 3. “部署”标签卡必须和 agent 执行层读取同一份部署绑定状态，不能一个报错、一个空白。
 4. agent 必须把“模板问题”和“平台资源问题”分开处理，不能在 Railway 资源失效时继续做本地模板修补。
+5. 部署成功必须以“公网真实可用”为准，不能把 Railway 的 `SUCCESS` 直接当成交付成功。
 
 ## 2. 范围
 
@@ -32,6 +33,25 @@
 - 为旧模板保留多套兼容注入逻辑
 
 ## 3. 现状证据
+
+### 3.0 2026-04-19 新增真实回归证据：服务端模板会被误判为缺少 analytics 入口
+
+在 `WD-PY-01` 真实回归中，生成产物是 Flask + Jinja 服务端模板站点，deploy run `4473829d-4ac6-4c4c-b55c-aaeef6fc0a99` 的多次 `deploy_application` 返回相同 repair 结论：
+
+1. `repairChecks` 包含 `missing_analytics_entry`
+2. baseline 已经补齐了 `start.command=gunicorn --bind 0.0.0.0:$PORT app:app`
+3. healthcheck 与 build contract 已满足
+4. 唯一剩余失败点是“未找到 HTML 入口文件，无法注入默认 analytics bootstrap”
+
+进一步核对真实工作区可见，项目使用的是 `templates/home.html`、`templates/about.html` 等服务端模板，而不是固定 `templates/index.html`。
+
+这说明当前模板基线还有一个新的结构性缺口：
+
+- 注入逻辑按固定文件名查找模板
+- 合规检测逻辑也按固定文件名查找模板
+- 结果是 Flask/Jinja 这类正常 Web 项目会被误判为“没有 analytics 入口”
+
+该问题已经通过平台修复收敛：模板入口从“固定候选”升级为“固定候选 + 服务端模板目录扫描”，并已由 `WD-PY-01`、`WD-PHP-01` 真实通过验证。
 
 ### 3.1 真实 session 证据
 
@@ -143,6 +163,20 @@
 
 用户提供的 session 里已经出现了这类行为：`Project not found` 之后，agent 继续做本地 `node server.js` 检查。
 
+#### 证据 G：Railway 成功不等于最终公网可用
+
+在 2026-04-19 的真实回归用例 `WD-NODE-01` 中，平台出现了新的稳定性缺口：
+
+1. Railway deployment panel 返回 `latestStatus=SUCCESS`
+2. task session deployment panel 返回 `bindingState=ready`
+3. Altus deploy run 因此直接 `complete_task`
+4. 但公网首页实际返回 500
+5. Railway 运行日志明确报错：`layout is not defined`
+
+这说明当前系统把“供应商层发布完成”错当成了“最终交付完成”。
+
+这不是模板建议问题，而是平台成功判定问题。
+
 ## 4. 外部产品契约依据
 
 以下外部依据用于约束本方案，不作为“猜测性实现”：
@@ -217,6 +251,22 @@
 - deployment trigger 丢失
 
 于是模型会把失败误当成“应用本身还不够可部署”，继续在 workspace 里修修补补。
+
+### 5.5 根因五：公网健康验证失败被吞掉，导致成功态上浮
+
+当前部署执行链虽然包含 `public_reachability` 阶段，但当公网探测失败时，会直接返回旧 panel，而不是把失败继续向上抛出。
+
+结果就是：
+
+1. deploy action 拿到的 panel 仍可能是 `ready + SUCCESS + publicUrl`
+2. deploy tool 继续返回 success
+3. Altus 直接把任务视为完成
+
+这条链路必须改成：
+
+1. 若 Railway 终态成功但公网验证失败，则视为失败，不允许上浮成 success
+2. 将失败信息保留在 deployment state / deployment panel 中
+3. 让 Altus 继续修复应用本身，而不是误报交付完成
 
 ## 6. 修复原则
 

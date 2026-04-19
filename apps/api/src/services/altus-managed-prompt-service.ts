@@ -157,6 +157,170 @@ function formatCodeList(values: readonly string[]): string {
   return values.map((value) => `\`${value}\``).join(', ');
 }
 
+const EXPLICIT_NO_DEPLOY_KEYWORDS = [
+  '不要部署',
+  '不需要部署',
+  '无需部署',
+  '不要发布',
+  '不需要发布',
+  '无需发布',
+  '不要上线',
+  '无需上线',
+  'do not deploy',
+  "don't deploy",
+  'no deploy',
+  'do not publish',
+] as const;
+
+const EXPLICIT_NO_WEB_KEYWORDS = [
+  '不要做网站',
+  '不做网站',
+  '不要做网页',
+  '不做网页',
+  '不是网站',
+  '不是网页',
+  '无需网站',
+  '只需要输出源码文件',
+  'source code only',
+  'just output the source code',
+] as const;
+
+const SCRIPT_ARTIFACT_KEYWORDS = [
+  '脚本',
+  'cli',
+  '命令行',
+  'command line',
+  '控制台程序',
+  'console program',
+  'console app',
+  'console application',
+  'tool script',
+  '日志汇总',
+  '读取 csv',
+  '读取 json',
+  '批量重命名',
+] as const;
+
+const EMAIL_TEMPLATE_KEYWORDS = [
+  '邮件模板',
+  'email template',
+  'html email',
+  '报价通知邮件',
+] as const;
+
+const WEB_ARTIFACT_KEYWORDS = [
+  '网站',
+  '网页',
+  '官网',
+  '企业站',
+  '产品介绍',
+  '公司介绍',
+  'web app',
+  'website',
+  'landing page',
+  'dashboard',
+  'admin panel',
+  'browser product',
+] as const;
+
+const DEPLOY_REQUEST_KEYWORDS = [
+  '部署',
+  '发布',
+  '上线',
+  'deploy',
+  'publish',
+  'go live',
+] as const;
+
+function includesAnyKeyword(text: string, keywords: readonly string[]) {
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function normalizeIntentTexts(texts: string[]) {
+  return texts
+    .map((item) => asText(item))
+    .filter(Boolean)
+    .map((item) => item.toLowerCase());
+}
+
+export type AltusManagedTaskIntentProfile = {
+  mode: 'deployable_web_app' | 'non_deployable_artifact' | 'neutral';
+  reason:
+    | 'latest_explicit_no_deploy'
+    | 'latest_explicit_no_web'
+    | 'latest_deployable_request'
+    | 'historical_explicit_no_deploy'
+    | 'historical_explicit_no_web'
+    | 'historical_deployable_request'
+    | 'script_or_template_artifact'
+    | 'unknown';
+  recentUserMessages: string[];
+  explicitNoDeploy: boolean;
+  explicitNoWeb: boolean;
+  webArtifactRequested: boolean;
+  deployRequested: boolean;
+  scriptArtifactRequested: boolean;
+  emailTemplateRequested: boolean;
+  deploymentAllowed: boolean;
+};
+
+export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTaskIntentProfile {
+  const normalizedTexts = normalizeIntentTexts(texts);
+  const latest = normalizedTexts[normalizedTexts.length - 1] || '';
+  const combined = normalizedTexts.join('\n');
+
+  const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
+  const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
+  const latestWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
+  const latestDeployRequest = includesAnyKeyword(latest, DEPLOY_REQUEST_KEYWORDS);
+
+  const explicitNoDeploy = includesAnyKeyword(combined, EXPLICIT_NO_DEPLOY_KEYWORDS);
+  const explicitNoWeb = includesAnyKeyword(combined, EXPLICIT_NO_WEB_KEYWORDS);
+  const webArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
+  const deployRequested = includesAnyKeyword(combined, DEPLOY_REQUEST_KEYWORDS);
+  const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
+  const emailTemplateRequested = includesAnyKeyword(combined, EMAIL_TEMPLATE_KEYWORDS);
+
+  let mode: AltusManagedTaskIntentProfile['mode'] = 'neutral';
+  let reason: AltusManagedTaskIntentProfile['reason'] = 'unknown';
+
+  if (latestExplicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_deploy';
+  } else if (latestExplicitNoWeb) {
+    mode = 'non_deployable_artifact';
+    reason = 'latest_explicit_no_web';
+  } else if (latestWebArtifact || latestDeployRequest) {
+    mode = 'deployable_web_app';
+    reason = 'latest_deployable_request';
+  } else if (explicitNoDeploy) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_deploy';
+  } else if (explicitNoWeb) {
+    mode = 'non_deployable_artifact';
+    reason = 'historical_explicit_no_web';
+  } else if (webArtifactRequested || deployRequested) {
+    mode = 'deployable_web_app';
+    reason = 'historical_deployable_request';
+  } else if (scriptArtifactRequested || emailTemplateRequested) {
+    mode = 'non_deployable_artifact';
+    reason = 'script_or_template_artifact';
+  }
+
+  return {
+    mode,
+    reason,
+    recentUserMessages: texts.map((item) => asText(item)).filter(Boolean).slice(-8),
+    explicitNoDeploy,
+    explicitNoWeb,
+    webArtifactRequested,
+    deployRequested,
+    scriptArtifactRequested,
+    emailTemplateRequested,
+    deploymentAllowed: mode === 'deployable_web_app',
+  };
+}
+
 function describeConnectorToolAccess(runtimeStatus: string): string {
   switch (runtimeStatus) {
     case 'connected':
@@ -226,6 +390,7 @@ export class AltusManagedPromptService {
     sessionTitle?: string | null;
     workspaceRoot: string;
     connectors: SessionConnectorStatus[];
+    taskIntentProfile?: AltusManagedTaskIntentProfile;
     connectorGuideSections?: {
       instructionsSection?: string;
       reminderSection?: string;
@@ -233,6 +398,19 @@ export class AltusManagedPromptService {
   }) {
     const title = asText(input.sessionTitle) || '未命名会话';
     const now = new Date().toISOString();
+    const taskIntentProfile = input.taskIntentProfile;
+    const nonDeployableTaskSection =
+      taskIntentProfile?.mode === 'non_deployable_artifact'
+        ? [
+            '# Non-deployable task contract',
+            `- The current session intent is classified as a non-deployable artifact (${taskIntentProfile.reason}).`,
+            '- Do not transform this task into a website, web app, or deployable browser product unless the user explicitly changes the requirement.',
+            '- Do not create `oneceo.manifest.json`, deploy-only `package.json` scripts, Railway-only baselines, or other publish scaffolding just to satisfy a web contract.',
+            '- Do not call `deploy_application`, `redeploy_application`, or `rollback_application_deployment` for this task.',
+            '- Valid outputs include source files such as email templates, CLI tools, scripts, console programs, or other non-web artifacts.',
+            '',
+          ].join('\n')
+        : '';
 
     return [
       'You are Altus, the managed-mode engineering agent inside OneCEO.',
@@ -302,6 +480,7 @@ export class AltusManagedPromptService {
       '- When you use external sources for a PPT, DOCX, or XLSX deliverable, preserve source URLs in an appendix slide, reference section, source sheet, notes area, or verification notes.',
       '- Do not rerun the same failing shell command unchanged. If a script fails, inspect the exact error, change the script or dependency once, then rerun.',
       '',
+      nonDeployableTaskSection,
       '# OneCEO web app contract',
       '- When the user asks for a website, web app, dashboard, admin panel, SaaS UI, landing page with working product flow, or other deployable browser product, you must build it as a OneCEO deployable web app instead of an ad-hoc static artifact.',
       '- For deployable web app tasks, you must produce a root `package.json` with working `build` and `start` scripts.',
@@ -309,6 +488,8 @@ export class AltusManagedPromptService {
       '- The manifest must include: `templateVersion`, `appType`, `stack`, `build.command`, `build.outputDir`, `start.command`, `start.portEnv`, `healthcheck.path`, `features`, and `runtime`.',
       '- For deployable web app tasks, default `appType` to `web_app`, `templateVersion` to `1.0.0`, and `start.portEnv` to `PORT`.',
       '- Prefer a Vite-based frontend and a simple Node/Express-compatible server boundary unless the existing workspace already dictates another web stack.',
+      "- For Express/EJS projects, do not use `layout('...')` or a layout file with `<%- body %>` unless `express-ejs-layouts` or `ejs-mate` is installed and wired in the server. Otherwise use ordinary partial includes for head/header/footer.",
+      '- For PHP sites that run with `php -S`, if you do not implement a dedicated JSON health endpoint, set `healthcheck.path` to `/` and make sure the homepage returns HTTP 200. Do not point PHP static-style sites at `/api/system/health` unless that route really exists.',
       '- If the app uses database persistence, default to Railway Postgres with `pg` or `drizzle-orm`; do not introduce MySQL by default.',
       '- Do not invent a separate analytics vendor choice inside generated app code. The platform owns the analytics runtime contract and injects tracker configuration during deployment.',
       '- If you touch the frontend entry for a deployable web app, keep a stable hook for platform analytics injection. Do not hard-code tracker host, websiteId, or vendor-specific script tags.',

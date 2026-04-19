@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { altusManagedPromptService } from '../src/services/altus-managed-prompt-service';
+import {
+  altusManagedPromptService,
+  deriveManagedTaskIntentProfile,
+} from '../src/services/altus-managed-prompt-service';
 
 test('managed prompt requires task grading and detailed todo for complex tasks', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
@@ -99,6 +102,27 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
   assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
+});
+
+test('managed prompt derives non-deployable artifact intent and emits a hard no-deploy contract', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',
+    '请按最佳方案直接继续，不需要再提问。',
+  ]);
+  assert.equal(profile.mode, 'non_deployable_artifact');
+  assert.equal(profile.deploymentAllowed, false);
+
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-non-deploy-test',
+    sessionTitle: 'non deploy contract',
+    workspaceRoot: '/workspace/session-non-deploy-test',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.match(prompt, /# Non-deployable task contract/);
+  assert.match(prompt, /do not transform this task into a website/i);
+  assert.match(prompt, /do not call `deploy_application`, `redeploy_application`, or `rollback_application_deployment`/i);
 });
 
 test('managed prompt builds minimal skill catalog index without full body', () => {

@@ -119,6 +119,29 @@ interface OpencodePreviewPanelProps {
   selectedWorkspacePath?: string | null;
 }
 
+function resolveFilePreviewDeploymentUrl(
+  info: TaskCreationDeploymentInfo | null | undefined,
+): string {
+  if (!info) return "";
+  const selectedDeployment =
+    info.deployments.find((deployment) => deployment.id === info.deploymentId) || null;
+  const successfulDeployment =
+    info.deployments.find(
+      (deployment) =>
+        deployment.status === "SUCCESS" && Boolean(deployment.staticUrl || deployment.url),
+    ) || null;
+  return (
+    selectedDeployment?.staticUrl ||
+    selectedDeployment?.url ||
+    successfulDeployment?.staticUrl ||
+    successfulDeployment?.url ||
+    info.latestStaticUrl ||
+    info.latestUrl ||
+    info.domains[0] ||
+    ""
+  );
+}
+
 type PreviewTab = "files" | "changes" | "debug" | "deployment";
 const DIRECTORY_PAGE_SIZE = 200;
 export type DirectoryLoadState = {
@@ -1757,14 +1780,8 @@ export function FilePreview({
   const [htmlPreviewMessage, setHtmlPreviewMessage] = useState("");
   const [htmlPreviewReloading, setHtmlPreviewReloading] = useState(false);
   const [htmlPreviewNonce, setHtmlPreviewNonce] = useState(0);
+  const [deploymentPreviewUrl, setDeploymentPreviewUrl] = useState("");
   const [copiedKey, setCopiedKey] = useState<"path" | "content" | null>(null);
-
-  useEffect(() => {
-    setHtmlView("preview");
-    setHtmlPreviewState("checking");
-    setHtmlPreviewMessage("");
-    setHtmlPreviewNonce(Date.now());
-  }, [selectedPath]);
 
   const previewType = file?.previewType || "text";
   const mimeType = file?.mimeType || "application/octet-stream";
@@ -1776,22 +1793,29 @@ export function FilePreview({
     sessionId && selectedPath
       ? getWorkspaceRawFileUrl(sessionId, selectedPath)
       : "";
+  const selectedExternalUrl =
+    previewType === "html" && deploymentPreviewUrl ? deploymentPreviewUrl : selectedRawUrl;
   const pathSegments = selectedPath ? selectedPath.split("/").filter(Boolean) : [];
   const htmlPreviewUrl =
-    previewType === "html" && sessionId && selectedPath
-      ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+    previewType === "html"
+      ? deploymentPreviewUrl ||
+        (sessionId && selectedPath
+          ? getWorkspaceRawFileUrl(sessionId, selectedPath)
+          : "")
       : "";
+  const htmlPreviewUsesDeployment = Boolean(previewType === "html" && deploymentPreviewUrl);
   const htmlPreviewEnabled = Boolean(
-    runtimeReady &&
-      !loading &&
+    !loading &&
       !error &&
-      tree &&
-      tree.items.length > 0 &&
-      sessionId &&
       selectedPath &&
       previewType === "html" &&
       !isBinary &&
-      htmlView === "preview",
+      htmlView === "preview" &&
+      (htmlPreviewUsesDeployment ||
+        (runtimeReady &&
+          tree &&
+          tree.items.length > 0 &&
+          sessionId)),
   );
   const effectiveHtmlPreviewUrl = appendPreviewCacheBust(
     htmlPreviewUrl,
@@ -1799,7 +1823,44 @@ export function FilePreview({
   );
 
   useEffect(() => {
-    if (!htmlPreviewEnabled || !sessionId || !selectedPath) {
+    if (!sessionId || previewType !== "html") {
+      setDeploymentPreviewUrl("");
+      return;
+    }
+    let cancelled = false;
+    getTaskCreationDeploymentInfo(sessionId)
+      .then((info) => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl(resolveFilePreviewDeploymentUrl(info));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDeploymentPreviewUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewType, sessionId]);
+
+  useEffect(() => {
+    setHtmlView("preview");
+    if (htmlPreviewUsesDeployment) {
+      setHtmlPreviewState("ready");
+      setHtmlPreviewMessage("");
+      return;
+    }
+    setHtmlPreviewState("checking");
+    setHtmlPreviewMessage("");
+    setHtmlPreviewNonce(Date.now());
+  }, [htmlPreviewUsesDeployment, selectedPath]);
+
+  useEffect(() => {
+    if (
+      !htmlPreviewEnabled ||
+      htmlPreviewUsesDeployment ||
+      !sessionId ||
+      !selectedPath
+    ) {
       return;
     }
     let cancelled = false;
@@ -1814,7 +1875,7 @@ export function FilePreview({
     return () => {
       cancelled = true;
     };
-  }, [htmlPreviewEnabled, selectedPath, sessionId]);
+  }, [htmlPreviewEnabled, htmlPreviewUsesDeployment, selectedPath, sessionId]);
 
   const reloadHtmlPreview = async () => {
     if (!sessionId || !selectedPath || htmlPreviewReloading) return;
@@ -2005,11 +2066,11 @@ export function FilePreview({
                     type="button"
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-slate-200 hover:text-foreground disabled:opacity-40"
                     onClick={() =>
-                      selectedRawUrl
-                        ? window.open(selectedRawUrl, "_blank", "noopener,noreferrer")
+                      selectedExternalUrl
+                        ? window.open(selectedExternalUrl, "_blank", "noopener,noreferrer")
                         : null
                     }
-                    disabled={!selectedRawUrl}
+                    disabled={!selectedExternalUrl}
                     title={i18n.t("previewPanel.openInNewWindow")}
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
@@ -2038,7 +2099,11 @@ export function FilePreview({
                             src={effectiveHtmlPreviewUrl}
                             title={`preview-${selectedPath}`}
                             className="h-full min-h-[360px] w-full rounded-md border border-border bg-card"
-                            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            sandbox={
+                              htmlPreviewUsesDeployment
+                                ? undefined
+                                : "allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                            }
                             onError={() => {
                               setHtmlPreviewState("fetch_failed");
                               setHtmlPreviewMessage(i18n.t("previewPanel.previewLoadFailed"));

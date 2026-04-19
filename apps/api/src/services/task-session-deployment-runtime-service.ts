@@ -12,6 +12,7 @@ import {
   triggerRailwayRedeploy,
   triggerRailwayRollback,
   waitForRailwayDeploymentAfterSourceSync,
+  waitForRailwayDeploymentPublicReachability,
   type DeploymentResourceBindingData,
   type RailwayDeploymentActionResult,
   type RailwayDeploymentBindingState,
@@ -587,6 +588,36 @@ async function recoverTaskSessionDeploymentSyncBacklog() {
   }
 }
 
+async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
+  panel: RailwayDeploymentPanelData;
+  healthPath?: string;
+  userId: string;
+  session: FileSessionRecord | null;
+  orchestratorSessionId: string;
+}) {
+  const publicUrl =
+    asText(input.panel.latestStaticUrl) ||
+    asText(input.panel.latestUrl) ||
+    asText(input.panel.domains[0]);
+  if (!publicUrl || input.panel.activeDeploymentPending !== true) {
+    return input.panel;
+  }
+  try {
+    await waitForRailwayDeploymentPublicReachability({
+      baseUrl: publicUrl,
+      healthPath: input.healthPath,
+    });
+    return await refreshTaskSessionDeploymentSnapshot({
+      userId: input.userId,
+      session: input.session,
+      selectedDeploymentId: input.panel.deploymentId,
+      resolvedOrchestratorSessionId: input.orchestratorSessionId,
+    });
+  } catch {
+    return input.panel;
+  }
+}
+
 async function runTaskSessionDeploymentSyncJobOnce() {
   if (deploymentSyncRunning) return;
   deploymentSyncRunning = true;
@@ -843,6 +874,33 @@ export async function buildTaskSessionDeploymentResponse(input: {
   const metadata = pickRecord(environment?.metadata);
   const savedState = pickTaskSessionDeploymentState(metadata.deploymentState);
   const savedPanel = pickTaskSessionDeploymentPanelSnapshot(metadata.deploymentPanel);
+  const shouldRefreshLiveSnapshot =
+    Boolean(input.resolvedOrchestratorSessionId) &&
+    (
+      (!savedPanel && savedState?.bindingState && savedState.bindingState !== 'uninitialized') ||
+      savedPanel?.activeDeploymentPending === true ||
+      savedPanel?.bindingState === 'provisioning' ||
+      savedState?.bindingState === 'provisioning' ||
+      savedState?.bindingState === 'repair_required'
+    );
+  if (shouldRefreshLiveSnapshot) {
+    try {
+      const livePanel = await refreshTaskSessionDeploymentSnapshot({
+        userId: input.userId,
+        session: input.session,
+        selectedDeploymentId: input.selectedDeploymentId,
+        resolvedEnvironment: environment,
+        resolvedOrchestratorSessionId: input.resolvedOrchestratorSessionId,
+      });
+      return selectDeploymentFromSnapshot(livePanel, input.selectedDeploymentId);
+    } catch (error) {
+      console.warn('[TASK_SESSION_DEPLOYMENT_RESPONSE_LIVE_REFRESH_FAILED]', {
+        sessionId: asText(input.session?.id),
+        orchestratorSessionId: input.resolvedOrchestratorSessionId,
+        error,
+      });
+    }
+  }
   if (savedPanel) {
     return selectDeploymentFromSnapshot(
       buildStoredSnapshotFromState(savedState || {}, savedPanel, savedPanel.analytics),
@@ -1099,11 +1157,18 @@ export async function executeTaskSessionDeploymentAction(
         message: 'Railway 已返回部署版本，后台正在同步公网可达性与部署状态。',
         lastVerifiedAt: new Date().toISOString(),
       });
-      const panel = await refreshTaskSessionDeploymentSnapshot({
+      let panel = await refreshTaskSessionDeploymentSnapshot({
         userId: input.userId,
         session: input.session,
         selectedDeploymentId: actionResult.deploymentId,
         resolvedOrchestratorSessionId: orchestratorSessionId,
+      });
+      panel = await waitForTaskSessionPublicReachabilityAndRefresh({
+        panel,
+        healthPath: publishReport.baseline.healthcheckPath,
+        userId: input.userId,
+        session: input.session,
+        orchestratorSessionId,
       });
       await enqueueTaskSessionDeploymentSync({
         taskSessionId: input.taskSessionId,
@@ -1172,11 +1237,18 @@ export async function executeTaskSessionDeploymentAction(
       message: 'Railway 已接收操作，后台正在同步公网可达性与部署状态。',
       lastVerifiedAt: new Date().toISOString(),
     });
-    const panel = await refreshTaskSessionDeploymentSnapshot({
+    let panel = await refreshTaskSessionDeploymentSnapshot({
       userId: input.userId,
       session: input.session,
       selectedDeploymentId: actionResult.deploymentId,
       resolvedOrchestratorSessionId: orchestratorSessionId,
+    });
+    panel = await waitForTaskSessionPublicReachabilityAndRefresh({
+      panel,
+      healthPath: '/api/system/health',
+      userId: input.userId,
+      session: input.session,
+      orchestratorSessionId,
     });
     await enqueueTaskSessionDeploymentSync({
       taskSessionId: input.taskSessionId,

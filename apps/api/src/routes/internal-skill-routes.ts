@@ -3,6 +3,7 @@ import { getPublicErrorMessage } from '../utils/error-response';
 import { platformSkillService } from '../services/platform-skill-service';
 import { platformSkillImportService } from '../services/platform-skill-import-service';
 import { platformSkillImportJobService } from '../services/platform-skill-import-job-service';
+import { listPlatformSkillGovernanceOptions } from '../services/platform-skill-governance-options';
 import { sandboxSkillSyncService } from '../services/sandbox-skill-sync-service';
 import { createRequireInternalToken } from './internal-auth-middleware';
 
@@ -21,6 +22,29 @@ function parseResources(input: unknown) {
       contentMarkdown: item?.contentMarkdown,
     }))
     .filter((item) => asText(item.resourcePath) && asText(item.contentMarkdown));
+}
+
+function parseGovernance(input: unknown) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  const autoActivation =
+    record.autoActivation && typeof record.autoActivation === 'object' && !Array.isArray(record.autoActivation)
+      ? (record.autoActivation as Record<string, unknown>)
+      : {};
+  return {
+    systemRole: asText(record.systemRole) || null,
+    adminManaged: Boolean(record.adminManaged),
+    required: Boolean(record.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: Array.isArray(autoActivation.triggers)
+        ? autoActivation.triggers.map((item) => asText(item)).filter(Boolean)
+        : [],
+      toolNames: Array.isArray(autoActivation.toolNames)
+        ? autoActivation.toolNames.map((item) => asText(item)).filter(Boolean)
+        : [],
+    },
+  };
 }
 
 router.use(createRequireInternalToken({
@@ -115,6 +139,18 @@ router.get('/skills', async (req, res) => {
   }
 });
 
+router.get('/skills/governance-options', async (_req, res) => {
+  try {
+    const data = listPlatformSkillGovernanceOptions();
+    return res.json({ success: true, data });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '获取 skill 治理选项失败'),
+    });
+  }
+});
+
 router.get('/skills/:skillId', async (req, res) => {
   try {
     const data = await platformSkillService.getAdminSkill(req.params.skillId);
@@ -134,6 +170,7 @@ router.post('/skills', async (req, res) => {
       name: req.body?.name,
       description: req.body?.description,
       category: req.body?.category,
+      governance: parseGovernance(req.body?.governance),
       bodyMarkdown: req.body?.bodyMarkdown,
       resources: parseResources(req.body?.resources),
       createdBy: asText(req.body?.createdBy) || 'admin_management',
@@ -153,6 +190,7 @@ router.put('/skills/:skillId', async (req, res) => {
       name: req.body?.name,
       description: req.body?.description,
       category: req.body?.category,
+      governance: parseGovernance(req.body?.governance),
       bodyMarkdown: req.body?.bodyMarkdown,
       resources: parseResources(req.body?.resources),
       createdBy: asText(req.body?.createdBy) || 'admin_management',

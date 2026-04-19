@@ -259,3 +259,256 @@ test('submit text-only managed input starts run without waiting for sandbox boot
   assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillCatalog?.length, 1);
   assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext?.length, 1);
 });
+
+test('submit auto-attaches deployment orchestrator skill for deploy requests', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+      slug: 'deploy-skill-governed',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: true,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+        },
+      },
+      resourceSummary: {
+        totalCount: 2,
+        referenceCount: 2,
+        templateCount: 0,
+        paths: ['references/runtime-classifier.md', 'references/deploy-repair-loop.md'],
+      },
+    },
+  ] as any);
+  const resolveSelectionsMock = mock.method(
+    userSkillService,
+    'resolveSelectionsForSession',
+    async (_sessionId: string, selections: any) =>
+      Array.isArray(selections) && selections.some((item) => item?.skillId === 'deploy-skill-1')
+        ? [
+            {
+              sourceType: 'platform',
+              skillId: 'deploy-skill-1',
+              revisionId: 'deploy-rev-1',
+              slug: 'deploy-skill-governed',
+              name: '部署编排',
+              description: '自动处理部署工作流',
+              category: 'deployment',
+              renderedMarkdown: '# deployment-orchestrator',
+              revisionNumber: 1,
+              governance: {
+                systemRole: 'deployment_orchestrator',
+                adminManaged: true,
+                required: true,
+                autoActivation: {
+                  enabled: true,
+                  triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+                },
+              },
+              resourceSummary: {
+                totalCount: 2,
+                referenceCount: 2,
+                templateCount: 0,
+                paths: ['references/runtime-classifier.md', 'references/deploy-repair-loop.md'],
+              },
+            },
+          ]
+        : []
+  );
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '帮我部署当前项目',
+    messageKey: 'msg-deploy',
+    metadata: {
+      source: 'chat',
+    },
+  });
+
+  assert.equal(setupService.ensureSandbox.mock.callCount(), 0);
+  assert.equal(touchMock.mock.callCount(), 0);
+  assert.equal(resolveSelectionsMock.mock.callCount(), 1);
+  assert.deepEqual(resolveSelectionsMock.mock.calls[0]?.arguments[1], [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+    },
+  ]);
+
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.deepEqual(startRunCall?.arguments[2]?.metadata?.skills, [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+    },
+  ]);
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext?.[0]?.slug, 'deploy-skill-governed');
+});
+
+test('submit does not auto-attach deployment orchestrator skill for non-deploy requests', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+      slug: 'deploy-skill-governed',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: true,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const resolveSelectionsMock = mock.method(
+    userSkillService,
+    'resolveSelectionsForSession',
+    async () => []
+  );
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '帮我写个网站',
+    messageKey: 'msg-build',
+    metadata: {
+      source: 'chat',
+    },
+  });
+
+  assert.deepEqual(resolveSelectionsMock.mock.calls[0]?.arguments[1], []);
+  const startRunCall = runService.startRun.mock.calls[0];
+  assert.equal(startRunCall?.arguments[2]?.metadata?.skills, undefined);
+  assert.equal(startRunCall?.arguments[2]?.metadata?.managedSkillContext, undefined);
+});
+
+test('submit does not duplicate deployment orchestrator skill when already explicitly selected', async () => {
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  mock.method(userSkillService, 'listAvailableSkills', async () => [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+      slug: 'deploy-skill-governed',
+      name: '部署编排',
+      description: '自动处理部署工作流',
+      category: 'deployment',
+      revisionNumber: 1,
+      governance: {
+        systemRole: 'deployment_orchestrator',
+        adminManaged: true,
+        required: true,
+        autoActivation: {
+          enabled: true,
+          triggers: ['deploy', 'redeploy', 'rollback', 'status'],
+        },
+      },
+      resourceSummary: null,
+    },
+  ] as any);
+  const resolveSelectionsMock = mock.method(
+    userSkillService,
+    'resolveSelectionsForSession',
+    async (_sessionId: string, selections: any) => selections as any
+  );
+  const touchMock = mock.fn(async () => undefined);
+
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+    ensureSandbox: mock.fn(async () => ({
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      reused: false,
+    })),
+  };
+  const runService = {
+    startRun: mock.fn(async (_sessionId: string, _userId: string, input: any) => ({
+      id: 'run-1',
+      sessionId: 'session-1',
+      status: 'queued',
+      input,
+    })),
+  };
+
+  const service = new AltusManagedInputService(setupService as any, runService as any, touchMock as any);
+  await service.submit('user-1', {
+    sessionId: 'session-1',
+    content: '帮我部署当前项目',
+    messageKey: 'msg-deploy-explicit',
+    metadata: {
+      source: 'chat',
+      skills: [
+        {
+          sourceType: 'platform',
+          skillId: 'deploy-skill-1',
+          revisionId: 'deploy-rev-1',
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(resolveSelectionsMock.mock.calls[0]?.arguments[1], [
+    {
+      sourceType: 'platform',
+      skillId: 'deploy-skill-1',
+      revisionId: 'deploy-rev-1',
+    },
+  ]);
+});

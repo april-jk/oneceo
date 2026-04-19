@@ -1,5 +1,6 @@
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS } from './deployment-template-bootstrap-service';
 
 type ManifestFeatures = {
   analytics: boolean;
@@ -241,15 +242,18 @@ async function detectAnalyticsEntry(sourceDir: string): Promise<boolean> {
     join(sourceDir, 'client/src/main.ts'),
     join(sourceDir, 'src/main.tsx'),
     join(sourceDir, 'src/main.ts'),
-    join(sourceDir, 'client/index.html'),
-    join(sourceDir, 'index.html'),
-    join(sourceDir, 'templates/index.html'),
-    join(sourceDir, 'app/templates/index.html'),
+    ...DEPLOYMENT_TEMPLATE_ANALYTICS_ENTRY_RELATIVE_PATHS.map((relativePath) =>
+      join(sourceDir, relativePath)
+    ),
   ];
   const contents = await Promise.all(candidates.map((file) => readTextIfExists(file)));
   return contents.some(
     (content) =>
       content.includes('ONECEO_ANALYTICS:START') ||
+      content.includes('window.__ONECEO_ANALYTICS__') ||
+      content.includes('window.ONECEO_ANALYTICS_CONFIG') ||
+      content.includes('OneCEO Analytics') ||
+      content.includes('data-oneceo-analytics') ||
       content.includes('VITE_ANALYTICS_') ||
       content.includes('data-website-id') ||
       content.includes('script.js')

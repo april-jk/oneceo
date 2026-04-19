@@ -39,6 +39,34 @@ class AppUserDAO {
     return record;
   }
 
+  async updateById(
+    id: string,
+    input: {
+      passwordHash?: string;
+      displayName?: string;
+      status?: string;
+    }
+  ) {
+    const nextValues: Record<string, unknown> = {
+      updatedAt: new Date(),
+    };
+    if (typeof input.passwordHash === 'string' && input.passwordHash.trim()) {
+      nextValues.passwordHash = input.passwordHash;
+    }
+    if (typeof input.displayName === 'string' && input.displayName.trim()) {
+      nextValues.displayName = input.displayName.trim();
+    }
+    if (typeof input.status === 'string' && input.status.trim()) {
+      nextValues.status = input.status.trim();
+    }
+    const [updated] = await db
+      .update(appUsers)
+      .set(nextValues)
+      .where(eq(appUsers.id, id as any))
+      .returning();
+    return updated;
+  }
+
   async touchLastLogin(id: string) {
     const [updated] = await db
       .update(appUsers)

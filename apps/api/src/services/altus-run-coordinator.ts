@@ -23,6 +23,17 @@ import {
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
+const DEPLOYMENT_PENDING_STATUSES = new Set([
+  '',
+  'unknown',
+  'building',
+  'deploying',
+  'initializing',
+  'queued',
+  'waiting',
+  'pending',
+  'provisioning',
+]);
 
 type DeploymentCompletionIntent = {
   mode: 'none' | 'deploy' | 'redeploy' | 'rollback';
@@ -205,16 +216,17 @@ export class AltusRunCoordinator {
   }
 
   private getMaxToolRounds() {
-    const fallback = 32;
+    const fallback = 192;
     const parsed = Number(process.env.ALTUS_MANAGED_MAX_TOOL_ROUNDS || fallback);
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-    return Math.min(32, Math.floor(parsed));
+    return Math.min(384, Math.floor(parsed));
   }
 
   private getModelRetryLimit() {
-    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRIES || 1);
-    if (!Number.isFinite(parsed) || parsed < 0) return 1;
-    return Math.min(3, Math.floor(parsed));
+    const fallback = 3;
+    const parsed = Number(process.env.ALTUS_MANAGED_MODEL_RETRIES || fallback);
+    if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+    return Math.min(5, Math.floor(parsed));
   }
 
   private getModelRetryDelayMs(attempt: number) {
@@ -332,7 +344,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'rollback',
-        acceptedToolNames: ['rollback_application_deployment'],
+        acceptedToolNames: ['rollback_application_deployment', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -349,7 +361,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'redeploy',
-        acceptedToolNames: ['redeploy_application', 'deploy_application'],
+        acceptedToolNames: ['redeploy_application', 'deploy_application', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -365,7 +377,7 @@ export class AltusRunCoordinator {
     ) {
       return {
         mode: 'deploy',
-        acceptedToolNames: ['deploy_application', 'redeploy_application'],
+        acceptedToolNames: ['deploy_application', 'redeploy_application', 'get_application_deployment_status'],
         requiresManagedSuccess: true,
       };
     }
@@ -391,6 +403,25 @@ export class AltusRunCoordinator {
     } catch {
       return null;
     }
+  }
+
+  private isManagedDeploymentEvidenceSuccessful(
+    intent: DeploymentCompletionIntent,
+    evidence: DeploymentCompletionEvidence | null
+  ) {
+    if (!intent.requiresManagedSuccess || !evidence) {
+      return false;
+    }
+    if (!intent.acceptedToolNames.includes(evidence.toolName)) {
+      return false;
+    }
+    if (evidence.status !== 'success') {
+      return false;
+    }
+    if (evidence.toolName !== 'get_application_deployment_status') {
+      return true;
+    }
+    return !DEPLOYMENT_PENDING_STATUSES.has(evidence.deploymentStatus);
   }
 
   private buildDeploymentCompletionBlockedError(
@@ -875,6 +906,7 @@ export class AltusRunCoordinator {
       userId: state.input.userId,
       sandboxId: state.sandboxId,
       workspaceRoot: state.workspaceRoot,
+      availableSkills: state.input.skillCatalog,
       activeSkills: state.input.skills,
       mcpProviders: state.input.mcpProviders,
     });
@@ -1037,6 +1069,48 @@ export class AltusRunCoordinator {
 
         try {
           const result = await runtime.execute(toolName, args, signal);
+          if (Array.isArray(result.activatedSkills) && result.activatedSkills.length > 0) {
+            const autoAttachedPrompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
+              result.activatedSkills,
+              toolName,
+            );
+            messages.push({
+              role: 'system',
+              content: autoAttachedPrompt,
+            });
+            await this.setupService.persistTimelineMessage({
+              sessionId: state.input.sessionId,
+              role: 'system',
+              messageType: 'status_update',
+              content: `已自动加载技能：${result.activatedSkills.map((item) => item.name).join('、')}`,
+              metadata: {
+                eventType: 'managed_skill_auto_attached',
+                toolName,
+                runId: state.input.runId,
+                sessionId: state.input.sessionId,
+                skillIds: result.activatedSkills.map((item) => item.skillId),
+                skillRevisionIds: result.activatedSkills.map((item) => item.revisionId),
+                skillSlugs: result.activatedSkills.map((item) => item.slug),
+                promptMarkdown: autoAttachedPrompt,
+              },
+              messageKey: `managed:${state.input.runId}:auto_attached_skills:${toolName}:${toolCall.id}`,
+            });
+            await this.eventWriter.appendRunEvent(
+              state.input.runId,
+              state.input.sessionId,
+              state.input.userId,
+              'run_status',
+              {
+                status: 'running',
+                content: `已自动加载技能：${result.activatedSkills.map((item) => item.name).join('、')}`,
+                toolName,
+                skillIds: result.activatedSkills.map((item) => item.skillId),
+                skillRevisionIds: result.activatedSkills.map((item) => item.revisionId),
+                skillSlugs: result.activatedSkills.map((item) => item.slug),
+                promptMarkdown: autoAttachedPrompt,
+              }
+            );
+          }
           if (result.type === 'ask_user') {
             return this.requestClarification(state, {
               question: result.question,
@@ -1048,7 +1122,10 @@ export class AltusRunCoordinator {
             result.type === 'complete' &&
             toolName === 'complete_task' &&
             deploymentCompletionIntent.requiresManagedSuccess &&
-            !deploymentCompletionUnlocked
+            !this.isManagedDeploymentEvidenceSuccessful(
+              deploymentCompletionIntent,
+              lastDeploymentEvidence
+            )
           ) {
             throw new Error(
               this.buildDeploymentCompletionBlockedError(
@@ -1157,9 +1234,10 @@ export class AltusRunCoordinator {
                 toolName,
               };
               if (
-                deploymentCompletionIntent.requiresManagedSuccess &&
-                deploymentCompletionIntent.acceptedToolNames.includes(toolName) &&
-                evidence.status === 'success'
+                this.isManagedDeploymentEvidenceSuccessful(
+                  deploymentCompletionIntent,
+                  lastDeploymentEvidence
+                )
               ) {
                 deploymentCompletionUnlocked = true;
               }

@@ -21,6 +21,7 @@ import type {
   OsacReleaseDetailResponse,
   OsacReleaseListResponse,
   SkillDetail,
+  SkillGovernanceOptions,
   SkillImportJob,
   SkillImportResult,
   SkillImportPreview,
@@ -343,12 +344,23 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<SkillSummary[]>(`/api/skill-management${suffix}`);
   },
+  getSkillGovernanceOptions: () => request<SkillGovernanceOptions>('/api/skill-management/governance-options'),
   getSkill: (skillId: string) => request<SkillDetail>(`/api/skill-management/${encodeURIComponent(skillId)}`),
   createSkill: (payload: {
     slug: string;
     name: string;
     description?: string;
     category?: string;
+    governance?: {
+      systemRole?: string | null;
+      adminManaged?: boolean;
+      required?: boolean;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+        toolNames?: string[];
+      };
+    };
     bodyMarkdown: string;
     resources?: Array<{
       resourcePath: string;
@@ -367,6 +379,16 @@ export const api = {
       name?: string;
       description?: string;
       category?: string;
+      governance?: {
+        systemRole?: string | null;
+        adminManaged?: boolean;
+        required?: boolean;
+        autoActivation?: {
+          enabled?: boolean;
+          triggers?: string[];
+          toolNames?: string[];
+        };
+      };
       bodyMarkdown?: string;
       resources?: Array<{
         resourcePath: string;

@@ -21,14 +21,11 @@ import {
   type RailwayDeploymentProvisioningPhase,
 } from './railway-deployment-service';
 import {
-  publishTaskSessionWorkspaceToRepository,
+  uploadTaskSessionWorkspaceToRailway,
   type DeploymentTemplateBaselineData,
   type DeploymentWorkspacePublishReport,
 } from './task-creation-deployment-source-service';
-import {
-  platformDeploymentAccountService,
-  refreshManagedServiceSourceConnection,
-} from './platform-deployment-account-service';
+import { platformDeploymentAccountService } from './platform-deployment-account-service';
 import { setSandboxMetadata } from './sandbox-activity-service';
 import {
   buildTaskSessionAnalyticsPanel,
@@ -76,6 +73,7 @@ type TaskSessionDeploymentSyncPayload = {
 let deploymentSyncTimer: NodeJS.Timeout | null = null;
 let deploymentSyncRunning = false;
 const deploymentSyncRunningSessions = new Set<string>();
+const terminalSuccessDeploymentStatuses = new Set(['SUCCESS', 'DEPLOYED', 'ACTIVE']);
 
 function deploymentSyncKeyFor(taskSessionId: string) {
   return `deployment_sync:${taskSessionId}`;
@@ -344,7 +342,7 @@ function buildStoredSnapshotFromState(
   const bindingState = state.bindingState || base.bindingState;
   const shouldKeepProvisioningPhase =
     bindingState === 'provisioning' || base.activeDeploymentPending === true;
-  const shouldKeepProviderError = bindingState === 'repair_required';
+  const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...base,
     bindingState,
@@ -599,7 +597,13 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
     asText(input.panel.latestStaticUrl) ||
     asText(input.panel.latestUrl) ||
     asText(input.panel.domains[0]);
-  if (!publicUrl || input.panel.activeDeploymentPending !== true) {
+  const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const shouldProbe =
+    Boolean(publicUrl) &&
+    (input.panel.activeDeploymentPending === true ||
+      asText(input.panel.bindingState) === 'ready' ||
+      terminalSuccessDeploymentStatuses.has(latestStatus));
+  if (!shouldProbe) {
     return input.panel;
   }
   try {
@@ -613,8 +617,125 @@ async function waitForTaskSessionPublicReachabilityAndRefresh(input: {
       selectedDeploymentId: input.panel.deploymentId,
       resolvedOrchestratorSessionId: input.orchestratorSessionId,
     });
-  } catch {
+  } catch (error) {
+    const refreshed = await refreshTaskSessionDeploymentSnapshot({
+      userId: input.userId,
+      session: input.session,
+      selectedDeploymentId: input.panel.deploymentId,
+      resolvedOrchestratorSessionId: input.orchestratorSessionId,
+    }).catch(() => input.panel);
+    const refreshedUrl =
+      asText(refreshed.latestStaticUrl) ||
+      asText(refreshed.latestUrl) ||
+      asText(refreshed.domains[0]);
+    const refreshedStatus = asText(refreshed.latestStatus).toUpperCase();
+    const isStillPending =
+      refreshed.activeDeploymentPending === true || asText(refreshed.bindingState) === 'provisioning';
+    if (isStillPending || !refreshedUrl) {
+      return refreshed;
+    }
+    if (
+      asText(refreshed.bindingState) === 'ready' ||
+      terminalSuccessDeploymentStatuses.has(refreshedStatus)
+    ) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`部署平台已返回成功状态，但公网访问验证失败。${message}`);
+    }
+    return refreshed;
+  }
+}
+
+function buildTaskSessionPublicReachabilityFailurePanel(
+  panel: RailwayDeploymentPanelData,
+  message: string
+): RailwayDeploymentPanelData {
+  return {
+    ...panel,
+    bindingState: 'provider_error',
+    provisioningPhase: 'public_reachability',
+    providerErrorCode: 'deployment_public_unreachable',
+    providerErrorMessage: message,
+    message,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: false,
+  };
+}
+
+function promoteTaskSessionSuccessfulLiveDeployment(
+  panel: RailwayDeploymentPanelData
+): RailwayDeploymentPanelData {
+  const successfulDeployment = panel.deployments.find((item) =>
+    terminalSuccessDeploymentStatuses.has(asText(item.status).toUpperCase())
+  );
+  if (!successfulDeployment) {
+    return panel;
+  }
+  return {
+    ...panel,
+    deploymentId: successfulDeployment.id,
+    latestStatus: successfulDeployment.status,
+    bindingState: 'ready',
+    provisioningPhase: undefined,
+    providerErrorCode: undefined,
+    providerErrorMessage: undefined,
+    message: undefined,
+    lastVerifiedAt: new Date().toISOString(),
+    activeDeploymentPending: false,
+  };
+}
+
+export async function validateTaskSessionDeploymentPublicReadiness(input: {
+  panel: RailwayDeploymentPanelData;
+  healthPath?: string;
+  probe?: typeof waitForRailwayDeploymentPublicReachability;
+}): Promise<RailwayDeploymentPanelData> {
+  const probe =
+    input.probe ||
+    ((probeInput, probeOptions) => waitForRailwayDeploymentPublicReachability(probeInput, probeOptions));
+  const publicUrl =
+    asText(input.panel.latestStaticUrl) ||
+    asText(input.panel.latestUrl) ||
+    asText(input.panel.domains[0]);
+  const latestStatus = asText(input.panel.latestStatus).toUpperCase();
+  const shouldValidateTerminalSuccess =
+    Boolean(publicUrl) &&
+    (asText(input.panel.bindingState) === 'ready' ||
+      terminalSuccessDeploymentStatuses.has(latestStatus));
+  const shouldPromoteSuccessfulLiveDeployment =
+    Boolean(publicUrl) &&
+    (input.panel.activeDeploymentPending === true ||
+      asText(input.panel.bindingState) === 'provisioning') &&
+    input.panel.deployments.some((item) =>
+      terminalSuccessDeploymentStatuses.has(asText(item.status).toUpperCase())
+    );
+  if (!shouldValidateTerminalSuccess && !shouldPromoteSuccessfulLiveDeployment) {
     return input.panel;
+  }
+
+  try {
+    await probe(
+      {
+        baseUrl: publicUrl,
+        healthPath: input.healthPath,
+      },
+      {
+        timeoutMs: 5_000,
+        pollIntervalMs: 1_000,
+      }
+    );
+    if (shouldPromoteSuccessfulLiveDeployment) {
+      return promoteTaskSessionSuccessfulLiveDeployment(input.panel);
+    }
+    return input.panel;
+  } catch (error) {
+    if (shouldPromoteSuccessfulLiveDeployment) {
+      return input.panel;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    return buildTaskSessionPublicReachabilityFailurePanel(
+      input.panel,
+      `部署平台已返回成功状态，但公网访问验证失败。${reason}`
+    );
   }
 }
 
@@ -819,7 +940,7 @@ async function resolveLiveTaskSessionDeploymentPanel(input: {
   const bindingState = panel.bindingState || savedState?.bindingState || 'ready';
   const shouldKeepProvisioningPhase =
     bindingState === 'provisioning' || panel.activeDeploymentPending === true;
-  const shouldKeepProviderError = bindingState === 'repair_required';
+  const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     ...panel,
     bindingState,
@@ -942,7 +1063,7 @@ function buildDeploymentStatePatchFromPanel(
   const bindingState = panel.bindingState || (panel.activeDeploymentPending ? 'provisioning' : 'ready');
   const shouldKeepProvisioningPhase =
     bindingState === 'provisioning' || panel.activeDeploymentPending === true;
-  const shouldKeepProviderError = bindingState === 'repair_required';
+  const shouldKeepProviderError = bindingState === 'repair_required' || bindingState === 'provider_error';
   return {
     bindingState,
     provisioningPhase: shouldKeepProvisioningPhase ? panel.provisioningPhase : undefined,
@@ -996,11 +1117,16 @@ export async function refreshTaskSessionDeploymentSnapshot(input: {
   const refreshedEnvironment = await sandboxExecutionEnvironmentDAO.getBySessionId(orchestratorSessionId);
   const refreshedMetadata = pickRecord(refreshedEnvironment?.metadata);
   const refreshedAnalytics = await buildTaskSessionAnalyticsPanel(refreshedMetadata);
-  const nextPanel = {
+  const baseline = pickRecord(refreshedMetadata.deploymentTemplateBaseline || metadata.deploymentTemplateBaseline);
+  let nextPanel: RailwayDeploymentPanelData = {
     ...panel,
     analytics: refreshedAnalytics,
     resourceBinding: resourceBinding || panel.resourceBinding,
-  } satisfies RailwayDeploymentPanelData;
+  };
+  nextPanel = await validateTaskSessionDeploymentPublicReadiness({
+    panel: nextPanel,
+    healthPath: asText(baseline.healthcheckPath) || undefined,
+  });
   await persistTaskSessionDeploymentState(
     orchestratorSessionId,
     pickTaskSessionDeploymentState(refreshedMetadata.deploymentState || metadata.deploymentState),
@@ -1099,15 +1225,15 @@ export async function executeTaskSessionDeploymentAction(
         environmentMetadata,
         account,
       });
-      const publishReport = await publishTaskSessionWorkspaceToRepository({
+      const publishReport = await uploadTaskSessionWorkspaceToRailway({
         orchestratorSessionId,
         workspaceRoot,
-        repository: {
-          owner: account.githubRepoOwner || '',
-          name: account.githubRepoName || '',
-          fullName: account.githubRepoFullName || '',
-          htmlUrl: account.githubRepoUrl,
-          defaultBranch: account.githubDefaultBranch || 'main',
+        railway: {
+          token: account.accessToken,
+          projectId: account.projectId,
+          environmentId: account.environmentId,
+          serviceId: account.serviceId,
+          message: `deploy ${input.taskSessionId} ${new Date().toISOString()}`,
         },
         sessionId: input.taskSessionId,
         analyticsConfig: buildDeploymentAnalyticsRuntimeConfig({
@@ -1123,31 +1249,31 @@ export async function executeTaskSessionDeploymentAction(
       savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
         bindingState: 'provisioning',
         provisioningPhase: currentPhase,
-        message: '工作区已发布到托管仓库，正在同步 Railway 源码绑定。',
+        message: '工作区已直传 Railway，正在确认部署版本。',
         lastVerifiedAt: new Date().toISOString(),
-      });
-      await refreshManagedServiceSourceConnection({
-        serviceId: account.serviceId,
-        repoFullName: account.githubRepoFullName || '',
-        branch: account.githubDefaultBranch || 'main',
       });
 
       currentPhase = 'deployment_trigger';
       savedState = await persistTaskSessionDeploymentState(orchestratorSessionId, savedState, {
         bindingState: 'provisioning',
         provisioningPhase: currentPhase,
-        message: '源码绑定已完成，正在等待 Railway 生成部署版本。',
+        message: 'Railway 已收到源码上传，正在等待部署版本生成。',
         lastVerifiedAt: new Date().toISOString(),
       });
-      const actionResult = await ensureDeploymentStartedAfterSourceSync({
-        waitForSourceSync: () =>
-          waitForRailwayDeploymentAfterSourceSync(deploymentMetadata, {
-            since: deploymentRequestedAt,
-            timeoutMs: 120_000,
-            pollIntervalMs: 4_000,
-          }),
-        triggerDeploy: () => triggerRailwayDeploy(deploymentMetadata),
-      });
+      const actionResult = publishReport.deploymentId
+        ? {
+            action: 'deploy' as const,
+            deploymentId: publishReport.deploymentId,
+          }
+        : await ensureDeploymentStartedAfterSourceSync({
+            waitForSourceSync: () =>
+              waitForRailwayDeploymentAfterSourceSync(deploymentMetadata, {
+                since: deploymentRequestedAt,
+                timeoutMs: 120_000,
+                pollIntervalMs: 4_000,
+              }),
+            triggerDeploy: () => triggerRailwayDeploy(deploymentMetadata),
+          });
       await persistRailwayDeploymentSelection(orchestratorSessionId, environment?.metadata, actionResult);
 
       currentPhase = 'public_reachability';

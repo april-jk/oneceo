@@ -652,3 +652,42 @@ test('debug_open_page fails fast when debug runtime reports failed status', asyn
   assert.equal(runCommandMock.mock.callCount(), 0);
   assert.equal(markSandboxDirtyMock.mock.callCount(), 0);
 });
+
+test('deployment tools are blocked for non-deployable artifact sessions', async () => {
+  const executeMock = mock.method(altusManagedDeploymentToolService, 'execute', async () => {
+    throw new Error('should_not_be_called');
+  });
+
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-non-deploy',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-non-deploy',
+    activeSkills: [],
+    mcpProviders: [],
+    taskIntentProfile: {
+      mode: 'non_deployable_artifact',
+      reason: 'historical_explicit_no_deploy',
+      recentUserMessages: [
+        '请帮我写一个 HTML 邮件模板，用于报价通知邮件。只需要输出源码文件，不需要做网站，也不要部署。',
+        '请按最佳方案直接继续，不需要再提问。',
+      ],
+      explicitNoDeploy: true,
+      explicitNoWeb: true,
+      webArtifactRequested: false,
+      deployRequested: false,
+      scriptArtifactRequested: false,
+      emailTemplateRequested: true,
+      deploymentAllowed: false,
+    },
+  });
+
+  await assert.rejects(
+    runtime.execute('deploy_application', {
+      notes: 'publish current app',
+    }),
+    /deployment_tool_not_allowed_non_web_task/
+  );
+
+  assert.equal(executeMock.mock.callCount(), 0);
+});

@@ -135,6 +135,7 @@ export class AltusManagedRunEntryService {
       },
       messageKey,
     });
+    const taskIntentProfile = await this.setupService.buildTaskIntentProfile(sessionId, content);
     await this.setupService.updateSessionLifecycle(sessionId, {
       status: 'in_progress',
       stage: 'executing',
@@ -160,6 +161,7 @@ export class AltusManagedRunEntryService {
       mcpProviders: mcpToolSnapshot.providers as any,
       skillCatalog: readManagedSkillCatalog(input.metadata?.managedSkillCatalog),
       skills: readManagedSkillContext(input.metadata?.managedSkillContext),
+      taskIntentProfile,
     });
     const abortController = new AbortController();
     this.controllers.set(run.id, abortController);
@@ -223,6 +225,18 @@ export class AltusManagedRunEntryService {
       mcpProviders: [],
       skillCatalog: [],
       skills: [],
+      taskIntentProfile: {
+        mode: 'neutral',
+        reason: 'unknown',
+        recentUserMessages: [],
+        explicitNoDeploy: false,
+        explicitNoWeb: false,
+        webArtifactRequested: false,
+        deployRequested: false,
+        scriptArtifactRequested: false,
+        emailTemplateRequested: false,
+        deploymentAllowed: false,
+      },
     });
     state.markStopped(reason || 'user_interrupt');
     await this.lifecycleService.markStopped(state, reason || 'user_interrupt');

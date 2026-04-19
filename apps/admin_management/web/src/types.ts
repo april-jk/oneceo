@@ -453,6 +453,16 @@ export interface SkillSummary {
   publishedRevisionNumber: number | null;
   publishedAt: string | null;
   updatedAt: string;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
 }
 
 export interface SkillDetail {
@@ -465,6 +475,16 @@ export interface SkillDetail {
   publishedRevisionId: string | null;
   latestBodyMarkdown: string;
   renderedSkillMarkdown: string | null;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
   resourceSummary?: {
     totalCount: number;
     referenceCount: number;
@@ -478,6 +498,19 @@ export interface SkillDetail {
     createdAt: string;
   }>;
   updatedAt: string;
+}
+
+export interface SkillGovernanceOption {
+  value: string;
+  label: string;
+  description?: string;
+  category?: string;
+}
+
+export interface SkillGovernanceOptions {
+  systemRoles: SkillGovernanceOption[];
+  autoActivationTriggers: SkillGovernanceOption[];
+  toolNames: SkillGovernanceOption[];
 }
 
 export interface SkillRevision {

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import type {
   SkillDetail,
+  SkillGovernanceOption,
+  SkillGovernanceOptions,
   SkillImportPreview,
   SkillRevision,
   SkillRevisionResources,
@@ -14,6 +16,14 @@ type EditorState = {
   name: string;
   description: string;
   category: string;
+  governance: {
+    systemRole: string;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivationEnabled: boolean;
+    autoActivationTriggers: string;
+    autoActivationToolNames: string;
+  };
   bodyMarkdown: string;
   documents: Array<{
     documentKey: string;
@@ -38,11 +48,24 @@ const EMPTY_EDITOR: EditorState = {
   name: '',
   description: '',
   category: 'general',
+  governance: {
+    systemRole: '',
+    adminManaged: false,
+    required: false,
+    autoActivationEnabled: false,
+    autoActivationTriggers: '',
+    autoActivationToolNames: '',
+  },
   bodyMarkdown: '',
   documents: [],
 };
 
 const DEFAULT_CATEGORY_OPTIONS = ['general', 'office', 'engineering', 'ops', 'design'];
+const EMPTY_GOVERNANCE_OPTIONS: SkillGovernanceOptions = {
+  systemRoles: [],
+  autoActivationTriggers: [],
+  toolNames: [],
+};
 
 function toEditorState(detail: SkillDetail): EditorState {
   return {
@@ -50,6 +73,18 @@ function toEditorState(detail: SkillDetail): EditorState {
     name: detail.name,
     description: detail.description || '',
     category: detail.category || 'general',
+    governance: {
+      systemRole: detail.governance?.systemRole || '',
+      adminManaged: Boolean(detail.governance?.adminManaged),
+      required: Boolean(detail.governance?.required),
+      autoActivationEnabled: Boolean(detail.governance?.autoActivation?.enabled),
+      autoActivationTriggers: Array.isArray(detail.governance?.autoActivation?.triggers)
+        ? detail.governance.autoActivation.triggers.join(', ')
+        : '',
+      autoActivationToolNames: Array.isArray(detail.governance?.autoActivation?.toolNames)
+        ? detail.governance.autoActivation.toolNames.join(', ')
+        : '',
+    },
     bodyMarkdown: detail.latestBodyMarkdown || '',
     documents: [],
   };
@@ -104,6 +139,102 @@ function skillCategoryLabel(category?: string | null) {
   return category || '-';
 }
 
+function governanceTriggerLabel(triggers?: string[] | null) {
+  if (!Array.isArray(triggers) || triggers.length === 0) return '-';
+  return triggers.join(' / ');
+}
+
+function governanceToolLabel(toolNames?: string[] | null) {
+  if (!Array.isArray(toolNames) || toolNames.length === 0) return '-';
+  return toolNames.join(' / ');
+}
+
+function splitGovernanceValues(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toggleGovernanceValue(current: string, value: string, checked: boolean) {
+  const next = new Set(splitGovernanceValues(current));
+  if (checked) {
+    next.add(value);
+  } else {
+    next.delete(value);
+  }
+  return Array.from(next).join(', ');
+}
+
+function mergeGovernanceOptions(options: SkillGovernanceOption[], selectedValues: string[]) {
+  const merged = new Map(options.map((item) => [item.value, item]));
+  for (const value of selectedValues) {
+    if (!merged.has(value)) {
+      merged.set(value, {
+        value,
+        label: `${value} (历史值)`,
+        category: 'legacy',
+      });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function formatGovernanceSelectionSummary(
+  selectedValues: string[],
+  options: SkillGovernanceOption[],
+  placeholder: string,
+) {
+  if (selectedValues.length === 0) return placeholder;
+  const labels = selectedValues
+    .map((value) => options.find((item) => item.value === value)?.label || value)
+    .filter(Boolean);
+  if (labels.length <= 2) return labels.join('、');
+  return `${labels.slice(0, 2).join('、')} +${labels.length - 2}`;
+}
+
+function GovernanceMultiSelectDropdown(props: {
+  options: SkillGovernanceOption[];
+  selectedValues: string[];
+  placeholder: string;
+  onToggle: (value: string, checked: boolean) => void;
+}) {
+  const { options, selectedValues, placeholder, onToggle } = props;
+  const mergedOptions = useMemo(() => mergeGovernanceOptions(options, selectedValues), [options, selectedValues]);
+  const summary = useMemo(
+    () => formatGovernanceSelectionSummary(selectedValues, mergedOptions, placeholder),
+    [mergedOptions, placeholder, selectedValues]
+  );
+
+  return (
+    <details className="skill-multiselect">
+      <summary className="control-input skill-multiselect-trigger">
+        <span>{summary}</span>
+        <span className="skill-multiselect-arrow" aria-hidden="true">
+          ▾
+        </span>
+      </summary>
+      <div className="skill-multiselect-menu">
+        {mergedOptions.map((item) => (
+          <label key={item.value} className="skill-multiselect-option">
+            <span className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={selectedValues.includes(item.value)}
+                onChange={(event) => onToggle(item.value, event.target.checked)}
+              />
+              <strong>{item.label}</strong>
+            </span>
+            <span className="cell-subtle mono">{item.value}</span>
+            {item.description ? <span className="cell-subtle">{item.description}</span> : null}
+            {item.category ? <span className="cell-subtle">{item.category}</span> : null}
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 async function readDirectoryFiles(fileList: FileList): Promise<Array<{ relativePath: string; content: string }>> {
   const files = Array.from(fileList);
   const binaryExtensionPattern =
@@ -133,6 +264,7 @@ type Props = {
 
 export function SkillManagementSection({ onError }: Props) {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [governanceOptions, setGovernanceOptions] = useState<SkillGovernanceOptions>(EMPTY_GOVERNANCE_OPTIONS);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [revisions, setRevisions] = useState<SkillRevision[]>([]);
@@ -177,6 +309,20 @@ export function SkillManagementSection({ onError }: Props) {
     }
     return Array.from(categories).sort((a, b) => skillCategoryLabel(a).localeCompare(skillCategoryLabel(b), 'zh-Hans-CN'));
   }, [skills]);
+
+  const selectedTriggerValues = useMemo(
+    () => splitGovernanceValues(editor.governance.autoActivationTriggers),
+    [editor.governance.autoActivationTriggers]
+  );
+  const selectedToolValues = useMemo(
+    () => splitGovernanceValues(editor.governance.autoActivationToolNames),
+    [editor.governance.autoActivationToolNames]
+  );
+
+  const loadGovernanceOptions = useCallback(async () => {
+    const next = await api.getSkillGovernanceOptions();
+    setGovernanceOptions(next);
+  }, []);
 
   const loadSkills = useCallback(async () => {
     const next = await api.listSkills({
@@ -228,7 +374,17 @@ export function SkillManagementSection({ onError }: Props) {
   }, [loadSkills, onError]);
 
   useEffect(() => {
+    void loadGovernanceOptions().catch((error) => {
+      onError(error instanceof Error ? error.message : '技能治理选项加载失败');
+    });
+  }, [loadGovernanceOptions, onError]);
+
+  useEffect(() => {
     if (!selectedSkillId) return;
+    setSelectedRevisionId(null);
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
     void loadSkillDetail(selectedSkillId).catch((error) => {
       onError(error instanceof Error ? error.message : '技能详情加载失败');
     });
@@ -341,6 +497,10 @@ export function SkillManagementSection({ onError }: Props) {
     setIsCreating(false);
     setDetailDialogOpen(true);
     setDetailTab('editor');
+    setSelectedRevisionId(null);
+    setRevisionResources(null);
+    setSelectedResourcePath(null);
+    setValidationResult(null);
     setSelectedSkillId(skillId);
   };
 
@@ -361,6 +521,22 @@ export function SkillManagementSection({ onError }: Props) {
     try {
       const created = await api.createSkill({
         ...editor,
+        governance: {
+          systemRole: editor.governance.systemRole.trim() || null,
+          adminManaged: editor.governance.adminManaged,
+          required: editor.governance.required,
+          autoActivation: {
+            enabled: editor.governance.autoActivationEnabled,
+            triggers: editor.governance.autoActivationTriggers
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+            toolNames: editor.governance.autoActivationToolNames
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          },
+        },
         resources: editor.documents
           .map((item, index) => ({
             resourcePath: item.resourcePath.trim(),
@@ -388,6 +564,22 @@ export function SkillManagementSection({ onError }: Props) {
         name: editor.name,
         description: editor.description,
         category: editor.category,
+        governance: {
+          systemRole: editor.governance.systemRole.trim() || null,
+          adminManaged: editor.governance.adminManaged,
+          required: editor.governance.required,
+          autoActivation: {
+            enabled: editor.governance.autoActivationEnabled,
+            triggers: editor.governance.autoActivationTriggers
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+            toolNames: editor.governance.autoActivationToolNames
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          },
+        },
         bodyMarkdown: editor.bodyMarkdown,
         resources: editor.documents
           .map((item) => ({
@@ -494,6 +686,7 @@ export function SkillManagementSection({ onError }: Props) {
       return [
         { label: '当前模式', value: '新建技能' },
         { label: '分类', value: skillCategoryLabel(editor.category) },
+        { label: '系统角色', value: editor.governance.systemRole || '-' },
         { label: '补充文档', value: String(editor.documents.length) },
         { label: '发布方式', value: '创建后生成版本 1' },
       ];
@@ -504,6 +697,7 @@ export function SkillManagementSection({ onError }: Props) {
     return [
       { label: '唯一标识', value: detail.slug, mono: true },
       { label: '分类', value: skillCategoryLabel(detail.category) },
+      { label: '系统角色', value: detail.governance?.systemRole || '-' },
       { label: '已发布版本', value: publishedRevision ? `版本 ${publishedRevision.revisionNumber}` : '未发布' },
       { label: '当前工作版本', value: selectedRevision ? `版本 ${selectedRevision.revisionNumber}` : '-' },
       { label: '资源 / 文档', value: `${currentResourceCount} / ${editor.documents.length}` },
@@ -646,6 +840,14 @@ export function SkillManagementSection({ onError }: Props) {
                       name: preview.name,
                       description: preview.discoveryDescription,
                       category: 'general',
+                      governance: {
+                        systemRole: '',
+                        adminManaged: false,
+                        required: false,
+                        autoActivationEnabled: false,
+                        autoActivationTriggers: '',
+                        autoActivationToolNames: '',
+                      },
                       bodyMarkdown: preview.entry.bodyMarkdown,
                       documents: preview.resources
                         .filter((item) => item.resourceKind === 'reference' || item.resourceKind === 'template')
@@ -774,6 +976,7 @@ export function SkillManagementSection({ onError }: Props) {
               <tr>
                 <th>技能</th>
                 <th>分类</th>
+                <th>治理</th>
                 <th>状态</th>
                 <th>当前版本</th>
               </tr>
@@ -781,7 +984,7 @@ export function SkillManagementSection({ onError }: Props) {
             <tbody>
               {visibleSkills.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="table-empty">
+                  <td colSpan={5} className="table-empty">
                     当前筛选下暂无技能记录
                   </td>
                 </tr>
@@ -797,6 +1000,15 @@ export function SkillManagementSection({ onError }: Props) {
                       <div className="cell-subtle">{item.slug}</div>
                     </td>
                     <td>{skillCategoryLabel(item.category)}</td>
+                    <td>
+                      <div>{item.governance?.systemRole || '-'}</div>
+                      <div className="cell-subtle">
+                        {item.governance?.autoActivation?.enabled
+                          ? `自动加载 · ${governanceTriggerLabel(item.governance.autoActivation.triggers)}`
+                          : '手动加载'}
+                      </div>
+                      <div className="cell-subtle">工具 · {governanceToolLabel(item.governance?.autoActivation?.toolNames)}</div>
+                    </td>
                     <td>
                       <span className={`status-pill status-${item.status}`}>{skillStatusLabel(item.status)}</span>
                     </td>
@@ -837,6 +1049,19 @@ export function SkillManagementSection({ onError }: Props) {
                         <span className={`status-pill status-${detail.status}`}>{skillStatusLabel(detail.status)}</span>
                         <span className="skill-detail-meta-chip">{skillCategoryLabel(detail.category)}</span>
                         <span className="skill-detail-meta-chip mono">{detail.slug}</span>
+                        {detail.governance?.systemRole ? (
+                          <span className="skill-detail-meta-chip">{detail.governance.systemRole}</span>
+                        ) : null}
+                        {detail.governance?.autoActivation?.enabled ? (
+                          <span className="skill-detail-meta-chip">
+                            自动加载 · {governanceTriggerLabel(detail.governance.autoActivation.triggers)}
+                          </span>
+                        ) : null}
+                        {detail.governance?.autoActivation?.toolNames?.length ? (
+                          <span className="skill-detail-meta-chip">
+                            工具 · {governanceToolLabel(detail.governance.autoActivation.toolNames)}
+                          </span>
+                        ) : null}
                       </>
                     ) : null}
                   </div>
@@ -931,6 +1156,131 @@ export function SkillManagementSection({ onError }: Props) {
                           value={editor.description}
                           onChange={(event) => setEditor((prev) => ({ ...prev, description: event.target.value }))}
                         />
+                      </label>
+                      <label className="form-field">
+                        <span>系统角色</span>
+                        <select
+                          className="control-input"
+                          value={editor.governance.systemRole}
+                          onChange={(event) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                systemRole: event.target.value,
+                              },
+                            }))
+                          }
+                        >
+                          <option value="">不设置</option>
+                          {editor.governance.systemRole &&
+                          !governanceOptions.systemRoles.some((item) => item.value === editor.governance.systemRole) ? (
+                            <option value={editor.governance.systemRole}>
+                              {editor.governance.systemRole} (历史值)
+                            </option>
+                          ) : null}
+                          {governanceOptions.systemRoles.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {item.label} ({item.value})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="form-field field-span-2">
+                        <span>自动加载触发动作</span>
+                        <GovernanceMultiSelectDropdown
+                          options={governanceOptions.autoActivationTriggers}
+                          selectedValues={selectedTriggerValues}
+                          placeholder="请选择触发动作"
+                          onToggle={(value, checked) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                autoActivationTriggers: toggleGovernanceValue(
+                                  prev.governance.autoActivationTriggers,
+                                  value,
+                                  checked
+                                ),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="form-field field-span-2">
+                        <span>自动加载工具</span>
+                        <GovernanceMultiSelectDropdown
+                          options={governanceOptions.toolNames}
+                          selectedValues={selectedToolValues}
+                          placeholder="请选择自动加载工具"
+                          onToggle={(value, checked) =>
+                            setEditor((prev) => ({
+                              ...prev,
+                              governance: {
+                                ...prev.governance,
+                                autoActivationToolNames: toggleGovernanceValue(
+                                  prev.governance.autoActivationToolNames,
+                                  value,
+                                  checked
+                                ),
+                              },
+                            }))
+                          }
+                        />
+                      </div>
+                      <label className="form-field">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.adminManaged}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  adminManaged: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>管理端治理</span>
+                        </span>
+                      </label>
+                      <label className="form-field">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.required}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  required: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>系统必需</span>
+                        </span>
+                      </label>
+                      <label className="form-field field-span-2">
+                        <span className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={editor.governance.autoActivationEnabled}
+                            onChange={(event) =>
+                              setEditor((prev) => ({
+                                ...prev,
+                                governance: {
+                                  ...prev.governance,
+                                  autoActivationEnabled: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          <span>自动加载</span>
+                        </span>
                       </label>
                       <label className="form-field field-span-2">
                         <span>主说明文档（Markdown）</span>

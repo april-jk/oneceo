@@ -402,6 +402,7 @@ export const platformSkills = pgTable(
     description: text('description').notNull().default(''),
     category: text('category').notNull().default('general'),
     status: text('status').notNull().default('active'),
+    metadataJson: jsonb('metadata_json').notNull().default(sql`'{}'::jsonb`),
     publishedRevisionId: uuid('published_revision_id'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),

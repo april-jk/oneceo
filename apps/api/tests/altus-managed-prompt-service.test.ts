@@ -97,7 +97,7 @@ test('managed prompt requires deployment tools and auto-repair loop for publish 
 
   assert.match(prompt, /use the managed deployment tools instead of replying with plain text/i);
   assert.match(prompt, /use `deploy_application` for first publish or publishing the latest workspace changes/i);
-  assert.match(prompt, /returns `status=retryable_repair_required`, do not stop/i);
+  assert.match(prompt, /returns `status=retryable_repair_required`, inspect `repair\.category` first/i);
   assert.match(prompt, /keep deployment debug details internal/i);
 });
 
@@ -150,8 +150,38 @@ test('managed prompt shows active skill resource summary alongside full body', (
   ]);
 
   assert.match(prompt, /# Active skills/);
+  assert.match(prompt, /currently active for the run/i);
   assert.match(prompt, /resources: 1 references, 1 templates/);
   assert.match(prompt, /# Skill Brief/);
+});
+
+test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {
+  const prompt = altusManagedPromptService.buildAutoAttachedSkillPrompt(
+    [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-1',
+        revisionId: 'rev-1',
+        slug: 'deployment-orchestrator',
+        name: '部署编排',
+        description: '自动处理部署工作流',
+        category: 'deployment',
+        renderedMarkdown: '# Skill Brief\n\nUse deployment tools carefully.',
+        revisionNumber: 1,
+        resourceSummary: {
+          totalCount: 2,
+          referenceCount: 2,
+          templateCount: 0,
+          paths: ['references/runtime-classifier.md', 'references/nodejs.md'],
+        },
+      },
+    ],
+    'deploy_application'
+  );
+
+  assert.match(prompt, /newly auto-attached skills/i);
+  assert.match(prompt, /because tool `deploy_application` was used/i);
+  assert.match(prompt, /use deployment tools carefully/i);
 });
 
 test('managed prompt labels attached connectors by runtime status instead of treating all attached connectors as callable', () => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -49,4 +49,33 @@ test('ensureDeploymentTemplateBootstrap injects disabled default config for insp
     assert.match(output, /"enabled":false/);
     assert.doesNotMatch(output, /%VITE_[A-Z0-9_]+%/);
   });
+});
+
+test('ensureDeploymentTemplateBootstrap injects analytics bootstrap into server-rendered EJS layout when no html entry exists', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'oneceo-bootstrap-ejs-test-'));
+  const layoutPath = join(dir, 'views/layouts/main.ejs');
+  try {
+    await mkdir(join(dir, 'views/layouts'), { recursive: true });
+    await writeFile(
+      layoutPath,
+      '<!DOCTYPE html><html><head><title><%= title %></title></head><body><%- body %></body></html>',
+      'utf-8'
+    );
+
+    const report = await ensureDeploymentTemplateBootstrap(dir, {
+      analyticsConfig: {
+        enabled: true,
+        host: 'https://analytics.oneceo.ai',
+        websiteId: 'site_ejs_123',
+      },
+    });
+
+    const output = await readFile(layoutPath, 'utf-8');
+    assert.equal(report.analyticsInjected, true);
+    assert.equal(report.analyticsTargetPath, layoutPath);
+    assert.match(output, /ONECEO_ANALYTICS:START/);
+    assert.match(output, /site_ejs_123/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

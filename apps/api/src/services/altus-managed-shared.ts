@@ -50,6 +50,16 @@ export type ManagedSkillContext = {
     templateCount: number;
     paths: string[];
   } | null;
+  governance?: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  } | null;
 };
 
 export type ManagedSkillCatalogEntry = {
@@ -66,6 +76,16 @@ export type ManagedSkillCatalogEntry = {
     referenceCount: number;
     templateCount: number;
     paths: string[];
+  } | null;
+  governance?: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
   } | null;
 };
 
@@ -575,6 +595,7 @@ export function readManagedSkillContext(value: unknown): ManagedSkillContext[] {
           ? record.revisionNumber
           : null,
       resourceSummary: readSkillResourceSummary(record.resourceSummary),
+      governance: readSkillGovernance(record.governance),
     });
   }
   return results;
@@ -606,6 +627,30 @@ function readSkillResourceSummary(value: unknown) {
   };
 }
 
+function readSkillGovernance(value: unknown) {
+  const record = pickObject(value);
+  const autoActivation = pickObject(record.autoActivation);
+  const triggers = Array.isArray(autoActivation.triggers)
+    ? autoActivation.triggers.map((item) => asText(item).toLowerCase()).filter(Boolean).slice(0, 32)
+    : [];
+  const toolNames = Array.isArray(autoActivation.toolNames)
+    ? autoActivation.toolNames.map((item) => asText(item).toLowerCase()).filter(Boolean).slice(0, 64)
+    : [];
+  if (!record.systemRole && !record.adminManaged && !record.required && !autoActivation.enabled && triggers.length === 0 && toolNames.length === 0) {
+    return null;
+  }
+  return {
+    systemRole: asText(record.systemRole) || null,
+    adminManaged: Boolean(record.adminManaged),
+    required: Boolean(record.required),
+    autoActivation: {
+      enabled: Boolean(autoActivation.enabled),
+      triggers: Array.from(new Set(triggers)),
+      toolNames: Array.from(new Set(toolNames)),
+    },
+  };
+}
+
 export function readManagedSkillCatalog(value: unknown): ManagedSkillCatalogEntry[] {
   if (!Array.isArray(value)) return [];
   const results: ManagedSkillCatalogEntry[] = [];
@@ -631,6 +676,7 @@ export function readManagedSkillCatalog(value: unknown): ManagedSkillCatalogEntr
           ? record.revisionNumber
           : null,
       resourceSummary: readSkillResourceSummary(record.resourceSummary),
+      governance: readSkillGovernance(record.governance),
     });
   }
   return results;

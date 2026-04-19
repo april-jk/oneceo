@@ -175,7 +175,15 @@ export class AltusManagedRunEntryService {
 
   async getLatestRun(sessionId: string, userId: string) {
     await this.setupService.ensureSessionOwnership(sessionId, userId);
-    await this.recoveryService.reconcileLatestRun(sessionId, userId);
+    try {
+      await this.recoveryService.reconcileLatestRun(sessionId, userId);
+    } catch (error) {
+      console.warn('[ALTUS_MANAGED_LATEST_RECOVERY_WARN]', {
+        sessionId,
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const latest = await taskSessionRunDAO.getLatestRun(sessionId);
     return this.eventWriter.toSummary(latest);
   }

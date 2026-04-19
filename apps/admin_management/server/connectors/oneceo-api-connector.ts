@@ -117,6 +117,16 @@ export type AdminSkillSummary = {
   publishedRevisionNumber: number | null;
   publishedAt: string | null;
   updatedAt: string;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
 };
 
 export type AdminSkillDetail = {
@@ -129,6 +139,16 @@ export type AdminSkillDetail = {
   publishedRevisionId: string | null;
   latestBodyMarkdown: string;
   renderedSkillMarkdown: string | null;
+  governance: {
+    systemRole: string | null;
+    adminManaged: boolean;
+    required: boolean;
+    autoActivation: {
+      enabled: boolean;
+      triggers: string[];
+      toolNames: string[];
+    };
+  };
   resourceSummary?: {
     totalCount: number;
     referenceCount: number;
@@ -142,6 +162,19 @@ export type AdminSkillDetail = {
     createdAt: string;
   }>;
   updatedAt: string;
+};
+
+export type AdminSkillGovernanceOption = {
+  value: string;
+  label: string;
+  description?: string;
+  category?: string;
+};
+
+export type AdminSkillGovernanceOptions = {
+  systemRoles: AdminSkillGovernanceOption[];
+  autoActivationTriggers: AdminSkillGovernanceOption[];
+  toolNames: AdminSkillGovernanceOption[];
 };
 
 export type AdminSkillRevision = {
@@ -802,6 +835,10 @@ export class OneceoApiConnector {
     return this.request<AdminSkillSummary[]>(`/api/internal/skills${suffix}`);
   }
 
+  getSkillGovernanceOptions() {
+    return this.request<AdminSkillGovernanceOptions>('/api/internal/skills/governance-options');
+  }
+
   getSkill(skillId: string) {
     return this.request<AdminSkillDetail>(`/api/internal/skills/${encodeURIComponent(skillId)}`);
   }
@@ -811,6 +848,16 @@ export class OneceoApiConnector {
     name: string;
     description?: string;
     category?: string;
+    governance?: {
+      systemRole?: string | null;
+      adminManaged?: boolean;
+      required?: boolean;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+        toolNames?: string[];
+      };
+    };
     bodyMarkdown: string;
     resources?: Array<{
       resourcePath: string;
@@ -831,6 +878,16 @@ export class OneceoApiConnector {
       name?: string;
       description?: string;
       category?: string;
+      governance?: {
+        systemRole?: string | null;
+        adminManaged?: boolean;
+        required?: boolean;
+        autoActivation?: {
+          enabled?: boolean;
+          triggers?: string[];
+          toolNames?: string[];
+        };
+      };
       bodyMarkdown?: string;
       resources?: Array<{
         resourcePath: string;

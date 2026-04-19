@@ -32,9 +32,140 @@ type SubmitManagedInputResult = {
   attachments: TaskAttachmentRecord[];
 };
 
+type SkillSelectionInput = {
+  sourceType: 'platform' | 'custom';
+  skillId: string;
+  revisionId: string;
+};
+
+const DEPLOYMENT_INTENT_PATTERNS = [
+  /帮我部署当前项目/,
+  /帮我重新部署当前项目/,
+  /帮我回滚当前部署/,
+  /帮我查看部署状态/,
+  /(?:重新)?部署(?:当前)?(?:项目|应用|网站)?/,
+  /回滚(?:当前)?(?:部署|发布|版本)?/,
+  /查看(?:当前)?(?:部署|发布)状态/,
+  /查询(?:当前)?(?:部署|发布)状态/,
+  /(?:项目|应用|网站).*(?:上线|发布)/,
+  /\bdeploy(?: the)?(?: current)?(?: project| app| site)?\b/i,
+  /\bredeploy(?: the)?(?: current)?(?: project| app| site)?\b/i,
+  /\brollback\b/i,
+  /\broll back\b/i,
+  /\bdeployment status\b/i,
+  /\bpublish(?: the)?(?: current)?(?: project| app| site)?\b/i,
+  /\bgo live\b/i,
+];
+
+type DeploymentAction = 'deploy' | 'redeploy' | 'rollback' | 'status';
+
+const DEPLOYMENT_ACTION_PATTERNS: Array<{ action: DeploymentAction; patterns: RegExp[] }> = [
+  {
+    action: 'redeploy',
+    patterns: [/帮我重新部署当前项目/, /重新部署/, /\bredeploy(?: the)?(?: current)?(?: project| app| site)?\b/i],
+  },
+  {
+    action: 'rollback',
+    patterns: [/帮我回滚当前部署/, /回滚(?:当前)?(?:部署|发布|版本)?/, /\brollback\b/i, /\broll back\b/i],
+  },
+  {
+    action: 'status',
+    patterns: [
+      /帮我查看部署状态/,
+      /查看(?:当前)?(?:部署|发布)状态/,
+      /查询(?:当前)?(?:部署|发布)状态/,
+      /\bdeployment status\b/i,
+    ],
+  },
+  {
+    action: 'deploy',
+    patterns: DEPLOYMENT_INTENT_PATTERNS,
+  },
+];
+
 function shellEscape(value: string): string {
   if (!value) return "''";
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function normalizeSkillSelections(value: unknown): SkillSelectionInput[] {
+  if (!Array.isArray(value)) return [];
+  const results: SkillSelectionInput[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const sourceType = asText(record.sourceType) === 'custom' ? 'custom' : 'platform';
+    const skillId = asText(record.skillId);
+    const revisionId = asText(record.revisionId);
+    if (!skillId || !revisionId) continue;
+    const key = `${sourceType}:${skillId}:${revisionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({
+      sourceType,
+      skillId,
+      revisionId,
+    });
+  }
+  return results;
+}
+
+function mergeSkillSelections(
+  existing: SkillSelectionInput[],
+  incoming: SkillSelectionInput[]
+): SkillSelectionInput[] {
+  const results = [...existing];
+  const seen = new Set(
+    existing.map((item) => `${item.sourceType}:${item.skillId}:${item.revisionId}`)
+  );
+  for (const item of incoming) {
+    const key = `${item.sourceType}:${item.skillId}:${item.revisionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(item);
+  }
+  return results;
+}
+
+function matchesDeploymentIntent(content: string): boolean {
+  const normalized = asText(content);
+  if (!normalized) return false;
+  return DEPLOYMENT_INTENT_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function detectDeploymentAction(content: string): DeploymentAction | null {
+  const normalized = asText(content);
+  if (!normalized) return null;
+  for (const candidate of DEPLOYMENT_ACTION_PATTERNS) {
+    if (candidate.patterns.some((pattern) => pattern.test(normalized))) {
+      return candidate.action;
+    }
+  }
+  return null;
+}
+
+function canAutoAttachDeploymentSkill(
+  skill: {
+    sourceType: 'platform' | 'custom';
+    governance?: {
+      systemRole?: string | null;
+      autoActivation?: {
+        enabled?: boolean;
+        triggers?: string[];
+      } | null;
+    } | null;
+  },
+  action: DeploymentAction
+) {
+  if (skill.sourceType !== 'platform') return false;
+  const governance = skill.governance;
+  if (!governance || governance.systemRole !== 'deployment_orchestrator') return false;
+  if (!governance.autoActivation?.enabled) return false;
+  const triggers = Array.isArray(governance.autoActivation.triggers)
+    ? governance.autoActivation.triggers.map((item) => asText(item).toLowerCase())
+    : [];
+  return triggers.includes(action) || triggers.includes('deployment');
 }
 
 export class AltusManagedInputService {
@@ -77,9 +208,27 @@ export class AltusManagedInputService {
       userId,
       availableSkillCount: availableSkills.length,
     });
+    const baseMetadata = pickObject(input.metadata);
+    const explicitSkillSelections = normalizeSkillSelections(baseMetadata.skills);
+    let mergedSkillSelections = explicitSkillSelections;
+    const deploymentAction = detectDeploymentAction(content);
+    if (deploymentAction && matchesDeploymentIntent(content)) {
+      const deploymentSkill = availableSkills.find((item) =>
+        canAutoAttachDeploymentSkill(item as any, deploymentAction)
+      );
+      if (deploymentSkill) {
+        mergedSkillSelections = mergeSkillSelections(mergedSkillSelections, [
+          {
+            sourceType: 'platform',
+            skillId: deploymentSkill.skillId,
+            revisionId: deploymentSkill.revisionId,
+          },
+        ]);
+      }
+    }
     const resolvedSkills = await userSkillService.resolveSelectionsForSession(
       sessionId,
-      pickObject(input.metadata).skills
+      mergedSkillSelections
     );
     writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_RESOLVED_SKILLS_READY]', {
       sessionId,
@@ -102,7 +251,8 @@ export class AltusManagedInputService {
     const attachmentContext =
       attachments.length > 0 ? buildAttachmentContextRecords(attachments, normalizedUploads) : [];
     const metadata = {
-      ...pickObject(input.metadata),
+      ...baseMetadata,
+      ...(mergedSkillSelections.length > 0 ? { skills: mergedSkillSelections } : {}),
       ...(availableSkills.length > 0 ? { managedSkillCatalog: availableSkills } : {}),
       ...(resolvedSkills.length > 0 ? { managedSkillContext: resolvedSkills } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),

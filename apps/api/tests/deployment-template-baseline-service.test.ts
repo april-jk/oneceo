@@ -207,6 +207,66 @@ test('deployment source normalization builds node script baseline without packag
   }
 });
 
+test('deployment template baseline normalizes PHP built-in server healthcheck to root path', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-php-health-test-'));
+  try {
+    await writeFile(
+      join(workspace, 'index.php'),
+      [
+        '<?php',
+        '$requestUri = $_SERVER[\'REQUEST_URI\'] ?? \'/\';',
+        'if ($requestUri === \'/\') {',
+        '  echo \'<!doctype html><!-- ONECEO_ANALYTICS:START --><html><body><h1>PHP Site</h1></body></html>\';',
+        '  return;',
+        '}',
+        'http_response_code(404);',
+        'echo \'not found\';',
+      ].join('\n'),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'oneceo.manifest.json'),
+      JSON.stringify(
+        {
+          templateVersion: '1.0.0',
+          appType: 'web_app',
+          stack: 'php',
+          build: { command: "echo 'PHP app ready'", outputDir: '.' },
+          start: { command: 'php -S 0.0.0.0:$PORT', portEnv: 'PORT' },
+          healthcheck: { path: '/api/system/health' },
+          features: {
+            analytics: true,
+            userTracking: true,
+            database: false,
+            auth: 'optional',
+            objectStorage: false,
+          },
+          runtime: { framework: 'php', transport: 'http' },
+        },
+        null,
+        2
+      ),
+      'utf-8'
+    );
+
+    const compliance = await ensureTemplateCompliance(workspace);
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      compliance,
+    });
+
+    assert.equal(compliance.manifest.healthcheck.path, '/');
+    assert.equal(compliance.checks.healthcheckRouteDetected, true);
+    assert.equal(baseline.healthcheckPath, '/');
+    assert.match(
+      compliance.warnings.join(' | '),
+      /PHP 站点入口且未提供显式健康检查路由，已将 manifest 健康检查标准化为 \//
+    );
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment template baseline accepts analytics injected into server-rendered EJS layout', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-ejs-layout-test-'));
   try {
@@ -222,6 +282,7 @@ test('deployment template baseline accepts analytics injected into server-render
         dependencies: {
           express: '^4.18.2',
           ejs: '^3.1.9',
+          'express-ejs-layouts': '^2.5.1',
         },
       }),
       'utf-8'
@@ -230,9 +291,12 @@ test('deployment template baseline accepts analytics injected into server-render
       join(workspace, 'server.js'),
       [
         "const express = require('express');",
+        "const expressLayouts = require('express-ejs-layouts');",
         "const app = express();",
         "app.set('view engine', 'ejs');",
         "app.set('views', __dirname + '/views');",
+        "app.use(expressLayouts);",
+        "app.set('layout', 'layouts/main');",
         "app.get('/', (_req, res) => res.render('index'));",
         "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));",
         "app.listen(process.env.PORT || 8080);",
@@ -262,6 +326,68 @@ test('deployment template baseline accepts analytics injected into server-render
     assert.equal(compliance.checks.analyticsEntryDetected, true);
     assert.equal(compliance.ok, true);
     assert.equal(baseline.status, 'ready');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment template baseline rejects broken EJS body layout without layout engine wiring', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-ejs-body-misuse-test-'));
+  try {
+    await mkdir(join(workspace, 'views'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'baseline-ejs-broken-demo',
+        scripts: {
+          build: 'echo "ready"',
+          start: 'node server.js',
+        },
+        dependencies: {
+          express: '^4.18.2',
+          ejs: '^3.1.9',
+        },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server.js'),
+      [
+        "const express = require('express');",
+        "const app = express();",
+        "app.set('view engine', 'ejs');",
+        "app.set('views', __dirname + '/views');",
+        "app.get('/', (_req, res) => res.render('index'));",
+        "app.get('/api/system/health', (_req, res) => res.json({ ok: true }));",
+        "app.listen(process.env.PORT || 8080);",
+      ].join('\n'),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'views/layout.ejs'),
+      '<!DOCTYPE html><html><body><main><%- body %></main></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'views/index.ejs'),
+      "<% include('layout') -%>\n<section>broken server rendered</section>",
+      'utf-8'
+    );
+
+    const bootstrap = await ensureDeploymentTemplateBootstrap(workspace);
+    const compliance = await ensureTemplateCompliance(workspace);
+    const baseline = buildDeploymentTemplateBaseline({
+      workspaceDetected: true,
+      bootstrap,
+      compliance,
+    });
+
+    assert.equal(compliance.ok, false);
+    assert.equal(baseline.status, 'needs_attention');
+    assert.match(
+      compliance.errors.join(' | '),
+      /使用 <%- body %>，但项目未检测到 express-ejs-layouts \/ ejs-mate 布局接入/
+    );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

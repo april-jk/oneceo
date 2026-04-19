@@ -1,6 +1,6 @@
 import '../src/config/env';
 
-import { desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 
 import { db } from '../src/config/database';
 import {
@@ -47,14 +47,18 @@ async function main() {
     .limit(6);
 
   const runIds = runs.map((item) => item.id);
-  const events =
+  const toolStartEvents =
     runIds.length > 0
       ? await db
           .select()
           .from(taskSessionRunEvents)
-          .where(inArray(taskSessionRunEvents.runId, runIds))
-          .orderBy(desc(taskSessionRunEvents.createdAt))
-          .limit(120)
+          .where(
+            and(
+              inArray(taskSessionRunEvents.runId, runIds),
+              eq(taskSessionRunEvents.eventType, 'tool_call_started'),
+            ),
+          )
+          .orderBy(asc(taskSessionRunEvents.createdAt), asc(taskSessionRunEvents.sequence))
       : [];
 
   const messages = await db
@@ -66,8 +70,7 @@ async function main() {
 
   const canonicalSandbox = await sandboxExecutionEnvironmentDAO.findCanonicalByTaskSessionId(sessionId);
 
-  const toolEvents = events
-    .filter((item) => item.eventType === 'tool_call_started')
+  const toolEvents = toolStartEvents
     .map((item) => ({
       runId: item.runId,
       sequence: item.sequence,
@@ -75,7 +78,13 @@ async function main() {
       toolName: asText((item.payloadJson as Record<string, unknown> | null)?.toolName),
       content: compactContent((item.payloadJson as Record<string, unknown> | null)?.content),
     }))
-    .sort((left, right) => Number(left.sequence) - Number(right.sequence));
+    .sort((left, right) => {
+      const createdDelta = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      if (createdDelta !== 0) {
+        return createdDelta;
+      }
+      return Number(left.sequence) - Number(right.sequence);
+    });
 
   const autoAttachedMessages = messages
     .filter((item) => {

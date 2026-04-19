@@ -21,6 +21,7 @@ import {
   type ManagedMcpProvider,
   type ManagedSkillContext,
 } from './altus-managed-shared';
+import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 
 type ManagedToolResult =
   | { type: 'result'; content: string; activatedSkills?: ManagedSkillContext[] }
@@ -163,6 +164,8 @@ export class AltusManagedToolRuntime {
       userId: string;
       sandboxId: string;
       workspaceRoot: string;
+      userInput?: string;
+      taskIntentProfile?: AltusManagedTaskIntentProfile;
       availableSkills?: ManagedSkillCatalogEntry[];
       activeSkills: ManagedSkillContext[];
       mcpProviders: ManagedMcpProvider[];
@@ -450,9 +453,36 @@ export class AltusManagedToolRuntime {
     return activated;
   }
 
+  private enforceDeploymentIntent(toolName: string) {
+    if (
+      toolName !== 'deploy_application' &&
+      toolName !== 'redeploy_application' &&
+      toolName !== 'rollback_application_deployment'
+    ) {
+      return;
+    }
+    const profile = this.input.taskIntentProfile;
+    if (!profile || profile.mode !== 'non_deployable_artifact') {
+      return;
+    }
+    const recentContext = profile.recentUserMessages.slice(-3).join(' | ');
+    throw new Error(
+      [
+        'deployment_tool_not_allowed_non_web_task',
+        `reason=${profile.reason}`,
+        'current_session_intent=non_deployable_artifact',
+        'do_not_create_or_publish_a_website_for_this_task',
+        recentContext ? `recent_user_messages=${recentContext}` : '',
+      ]
+        .filter(Boolean)
+        .join(':')
+    );
+  }
+
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
     await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
+    this.enforceDeploymentIntent(toolName);
     const activatedSkills = await this.autoAttachSkillsForTool(toolName, signal);
     if (toolName === 'load_connector_guide') {
       const connectorKey = asText(rawArgs.connectorKey).toLowerCase();

@@ -82,10 +82,31 @@ class FakeRedisPort implements RedisCommandPort {
   }
 }
 
-test('altus run recovery service rebuilds run state and recovery snapshot from db facts when redis is empty', async () => {
+test('altus run recovery service rebuilds run state from db facts while preserving loop recovery metadata', async () => {
   const redis = new FakeRedisPort();
   const redisState = new AltusRunRedisStateService(redis);
   const service = new AltusRunRecoveryService(redisState);
+
+  await redisState.setRecoverySnapshot({
+    userId: 'user-rebuild-1',
+    sessionId: 'session-rebuild-1',
+    runId: 'run-rebuild-1',
+    status: 'running',
+    sequence: 2,
+    stream: {
+      latestSequence: 2,
+      latestEventType: 'tool_call_completed',
+    },
+    loop: {
+      lastTransitionReason: 'model_retryable_error',
+      recoveryMode: 'model_retry',
+      currentRound: 2,
+      maxRounds: 192,
+      plainTextRecoveryUsed: false,
+      lastToolName: 'write_file',
+      lastToolCallId: 'tool-rebuild-1',
+    },
+  });
 
   const runDaoAny = taskSessionRunDAO as any;
   const sessionDaoAny = taskCreationSessionDAO as any;
@@ -156,6 +177,10 @@ test('altus run recovery service rebuilds run state and recovery snapshot from d
     assert.equal(recovery?.sandbox.sandboxId, 'sandbox-rebuild-1');
     assert.deepEqual(recovery?.connectorRuntime.providerIds, ['provider-rebuild-1']);
     assert.equal(recovery?.stream.latestSequence, 8);
+    assert.equal(recovery?.loop.lastTransitionReason, 'model_retryable_error');
+    assert.equal(recovery?.loop.recoveryMode, 'model_retry');
+    assert.equal(recovery?.loop.currentRound, 2);
+    assert.equal(recovery?.loop.lastToolName, 'write_file');
   } finally {
     runDaoAny.getLatestRun = originalGetLatestRun;
     runDaoAny.getRun = originalGetRun;

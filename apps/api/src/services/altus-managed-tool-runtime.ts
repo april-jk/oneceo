@@ -457,21 +457,23 @@ export class AltusManagedToolRuntime {
     if (
       toolName !== 'deploy_application' &&
       toolName !== 'redeploy_application' &&
-      toolName !== 'rollback_application_deployment'
+      toolName !== 'rollback_application_deployment' &&
+      toolName !== 'get_application_deployment_status'
     ) {
       return;
     }
     const profile = this.input.taskIntentProfile;
-    if (!profile || profile.mode !== 'non_deployable_artifact') {
+    if (!profile || profile.deploymentAllowed) {
       return;
     }
     const recentContext = profile.recentUserMessages.slice(-3).join(' | ');
     throw new Error(
       [
-        'deployment_tool_not_allowed_non_web_task',
+        'deployment_tool_not_allowed_without_explicit_request',
         `reason=${profile.reason}`,
-        'current_session_intent=non_deployable_artifact',
-        'do_not_create_or_publish_a_website_for_this_task',
+        `current_session_intent=${profile.mode}`,
+        'current_session_deployment_allowed=false',
+        'do_not_enter_deployment_flow_without_an_explicit_user_request',
         recentContext ? `recent_user_messages=${recentContext}` : '',
       ]
         .filter(Boolean)

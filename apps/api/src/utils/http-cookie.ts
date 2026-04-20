@@ -4,17 +4,33 @@ function splitCookies(input: string): string[] {
   return input.split(/;\s*/g).filter(Boolean);
 }
 
-export function readCookie(req: express.Request, name: string): string | null {
-  const header = typeof req.headers.cookie === 'string' ? req.headers.cookie : '';
-  if (!header) return null;
+export function readCookieValuesFromHeader(cookieHeader: string, name: string): string[] {
+  const header = typeof cookieHeader === 'string' ? cookieHeader : '';
+  if (!header) return [];
+  const values: string[] = [];
   for (const part of splitCookies(header)) {
     const index = part.indexOf('=');
     if (index <= 0) continue;
     const key = part.slice(0, index).trim();
     if (key !== name) continue;
-    return decodeURIComponent(part.slice(index + 1));
+    const rawValue = part.slice(index + 1);
+    try {
+      values.push(decodeURIComponent(rawValue));
+    } catch {
+      values.push(rawValue);
+    }
   }
-  return null;
+  return values;
+}
+
+export function readCookieValues(req: express.Request, name: string): string[] {
+  const header = typeof req.headers.cookie === 'string' ? req.headers.cookie : '';
+  return readCookieValuesFromHeader(header, name);
+}
+
+export function readCookie(req: express.Request, name: string): string | null {
+  const values = readCookieValues(req, name);
+  return values.length > 0 ? values[0] : null;
 }
 
 export function buildCookie(name: string, value: string, options?: {

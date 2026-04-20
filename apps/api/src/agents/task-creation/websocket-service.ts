@@ -69,12 +69,13 @@ function readCookieFromHeader(cookieHeader: unknown, name: string): string | nul
   const header = asText(cookieHeader);
   if (!header) return null;
   const items = header.split(/;\s*/g).filter(Boolean);
-  for (const item of items) {
-    const index = item.indexOf('=');
-    if (index <= 0) continue;
-    const key = item.slice(0, index).trim();
+  for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = items[itemIndex];
+    const separatorIndex = item.indexOf('=');
+    if (separatorIndex <= 0) continue;
+    const key = item.slice(0, separatorIndex).trim();
     if (key !== name) continue;
-    const rawValue = item.slice(index + 1);
+    const rawValue = item.slice(separatorIndex + 1);
     try {
       return decodeURIComponent(rawValue);
     } catch {
@@ -330,6 +331,48 @@ export class TaskCreationWebSocketService {
     });
     if (stage) {
       await taskCreationFileMemoryStore.updateSessionState(sessionId, { stage: stage as any });
+    }
+  }
+
+  private async emitTerminalOutcomeIfNeeded(clientId: string, sessionId: string): Promise<void> {
+    const current = await taskCreationFileMemoryStore.getSession(sessionId);
+    if (!current) return;
+
+    if (current.status === 'completed' || current.stage === 'completed') {
+      this.sendToClient(
+        clientId,
+        {
+          type: 'status_update' as any,
+          sessionId,
+          content: '执行完成',
+          stage: 'completed' as any,
+          tone: 'review' as any,
+          metadata: {
+            outcome: 'completed',
+            executionMode: current.mode === 'altus' ? 'altus_managed' : 'task_creation',
+          },
+        },
+        { skipPersistence: true }
+      );
+      return;
+    }
+
+    if (current.status === 'failed' || current.stage === 'failed') {
+      this.sendToClient(
+        clientId,
+        {
+          type: 'status_update' as any,
+          sessionId,
+          content: '执行失败',
+          stage: 'failed' as any,
+          tone: 'error' as any,
+          metadata: {
+            outcome: 'failed',
+            executionMode: current.mode === 'altus' ? 'altus_managed' : 'task_creation',
+          },
+        },
+        { skipPersistence: true }
+      );
     }
   }
 
@@ -663,6 +706,7 @@ export class TaskCreationWebSocketService {
         await service.resumeTask(sessionId, message.content || pendingResume.lastUserInput, resolvedUserId);
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
         return;
       } catch (error) {
         this.clearManagedRun(sessionId);
@@ -700,6 +744,7 @@ export class TaskCreationWebSocketService {
         await service.createTask(resumedInput, resolvedUserId, sessionId, 'user_response');
         this.clearManagedRun(sessionId);
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
         return;
       } catch (error) {
         this.clearManagedRun(sessionId);
@@ -732,6 +777,7 @@ export class TaskCreationWebSocketService {
       }
       if (sessionId) {
         await this.syncSessionStateFromCurrentStage(sessionId);
+        await this.emitTerminalOutcomeIfNeeded(clientId, sessionId);
       }
     } catch (error) {
       if (sessionId) {
@@ -827,9 +873,13 @@ export class TaskCreationWebSocketService {
     if (!enabled) return;
     void sandboxAgentProvisionService
       .provisionWithLock({
+        executor: 'altus',
         metadata: {
           taskSessionId: sessionId,
           taskTitle: taskTitle?.slice(0, 80) || '新建任务会话',
+          sandboxExecutor: 'altus',
+          executor: 'altus',
+          altusMode: 'managed',
         },
       })
       .catch((error) => {

@@ -1,7 +1,7 @@
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../db/dao';
 import { altusManagedStreamService } from './altus-managed-stream-service';
 import { altusRunRedisStateService, AltusRunRedisStateService } from './altus-run-redis-state-service';
-import { toIso, type ManagedRunSummary } from './altus-managed-shared';
+import { stripManagedDebugPayload, toIso, type ManagedRunSummary } from './altus-managed-shared';
 
 const MANAGED_TOOL_EVENT_TYPES = new Set([
   'tool_call_started',
@@ -56,6 +56,7 @@ export class AltusRunEventWriter {
       sequence,
       eventType: normalizedEventType,
     };
+    const userVisiblePayload = stripManagedDebugPayload(envelopePayload);
     if (shouldProjectManagedToolEvent(normalizedEventType)) {
       const messageKey = buildManagedToolMessageKey({
         runId,
@@ -70,7 +71,7 @@ export class AltusRunEventWriter {
         messageType: 'executor_event',
         content,
         metadata: {
-          ...envelopePayload,
+          ...userVisiblePayload,
           messageKey,
           eventType: normalizedEventType,
           executor: 'altus',

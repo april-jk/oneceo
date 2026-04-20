@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
+import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-memory-store';
 import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { taskSessionConnectorBindingDAO } from '../src/db/dao/task-session-connector-binding.dao';
 import { managedImageObjectService } from '../src/services/managed-image-object-service';
@@ -96,6 +97,8 @@ test('ensureSandbox provisions through sandboxAgentProvisionService to enforce p
   }) as any);
   const upsertMock = mock.method(taskSessionRunDAO, 'upsertSandboxBinding', async () => ({} as any));
   const recoverMock = mock.method(sessionMcpRecoveryService, 'ensureSessionRecovered', async () => undefined as any);
+  const executorMock = mock.method(taskCreationFileMemoryStore, 'updateSessionExecutor', async () => undefined);
+  const runtimeBindingMock = mock.method(taskCreationFileMemoryStore, 'updateRuntimeBinding', async () => undefined);
 
   const service = new AltusManagedSetupService();
   const result = await service.ensureSandbox('session-1', 'Demo session');
@@ -106,6 +109,10 @@ test('ensureSandbox provisions through sandboxAgentProvisionService to enforce p
   assert.equal((provisionInput.metadata as Record<string, unknown>)?.taskSessionId, 'session-1');
   assert.equal((provisionInput.metadata as Record<string, unknown>)?.sandboxExecutor, 'altus');
   assert.equal(upsertMock.mock.callCount(), 1);
+  assert.equal(executorMock.mock.callCount(), 1);
+  assert.equal(runtimeBindingMock.mock.callCount(), 1);
+  assert.equal((runtimeBindingMock.mock.calls[0]?.arguments[1] as any)?.executor, 'altus');
+  assert.equal((runtimeBindingMock.mock.calls[0]?.arguments[1] as any)?.orchestratorSessionId, 'sandbox-new');
   assert.equal(result.sandboxId, 'sandbox-new');
   assert.equal(result.reused, true);
   assert.equal(recoverMock.mock.callCount(), 1);

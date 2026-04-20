@@ -903,7 +903,7 @@ export default function Sidebar({
               <Settings className="w-4 h-4" />
               {!collapsed && (
                 <span className="min-w-0 truncate text-sm font-medium">
-                  {t("sidebar.personalization")}
+                  {t("sidebar.settings")}
                 </span>
               )}
             </Button>
@@ -955,13 +955,6 @@ export default function Sidebar({
               <DropdownMenuItem className="rounded-lg py-2.5 px-3">
                 <Bell className="w-4 h-4 mr-2 text-muted-foreground" />
                 <span className="text-sm">{t("sidebar.notifications")}</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="rounded-lg py-2.5 px-3"
-                onSelect={() => openSettingsDialog({ tab: "personalization" })}
-              >
-                <Pencil className="w-4 h-4 mr-2 text-muted-foreground" />
-                <span className="text-sm">{t("sidebar.personalization")}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="rounded-lg py-2.5 px-3"

@@ -125,4 +125,32 @@ router.get('/me', async (req, res) => {
   });
 });
 
+router.patch('/profile', async (req, res) => {
+  const current = (req as any).currentAppUser;
+  if (!current?.id) {
+    return res.status(401).json({
+      success: false,
+      error: '当前未登录',
+    });
+  }
+
+  try {
+    const user = await appAuthService.updateProfile(current.id, {
+      displayName: req.body?.displayName,
+      personalization: req.body?.personalization,
+    });
+    return res.json({
+      success: true,
+      data: {
+        user,
+      },
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: getPublicErrorMessage(error?.message || '更新用户资料失败'),
+    });
+  }
+});
+
 export default router;

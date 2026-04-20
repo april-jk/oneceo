@@ -6,6 +6,14 @@ export type AppAuthUser = {
   email: string;
   displayName: string;
   status?: string;
+  personalization?: AppUserPersonalization;
+};
+
+export type AppUserPersonalization = {
+  preferredName: string;
+  role: string;
+  about: string;
+  responsePreferences: string;
 };
 
 type AuthEnvelope<T> = {
@@ -115,6 +123,20 @@ export async function logoutAppUser(): Promise<void> {
     method: "POST",
     body: JSON.stringify({}),
   });
+}
+
+export async function updateAppUserProfile(input: {
+  displayName?: string;
+  personalization?: AppUserPersonalization;
+}): Promise<AppAuthUser> {
+  const result = await requestAuth<AuthPayload>("/api/auth/profile", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  if (!result.user) {
+    throw new Error(i18n.t("account.profileUpdateFailed"));
+  }
+  return result.user;
 }
 
 export function installApiFetchCredentials() {
